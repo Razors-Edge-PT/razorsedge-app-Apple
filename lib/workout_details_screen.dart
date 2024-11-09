@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:localtest222/workout_entry_screen.dart';
 import 'workout_model.dart'; // Import Workout and Exercise models
 import 'exercise_details_screen.dart'; // Import the ExerciseDetailsScreen
 import 'package:firebase_auth/firebase_auth.dart';
@@ -38,22 +39,28 @@ class _WorkoutDetailsScreenState extends State<WorkoutDetailsScreen> {
             .get();
 
         // Map Firestore documents to Workout objects
-        allWorkouts = querySnapshot.docs.map((doc) => Workout.fromFirestore(doc)).toList();
+        setState(() {
+          allWorkouts = querySnapshot.docs.map((doc) => Workout.fromFirestore(doc)).toList();
+        });
       }
     } catch (error) {
       // Handle errors (e.g., show a Snackbar)
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error fetching workouts: $error')),
+      );
     }
   }
 
-  List<Workout> getRecentWorkoutsForExercise(String exerciseName) {
-    // Filter workouts that contain the specified exercise
+  List<Workout> getRecentWorkoutsForExercise(String exerciseName, DateTime currentWorkoutDate) {
+    // Filter workouts that contain the specified exercise and occurred before the specified date
     List<Workout> filteredWorkouts = allWorkouts.where((w) =>
+    w.date.isBefore(currentWorkoutDate) &&
         w.exercises.any((ex) => ex.name == exerciseName)).toList();
 
-    // Sort workouts by date (most recent first)
+    // Sort workouts by date in descending order (most recent first)
     filteredWorkouts.sort((a, b) => b.date.compareTo(a.date));
 
-    // Return only the most recent three workouts
+    // Return only the three most recent workouts before the given date
     return filteredWorkouts.take(3).toList();
   }
 
@@ -61,14 +68,20 @@ class _WorkoutDetailsScreenState extends State<WorkoutDetailsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.workout.name),
+        title: Text('Workout: ${widget.workout.name}'),
         actions: [
           IconButton(
             icon: const Icon(Icons.edit),
             onPressed: () {
-              // Handle navigation to workout edit screen (optional)
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => WorkoutPage(workout: widget.workout),
+                ),
+              );
             },
           ),
+
         ],
       ),
       body: Padding(
@@ -91,28 +104,36 @@ class _WorkoutDetailsScreenState extends State<WorkoutDetailsScreen> {
                 itemCount: widget.workout.exercises.length,
                 itemBuilder: (context, index) {
                   final exercise = widget.workout.exercises[index];
-                  return GestureDetector(
-                    onDoubleTap: () {
-                      // Gather recent workouts for this exercise
-                      List<Workout> recentWorkouts = getRecentWorkoutsForExercise(exercise.name);
-
-                      // Navigate to the exercise details screen on double tap
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => ExerciseDetailsScreen(
-                            exerciseName: exercise.name, // Pass the exercise name
-                            recentWorkouts: recentWorkouts, // Pass recent workouts
-                          ),
-                        ),
-                      );
-                    },
+                  return Card(
+                    elevation: 2.0,
+                    margin: const EdgeInsets.symmetric(vertical: 4.0),
                     child: ExpansionTile(
-                      title: Text(exercise.name),
+                      title: Text(
+                        exercise.name,
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.info_outline),
+                        onPressed: () {
+                          // Gather recent workouts for this exercise
+                          List<Workout> recentWorkouts = getRecentWorkoutsForExercise(exercise.name,widget.workout.date);
+                          // Navigate to the exercise details screen
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => ExerciseDetailsScreen(
+                                exerciseName: exercise.name,
+                                recentWorkouts: recentWorkouts,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
                       children: exercise.sets.map((set) {
                         return ListTile(
                           title: Text('Set ${set.setNumber}'),
                           subtitle: Text('Reps: ${set.reps}, Weight: ${set.weight} kg'),
+                          trailing: Text('RIR: ${set.rir}'),
                         );
                       }).toList(),
                     ),

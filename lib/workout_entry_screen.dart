@@ -1,14 +1,18 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:intl/intl.dart'; // Import this package for date formatting
+import 'package:intl/intl.dart'; // Import for date formatting
+import 'package:localtest222/workout_model.dart';
 import 'exercise_selection_screen.dart';
 import 'template_model.dart';
 import 'templates.dart';
 import 'exercise_details_screen.dart'; // Import your exercise details screen
 
 class WorkoutPage extends StatefulWidget {
-  const WorkoutPage({super.key});
+  final Template? initialTemplate;
+  final Workout? workout; // Make workout optional
+
+  const WorkoutPage({Key? key, this.initialTemplate, this.workout}) : super(key: key);
 
   @override
   _WorkoutPageState createState() => _WorkoutPageState();
@@ -17,12 +21,14 @@ class WorkoutPage extends StatefulWidget {
 class SetDetails {
   String reps;
   String weight;
+  String rir; // New field for RIR
 
-  SetDetails({required this.reps, required this.weight});
+  SetDetails({required this.reps, required this.weight, required this.rir});
 
   Map<String, dynamic> toMap() => {
     'reps': reps,
     'weight': weight,
+    'rir': rir, // Include RIR in the map
   };
 }
 
@@ -33,12 +39,63 @@ class _WorkoutPageState extends State<WorkoutPage> {
   final List<List<SetDetails>> _workoutSets = [];
   final List<List<TextEditingController>> _repsControllers = [];
   final List<List<TextEditingController>> _weightControllers = [];
+  final List<List<TextEditingController>> _rirControllers = []; // New controller list for RIR
   final int _defaultSets = 3;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.workout != null) {
+      // Editing an existing workout
+      _loadWorkout(widget.workout!);
+    } else if (widget.initialTemplate != null) {
+      // Loading from a template for a new workout
+      _loadTemplate(widget.initialTemplate!);
+    }
+  }
+
+  void _loadWorkout(Workout workout) {
+    _workoutNameController.text = workout.name;
+    _selectedDate = workout.date;
+    _selectedExercises.clear();
+    _selectedExercises.addAll(workout.exercises.map((exercise) => exercise.name));
+
+    // Map workout exercises and sets to initialize _workoutSets and controllers
+    _workoutSets.clear();
+    _workoutSets.addAll(
+      workout.exercises.map((exercise) {
+        return exercise.sets.map((set) => SetDetails(reps: set.reps.toString(), weight: set.weight.toString(), rir: set.rir)).toList();
+      }).toList(),
+    );
+
+    _initializeControllers();
+  }
+
+  void _loadTemplate(Template template) {
+    setState(() {
+      _workoutNameController.text = template.name;
+      _selectedExercises.clear();
+      _workoutSets.clear();
+
+      _selectedExercises.addAll(template.exercises);
+      _workoutSets.addAll(List.generate(
+        _selectedExercises.length,
+            (index) =>
+            List.generate(
+              _defaultSets,
+                  (setIndex) =>
+                  SetDetails(reps: '',
+                      weight: '',
+                      rir: ''), // Include RIR initialization
+            ),
+      ));
+      _initializeControllers();
+    });
+  }
 
   @override
   void dispose() {
     _workoutNameController.dispose();
-    // Dispose all controllers
     for (var controllers in _repsControllers) {
       for (var controller in controllers) {
         controller.dispose();
@@ -49,19 +106,36 @@ class _WorkoutPageState extends State<WorkoutPage> {
         controller.dispose();
       }
     }
+    for (var controllers in _rirControllers) {
+      for (var controller in controllers) {
+        controller.dispose();
+      }
+    }
     super.dispose();
   }
 
   void _initializeControllers() {
+    // Clear existing controllers
     _repsControllers.clear();
     _weightControllers.clear();
+    _rirControllers.clear();
 
+    // Re-create controllers based on the updated _workoutSets
     for (int i = 0; i < _selectedExercises.length; i++) {
       _repsControllers.add(
-        _workoutSets[i].map((set) => TextEditingController(text: set.reps)).toList(),
+        _workoutSets[i]
+            .map((set) => TextEditingController(text: set.reps))
+            .toList(),
       );
       _weightControllers.add(
-        _workoutSets[i].map((set) => TextEditingController(text: set.weight)).toList(),
+        _workoutSets[i]
+            .map((set) => TextEditingController(text: set.weight))
+            .toList(),
+      );
+      _rirControllers.add(
+        _workoutSets[i]
+            .map((set) => TextEditingController(text: set.rir))
+            .toList(),
       );
     }
   }
@@ -74,22 +148,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
       ),
     ).then((selectedTemplate) {
       if (selectedTemplate != null && selectedTemplate is Template) {
-        setState(() {
-          _workoutNameController.text = selectedTemplate.name;
-          _selectedExercises.clear();
-          _workoutSets.clear();
-
-          _selectedExercises.addAll(selectedTemplate.exercises);
-          _workoutSets.addAll(List.generate(
-            _selectedExercises.length,
-                (index) => List.generate(
-              _defaultSets,
-                  (setIndex) => SetDetails(reps: '', weight: ''), // No setNumber here
-            ),
-          ));
-          // Initialize TextEditingControllers
-          _initializeControllers();
-        });
+        _loadTemplate(selectedTemplate);
       }
     });
   }
@@ -98,9 +157,10 @@ class _WorkoutPageState extends State<WorkoutPage> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => ExerciseSelectionScreen(
-          selectedExercises: _selectedExercises, // Pass current selections
-        ),
+        builder: (context) =>
+            ExerciseSelectionScreen(
+              selectedExercises: _selectedExercises,
+            ),
       ),
     ).then((selectedExercises) {
       if (selectedExercises != null && selectedExercises is List<String>) {
@@ -108,26 +168,28 @@ class _WorkoutPageState extends State<WorkoutPage> {
           _selectedExercises.clear();
           _selectedExercises.addAll(selectedExercises);
 
-          // Generate sets for each exercise
           _workoutSets.clear();
           _workoutSets.addAll(
             List.generate(
               _selectedExercises.length,
-                  (index) => List.generate(
-                _defaultSets,
-                    (setIndex) => SetDetails(reps: '', weight: ''), // No setNumber here
-              ),
+                  (index) =>
+                  List.generate(
+                    _defaultSets,
+                        (setIndex) =>
+                        SetDetails(reps: '',
+                            weight: '',
+                            rir: ''), // Include RIR initialization
+                  ),
             ),
           );
-          _initializeControllers(); // Make sure controllers are updated
+          _initializeControllers();
         });
       }
     });
   }
 
   Future<void> _saveWorkout() async {
-    if (_workoutNameController.text.isEmpty ||
-        _selectedExercises.isEmpty) {
+    if (_workoutNameController.text.isEmpty || _selectedExercises.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please fill in all required fields.')),
       );
@@ -144,7 +206,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
     final workoutData = {
       'name': _workoutNameController.text,
-      'date': _selectedDate.toIso8601String(), // Use the selected date
+      'date': _selectedDate.toIso8601String(),
       'userId': user.uid,
       'exercises': _selectedExercises.map((exercise) {
         return {
@@ -175,26 +237,28 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
   void addSet(int exerciseIndex) {
     setState(() {
-      _workoutSets[exerciseIndex].add(SetDetails(reps: '', weight: ''));
+      _workoutSets[exerciseIndex].add(
+          SetDetails(reps: '', weight: '', rir: ''));
       _repsControllers[exerciseIndex].add(TextEditingController());
       _weightControllers[exerciseIndex].add(TextEditingController());
+      _rirControllers[exerciseIndex].add(TextEditingController());
     });
   }
 
   void removeSet(int exerciseIndex, int setIndex) {
-    if (setIndex == 0) {
+    setState(() {
+      // Check if only one set remains and confirm removal
       if (_workoutSets[exerciseIndex].length == 1) {
         showDialog(
           context: context,
           builder: (BuildContext context) {
             return AlertDialog(
               title: const Text('Confirm Removal'),
-              content: const Text('Are you sure you want to remove this exercise?'),
+              content: const Text(
+                  'Are you sure you want to remove this exercise?'),
               actions: <Widget>[
                 TextButton(
-                  onPressed: () {
-                    Navigator.of(context).pop(); // Close the dialog
-                  },
+                  onPressed: () => Navigator.of(context).pop(),
                   child: const Text('Cancel'),
                 ),
                 TextButton(
@@ -202,8 +266,11 @@ class _WorkoutPageState extends State<WorkoutPage> {
                     setState(() {
                       _selectedExercises.removeAt(exerciseIndex);
                       _workoutSets.removeAt(exerciseIndex);
+                      _repsControllers.removeAt(exerciseIndex);
+                      _weightControllers.removeAt(exerciseIndex);
+                      _rirControllers.removeAt(exerciseIndex);
                     });
-                    Navigator.of(context).pop(); // Close the dialog after removal
+                    Navigator.of(context).pop();
                   },
                   child: const Text('Yes'),
                 ),
@@ -212,18 +279,18 @@ class _WorkoutPageState extends State<WorkoutPage> {
           },
         );
       } else {
-        setState(() {
-          _workoutSets[exerciseIndex].removeAt(setIndex);
-        });
-      }
-    } else {
-      setState(() {
+        // Remove the specific set at setIndex
         _workoutSets[exerciseIndex].removeAt(setIndex);
-      });
-    }
+        _repsControllers[exerciseIndex].removeAt(setIndex);
+        _weightControllers[exerciseIndex].removeAt(setIndex);
+        _rirControllers[exerciseIndex].removeAt(setIndex);
+
+        // Re-initialize controllers for consistent UI behavior
+        _initializeControllers();
+      }
+    });
   }
 
-  // New method to show date picker
   Future<void> _selectDate(BuildContext context) async {
     final DateTime? pickedDate = await showDatePicker(
       context: context,
@@ -233,21 +300,54 @@ class _WorkoutPageState extends State<WorkoutPage> {
     );
     if (pickedDate != null && pickedDate != _selectedDate) {
       setState(() {
-        _selectedDate = pickedDate; // Update the selected date
+        _selectedDate = pickedDate;
       });
     }
   }
 
-  // Method to navigate to exercise details screen
-  void _navigateToExerciseDetails(String exerciseName) {
+  void _navigateToExerciseDetails(String exerciseName) async {
+    // Fetch recent workouts for the selected exercise using the workout date
+    List<Workout> recentWorkouts = await getRecentWorkoutsForExercise(exerciseName, _selectedDate);
+
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => ExerciseDetailsScreen(exerciseName: exerciseName, recentWorkouts: const [],),
+        builder: (context) => ExerciseDetailsScreen(
+          exerciseName: exerciseName,
+          recentWorkouts: recentWorkouts,
+        ),
       ),
     );
   }
 
+  Future<List<Workout>> getRecentWorkoutsForExercise(String exerciseName, DateTime currentWorkoutDate) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      return [];
+    }
+
+    // Fetch workouts from Firebase
+    final snapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('workouts')
+        .get();
+
+    // Filter workouts by exercise name and date
+    List<Workout> filteredWorkouts = snapshot.docs
+        .map((doc) => Workout.fromFirestore(doc))
+        .where((workout) =>
+    workout.date.isBefore(currentWorkoutDate) &&
+        workout.exercises.any((exercise) => exercise.name == exerciseName))
+        .toList();
+
+    // Sort by date in descending order
+    filteredWorkouts.sort((a, b) => b.date.compareTo(a.date));
+
+    // Return the top 3 recent workouts
+    return filteredWorkouts.take(3).toList();
+  }
+  
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -255,8 +355,38 @@ class _WorkoutPageState extends State<WorkoutPage> {
         title: const Text('Workout Entry'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: _navigateToExerciseSelection,
+            icon: const Icon(Icons.delete), // Trash icon
+            onPressed: () {
+              // Confirm clear action with an alert dialog
+              showDialog(
+                context: context,
+                builder: (BuildContext context) {
+                  return AlertDialog(
+                    title: const Text('Clear Workout'),
+                    content: const Text(
+                        'Delete this workout?'),
+                    actions: <Widget>[
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('Cancel'),
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          setState(() {
+                            _workoutNameController.clear();
+                            _selectedExercises.clear();
+                            _workoutSets.clear();
+                            _initializeControllers(); // Reset controllers
+                          });
+                          Navigator.of(context).pop();
+                        },
+                        child: const Text('Yes'),
+                      ),
+                    ],
+                  );
+                },
+              );
+            },
           ),
           IconButton(
             icon: const Icon(Icons.save),
@@ -269,93 +399,126 @@ class _WorkoutPageState extends State<WorkoutPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Date picker
+            TextField(
+              controller: _workoutNameController,
+              decoration: const InputDecoration(
+                labelText: 'Workout Name',
+              ),
+            ),
+            const SizedBox(height: 16.0),
             Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  'Workout Date: ${DateFormat('dd-MM-yyyy').format(_selectedDate)}',
-                  style: const TextStyle(fontSize: 16),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.calendar_today),
+                Text('Date: ${DateFormat('yMMMd').format(_selectedDate)}'),
+                ElevatedButton(
                   onPressed: () => _selectDate(context),
+                  child: const Text('Select Date'),
                 ),
               ],
             ),
-            const SizedBox(height: 16.0),
-            ListView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: _selectedExercises.length,
-              itemBuilder: (context, exerciseIndex) {
-                return GestureDetector(
-                  onDoubleTap: () {
-                    _navigateToExerciseDetails(_selectedExercises[exerciseIndex]);
-                  },
-                  child: ExpansionTile(
-                    key: Key('exercise_$exerciseIndex'),
-                    title: Text(_selectedExercises[exerciseIndex]),
-                    children: [
-                      ListView.builder(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        itemCount: _workoutSets[exerciseIndex].length,
-                        itemBuilder: (context, setIndex) {
-                          final setDetails = _workoutSets[exerciseIndex][setIndex];
-                          return Column(
-                            children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text('Set ${setIndex + 1}'),
-                                  if (setIndex == 0)
-                                    IconButton(
-                                      icon: const Icon(Icons.add_circle),
-                                      onPressed: () => addSet(exerciseIndex),
-                                    ),
-                                  if (setIndex > 0)
-                                    IconButton(
-                                      icon: const Icon(Icons.remove_circle),
-                                      onPressed: () => removeSet(exerciseIndex, setIndex),
-                                    ),
-                                ],
-                              ),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: TextField(
-                                      controller: _repsControllers[exerciseIndex][setIndex],
-                                      decoration: const InputDecoration(
-                                        labelText: 'Reps',
-                                      ),
-                                      keyboardType: TextInputType.number,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 16.0),
-                                  Expanded(
-                                    child: TextField(
-                                      controller: _weightControllers[exerciseIndex][setIndex],
-                                      decoration: const InputDecoration(
-                                        labelText: 'Weight',
-                                      ),
-                                      keyboardType: TextInputType.number,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const Divider(),
-                            ],
-                          );
-                        },
-                      ),
-                    ],
+            const SizedBox(height: 12.0),
+            if (_selectedExercises.isEmpty)
+              const Text('No exercises selected yet. Add some to get started.'),
+            for (int i = 0; i < _selectedExercises.length; i++)
+              Card(
+                margin: const EdgeInsets.symmetric(vertical: 8.0),
+                child: ExpansionTile(
+                  title: Text(_selectedExercises[i]),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.info_outline),
+                    onPressed: () {
+                      // Navigate to the exercise details screen for the selected exercise
+                      _navigateToExerciseDetails(_selectedExercises[i]);
+                    },
                   ),
-                );
-              },
-            ),
+                  children: [
+                    for (int j = 0; j < _workoutSets[i].length; j++)
+                      Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Set ${j + 1}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14.0,
+                              ),
+                            ),
+                            const SizedBox(height: 4.0),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextField(
+                                    controller: _weightControllers[i][j],
+                                    keyboardType: TextInputType.number,
+                                    decoration: const InputDecoration(
+                                      labelStyle: TextStyle(fontSize: 12.0),
+                                      labelText: 'Weight',
+                                    ),
+                                    onChanged: (value) {
+                                      _workoutSets[i][j].weight = value;
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 8.0),
+                                Expanded(
+                                  child: TextField(
+                                    controller: _repsControllers[i][j],
+                                    keyboardType: TextInputType.number,
+                                    decoration: const InputDecoration(
+                                      labelStyle: TextStyle(fontSize: 12.0),
+                                      labelText: 'Reps',
+                                    ),
+                                    onChanged: (value) {
+                                      _workoutSets[i][j].reps = value;
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 8.0),
+                                Expanded(
+                                  child: TextField(
+                                    controller: _rirControllers[i][j],
+                                    keyboardType: TextInputType.number,
+                                    decoration: const InputDecoration(
+                                      labelStyle: TextStyle(fontSize: 12.0),
+                                      labelText: 'RIR',
+                                    ),
+                                    onChanged: (value) {
+                                      _workoutSets[i][j].rir = value;
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 8.0),
+                                IconButton(
+                                  icon: const Icon(Icons.remove),
+                                  onPressed: () => removeSet(i, j),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: IconButton(
+                        icon: const Icon(Icons.add),
+                        onPressed: () => addSet(i),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
           ],
         ),
       ),
+      // Floating action button for adding exercise
+      floatingActionButton: FloatingActionButton(
+        onPressed: _navigateToExerciseSelection,
+        child: const Icon(Icons.add),
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation
+          .endFloat, // Position at bottom-right
     );
   }
 }

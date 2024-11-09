@@ -44,8 +44,8 @@ class Exercise {
   // Factory expects a Map<String, dynamic> instead of DocumentSnapshot
   factory Exercise.fromFirestore(Map<String, dynamic> data) {
     var setsData = data['sets'] as List<dynamic>;
-    List<SetDetails> sets = setsData.map((set) {
-      return SetDetails.fromFirestore(set as Map<String, dynamic>);
+    List<SetDetails> sets = setsData.asMap().entries.map((entry) {
+      return SetDetails.fromFirestore(entry.value as Map<String, dynamic>, entry.key + 1); // Pass set index as setNumber
     }).toList();
 
     return Exercise(
@@ -56,25 +56,31 @@ class Exercise {
 }
 
 class SetDetails {
-  final int setNumber;
-  final String reps;
-  final String weight;
+  final int setNumber; // New field for set number
+  String reps;
+  String weight;
+  String rir; // New field for RIR
 
-  SetDetails({required this.setNumber, required this.reps, required this.weight});
+  SetDetails({
+    required this.setNumber,
+    required this.reps,
+    required this.weight,
+    required this.rir,
+  });
 
-  factory SetDetails.fromFirestore(Map<String, dynamic> data) {
+  factory SetDetails.fromFirestore(Map<String, dynamic> data, int setNumber) {
     return SetDetails(
-      setNumber: data['setNumber'] ?? 1,
+      setNumber: setNumber, // Assign set number
       reps: data['reps'] ?? '0',
       weight: data['weight'] ?? '0',
+      rir: data['rir'] ?? '0', // Default RIR
     );
   }
 
-  Map<String, dynamic> toMap() {
-    return {
-      'setNumber': setNumber,
-      'reps': reps,
-      'weight': weight,
-    };
-  }
+  Map<String, dynamic> toMap() => {
+    'setNumber': setNumber, // Include set number when converting to map
+    'reps': reps,
+    'weight': weight,
+    'rir': rir,
+  };
 }

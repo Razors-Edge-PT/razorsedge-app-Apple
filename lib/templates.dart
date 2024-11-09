@@ -163,7 +163,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       MaterialPageRoute(
         builder: (context) => TemplateDetailsScreen(
           template: template,
-          fromWorkoutPage: widget.fromWorkoutPage, // Pass the flag
+          //fromWorkoutPage: widget.fromWorkoutPage, // Pass the flag
           onLoadTemplate: (selectedTemplate) {
             Navigator.pop(context, selectedTemplate); // Pass the template back to WorkoutPage
           },

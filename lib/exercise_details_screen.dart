@@ -47,7 +47,7 @@ class ExerciseDetailsScreen extends StatelessWidget {
                     return ListTile(
                       title: Text('Workout Date: ${DateFormat('dd-MM-yyyy').format(workout.date)}'),
                       subtitle: Text(
-                        'Reps: ${set1.reps}, Weight: ${set1.weight} kg',
+                        'Reps: ${set1.reps}, Weight: ${set1.weight} kg, RIR: ${set1.rir}',
                       ),
                     );
                   } else {

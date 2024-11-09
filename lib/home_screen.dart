@@ -177,10 +177,13 @@ class _HomeScreenState extends State<HomeScreen> {
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (context) =>
-                                WorkoutDetailsScreen(
-                                    workout: mostRecentWorkout!),
+                            builder: (context) => WorkoutDetailsScreen(workout: mostRecentWorkout!),
                           ),
+                        );
+                      } else {
+                        // Optionally, you can show a message if there is no recent workout.
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('No recent workout available')),
                         );
                       }
                     },
