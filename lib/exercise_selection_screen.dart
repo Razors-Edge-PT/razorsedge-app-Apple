@@ -1,5 +1,6 @@
-import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
+
 import 'exercise_model.dart';
 
 class ExerciseSelectionScreen extends StatefulWidget {
@@ -8,24 +9,30 @@ class ExerciseSelectionScreen extends StatefulWidget {
   const ExerciseSelectionScreen({required this.selectedExercises, super.key});
 
   @override
-  State<ExerciseSelectionScreen> createState() => _ExerciseSelectionScreenState();
+  State<ExerciseSelectionScreen> createState() =>
+      _ExerciseSelectionScreenState();
 }
 
 class _ExerciseSelectionScreenState extends State<ExerciseSelectionScreen> {
   final List<String> _selectedExercises = []; // Local list to track selections
-  final Map<String, List<Exercise>> _groupedExercises = {}; // Grouped exercises by body part
+  final Map<String, List<Exercise>> _groupedExercises =
+      {}; // Grouped exercises by body part
 
   @override
   void initState() {
     super.initState();
-    _selectedExercises.addAll(widget.selectedExercises); // Copy initial selections
+    _selectedExercises
+        .addAll(widget.selectedExercises); // Copy initial selections
     _fetchExercises();
   }
 
   Future<void> _fetchExercises() async {
     try {
-      final querySnapshot = await FirebaseFirestore.instance.collection('exercises').get();
-      final exercises = querySnapshot.docs.map((doc) => Exercise.fromDocumentSnapshot(doc)).toList();
+      final querySnapshot =
+          await FirebaseFirestore.instance.collection('exercises').get();
+      final exercises = querySnapshot.docs
+          .map((doc) => Exercise.fromDocumentSnapshot(doc))
+          .toList();
 
       // Group exercises by body part
       final Map<String, List<Exercise>> grouped = {};
@@ -61,7 +68,8 @@ class _ExerciseSelectionScreenState extends State<ExerciseSelectionScreen> {
           final exercises = _groupedExercises[bodyPart]!;
 
           return ExpansionTile(
-            title: Text(bodyPart, style: const TextStyle(fontWeight: FontWeight.bold)),
+            title: Text(bodyPart,
+                style: const TextStyle(fontWeight: FontWeight.bold)),
             children: exercises.map((exercise) {
               return CheckboxListTile(
                 title: Text(exercise.name),

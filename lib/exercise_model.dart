@@ -6,11 +6,11 @@ class Exercise {
   final String bodyPart;
   final String category;
 
-  Exercise({
-    required this.id,
-    required this.name,
-    required this.bodyPart,
-    required this.category});
+  Exercise(
+      {required this.id,
+      required this.name,
+      required this.bodyPart,
+      required this.category});
 
   factory Exercise.fromDocumentSnapshot(DocumentSnapshot snapshot) {
     return Exercise(

@@ -8,7 +8,8 @@ class Workout {
   Workout({required this.name, required this.date, required this.exercises});
 
   // Factory constructor for converting Firestore data into a Workout object
-  factory Workout.fromFirestore(DocumentSnapshot<Map<String, dynamic>> snapshot) {
+  factory Workout.fromFirestore(
+      DocumentSnapshot<Map<String, dynamic>> snapshot) {
     final data = snapshot.data()!;
 
     // Handle both Firestore Timestamp and String date formats
@@ -45,7 +46,8 @@ class Exercise {
   factory Exercise.fromFirestore(Map<String, dynamic> data) {
     var setsData = data['sets'] as List<dynamic>;
     List<SetDetails> sets = setsData.asMap().entries.map((entry) {
-      return SetDetails.fromFirestore(entry.value as Map<String, dynamic>, entry.key + 1); // Pass set index as setNumber
+      return SetDetails.fromFirestore(entry.value as Map<String, dynamic>,
+          entry.key + 1); // Pass set index as setNumber
     }).toList();
 
     return Exercise(
@@ -78,9 +80,9 @@ class SetDetails {
   }
 
   Map<String, dynamic> toMap() => {
-    'setNumber': setNumber, // Include set number when converting to map
-    'reps': reps,
-    'weight': weight,
-    'rir': rir,
-  };
+        'setNumber': setNumber, // Include set number when converting to map
+        'reps': reps,
+        'weight': weight,
+        'rir': rir,
+      };
 }

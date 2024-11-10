@@ -5,7 +5,8 @@ import 'package:flutter/material.dart';
 class BodyWeightTracker extends StatefulWidget {
   final Function(String)? onWeightSaved; // Declare the callback parameter
 
-  const BodyWeightTracker({this.onWeightSaved, super.key}); // Add it to the constructor
+  const BodyWeightTracker(
+      {this.onWeightSaved, super.key}); // Add it to the constructor
 
   @override
   State<BodyWeightTracker> createState() => _BodyWeightTrackerState();
@@ -63,7 +64,8 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
         FocusScope.of(context).unfocus();
 
         // Call the callback to update the most recent weight
-        if (widget.onWeightSaved != null) { // Use 'widget.onWeightSaved'
+        if (widget.onWeightSaved != null) {
+          // Use 'widget.onWeightSaved'
           widget.onWeightSaved!('${weight.toString()} $unit');
         }
       } catch (error) {

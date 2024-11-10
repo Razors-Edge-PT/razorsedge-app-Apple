@@ -13,7 +13,7 @@ class Template {
 
   Map<String, dynamic> toJson() {
     return {
-      'id' : id,
+      'id': id,
       'name': name,
       'day': day,
       'exercises': exercises,
@@ -33,5 +33,4 @@ class Template {
       exercises: exercises ?? List.from(this.exercises),
     );
   }
-
 }

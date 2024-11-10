@@ -1,11 +1,12 @@
-import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+
 import 'body_weight_tracker.dart';
-import 'workout_model.dart'; // Import Workout model
 import 'workout_details_screen.dart'; // Import workout details screen
 import 'workout_entry_screen.dart'; // Import workout entry screen
+import 'workout_model.dart'; // Import Workout model
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -141,70 +142,74 @@ class _HomeScreenState extends State<HomeScreen> {
       body: isLoading
           ? const Center(child: CircularProgressIndicator())
           : errorMessage.isNotEmpty
-          ? Center(child: Text(errorMessage))
-          : Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ListTile(
-              title: const Text('Most Recent Weight'),
-              subtitle:
-              Text(mostRecentWeight ?? 'No recent weight found'),
-              onTap: () {
-                if (mostRecentWeight != null) {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => const BodyWeightTracker(),
-                    ),
-                  );
-                }
-              },
-            ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: ListTile(
-                    title: const Text('Most Recent Workout'),
-                    subtitle: Text(mostRecentWorkout != null
-                        ? '${mostRecentWorkout!.name} - ${DateFormat('dd-MM-yyyy').format(mostRecentWorkout!.date)}'
-                        : 'No recent workout found'),
-                    onTap: () {
-                      if (mostRecentWorkout != null) {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => WorkoutDetailsScreen(workout: mostRecentWorkout!),
+              ? Center(child: Text(errorMessage))
+              : Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ListTile(
+                        title: const Text('Most Recent Weight'),
+                        subtitle:
+                            Text(mostRecentWeight ?? 'No recent weight found'),
+                        onTap: () {
+                          if (mostRecentWeight != null) {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => const BodyWeightTracker(),
+                              ),
+                            );
+                          }
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: ListTile(
+                              title: const Text('Most Recent Workout'),
+                              subtitle: Text(mostRecentWorkout != null
+                                  ? '${mostRecentWorkout!.name} - ${DateFormat('dd-MM-yyyy').format(mostRecentWorkout!.date)}'
+                                  : 'No recent workout found'),
+                              onTap: () {
+                                if (mostRecentWorkout != null) {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (context) =>
+                                          WorkoutDetailsScreen(
+                                              workout: mostRecentWorkout!),
+                                    ),
+                                  );
+                                } else {
+                                  // Optionally, you can show a message if there is no recent workout.
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                        content: Text(
+                                            'No recent workout available')),
+                                  );
+                                }
+                              },
+                            ),
                           ),
-                        );
-                      } else {
-                        // Optionally, you can show a message if there is no recent workout.
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('No recent workout available')),
-                        );
-                      }
-                    },
+                          ElevatedButton(
+                            onPressed: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => const WorkoutPage(),
+                                ),
+                              );
+                            },
+                            child: const Text('Add Workout'),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
-                ElevatedButton(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const WorkoutPage(),
-                      ),
-                    );
-                  },
-                  child: const Text('Add Workout'),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

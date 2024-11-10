@@ -1,9 +1,10 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
-import 'workout_model.dart'; // Import Workout and Exercise models
+
 import 'workout_details_screen.dart'; // Import the details screen
+import 'workout_model.dart'; // Import Workout and Exercise models
 
 class WorkoutHistoryScreen extends StatefulWidget {
   const WorkoutHistoryScreen({super.key});
@@ -35,7 +36,9 @@ class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen> {
             .get();
 
         // Map Firestore documents to Workout objects
-        workouts = querySnapshot.docs.map((doc) => Workout.fromFirestore(doc)).toList();
+        workouts = querySnapshot.docs
+            .map((doc) => Workout.fromFirestore(doc))
+            .toList();
       }
     } catch (error) {
       errorMessage = 'Failed to load workouts: $error';
@@ -55,27 +58,29 @@ class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen> {
       body: isLoading
           ? const Center(child: CircularProgressIndicator())
           : errorMessage.isNotEmpty
-          ? Center(child: Text(errorMessage))
-          : workouts.isEmpty
-          ? const Center(child: Text('No workouts found.'))
-          : ListView.builder(
-        itemCount: workouts.length,
-        itemBuilder: (context, index) {
-          final workout = workouts[index];
-          return ListTile(
-            title: Text(workout.name),
-            subtitle: Text(DateFormat('dd-MM-yyyy').format(workout.date)),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => WorkoutDetailsScreen(workout: workout),
-                ),
-              );
-            },
-          );
-        },
-      ),
+              ? Center(child: Text(errorMessage))
+              : workouts.isEmpty
+                  ? const Center(child: Text('No workouts found.'))
+                  : ListView.builder(
+                      itemCount: workouts.length,
+                      itemBuilder: (context, index) {
+                        final workout = workouts[index];
+                        return ListTile(
+                          title: Text(workout.name),
+                          subtitle: Text(
+                              DateFormat('dd-MM-yyyy').format(workout.date)),
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) =>
+                                    WorkoutDetailsScreen(workout: workout),
+                              ),
+                            );
+                          },
+                        );
+                      },
+                    ),
     );
   }
 }

@@ -24,7 +24,8 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
 
   Future<void> _fetchExercises() async {
     try {
-      final querySnapshot = await FirebaseFirestore.instance.collection('exercises').get();
+      final querySnapshot =
+          await FirebaseFirestore.instance.collection('exercises').get();
       final data = querySnapshot.docs.map((doc) => doc.data()).toList();
       setState(() {
         exercises = data;
@@ -54,8 +55,7 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
                     if (value == null || value.isEmpty) {
                       return 'Please enter a name';
                     }
-                    return
-                      null;
+                    return null;
                   },
                 ),
                 TextFormField(
@@ -67,8 +67,7 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
                     if (value == null || value.isEmpty) {
                       return 'Please enter a category';
                     }
-                    return
-                      null;
+                    return null;
                   },
                 ),
                 TextFormField(
@@ -80,8 +79,7 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
                     if (value == null || value.isEmpty) {
                       return 'Please enter a body part';
                     }
-                    return
-                      null;
+                    return null;
                   },
                 ),
                 // ... other TextFields for bodyPart and category
@@ -98,8 +96,7 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
             TextButton(
               child: const Text('Save'),
               onPressed: () {
-                if (_formKey.currentState!.validate())
-                {
+                if (_formKey.currentState!.validate()) {
                   // Add exercise to Firebase
                   _addExercise(_name, _bodyPart, _category);
                   Navigator.of(context).pop();
@@ -112,7 +109,8 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
     );
   }
 
-  Future<void> _addExercise(String name, String bodyPart, String category) async {
+  Future<void> _addExercise(
+      String name, String bodyPart, String category) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
       final exerciseData = {

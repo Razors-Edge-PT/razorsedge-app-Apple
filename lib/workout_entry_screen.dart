@@ -1,18 +1,20 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart'; // Import for date formatting
 import 'package:localtest222/workout_model.dart';
+
+import 'exercise_details_screen.dart'; // Import your exercise details screen
 import 'exercise_selection_screen.dart';
 import 'template_model.dart';
 import 'templates.dart';
-import 'exercise_details_screen.dart'; // Import your exercise details screen
 
 class WorkoutPage extends StatefulWidget {
   final Template? initialTemplate;
   final Workout? workout; // Make workout optional
 
-  const WorkoutPage({Key? key, this.initialTemplate, this.workout}) : super(key: key);
+  const WorkoutPage({Key? key, this.initialTemplate, this.workout})
+      : super(key: key);
 
   @override
   _WorkoutPageState createState() => _WorkoutPageState();
@@ -26,14 +28,14 @@ class SetDetails {
   SetDetails({
     this.reps = '', // Empty string for reps
     this.weight = '', // Empty string for weight
-    this.rir = '',    // Empty string for RIR
+    this.rir = '', // Empty string for RIR
   });
 
   Map<String, dynamic> toMap() => {
-    'reps': reps,
-    'weight': weight,
-    'rir': rir,
-  };
+        'reps': reps,
+        'weight': weight,
+        'rir': rir,
+      };
 }
 
 class _WorkoutPageState extends State<WorkoutPage> {
@@ -43,7 +45,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
   final List<List<SetDetails>> _workoutSets = [];
   final List<List<TextEditingController>> _repsControllers = [];
   final List<List<TextEditingController>> _weightControllers = [];
-  final List<List<TextEditingController>> _rirControllers = []; // New controller list for RIR
+  final List<List<TextEditingController>> _rirControllers =
+      []; // New controller list for RIR
   final int _defaultSets = 3;
 
   @override
@@ -63,13 +66,19 @@ class _WorkoutPageState extends State<WorkoutPage> {
     _workoutNameController.text = workout.name;
     _selectedDate = workout.date;
     _selectedExercises.clear();
-    _selectedExercises.addAll(workout.exercises.map((exercise) => exercise.name));
+    _selectedExercises
+        .addAll(workout.exercises.map((exercise) => exercise.name));
 
     // Map workout exercises and sets to initialize _workoutSets and controllers
     _workoutSets.clear();
     _workoutSets.addAll(
       workout.exercises.map((exercise) {
-        return exercise.sets.map((set) => SetDetails(reps: set.reps.toString(), weight: set.weight.toString(), rir: set.rir)).toList();
+        return exercise.sets
+            .map((set) => SetDetails(
+                reps: set.reps.toString(),
+                weight: set.weight.toString(),
+                rir: set.rir))
+            .toList();
       }).toList(),
     );
 
@@ -85,9 +94,9 @@ class _WorkoutPageState extends State<WorkoutPage> {
       _selectedExercises.addAll(template.exercises);
       _workoutSets.addAll(List.generate(
         _selectedExercises.length,
-            (index) => List.generate(
+        (index) => List.generate(
           _defaultSets,
-              (setIndex) => SetDetails(), // Using SetDetails default values
+          (setIndex) => SetDetails(), // Using SetDetails default values
         ),
       ));
       _initializeControllers();
@@ -125,14 +134,15 @@ class _WorkoutPageState extends State<WorkoutPage> {
     for (int i = 0; i < _selectedExercises.length; i++) {
       List<SetDetails> sets = List.generate(
         _defaultSets,
-            (setIndex) => SetDetails(),
+        (setIndex) => SetDetails(),
       );
 
       _workoutSets.add(sets);
 
       // Ensure TextEditingController is initialized with empty string and no default text
       _repsControllers.add(sets.map((set) => TextEditingController()).toList());
-      _weightControllers.add(sets.map((set) => TextEditingController()).toList());
+      _weightControllers
+          .add(sets.map((set) => TextEditingController()).toList());
       _rirControllers.add(sets.map((set) => TextEditingController()).toList());
     }
   }
@@ -154,10 +164,9 @@ class _WorkoutPageState extends State<WorkoutPage> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) =>
-            ExerciseSelectionScreen(
-              selectedExercises: _selectedExercises,
-            ),
+        builder: (context) => ExerciseSelectionScreen(
+          selectedExercises: _selectedExercises,
+        ),
       ),
     ).then((selectedExercises) {
       if (selectedExercises != null && selectedExercises is List<String>) {
@@ -169,14 +178,13 @@ class _WorkoutPageState extends State<WorkoutPage> {
           _workoutSets.addAll(
             List.generate(
               _selectedExercises.length,
-                  (index) =>
-                  List.generate(
-                    _defaultSets,
-                        (setIndex) =>
-                        SetDetails(reps: '',
-                            weight: '',
-                            rir: ''), // Include RIR initialization
-                  ),
+              (index) => List.generate(
+                _defaultSets,
+                (setIndex) => SetDetails(
+                    reps: '',
+                    weight: '',
+                    rir: ''), // Include RIR initialization
+              ),
             ),
           );
           _initializeControllers();
@@ -234,8 +242,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
   void addSet(int exerciseIndex) {
     setState(() {
-      _workoutSets[exerciseIndex].add(
-          SetDetails(reps: '', weight: '', rir: ''));
+      _workoutSets[exerciseIndex]
+          .add(SetDetails(reps: '', weight: '', rir: ''));
       _repsControllers[exerciseIndex].add(TextEditingController());
       _weightControllers[exerciseIndex].add(TextEditingController());
       _rirControllers[exerciseIndex].add(TextEditingController());
@@ -251,8 +259,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
           builder: (BuildContext context) {
             return AlertDialog(
               title: const Text('Confirm Removal'),
-              content: const Text(
-                  'Are you sure you want to remove this exercise?'),
+              content:
+                  const Text('Are you sure you want to remove this exercise?'),
               actions: <Widget>[
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
@@ -304,7 +312,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
   void _navigateToExerciseDetails(String exerciseName) async {
     // Fetch recent workouts for the selected exercise using the workout date
-    List<Workout> recentWorkouts = await getRecentWorkoutsForExercise(exerciseName, _selectedDate);
+    List<Workout> recentWorkouts =
+        await getRecentWorkoutsForExercise(exerciseName, _selectedDate);
 
     Navigator.push(
       context,
@@ -317,7 +326,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
     );
   }
 
-  Future<List<Workout>> getRecentWorkoutsForExercise(String exerciseName, DateTime currentWorkoutDate) async {
+  Future<List<Workout>> getRecentWorkoutsForExercise(
+      String exerciseName, DateTime currentWorkoutDate) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       return [];
@@ -334,8 +344,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
     List<Workout> filteredWorkouts = snapshot.docs
         .map((doc) => Workout.fromFirestore(doc))
         .where((workout) =>
-    workout.date.isBefore(currentWorkoutDate) &&
-        workout.exercises.any((exercise) => exercise.name == exerciseName))
+            workout.date.isBefore(currentWorkoutDate) &&
+            workout.exercises.any((exercise) => exercise.name == exerciseName))
         .toList();
 
     // Sort by date in descending order
@@ -360,8 +370,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                 builder: (BuildContext context) {
                   return AlertDialog(
                     title: const Text('Clear Workout'),
-                    content: const Text(
-                        'Delete this workout?'),
+                    content: const Text('Delete this workout?'),
                     actions: <Widget>[
                       TextButton(
                         onPressed: () => Navigator.of(context).pop(),
@@ -392,7 +401,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
         ],
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.only(left:12,top:0,right:12,bottom:0),
+        padding: const EdgeInsets.only(left: 12, top: 0, right: 12, bottom: 0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -418,7 +427,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
               const Text('No exercises selected yet. Add some to get started.'),
             for (int i = 0; i < _selectedExercises.length; i++)
               Card(
-                margin: const EdgeInsets.only(left: 0,top: 4,right: 0,bottom: 0),
+                margin:
+                    const EdgeInsets.only(left: 0, top: 4, right: 0, bottom: 0),
                 child: ExpansionTile(
                   title: Text(_selectedExercises[i]),
                   trailing: IconButton(
@@ -431,7 +441,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
                   children: [
                     for (int j = 0; j < _workoutSets[i].length; j++)
                       Padding(
-                        padding: const EdgeInsets.only(left: 6,bottom: 0,top: 0,right: 6),
+                        padding: const EdgeInsets.only(
+                            left: 6, bottom: 0, top: 0, right: 6),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -457,11 +468,20 @@ class _WorkoutPageState extends State<WorkoutPage> {
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: const [
-                                Expanded(child: Text('Weight', textAlign: TextAlign.left, style: TextStyle(fontSize: 10.0))),
+                                Expanded(
+                                    child: Text('Weight',
+                                        textAlign: TextAlign.left,
+                                        style: TextStyle(fontSize: 10.0))),
                                 SizedBox(width: 8.0),
-                                Expanded(child: Text('Reps', textAlign: TextAlign.left, style: TextStyle(fontSize: 10.0))),
+                                Expanded(
+                                    child: Text('Reps',
+                                        textAlign: TextAlign.left,
+                                        style: TextStyle(fontSize: 10.0))),
                                 SizedBox(width: 8.0),
-                                Expanded(child: Text('RIR', textAlign: TextAlign.left, style: TextStyle(fontSize: 10.0)))
+                                Expanded(
+                                    child: Text('RIR',
+                                        textAlign: TextAlign.left,
+                                        style: TextStyle(fontSize: 10.0)))
                               ],
                             ),
                             const SizedBox(height: 0.0),
@@ -473,7 +493,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                     controller: _weightControllers[i][j],
                                     keyboardType: TextInputType.number,
                                     decoration: InputDecoration(
-                                      hintText: '20', // Placeholder weight value
+                                      hintText: '20',
+                                      // Placeholder weight value
                                       hintStyle: const TextStyle(
                                         color: Colors.grey,
                                         fontStyle: FontStyle.italic,
@@ -544,8 +565,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
         onPressed: _navigateToExerciseSelection,
         child: const Icon(Icons.add),
       ),
-      floatingActionButtonLocation: FloatingActionButtonLocation
-          .endFloat, // Position at bottom-right
+      floatingActionButtonLocation:
+          FloatingActionButtonLocation.endFloat, // Position at bottom-right
     );
   }
 }

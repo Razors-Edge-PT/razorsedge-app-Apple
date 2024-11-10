@@ -19,7 +19,8 @@ class _LoginScreenState extends State<LoginScreen> {
         password: _passwordController.text.trim(),
       );
       // Successful login, navigate to home screen
-      Navigator.pushReplacementNamed(context, '/home'); // Replace '/home' with your home screen route
+      Navigator.pushReplacementNamed(
+          context, '/home'); // Replace '/home' with your home screen route
     } on FirebaseAuthException catch (e) {
       // Handle errors, e.g., display error message to user
       print(e);

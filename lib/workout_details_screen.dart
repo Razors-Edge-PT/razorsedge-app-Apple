@@ -1,10 +1,11 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:localtest222/workout_entry_screen.dart';
-import 'workout_model.dart'; // Import Workout and Exercise models
+
 import 'exercise_details_screen.dart'; // Import the ExerciseDetailsScreen
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'workout_model.dart'; // Import Workout and Exercise models
 
 class WorkoutDetailsScreen extends StatefulWidget {
   final Workout workout;
@@ -40,7 +41,9 @@ class _WorkoutDetailsScreenState extends State<WorkoutDetailsScreen> {
 
         // Map Firestore documents to Workout objects
         setState(() {
-          allWorkouts = querySnapshot.docs.map((doc) => Workout.fromFirestore(doc)).toList();
+          allWorkouts = querySnapshot.docs
+              .map((doc) => Workout.fromFirestore(doc))
+              .toList();
         });
       }
     } catch (error) {
@@ -51,11 +54,14 @@ class _WorkoutDetailsScreenState extends State<WorkoutDetailsScreen> {
     }
   }
 
-  List<Workout> getRecentWorkoutsForExercise(String exerciseName, DateTime currentWorkoutDate) {
+  List<Workout> getRecentWorkoutsForExercise(
+      String exerciseName, DateTime currentWorkoutDate) {
     // Filter workouts that contain the specified exercise and occurred before the specified date
-    List<Workout> filteredWorkouts = allWorkouts.where((w) =>
-    w.date.isBefore(currentWorkoutDate) &&
-        w.exercises.any((ex) => ex.name == exerciseName)).toList();
+    List<Workout> filteredWorkouts = allWorkouts
+        .where((w) =>
+            w.date.isBefore(currentWorkoutDate) &&
+            w.exercises.any((ex) => ex.name == exerciseName))
+        .toList();
 
     // Sort workouts by date in descending order (most recent first)
     filteredWorkouts.sort((a, b) => b.date.compareTo(a.date));
@@ -81,7 +87,6 @@ class _WorkoutDetailsScreenState extends State<WorkoutDetailsScreen> {
               );
             },
           ),
-
         ],
       ),
       body: Padding(
@@ -116,7 +121,9 @@ class _WorkoutDetailsScreenState extends State<WorkoutDetailsScreen> {
                         icon: const Icon(Icons.info_outline),
                         onPressed: () {
                           // Gather recent workouts for this exercise
-                          List<Workout> recentWorkouts = getRecentWorkoutsForExercise(exercise.name,widget.workout.date);
+                          List<Workout> recentWorkouts =
+                              getRecentWorkoutsForExercise(
+                                  exercise.name, widget.workout.date);
                           // Navigate to the exercise details screen
                           Navigator.push(
                             context,
@@ -132,7 +139,8 @@ class _WorkoutDetailsScreenState extends State<WorkoutDetailsScreen> {
                       children: exercise.sets.map((set) {
                         return ListTile(
                           title: Text('Set ${set.setNumber}'),
-                          subtitle: Text('Reps: ${set.reps}, Weight: ${set.weight} kg'),
+                          subtitle: Text(
+                              'Reps: ${set.reps}, Weight: ${set.weight} kg'),
                           trailing: Text('RIR: ${set.rir}'),
                         );
                       }).toList(),

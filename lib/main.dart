@@ -1,12 +1,13 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
+
 import 'body_weight_tracker.dart'; // Import the new file
-import 'login_screen.dart';
 import 'exercises.dart';
+import 'home_screen.dart';
+import 'login_screen.dart';
 import 'templates.dart';
 import 'workout_entry_screen.dart';
 import 'workout_history_screen.dart';
-import 'home_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();

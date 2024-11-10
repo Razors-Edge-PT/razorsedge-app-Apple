@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import 'template_model.dart';
 import 'workout_entry_screen.dart';
 import 'workout_model.dart';
@@ -21,8 +22,10 @@ class TemplateDetailsScreen extends StatelessWidget {
           template.name,
           style: const TextStyle(color: Colors.black),
         ),
-        backgroundColor: Colors.grey[200], // Pale grey background
-        iconTheme: const IconThemeData(color: Colors.black), // Black icons
+        backgroundColor: Colors.grey[200],
+        // Pale grey background
+        iconTheme: const IconThemeData(color: Colors.black),
+        // Black icons
         elevation: 1,
         actions: [
           // Edit icon
@@ -30,7 +33,8 @@ class TemplateDetailsScreen extends StatelessWidget {
             icon: const Icon(Icons.edit, color: Colors.black),
             onPressed: () {
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text("Edit template feature not implemented")),
+                const SnackBar(
+                    content: Text("Edit template feature not implemented")),
               );
             },
             tooltip: 'Edit Template',
@@ -44,7 +48,8 @@ class TemplateDetailsScreen extends StatelessWidget {
                 context,
                 MaterialPageRoute(
                   builder: (context) => WorkoutPage(
-                    initialTemplate: template, // Pass the template as an argument
+                    initialTemplate:
+                        template, // Pass the template as an argument
                   ),
                 ),
               );
