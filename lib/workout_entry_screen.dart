@@ -21,14 +21,18 @@ class WorkoutPage extends StatefulWidget {
 class SetDetails {
   String reps;
   String weight;
-  String rir; // New field for RIR
+  String rir;
 
-  SetDetails({required this.reps, required this.weight, required this.rir});
+  SetDetails({
+    this.reps = '', // Empty string for reps
+    this.weight = '', // Empty string for weight
+    this.rir = '',    // Empty string for RIR
+  });
 
   Map<String, dynamic> toMap() => {
     'reps': reps,
     'weight': weight,
-    'rir': rir, // Include RIR in the map
+    'rir': rir,
   };
 }
 
@@ -46,11 +50,12 @@ class _WorkoutPageState extends State<WorkoutPage> {
   void initState() {
     super.initState();
     if (widget.workout != null) {
-      // Editing an existing workout
       _loadWorkout(widget.workout!);
     } else if (widget.initialTemplate != null) {
-      // Loading from a template for a new workout
       _loadTemplate(widget.initialTemplate!);
+    } else {
+      // No placeholder exercises are added here.
+      _initializeControllers();
     }
   }
 
@@ -80,14 +85,10 @@ class _WorkoutPageState extends State<WorkoutPage> {
       _selectedExercises.addAll(template.exercises);
       _workoutSets.addAll(List.generate(
         _selectedExercises.length,
-            (index) =>
-            List.generate(
-              _defaultSets,
-                  (setIndex) =>
-                  SetDetails(reps: '',
-                      weight: '',
-                      rir: ''), // Include RIR initialization
-            ),
+            (index) => List.generate(
+          _defaultSets,
+              (setIndex) => SetDetails(), // Using SetDetails default values
+        ),
       ));
       _initializeControllers();
     });
@@ -120,23 +121,19 @@ class _WorkoutPageState extends State<WorkoutPage> {
     _weightControllers.clear();
     _rirControllers.clear();
 
-    // Re-create controllers based on the updated _workoutSets
+    // Re-create controllers based on _selectedExercises with default placeholder values for each set
     for (int i = 0; i < _selectedExercises.length; i++) {
-      _repsControllers.add(
-        _workoutSets[i]
-            .map((set) => TextEditingController(text: set.reps))
-            .toList(),
+      List<SetDetails> sets = List.generate(
+        _defaultSets,
+            (setIndex) => SetDetails(),
       );
-      _weightControllers.add(
-        _workoutSets[i]
-            .map((set) => TextEditingController(text: set.weight))
-            .toList(),
-      );
-      _rirControllers.add(
-        _workoutSets[i]
-            .map((set) => TextEditingController(text: set.rir))
-            .toList(),
-      );
+
+      _workoutSets.add(sets);
+
+      // Ensure TextEditingController is initialized with empty string and no default text
+      _repsControllers.add(sets.map((set) => TextEditingController()).toList());
+      _weightControllers.add(sets.map((set) => TextEditingController()).toList());
+      _rirControllers.add(sets.map((set) => TextEditingController()).toList());
     }
   }
 
@@ -347,7 +344,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
     // Return the top 3 recent workouts
     return filteredWorkouts.take(3).toList();
   }
-  
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -395,7 +392,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
         ],
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
+        padding: const EdgeInsets.only(left:12,top:0,right:12,bottom:0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -405,7 +402,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                 labelText: 'Workout Name',
               ),
             ),
-            const SizedBox(height: 16.0),
+            const SizedBox(height: 10.0),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -416,12 +413,12 @@ class _WorkoutPageState extends State<WorkoutPage> {
                 ),
               ],
             ),
-            const SizedBox(height: 12.0),
+            const SizedBox(height: 0.0),
             if (_selectedExercises.isEmpty)
               const Text('No exercises selected yet. Add some to get started.'),
             for (int i = 0; i < _selectedExercises.length; i++)
               Card(
-                margin: const EdgeInsets.symmetric(vertical: 8.0),
+                margin: const EdgeInsets.only(left: 0,top: 4,right: 0,bottom: 0),
                 child: ExpansionTile(
                   title: Text(_selectedExercises[i]),
                   trailing: IconButton(
@@ -434,27 +431,54 @@ class _WorkoutPageState extends State<WorkoutPage> {
                   children: [
                     for (int j = 0; j < _workoutSets[i].length; j++)
                       Padding(
-                        padding: const EdgeInsets.all(8.0),
+                        padding: const EdgeInsets.only(left: 6,bottom: 0,top: 0,right: 6),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              'Set ${j + 1}',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 14.0,
-                              ),
+                            // Row for the Set number and Remove Set icon
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  'Set ${j + 1}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 12.0,
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.remove),
+                                  onPressed: () => removeSet(i, j),
+                                ),
+                              ],
                             ),
-                            const SizedBox(height: 4.0),
+                            const SizedBox(height: 0.0),
+                            // Row for the labels
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: const [
+                                Expanded(child: Text('Weight', textAlign: TextAlign.left, style: TextStyle(fontSize: 10.0))),
+                                SizedBox(width: 8.0),
+                                Expanded(child: Text('Reps', textAlign: TextAlign.left, style: TextStyle(fontSize: 10.0))),
+                                SizedBox(width: 8.0),
+                                Expanded(child: Text('RIR', textAlign: TextAlign.left, style: TextStyle(fontSize: 10.0)))
+                              ],
+                            ),
+                            const SizedBox(height: 0.0),
+                            // Row for the text fields
                             Row(
                               children: [
                                 Expanded(
                                   child: TextField(
                                     controller: _weightControllers[i][j],
                                     keyboardType: TextInputType.number,
-                                    decoration: const InputDecoration(
-                                      labelStyle: TextStyle(fontSize: 12.0),
-                                      labelText: 'Weight',
+                                    decoration: InputDecoration(
+                                      hintText: '20', // Placeholder weight value
+                                      hintStyle: const TextStyle(
+                                        color: Colors.grey,
+                                        fontStyle: FontStyle.italic,
+                                        fontSize: 12,
+                                      ),
                                     ),
                                     onChanged: (value) {
                                       _workoutSets[i][j].weight = value;
@@ -466,9 +490,13 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                   child: TextField(
                                     controller: _repsControllers[i][j],
                                     keyboardType: TextInputType.number,
-                                    decoration: const InputDecoration(
-                                      labelStyle: TextStyle(fontSize: 12.0),
-                                      labelText: 'Reps',
+                                    decoration: InputDecoration(
+                                      hintText: '10', // Placeholder reps value
+                                      hintStyle: const TextStyle(
+                                        color: Colors.grey,
+                                        fontStyle: FontStyle.italic,
+                                        fontSize: 12,
+                                      ),
                                     ),
                                     onChanged: (value) {
                                       _workoutSets[i][j].reps = value;
@@ -480,19 +508,18 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                   child: TextField(
                                     controller: _rirControllers[i][j],
                                     keyboardType: TextInputType.number,
-                                    decoration: const InputDecoration(
-                                      labelStyle: TextStyle(fontSize: 12.0),
-                                      labelText: 'RIR',
+                                    decoration: InputDecoration(
+                                      hintText: '2', // Placeholder RIR value
+                                      hintStyle: const TextStyle(
+                                        color: Colors.grey,
+                                        fontStyle: FontStyle.italic,
+                                        fontSize: 12,
+                                      ),
                                     ),
                                     onChanged: (value) {
                                       _workoutSets[i][j].rir = value;
                                     },
                                   ),
-                                ),
-                                const SizedBox(width: 8.0),
-                                IconButton(
-                                  icon: const Icon(Icons.remove),
-                                  onPressed: () => removeSet(i, j),
                                 ),
                               ],
                             ),
@@ -508,7 +535,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                     ),
                   ],
                 ),
-              ),
+              )
           ],
         ),
       ),
