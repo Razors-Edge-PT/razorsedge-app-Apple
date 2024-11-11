@@ -456,7 +456,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                         child: const Text('Load Template'),
                       ),
                     ],
-                  )
+                  ),
                 ],
               ),
             for (int i = 0; i < _selectedExercises.length; i++)
