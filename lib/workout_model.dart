@@ -1,34 +1,44 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'set_details.dart';
 
 class Workout {
   final String name;
   final DateTime date;
   final List<Exercise> exercises;
+  final String id;
 
-  Workout({required this.name, required this.date, required this.exercises});
+  Workout({
+    required this.name,
+    required this.date,
+    required this.exercises,
+    required this.id,
+  });
 
-  // Factory constructor for converting Firestore data into a Workout object
-  factory Workout.fromFirestore(
-      DocumentSnapshot<Map<String, dynamic>> snapshot) {
-    final data = snapshot.data()!;
+  factory Workout.fromFirestore(DocumentSnapshot<Map<String, dynamic>> snapshot) {
+    final data = snapshot.data() ?? {};
 
-    // Handle both Firestore Timestamp and String date formats
     DateTime workoutDate;
     if (data['date'] is Timestamp) {
       workoutDate = (data['date'] as Timestamp).toDate();
     } else if (data['date'] is String) {
       workoutDate = DateTime.parse(data['date']);
     } else {
-      throw Exception('Invalid date format');
+      workoutDate = DateTime.now();
     }
 
-    // Parse exercises from List<Map<String, dynamic>>
-    var exercisesData = data['exercises'] as List<dynamic>;
-    List<Exercise> exercises = exercisesData.map((exercise) {
-      return Exercise.fromFirestore(exercise as Map<String, dynamic>);
-    }).toList();
+    List<Exercise> exercises = [];
+    if (data['exercises'] is List) {
+      exercises = (data['exercises'] as List).map((exercise) {
+        if (exercise is Map<String, dynamic>) {
+          return Exercise.fromFirestore(exercise);
+        } else {
+          return Exercise(name: 'Unnamed Exercise', sets: []);
+        }
+      }).toList();
+    }
 
     return Workout(
+      id: snapshot.id,
       name: data['name'] ?? 'Unnamed Workout',
       date: workoutDate,
       exercises: exercises,
@@ -42,47 +52,21 @@ class Exercise {
 
   Exercise({required this.name, required this.sets});
 
-  // Factory expects a Map<String, dynamic> instead of DocumentSnapshot
   factory Exercise.fromFirestore(Map<String, dynamic> data) {
-    var setsData = data['sets'] as List<dynamic>;
-    List<SetDetails> sets = setsData.asMap().entries.map((entry) {
-      return SetDetails.fromFirestore(entry.value as Map<String, dynamic>,
-          entry.key + 1); // Pass set index as setNumber
-    }).toList();
+    List<SetDetails> sets = [];
+    if (data['sets'] is List) {
+      sets = (data['sets'] as List).map((set) {
+        if (set is Map<String, dynamic>) {
+          return SetDetails.fromFirestore(set);
+        } else {
+          return SetDetails(setNumber: 1, reps: '', weight: '', rir: '');
+        }
+      }).toList();
+    }
 
     return Exercise(
       name: data['name'] ?? 'Unnamed Exercise',
       sets: sets,
     );
   }
-}
-
-class SetDetails {
-  final int setNumber; // New field for set number
-  String reps;
-  String weight;
-  String rir; // New field for RIR
-
-  SetDetails({
-    required this.setNumber,
-    required this.reps,
-    required this.weight,
-    required this.rir,
-  });
-
-  factory SetDetails.fromFirestore(Map<String, dynamic> data, int setNumber) {
-    return SetDetails(
-      setNumber: setNumber, // Assign set number
-      reps: data['reps'] ?? '0',
-      weight: data['weight'] ?? '0',
-      rir: data['rir'] ?? '0', // Default RIR
-    );
-  }
-
-  Map<String, dynamic> toMap() => {
-        'setNumber': setNumber, // Include set number when converting to map
-        'reps': reps,
-        'weight': weight,
-        'rir': rir,
-      };
 }
