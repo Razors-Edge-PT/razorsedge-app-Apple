@@ -29,14 +29,15 @@ class _WorkoutPageState extends State<WorkoutPage> {
   final List<List<SetDetails>> _workoutSets = [];
   final List<List<TextEditingController>> _repsControllers = [];
   final List<List<TextEditingController>> _weightControllers = [];
-  final List<List<TextEditingController>> _rirControllers = []; // New controller list for RIR
+  final List<List<TextEditingController>> _rirControllers = [];
+  final List<bool> _showPreviousData = []; // Refined toggle state for each exercise
   final int _defaultSets = 3;
   Workout? _currentWorkout; // Track the saved workout instance with ID
 
   @override
   void initState() {
     super.initState();
-    logAllWorkouts(); // Debug Firestore data
+    logAllWorkouts();
     if (widget.workout != null) {
       _currentWorkout = widget.workout;
       _loadWorkout(widget.workout!);
@@ -44,7 +45,24 @@ class _WorkoutPageState extends State<WorkoutPage> {
       _loadTemplate(widget.initialTemplate!);
     } else {
       _initializeControllers();
+      _initializeToggleStates();
     }
+  }
+
+  void _initializeToggleStates() {
+    // Ensure toggle states match the number of selected exercises
+    while (_showPreviousData.length < _selectedExercises.length) {
+      _showPreviousData.add(false); // Default to showing editable fields
+    }
+    while (_showPreviousData.length > _selectedExercises.length) {
+      _showPreviousData.removeLast(); // Remove excess toggle states
+    }
+  }
+
+  @override
+  void setState(VoidCallback fn) {
+    super.setState(fn);
+    _initializeToggleStates(); // Ensure toggle states stay in sync
   }
 
   Future<void> logAllWorkouts() async {
@@ -70,13 +88,12 @@ class _WorkoutPageState extends State<WorkoutPage> {
     _selectedDate = workout.date;
     _selectedExercises.clear();
     _selectedExercises.addAll(workout.exercises.map((exercise) => exercise.name));
-
     _workoutSets.clear();
     _workoutSets.addAll(
       workout.exercises.map((exercise) {
         return exercise.sets.map((set) {
           return SetDetails(
-            setNumber: exercise.sets.indexOf(set) + 1, // Correct assignment
+            setNumber: exercise.sets.indexOf(set) + 1,
             reps: set.reps.toString(),
             weight: set.weight.toString(),
             rir: set.rir,
@@ -86,6 +103,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
     );
 
     _initializeControllers();
+    _initializeToggleStates();
   }
 
   void _loadTemplate(Template template) {
@@ -93,14 +111,13 @@ class _WorkoutPageState extends State<WorkoutPage> {
       _workoutNameController.text = template.name;
       _selectedExercises.clear();
       _workoutSets.clear();
-
       _selectedExercises.addAll(template.exercises);
       _workoutSets.addAll(List.generate(
         _selectedExercises.length,
-            (index) => List.generate(
+        (index) => List.generate(
           _defaultSets,
-              (setIndex) => SetDetails(
-            setNumber: setIndex + 1, // Assign set number
+          (setIndex) => SetDetails(
+            setNumber: setIndex + 1,
             reps: '',
             weight: '',
             rir: '',
@@ -108,6 +125,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
         ),
       ));
       _initializeControllers();
+      _initializeToggleStates();
     });
   }
 
@@ -143,45 +161,31 @@ class _WorkoutPageState extends State<WorkoutPage> {
       List<SetDetails> sets = _workoutSets[i];
 
       _repsControllers.add(sets.map((set) {
-        final controller = TextEditingController(text: set.reps);
-        if (widget.isNewWorkout && set.reps.isEmpty) {
-          controller.text = ''; // Ensure no text pre-filled
-          controller.value = TextEditingValue(
-              text: '', selection: TextSelection.collapsed(offset: 0));
-        }
-        return controller;
+        return TextEditingController(text: set.reps);
       }).toList());
 
       _weightControllers.add(sets.map((set) {
-        final controller = TextEditingController(text: set.weight);
-        if (widget.isNewWorkout && set.weight.isEmpty) {
-          controller.text = ''; // Ensure no text pre-filled
-          controller.value = TextEditingValue(
-              text: '', selection: TextSelection.collapsed(offset: 0));
-        }
-        return controller;
+        return TextEditingController(text: set.weight);
       }).toList());
 
       _rirControllers.add(sets.map((set) {
-        final controller = TextEditingController(text: set.rir);
-        if (widget.isNewWorkout && set.rir.isEmpty) {
-          controller.text = ''; // Ensure no text pre-filled
-          controller.value = TextEditingValue(
-              text: '', selection: TextSelection.collapsed(offset: 0));
-        }
-        return controller;
+        return TextEditingController(text: set.rir);
       }).toList());
     }
   }
 
-  Future<SetDetails?> getMostRecentSetData(String exerciseName, int setNumber) async {
+  Future<List<SetDetails>> getMostRecentSetData(String exerciseName) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       print('No user logged in');
-      return null;
+      return List.generate(
+        _defaultSets,
+        (index) =>
+            SetDetails(setNumber: index + 1, reps: '', weight: '', rir: ''),
+      );
     }
 
-    print('Querying for exercise: $exerciseName, set number: $setNumber');
+    print('Querying for most recent workout with exercise: $exerciseName');
 
     // Fetch workouts for the user
     final snapshot = await FirebaseFirestore.instance
@@ -191,40 +195,35 @@ class _WorkoutPageState extends State<WorkoutPage> {
         .orderBy('date', descending: true)
         .get();
 
-    // Iterate through the documents to find a workout where Set 1 is not blank
+    // Iterate through the documents to find the most recent workout with the exercise
     for (var doc in snapshot.docs) {
       final workout = Workout.fromFirestore(doc);
       final exercise = workout.exercises.firstWhere(
-            (ex) => ex.name == exerciseName,
+        (ex) => ex.name == exerciseName,
         orElse: () => Exercise(name: '', sets: []),
       );
 
-      // Check if the exercise and set data exist and are non-blank
-      if (exercise.sets.isNotEmpty && setNumber <= exercise.sets.length) {
-        final set = exercise.sets[setNumber - 1];
-        if (set.reps.isNotEmpty || set.weight.isNotEmpty || set.rir.isNotEmpty) {
-          print('Found recent set for $exerciseName, set: $setNumber');
-          return set;
-        }
+      // Check if the exercise exists and has valid set data
+      if (exercise.name.isNotEmpty && exercise.sets.isNotEmpty) {
+        print('Found recent workout with exercise: $exerciseName');
+
+        // Fill in missing sets with empty data if necessary
+        return List.generate(
+          _defaultSets,
+          (index) => index < exercise.sets.length
+              ? exercise.sets[index]
+              : SetDetails(setNumber: index + 1, reps: '', weight: '', rir: ''),
+        );
       }
     }
 
-    print('No valid recent set found for exercise: $exerciseName');
-    return null;
-  }
-
-  String getHint(SetDetails? setDetails, String field) {
-    if (setDetails == null) return '';
-    switch (field) {
-      case 'reps':
-        return setDetails.reps.isEmpty ? '' : setDetails.reps;
-      case 'weight':
-        return setDetails.weight.isEmpty ? '' : setDetails.weight;
-      case 'rir':
-        return setDetails.rir.isEmpty ? '' : setDetails.rir;
-      default:
-        return '';
-    }
+    print('No valid recent workout found for exercise: $exerciseName');
+    // Return empty sets if no workout is found
+    return List.generate(
+      _defaultSets,
+      (index) =>
+          SetDetails(setNumber: index + 1, reps: '', weight: '', rir: ''),
+    );
   }
 
   void _navigateToTemplateSelection() {
@@ -258,9 +257,9 @@ class _WorkoutPageState extends State<WorkoutPage> {
           _workoutSets.addAll(
             List.generate(
               _selectedExercises.length,
-                  (index) => List.generate(
+              (index) => List.generate(
                 _defaultSets,
-                    (setIndex) => SetDetails(
+                (setIndex) => SetDetails(
                   setNumber: setIndex + 1, // Correct assignment
                   reps: '',
                   weight: '',
@@ -332,7 +331,6 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
       // Navigate back to the home page
       Navigator.popUntil(context, ModalRoute.withName('/home'));
-
     } catch (error) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Failed to save workout.')),
@@ -344,7 +342,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
     setState(() {
       _workoutSets[exerciseIndex].add(
         SetDetails(
-          setNumber: _workoutSets[exerciseIndex].length + 1, // New set number
+          setNumber: _workoutSets[exerciseIndex].length + 1,
           reps: '',
           weight: '',
           rir: '',
@@ -366,7 +364,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
             return AlertDialog(
               title: const Text('Confirm Removal'),
               content:
-              const Text('Are you sure you want to remove this exercise?'),
+                  const Text('Are you sure you want to remove this exercise?'),
               actions: <Widget>[
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
@@ -419,7 +417,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
   void _navigateToExerciseDetails(String exerciseName) async {
     // Fetch recent workouts for the selected exercise using the workout date
     List<Workout> recentWorkouts =
-    await getRecentWorkoutsForExercise(exerciseName, _selectedDate);
+        await getRecentWorkoutsForExercise(exerciseName, _selectedDate);
 
     Navigator.push(
       context,
@@ -489,8 +487,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
     List<Workout> filteredWorkouts = snapshot.docs
         .map((doc) => Workout.fromFirestore(doc))
         .where((workout) =>
-    workout.date.isBefore(currentWorkoutDate) &&
-        workout.exercises.any((exercise) => exercise.name == exerciseName))
+            workout.date.isBefore(currentWorkoutDate) &&
+            workout.exercises.any((exercise) => exercise.name == exerciseName))
         .toList();
 
     // Sort by date in descending order
@@ -514,7 +512,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
                 builder: (BuildContext context) {
                   return AlertDialog(
                     title: const Text('Delete Workout'),
-                    content: const Text('Are you sure you want to delete this workout?'),
+                    content: const Text(
+                        'Are you sure you want to delete this workout?'),
                     actions: <Widget>[
                       TextButton(
                         onPressed: () => Navigator.of(context).pop(),
@@ -540,15 +539,13 @@ class _WorkoutPageState extends State<WorkoutPage> {
         ],
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.only(left: 12, top: 0, right: 12, bottom: 0),
+        padding: const EdgeInsets.all(12.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             TextField(
               controller: _workoutNameController,
-              decoration: const InputDecoration(
-                labelText: 'Workout Name',
-              ),
+              decoration: const InputDecoration(labelText: 'Workout Name'),
             ),
             const SizedBox(height: 10.0),
             Row(
@@ -581,144 +578,89 @@ class _WorkoutPageState extends State<WorkoutPage> {
               ),
             for (int i = 0; i < _selectedExercises.length; i++)
               Card(
-                margin:
-                const EdgeInsets.only(left: 0, top: 4, right: 0, bottom: 0),
+                margin: const EdgeInsets.symmetric(vertical: 6.0),
                 child: ExpansionTile(
-                  title: Text(_selectedExercises[i]),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.info_outline),
-                    onPressed: () {
-                      _navigateToExerciseDetails(_selectedExercises[i]);
-                    },
+                  title: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(_selectedExercises[i]),
+                      Switch(
+                        value: _showPreviousData[i],
+                        onChanged: (value) {
+                          setState(() {
+                            _showPreviousData[i] = value;
+                          });
+                        },
+                      ),
+                    ],
                   ),
                   children: [
-                    for (int j = 0; j < _workoutSets[i].length; j++)
-                      Padding(
-                        padding: const EdgeInsets.only(
-                            left: 6, bottom: 0, top: 0, right: 6),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                    if (_showPreviousData[i]) // Show previous data
+                      FutureBuilder<List<SetDetails>>(
+                        future: getMostRecentSetData(_selectedExercises[i]),
+                        builder: (context, snapshot) {
+                          if (snapshot.connectionState == ConnectionState.waiting) {
+                            return const Text('Loading previous data...');
+                          } else if (snapshot.hasError) {
+                            return const Text('Error loading data');
+                          } else {
+                            final recentSets = snapshot.data ?? [];
+                            return Column(
+                              children: recentSets.map((set) {
+                                return Text(
+                                  'Set ${set.setNumber}: ${set.reps} reps, ${set.weight}kg, RIR ${set.rir}',
+                                  style: const TextStyle(fontSize: 12),
+                                );
+                              }).toList(),
+                            );
+                          }
+                        },
+                      )
+                    else // Show editable fields
+                      for (int j = 0; j < _workoutSets[i].length; j++)
+                        Row(
                           children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  'Set ${j + 1}',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 12.0,
-                                  ),
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.remove),
-                                  onPressed: () => removeSet(i, j),
-                                ),
-                              ],
+                            Expanded(
+                              child: TextField(
+                                controller: _weightControllers[i][j],
+                                keyboardType: TextInputType.number,
+                                decoration:
+                                const InputDecoration(labelText: 'Weight'),
+                                onChanged: (value) {
+                                  _workoutSets[i][j].weight = value;
+                                },
+                              ),
                             ),
-                            const SizedBox(height: 0.0),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: const [
-                                Expanded(
-                                    child: Text('Weight',
-                                        textAlign: TextAlign.left,
-                                        style: TextStyle(fontSize: 10.0))),
-                                SizedBox(width: 8.0),
-                                Expanded(
-                                    child: Text('Reps',
-                                        textAlign: TextAlign.left,
-                                        style: TextStyle(fontSize: 10.0))),
-                                SizedBox(width: 8.0),
-                                Expanded(
-                                    child: Text('RIR',
-                                        textAlign: TextAlign.left,
-                                        style: TextStyle(fontSize: 10.0)))
-                              ],
+                            const SizedBox(width: 8.0),
+                            Expanded(
+                              child: TextField(
+                                controller: _repsControllers[i][j],
+                                keyboardType: TextInputType.number,
+                                decoration:
+                                const InputDecoration(labelText: 'Reps'),
+                                onChanged: (value) {
+                                  _workoutSets[i][j].reps = value;
+                                },
+                              ),
                             ),
-                            const SizedBox(height: 0.0),
-                            FutureBuilder<SetDetails?>(
-                              future: getMostRecentSetData(_selectedExercises[i], j + 1),
-                              builder: (context, snapshot) {
-                                if (snapshot.connectionState == ConnectionState.waiting) {
-                                  return Row(
-                                    children: const [
-                                      Expanded(child: Text('Loading...', style: TextStyle(fontSize: 12))),
-                                    ],
-                                  );
-                                } else if (snapshot.hasError) {
-                                  print('Error fetching recent set: ${snapshot.error}');
-                                  return Row(
-                                    children: const [
-                                      Expanded(child: Text('Error loading data', style: TextStyle(fontSize: 12))),
-                                    ],
-                                  );
-                                } else {
-                                  final recentSet = snapshot.data;
-                                  print('Fetched recent set: $recentSet');
-
-                                  return Row(
-                                    children: [
-                                      Expanded(
-                                        child: TextField(
-                                          controller: _weightControllers[i][j],
-                                          keyboardType: TextInputType.number,
-                                          decoration: InputDecoration(
-                                            hintText: recentSet != null ? getHint(recentSet, 'weight') : 'Enter weight',
-                                            hintStyle: const TextStyle(
-                                              color: Colors.grey,
-                                              fontStyle: FontStyle.italic,
-                                              fontSize: 12,
-                                            ),
-                                          ),
-                                          onChanged: (value) {
-                                            _workoutSets[i][j].weight = value;
-                                          },
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8.0),
-                                      Expanded(
-                                        child: TextField(
-                                          controller: _repsControllers[i][j],
-                                          keyboardType: TextInputType.number,
-                                          decoration: InputDecoration(
-                                            hintText: recentSet != null ? getHint(recentSet, 'reps') : 'Enter reps',
-                                            hintStyle: const TextStyle(
-                                              color: Colors.grey,
-                                              fontStyle: FontStyle.italic,
-                                              fontSize: 12,
-                                            ),
-                                          ),
-                                          onChanged: (value) {
-                                            _workoutSets[i][j].reps = value;
-                                          },
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8.0),
-                                      Expanded(
-                                        child: TextField(
-                                          controller: _rirControllers[i][j],
-                                          keyboardType: TextInputType.number,
-                                          decoration: InputDecoration(
-                                            hintText: recentSet != null ? getHint(recentSet, 'rir') : 'Enter RIR',
-                                            hintStyle: const TextStyle(
-                                              color: Colors.grey,
-                                              fontStyle: FontStyle.italic,
-                                              fontSize: 12,
-                                            ),
-                                          ),
-                                          onChanged: (value) {
-                                            _workoutSets[i][j].rir = value;
-                                          },
-                                        ),
-                                      ),
-                                    ],
-                                  );
-                                }
-                              },
+                            const SizedBox(width: 8.0),
+                            Expanded(
+                              child: TextField(
+                                controller: _rirControllers[i][j],
+                                keyboardType: TextInputType.number,
+                                decoration:
+                                const InputDecoration(labelText: 'RIR'),
+                                onChanged: (value) {
+                                  _workoutSets[i][j].rir = value;
+                                },
+                              ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.remove),
+                              onPressed: () => removeSet(i, j),
                             ),
                           ],
                         ),
-                      ),
                     Align(
                       alignment: Alignment.centerRight,
                       child: IconButton(
