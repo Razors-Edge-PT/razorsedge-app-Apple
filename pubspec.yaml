@@ -33,9 +33,11 @@ dependencies:
   firebase_database: ^11.0.4
   cloud_firestore: ^5.2.0
   intl: ^0.19.0
+  google_sign_in: ^6.2.2
 
   flutter:
     sdk: flutter
+
 
 
   # The following adds the Cupertino Icons font to your application.
@@ -58,13 +60,13 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
-  # The following line ensures that the Material Icons font is
-  # included with your application, so that you can use the icons in
-  # the material Icons class.
   uses-material-design: true
-
-  # assets:
-  #   - assets/google-services.json
+  assets:
+    - assets/google_logo.png
+   # - assets/re_launcher.png
+   # - assets/login_fill.png
+    - assets/re_banner.png
+    - assets/login_fill.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/assets-and-images/#resolution-aware
