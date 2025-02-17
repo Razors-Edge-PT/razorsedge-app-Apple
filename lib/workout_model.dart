@@ -17,15 +17,33 @@ class Workout {
   factory Workout.fromFirestore(DocumentSnapshot<Map<String, dynamic>> snapshot) {
     final data = snapshot.data() ?? {};
 
-    DateTime workoutDate;
-    if (data['date'] is Timestamp) {
-      workoutDate = (data['date'] as Timestamp).toDate();
-    } else if (data['date'] is String) {
-      workoutDate = DateTime.parse(data['date']);
+    print("DEBUG - Firestore workout data: $data"); // Log entire workout data
+
+    // Log the type of date
+    if (data.containsKey('date')) {
+      print("DEBUG - Type of 'date' field: ${data['date'].runtimeType}");
     } else {
-      workoutDate = DateTime.now();
+      print("ERROR - 'date' field missing in Firestore data!");
     }
 
+    // Convert date safely
+    DateTime workoutDate;
+    if (data['date'] is String) {
+      try {
+        workoutDate = DateTime.parse(data['date']); // Convert string to DateTime
+      } catch (e) {
+        print("ERROR - Failed to parse string date: ${data['date']}");
+        workoutDate = DateTime.now(); // Fallback if parsing fails
+      }
+    } else {
+      print("ERROR - Unexpected date format: ${data['date']}");
+      workoutDate = DateTime.now(); // Default fallback
+    }
+
+    // Convert workout name to String (fix for double values)
+    String workoutName = data['name'].toString(); // Ensure it's always a string
+
+    // Convert exercises safely
     List<Exercise> exercises = [];
     if (data['exercises'] is List) {
       exercises = (data['exercises'] as List).map((exercise) {
@@ -39,7 +57,7 @@ class Workout {
 
     return Workout(
       id: snapshot.id,
-      name: data['name'] ?? 'Unnamed Workout',
+      name: workoutName, // Always a string now
       date: workoutDate,
       exercises: exercises,
     );

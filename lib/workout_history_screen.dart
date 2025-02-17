@@ -2,9 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-
 import 'workout_details_screen.dart'; // Import the details screen
-import 'workout_model.dart'; // Import Workout and Exercise models
+import 'workout_model.dart'; // Import Workout model
 
 class WorkoutHistoryScreen extends StatefulWidget {
   const WorkoutHistoryScreen({super.key});
@@ -35,7 +34,6 @@ class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen> {
             .orderBy('date', descending: true)
             .get();
 
-        // Map Firestore documents to Workout objects
         workouts = querySnapshot.docs
             .map((doc) => Workout.fromFirestore(doc))
             .toList();
@@ -58,29 +56,48 @@ class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen> {
       body: isLoading
           ? const Center(child: CircularProgressIndicator())
           : errorMessage.isNotEmpty
-              ? Center(child: Text(errorMessage))
-              : workouts.isEmpty
-                  ? const Center(child: Text('No workouts found.'))
-                  : ListView.builder(
-                      itemCount: workouts.length,
-                      itemBuilder: (context, index) {
-                        final workout = workouts[index];
-                        return ListTile(
-                          title: Text(workout.name),
-                          subtitle: Text(
-                              DateFormat('dd-MM-yyyy').format(workout.date)),
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) =>
-                                    WorkoutDetailsScreen(workout: workout),
-                              ),
-                            );
-                          },
-                        );
-                      },
-                    ),
+          ? Center(child: Text(errorMessage))
+          : workouts.isEmpty
+          ? const Center(child: Text('No workouts found.'))
+          : ListView.builder(
+        itemCount: workouts.length,
+        itemBuilder: (context, index) {
+          final workout = workouts[index];
+          return Card(
+            margin: const EdgeInsets.symmetric(
+                vertical: 8, horizontal: 12),
+            elevation: 3,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12)),
+            child: ListTile(
+              leading: Icon(
+                Icons.fitness_center,
+                color: Colors.blueAccent,
+              ),
+              title: Text(
+                workout.name,
+                style: const TextStyle(
+                    fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              subtitle: Text(
+                'Date: ${DateFormat('dd MMM yyyy').format(workout.date)}',
+                style: const TextStyle(color: Colors.grey),
+              ),
+              trailing: const Icon(Icons.arrow_forward_ios,
+                  color: Colors.blueGrey),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) =>
+                        WorkoutDetailsScreen(workout: workout),
+                  ),
+                );
+              },
+            ),
+          );
+        },
+      ),
     );
   }
 }

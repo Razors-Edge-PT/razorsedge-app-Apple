@@ -15,9 +15,9 @@ class SetDetails {
   factory SetDetails.fromFirestore(Map<String, dynamic> data) {
     return SetDetails(
       setNumber: data['setNumber'] ?? 1,  // Default to 1 if not provided
-      reps: data['reps'] ?? '',
-      weight: data['weight'] ?? '',
-      rir: data['rir'] ?? '',
+      reps: data['reps'].toString(), // Ensure it's a string
+      weight: data['weight'].toString(), // Ensure it's a string
+      rir: data['rir'].toString(), // Ensure it's a string
     );
   }
 

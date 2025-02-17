@@ -84,32 +84,28 @@ class _LoginScreenState extends State<LoginScreen> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // Background Image
           Image.asset(
             'assets/login_fill.png',
-            fit: BoxFit.cover, // Ensures the image fills the screen
+            fit: BoxFit.cover,
           ),
 
-          // Column for Logo and Login Form
           Column(
             children: [
-              const Spacer(flex: 2), // Pushes the logo down from the top
+              const Spacer(flex: 2),
 
-              // Animated Logo (Hides when keyboard is open)
               AnimatedOpacity(
-                opacity: keyboardHeight > 0 ? 0.0 : 1.0, // Hide when keyboard appears
+                opacity: keyboardHeight > 0 ? 0.0 : 1.0,
                 duration: const Duration(milliseconds: 300),
                 child: Center(
                   child: Image.asset(
                     'assets/re_banner.png',
-                    height: 100, // Adjust size as needed
+                    height: 100,
                   ),
                 ),
               ),
 
-              const Spacer(flex: 1), // Space between logo and card
+              const Spacer(flex: 1),
 
-              // Login Form
               Card(
                 elevation: 10,
                 shape: RoundedRectangleBorder(
@@ -200,11 +196,14 @@ class _LoginScreenState extends State<LoginScreen> {
 
                         const SizedBox(height: 12),
 
-                        GestureDetector(
-                          onTap: _isLoading ? null : signInWithGoogle,
-                          child: Image.asset(
-                            'assets/google_logo.png',
-                            height: 50, // Adjust size as needed
+                        SizedBox(
+                          width: double.infinity,
+                          child: GestureDetector(
+                            onTap: _isLoading ? null : signInWithGoogle,
+                            child: Image.asset(
+                              'assets/google_sign_in.png', // Replace with your actual file path
+                              height: 50, // Adjust based on your image size
+                            ),
                           ),
                         ),
 
@@ -225,7 +224,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ),
 
-              const Spacer(flex: 3), // Pushes everything up slightly
+              const Spacer(flex: 3),
             ],
           ),
         ],
