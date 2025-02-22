@@ -159,30 +159,13 @@ class _HomeScreenState extends State<HomeScreen> {
                 Navigator.pushNamed(context, '/templates');
               },
             ),
-
             ListTile(
-              title: const Text('Workout History'),
+              title: const Text('Workouts List'),
               onTap: () {
                 Navigator.pop(context);
-                Navigator.pushNamed(context, '/workouts_list'); // ✅ Match main.dart, dont change - it shits itself
+                Navigator.pushNamed(context, '/workouts_list'); // ✅ Match main.dart
               },
             ),
-
-            ListTile(
-              title: const Text('Block Builder'),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.pushNamed(context, '/block_builder');
-              },
-            ),
-            ListTile(
-              title: const Text('Block Builder 2.0 🚀'),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.pushNamed(context, '/block_builder_2'); // 👈 Match the route
-              },
-            ),
-
           ],
         ),
       ),
