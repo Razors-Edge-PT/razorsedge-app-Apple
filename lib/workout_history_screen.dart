@@ -27,27 +27,69 @@ class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen> {
   Future<void> _fetchWorkouts() async {
     try {
       final user = FirebaseAuth.instance.currentUser;
-      if (user != null) {
-        final querySnapshot = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .collection('workouts')
-            .orderBy('date', descending: true)
-            .get();
-
-        // Map Firestore documents to Workout objects
-        workouts = querySnapshot.docs
-            .map((doc) => Workout.fromFirestore(doc))
-            .toList();
+      if (user == null) {
+        setState(() {
+          errorMessage = "No user signed in.";
+        });
+        return;
       }
+
+      final querySnapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('workouts')
+          .orderBy('date', descending: true)
+          .get();
+
+      if (querySnapshot.docs.isEmpty) {
+        setState(() {
+          errorMessage = "No workouts found.";
+        });
+        return;
+      }
+
+      workouts = querySnapshot.docs.map((doc) {
+        final data = doc.data();
+        if (data == null) return null;
+
+        return Workout(
+          name: data['name'] ?? 'Unnamed Workout',
+          date: (data['date'] is Timestamp) ? (data['date'] as Timestamp).toDate() : DateTime.tryParse(data['date']) ?? DateTime.now(),
+          exercises: (data['exercises'] as List?)?.map((exerciseData) {
+            final exerciseMap = exerciseData as Map<String, dynamic>;
+            return Exercise(
+              name: exerciseMap['name'] ?? 'Unnamed Exercise',
+              sets: (exerciseMap['sets'] as List?)?.map((setData) {
+                final setMap = setData as Map<String, dynamic>;
+                return SetDetails(
+                  reps: (setMap['reps'] is num) ? setMap['reps'] as int : int.tryParse(setMap['reps'].toString()) ?? 0,
+                  weight: (setMap['weight'] is num) ? (setMap['weight'] as num).toDouble() : double.tryParse(setMap['weight'].toString()) ?? 0.0,
+                  rir: (setMap['rir'] is num) ? (setMap['rir'] as num).toDouble() : double.tryParse(setMap['rir'].toString()) ?? 0.0,
+                );
+              }).toList() ?? [],
+            );
+          }).toList() ?? [],
+        );
+      }).where((workout) => workout != null).cast<Workout>().toList();
+
+      if (workouts.isEmpty) {
+        setState(() {
+          errorMessage = "No valid workouts found.";
+        });
+      }
+
     } catch (error) {
-      errorMessage = 'Failed to load workouts: $error';
+      setState(() {
+        errorMessage = "Failed to load workouts: $error";
+      });
     } finally {
       setState(() {
         isLoading = false;
       });
     }
   }
+
+
 
   @override
   Widget build(BuildContext context) {
