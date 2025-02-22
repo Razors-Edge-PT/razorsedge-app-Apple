@@ -15,6 +15,8 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
+
+
 class _HomeScreenState extends State<HomeScreen> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
@@ -26,6 +28,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+
     _fetchRecentData();
   }
 
@@ -75,13 +78,40 @@ class _HomeScreenState extends State<HomeScreen> {
             .get();
 
         if (querySnapshot.docs.isNotEmpty) {
-          mostRecentWorkout = Workout.fromFirestore(querySnapshot.docs.first);
+          final doc = querySnapshot.docs.first;
+          final data = doc.data();
+
+          // ✅ Safely parse data to prevent "String is not a subtype of num" errors
+          mostRecentWorkout = Workout(
+            name: data['name'] ?? 'Unnamed Workout',
+            date: data['date'] is Timestamp
+                ? (data['date'] as Timestamp).toDate()
+                : DateTime.parse(data['date']),
+            exercises: (data['exercises'] as List<dynamic>).map((exercise) {
+              final exerciseData = exercise as Map<String, dynamic>;
+              return Exercise(
+                name: exerciseData['name'] ?? 'Unnamed Exercise',
+                sets: (exerciseData['sets'] as List<dynamic>).map((set) {
+                  final setData = set as Map<String, dynamic>;
+                  return SetDetails(
+                    reps: (setData['reps'] is num) ? setData['reps'] as int : int.tryParse(setData['reps'].toString()) ?? 0,
+                    weight: (setData['weight'] is num) ? (setData['weight'] as num).toDouble() : double.tryParse(setData['weight'].toString()) ?? 0.0,
+                    rir: (setData['rir'] is num) ? (setData['rir'] as num).toDouble() : double.tryParse(setData['rir'].toString()) ?? 0.0,
+                  );
+                }).toList(),
+              );
+            }).toList(),
+          );
         }
       }
     } catch (error) {
-      errorMessage = 'Failed to load recent workout: $error';
+      setState(() {
+        errorMessage = 'Failed to load recent workout: $error';
+      });
     }
   }
+
+
 
   void _openDrawer() {
     _scaffoldKey.currentState?.openDrawer();
@@ -133,7 +163,7 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('Workouts List'),
               onTap: () {
                 Navigator.pop(context);
-                Navigator.pushNamed(context, '/workouts_list');
+                Navigator.pushNamed(context, '/workouts_list'); // ✅ Match main.dart
               },
             ),
           ],

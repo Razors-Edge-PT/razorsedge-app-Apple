@@ -18,6 +18,14 @@ class WorkoutDetailsScreen extends StatefulWidget {
   _WorkoutDetailsScreenState createState() => _WorkoutDetailsScreenState();
 }
 
+double calculateE1RM(double? weight, int? reps, double? rir) {
+  double w = weight ?? 0.0;
+  int r = reps ?? 0;
+  double rValue = rir ?? 0.0;
+
+  return w * (1 + (0.0333 * (r + rValue)));
+}
+
 class _WorkoutDetailsScreenState extends State<WorkoutDetailsScreen> {
   List<Workout> allWorkouts = [];
 
@@ -42,6 +50,8 @@ class _WorkoutDetailsScreenState extends State<WorkoutDetailsScreen> {
         setState(() {
           allWorkouts = querySnapshot.docs.map((doc) => Workout.fromFirestore(doc)).toList();
         });
+        // 🔍 Debugging: Print the total number of workouts retrieved
+        print("Total workouts retrieved from Firestore: ${allWorkouts.length}");
       }
     } catch (error) {
       // Handle errors (e.g., show a Snackbar)
@@ -61,7 +71,7 @@ class _WorkoutDetailsScreenState extends State<WorkoutDetailsScreen> {
     filteredWorkouts.sort((a, b) => b.date.compareTo(a.date));
 
     // Return only the three most recent workouts before the given date
-    return filteredWorkouts.take(3).toList();
+    return filteredWorkouts.take(12).toList();
   }
 
   @override
@@ -129,13 +139,48 @@ class _WorkoutDetailsScreenState extends State<WorkoutDetailsScreen> {
                           );
                         },
                       ),
-                      children: exercise.sets.map((set) {
-                        return ListTile(
-                          title: Text('Set ${set.setNumber}'),
-                          subtitle: Text('Weight: ${set.weight} kg  Reps: ${set.reps}'),
-                          trailing: Text('RIR: ${set.rir}'),
+                      children: exercise.sets.asMap().entries.map((entry) {
+                        final int setIndex = entry.key + 1; // Set index starts from 1
+                        final set = entry.value;
+
+                        // ✅ Calculate E1RM
+                        double weight = set.weight ?? 0.0;
+                        double reps = (set.reps ?? 0).toDouble();  // ✅ Convert safely by defaulting to 0
+                        double rir = set.rir ?? 0.0;
+                        double e1rm = weight * (1 + (0.0333 * (reps + rir)));
+
+// ✅ Find the highest E1RM in this workout
+                        double highestE1RM = exercise.sets
+                            .map((s) => (s.weight ?? 0.0) *
+                            (1 + (0.0333 * (((s.reps ?? 0).toDouble()) + (s.rir ?? 0.0)))))
+                            .reduce((a, b) => a > b ? a : b); // ✅ Find max E1RM safely
+
+
+
+                        return Container(
+                          decoration: BoxDecoration(
+                            border: Border.all(
+                              color: e1rm == highestE1RM ? Colors.blue : Colors.transparent, // ✅ Blue border for highest E1RM
+                              width: 2.0,
+                            ),
+                            borderRadius: BorderRadius.circular(8.0),
+                          ),
+                          margin: const EdgeInsets.symmetric(vertical: 4.0), // Space between sets
+                          child: ListTile(
+                            title: Text('Set $setIndex'),
+                            subtitle: Text(
+                              'W:${set.weight}kg X ${set.reps} Reps, RIR: ${set.rir} | '
+                                  'E1RM: ${e1rm.toStringAsFixed(1)}kg',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: e1rm == highestE1RM ? FontWeight.bold : FontWeight.normal, // ✅ Bold for highest E1RM
+                                color: e1rm == highestE1RM ? Colors.blue : Colors.black, // ✅ Blue text for highest E1RM
+                              ),
+                            ),
+                          ),
                         );
                       }).toList(),
+
                     ),
                   );
                 },

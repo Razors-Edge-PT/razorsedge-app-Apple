@@ -7,6 +7,31 @@ import 'exercise_selection_screen.dart';
 import 'template_model.dart';
 import 'templates.dart';
 import 'exercise_details_screen.dart'; // Import your exercise details screen
+import 'top_sets_screen.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
+Future<void> deleteAllUserWorkouts() async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return; // Exit if no user is signed in
+
+  try {
+    final collectionRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('workouts');
+
+    final snapshot = await collectionRef.get();
+
+    for (var doc in snapshot.docs) {
+      await doc.reference.delete(); // Deletes each workout document
+    }
+  } catch (e) {
+    // Handle error silently or show a message to the user if needed
+  }
+}
+
+
 
 class WorkoutPage extends StatefulWidget {
   final Template? initialTemplate;
@@ -21,23 +46,9 @@ class WorkoutPage extends StatefulWidget {
   _WorkoutPageState createState() => _WorkoutPageState();
 }
 
-class SetDetails {
-  String reps;
-  String weight;
-  String rir;
 
-  SetDetails({
-    this.reps = '', // Empty string for reps
-    this.weight = '', // Empty string for weight
-    this.rir = '', // Empty string for RIR
-  });
 
-  Map<String, dynamic> toMap() => {
-        'reps': reps,
-        'weight': weight,
-        'rir': rir,
-      };
-}
+
 
 class _WorkoutPageState extends State<WorkoutPage> {
   final TextEditingController _workoutNameController = TextEditingController();
@@ -47,39 +58,284 @@ class _WorkoutPageState extends State<WorkoutPage> {
   final List<List<TextEditingController>> _repsControllers = [];
   final List<List<TextEditingController>> _weightControllers = [];
   final List<List<TextEditingController>> _rirControllers =
-      []; // New controller list for RIR
+  []; // New controller list for RIR
   final int _defaultSets = 3;
+
+
+
+  // ✅ Brzycki Formula for E1RM
+  double calculateE1RM(double? weight, double? reps, double? rir) {
+    double w = weight ?? 0.0;
+    double r = reps ?? 0.0;
+    double rValue = rir ?? 0.0;
+
+    return w * (36 / (37 - (r + rValue)));
+  }
+
+
+  /// ✅ Helper Function to Parse Any Firestore Value to a Double
+  double _parseToDouble(dynamic value) {
+    if (value is double) return value; // ✅ Already a double, return it
+    if (value is int) return value.toDouble(); // ✅ Convert int to double
+    if (value is String) return double.tryParse(value) ?? 0; // ✅ Convert String to double
+    return 0; // ✅ Default case
+  }
+
+
+  //Determine available rep targets for this workout:
+
+  List<double> _lastWorkoutTopE1RMs = []; // ✅ Stores last 4 top set E1RMs
+  List<int> _lastWorkoutTopSetReps = []; // Stores last twelve top set reps
+
+  Future<void> _fetchLastWorkoutTopSetReps() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final snapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('workouts')
+        .orderBy('date', descending: true) // ✅ Fetch newest first
+        .limit(12) // ✅ Get last 12 workouts
+        .get();
+
+    if (snapshot.docs.isNotEmpty) {
+      setState(() {
+        _lastWorkoutTopSetReps.clear();
+        _lastWorkoutTopE1RMs.clear(); // ✅ Reset stored E1RMs
+
+        for (var doc in snapshot.docs) {
+          final workout = Workout.fromFirestore(doc);
+
+          if (workout.exercises.isNotEmpty) {
+            // ✅ Find the top set with the highest E1RM
+            SetDetails? topSet;
+            double highestE1RM = 0.0;
+
+            for (var exercise in workout.exercises) {
+              for (var set in exercise.sets) {
+                double weight = _parseToDouble(set.weight);
+                double reps = _parseToDouble(set.reps);
+                double rir = _parseToDouble(set.rir);
+
+                double e1rm = weight * (36 / (37 - (reps + rir)));
+
+                if (topSet == null || e1rm > highestE1RM) {
+                  highestE1RM = e1rm;
+                  topSet = set;
+                }
+              }
+            }
+
+            if (topSet != null) {
+              int effectiveReps = (_parseToDouble(topSet.reps) + _parseToDouble(topSet.rir)).floor();
+              _lastWorkoutTopSetReps.add(effectiveReps); // ✅ Store as INT
+              _lastWorkoutTopE1RMs.add(highestE1RM); // ✅ Store E1RM
+            }
+          }
+        }
+      });
+    }
+  }
+
+
+  List<int> _getForbiddenRepTargets(int exerciseIndex, int setIndex) {
+    List<int> pastReps = _lastWorkoutTopSetReps.toList(); // ✅ Already stores Reps + RIR
+    Set<int> forbiddenReps = {};
+
+    for (int i = 0; i < pastReps.length; i++) {
+      int effectiveRep = pastReps[i]; // ✅ Now includes RIR (already adjusted in _lastWorkoutTopSetReps)
+
+      if (i == 0) {
+        forbiddenReps.addAll([
+          effectiveRep,
+          effectiveRep - 2,
+          effectiveRep - 1,
+          effectiveRep + 1,
+          effectiveRep + 2
+        ]);
+      } else if (i == 1) {
+        forbiddenReps.addAll([effectiveRep - 1, effectiveRep, effectiveRep + 1]);
+      } else if (i == 2 || i == 3) {
+        forbiddenReps.add(effectiveRep);
+      }
+    }
+
+    return forbiddenReps.where((rep) => rep >= 1).toList(); // ✅ Remove upper limit (previously 12)
+  }
+
+
+  List<int> _getAvailableRepTargets(int exerciseIndex, int setIndex) {
+    int enteredReps = int.tryParse(_repsControllers[exerciseIndex][setIndex].text) ?? 0;
+    double enteredRIR = double.tryParse(_rirControllers[exerciseIndex][setIndex].text) ?? 0.0;
+    int effectiveReps = (enteredReps + enteredRIR).floor(); // ✅ Effective reps include RIR
+
+    // ✅ Ensure max available reps do not exceed 12
+    List<int> allReps = List.generate(12, (index) => index + 1);
+    List<int> forbiddenReps = _getForbiddenRepTargets(exerciseIndex, setIndex);
+
+    // ✅ Get available reps by filtering out forbidden ones
+    List<int> availableReps = allReps.where((rep) => !forbiddenReps.contains(rep)).toList();
+
+    // ✅ Sort available reps so the most distant target is first (i.e., least recently used)
+    availableReps.sort((a, b) => _lastWorkoutTopSetReps.contains(a) ? 1 : -1);
+
+    return availableReps;
+  }
+
+
+  int _getSuggestedRepTarget(int exerciseIndex, int setIndex, {double? weight}) {
+
+    // ✅ Get available rep targets
+    List<int> availableReps = _getAvailableRepTargets(exerciseIndex, setIndex);
+
+    if (availableReps.isEmpty) return 6; // ✅ Default to 6 if all reps are blocked
+
+    return availableReps.first; // ✅ Return the best available rep target
+  }
+
+
+  //Determine hint texts for this workout:NEW METHOD
+
+  // ✅ New function for Set 1 Suggested Reps
+  double set1SuggestedReps(int exerciseIndex) {
+    return _getSuggestedRepTarget(exerciseIndex, 0).toDouble();
+  }
+
+  // ✅ Function to determine suggested reps for Set 2
+  int set2SuggestedReps(int exerciseIndex) {
+    int set1Reps = int.tryParse(_repsControllers[exerciseIndex][0].text) ?? set1SuggestedReps(exerciseIndex).toInt();
+    return (set1Reps - 1).clamp(1, 200); // Ensure reps don't go below 1
+  }
+
+  int set3SuggestedReps(int exerciseIndex) {
+    int set2Reps = int.tryParse(_repsControllers[exerciseIndex][1].text) ?? set2SuggestedReps(exerciseIndex);
+    return (set2Reps - 1).clamp(1, 200); // Ensure reps don't go below 1
+  }
+
+  // ✅ Function to determine RIR for Set 1 (Default: 0.5, Modifiable in Future)
+  double set1RIR(int exerciseIndex) {
+    // Placeholder for now, will later be modified from another page
+    return 0.5;
+  }
+
+  // ✅ Function to determine RIR for Set 2 (Default: 1.5, Modifiable in Future)
+  double set2RIR(int exerciseIndex) {
+    // Placeholder for now, will later be modified from another page
+    return 1.5;
+  }
+
+// ✅ Function to determine RIR for Set 3 (Default: 2.5, Modifiable in Future)
+  double set3RIR(int exerciseIndex) {
+    // Placeholder for now, will later be modified from another page
+    return 2.5;
+  }
+
+
+// ✅ Reverse Brzycki Formula to Calculate Suggested Weight for Set 1
+// Uses the average of the last 4 top E1RMs if available
+  double set1SuggestedWeight(int exerciseIndex) {
+    if (_lastWorkoutTopE1RMs.isEmpty) return 20.0; // Default weight if no history
+
+    // ✅ Get the last 4 E1RMs (or fewer if not available)
+    List<double> recentE1RMs = _lastWorkoutTopE1RMs.take(4).toList();
+    double avgE1RM = recentE1RMs.reduce((a, b) => a + b) / recentE1RMs.length;
+
+    // ✅ Get reps and RIR from UI or use default values
+    int reps = int.tryParse(_repsControllers[exerciseIndex][0].text) ?? set1SuggestedReps(exerciseIndex).toInt();
+    double rir = double.tryParse(_rirControllers[exerciseIndex][0].text) ?? 1.0;
+    double effectiveReps = reps + rir;
+
+    double suggestedWeight = avgE1RM * (37 - effectiveReps) / 36;
+
+    // ✅ Prevent negative suggested weight
+    suggestedWeight = suggestedWeight.clamp(2.5, double.infinity);
+
+    // ✅ Round to the nearest 2.5kg increment
+    return (suggestedWeight / 2.5).round() * 2.5;
+  }
+
+  double set2SuggestedWeight(int exerciseIndex) {
+    if (_lastWorkoutTopE1RMs.isEmpty) return 20.0; // Default weight if no history
+
+    // ✅ Calculate Set 1 E1RM using user input or hint values
+    double set1Weight = double.tryParse(_weightControllers[exerciseIndex][0].text) ?? set1SuggestedWeight(exerciseIndex);
+    int set1Reps = int.tryParse(_repsControllers[exerciseIndex][0].text) ?? set1SuggestedReps(exerciseIndex).toInt();
+    double set1RIRValue = double.tryParse(_rirControllers[exerciseIndex][0].text) ?? set1RIR(exerciseIndex); // ✅ Ensure function call
+    double set1EffectiveReps = set1Reps + set1RIRValue;
+    double set1E1RM = calculateE1RM(set1Weight, set1EffectiveReps, set1RIRValue);
+
+    // ✅ Subtract 7 from Set 1 E1RM
+    double adjustedE1RM = (set1E1RM > 7) ? (set1E1RM - 7) : 1.0;
+
+    // ✅ Use Set 2 reps and RIR for weight calculation
+    int reps = int.tryParse(_repsControllers[exerciseIndex][1].text) ?? set2SuggestedReps(exerciseIndex);
+    double rir = double.tryParse(_rirControllers[exerciseIndex][1].text) ?? set2RIR(exerciseIndex);
+    double effectiveReps = reps + rir;
+
+    // ✅ Prevent negative multiplier
+    double repMultiplier = (37 - effectiveReps).clamp(1, 37); // Min 1, Max 37
+
+    double suggestedWeight = adjustedE1RM * repMultiplier / 36;
+    return ((suggestedWeight / 2.5).round() * 2.5).clamp(1.0, double.infinity); // ✅ Ensures minimum weight is 1kg
+  }
+
+  double set3SuggestedWeight(int exerciseIndex) {
+    if (_lastWorkoutTopE1RMs.isEmpty) return 20.0; // Default weight if no history
+
+    // ✅ Calculate Set 1 E1RM using user input or hint values
+    double set1Weight = double.tryParse(_weightControllers[exerciseIndex][0].text) ?? set1SuggestedWeight(exerciseIndex);
+    int set1Reps = int.tryParse(_repsControllers[exerciseIndex][0].text) ?? set1SuggestedReps(exerciseIndex).toInt();
+    double set1RIRValue = double.tryParse(_rirControllers[exerciseIndex][0].text) ?? set1RIR(exerciseIndex); // ✅ Ensure function call
+    double set1EffectiveReps = set1Reps + set1RIRValue;
+    double set1E1RM = calculateE1RM(set1Weight, set1EffectiveReps, set1RIRValue);
+
+    // ✅ Subtract 10 from Set 1 E1RM
+    double adjustedE1RM = (set1E1RM > 10) ? (set1E1RM - 10) : 1.0;
+
+    // ✅ Use Set 3 reps and RIR for weight calculation
+    int reps = int.tryParse(_repsControllers[exerciseIndex][2].text) ?? set3SuggestedReps(exerciseIndex);
+    double rir = double.tryParse(_rirControllers[exerciseIndex][2].text) ?? set3RIR(exerciseIndex);
+    double effectiveReps = reps + rir;
+
+    // ✅ Prevent negative multiplier
+    double repMultiplier = (37 - effectiveReps).clamp(1, 37); // Min 1, Max 37
+
+    double suggestedWeight = adjustedE1RM * repMultiplier / 36;
+    return ((suggestedWeight / 2.5).round() * 2.5).clamp(1.0, double.infinity); // ✅ Ensures minimum weight is 1kg
+  }
+
+
 
   @override
   void initState() {
     super.initState();
+
     if (widget.workout != null) {
       _loadWorkout(widget.workout!);
     } else if (widget.initialTemplate != null) {
       _loadTemplate(widget.initialTemplate!);
     } else {
-      // No placeholder exercises are added here.
       _initializeControllers();
     }
+
+    _fetchLastWorkoutTopSetReps(); // ✅ Load top set reps
   }
 
   void _loadWorkout(Workout workout) {
     _workoutNameController.text = workout.name;
     _selectedDate = workout.date;
     _selectedExercises.clear();
-    _selectedExercises
-        .addAll(workout.exercises.map((exercise) => exercise.name));
+    _selectedExercises.addAll(workout.exercises.map((exercise) => exercise.name));
 
-    // Map workout exercises and sets to initialize _workoutSets and controllers
     _workoutSets.clear();
     _workoutSets.addAll(
       workout.exercises.map((exercise) {
-        return exercise.sets
-            .map((set) => SetDetails(
-                reps: set.reps.toString(),
-                weight: set.weight.toString(),
-                rir: set.rir))
-            .toList();
+        return exercise.sets.map((set) => SetDetails(
+          reps: set.reps,    // ✅ Now allows null
+          weight: set.weight,
+          rir: set.rir,
+        )).toList();
       }).toList(),
     );
 
@@ -95,14 +351,19 @@ class _WorkoutPageState extends State<WorkoutPage> {
       _selectedExercises.addAll(template.exercises);
       _workoutSets.addAll(List.generate(
         _selectedExercises.length,
-        (index) => List.generate(
+            (index) => List.generate(
           _defaultSets,
-          (setIndex) => SetDetails(), // Using SetDetails default values
+              (setIndex) => SetDetails(
+            reps: null,  // ✅ Now null instead of placeholder
+            weight: null,
+            rir: null,
+          ),
         ),
       ));
       _initializeControllers();
     });
   }
+
 
   @override
   void dispose() {
@@ -125,47 +386,31 @@ class _WorkoutPageState extends State<WorkoutPage> {
     super.dispose();
   }
 
+
   void _initializeControllers() {
-    // Clear existing controllers
     _repsControllers.clear();
     _weightControllers.clear();
     _rirControllers.clear();
 
-    // Loop through each exercise and initialize controllers
     for (int i = 0; i < _selectedExercises.length; i++) {
       List<SetDetails> sets = _workoutSets[i];
 
       _repsControllers.add(sets.map((set) {
-        final controller = TextEditingController(text: set.reps);
-        if (widget.isNewWorkout && set.reps.isEmpty) {
-          controller.text = ''; // Ensure no text pre-filled
-          controller.value = TextEditingValue(
-              text: '', selection: TextSelection.collapsed(offset: 0));
-        }
-        return controller;
+        return TextEditingController(text: set.reps?.toString() ?? '');  // ✅ Handles null by setting empty text
       }).toList());
 
       _weightControllers.add(sets.map((set) {
-        final controller = TextEditingController(text: set.weight);
-        if (widget.isNewWorkout && set.weight.isEmpty) {
-          controller.text = ''; // Ensure no text pre-filled
-          controller.value = TextEditingValue(
-              text: '', selection: TextSelection.collapsed(offset: 0));
-        }
-        return controller;
+        return TextEditingController(text: set.weight != null ? set.weight!.toStringAsFixed(1) : ''); // ✅ Handles null properly
       }).toList());
 
       _rirControllers.add(sets.map((set) {
-        final controller = TextEditingController(text: set.rir);
-        if (widget.isNewWorkout && set.rir.isEmpty) {
-          controller.text = ''; // Ensure no text pre-filled
-          controller.value = TextEditingValue(
-              text: '', selection: TextSelection.collapsed(offset: 0));
-        }
-        return controller;
+        return TextEditingController(text: set.rir != null ? set.rir!.toStringAsFixed(1) : ''); // ✅ Handles null properly
       }).toList());
     }
   }
+
+
+
 
   void _navigateToTemplateSelection() {
     Navigator.push(
@@ -198,20 +443,23 @@ class _WorkoutPageState extends State<WorkoutPage> {
           _workoutSets.addAll(
             List.generate(
               _selectedExercises.length,
-              (index) => List.generate(
+                  (index) => List.generate(
                 _defaultSets,
-                (setIndex) => SetDetails(
-                    reps: '',
-                    weight: '',
-                    rir: ''), // Include RIR initialization
+                    (setIndex) => SetDetails(
+                  reps: null,  // ✅ Now using null instead of placeholder
+                  weight: null,
+                  rir: null,
+                ),
               ),
             ),
           );
+
           _initializeControllers();
         });
       }
     });
   }
+
 
   Future<void> _saveWorkout() async {
     if (_workoutNameController.text.isEmpty || _selectedExercises.isEmpty) {
@@ -233,15 +481,31 @@ class _WorkoutPageState extends State<WorkoutPage> {
       'name': _workoutNameController.text,
       'date': _selectedDate.toIso8601String(),
       'userId': user.uid,
-      'exercises': _selectedExercises.map((exercise) {
+      'exercises': _selectedExercises.asMap().entries.map((exerciseEntry) {
+        int exerciseIndex = exerciseEntry.key;
+        String exerciseName = exerciseEntry.value;
+
         return {
-          'name': exercise,
-          'sets': _workoutSets[_selectedExercises.indexOf(exercise)]
-              .map((set) => set.toMap())
-              .toList(),
+          'name': exerciseName,
+          'sets': List.generate(_weightControllers[exerciseIndex].length, (setIndex) {
+            TextEditingController weightController = _weightControllers[exerciseIndex][setIndex];
+            TextEditingController repsController = _repsControllers[exerciseIndex][setIndex];
+            TextEditingController rirController = _rirControllers[exerciseIndex][setIndex];
+
+            String weightText = weightController.text.trim();
+            String repsText = repsController.text.trim();
+            String rirText = rirController.text.trim();
+
+            return {
+              'reps': repsText.isNotEmpty ? int.tryParse(repsText) ?? 0 : 0,
+              'weight': weightText.isNotEmpty ? double.tryParse(weightText) ?? 0.0 : 0.0,
+              'rir': rirText.isNotEmpty ? double.tryParse(rirText) ?? 0.0 : 0.0,
+            };
+          }),
         };
       }).toList(),
     };
+
 
     try {
       await FirebaseFirestore.instance
@@ -255,15 +519,19 @@ class _WorkoutPageState extends State<WorkoutPage> {
       );
     } catch (error) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to save workout.')),
+        SnackBar(content: Text('Failed to save workout: $error')),
       );
     }
   }
 
+
+
+
+
   void addSet(int exerciseIndex) {
     setState(() {
       _workoutSets[exerciseIndex]
-          .add(SetDetails(reps: '', weight: '', rir: ''));
+          .add(SetDetails(reps: 0, weight: 0, rir: 0));
       _repsControllers[exerciseIndex].add(TextEditingController());
       _weightControllers[exerciseIndex].add(TextEditingController());
       _rirControllers[exerciseIndex].add(TextEditingController());
@@ -280,7 +548,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
             return AlertDialog(
               title: const Text('Confirm Removal'),
               content:
-                  const Text('Are you sure you want to remove this exercise?'),
+              const Text('Are you sure you want to remove this exercise?'),
               actions: <Widget>[
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
@@ -331,9 +599,14 @@ class _WorkoutPageState extends State<WorkoutPage> {
   }
 
   void _navigateToExerciseDetails(String exerciseName) async {
-    // Fetch recent workouts for the selected exercise using the workout date
-    List<Workout> recentWorkouts =
-        await getRecentWorkoutsForExercise(exerciseName, _selectedDate);
+    List<Workout> recentWorkouts = await getRecentWorkoutsForExercise(exerciseName, _selectedDate);
+
+    if (recentWorkouts.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No recent workouts found for this exercise.')),
+      );
+      return; // ✅ Do not navigate if no workouts exist
+    }
 
     Navigator.push(
       context,
@@ -346,6 +619,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
     );
   }
 
+
   Future<List<Workout>> getRecentWorkoutsForExercise(
       String exerciseName, DateTime currentWorkoutDate) async {
     final user = FirebaseAuth.instance.currentUser;
@@ -353,33 +627,63 @@ class _WorkoutPageState extends State<WorkoutPage> {
       return [];
     }
 
-    // Fetch workouts from Firebase
-    final snapshot = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .collection('workouts')
-        .get();
+    try {
+      // ✅ Fetch last 12 workouts from Firestore
+      final snapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('workouts')
+          .orderBy('date', descending: true)
+          .limit(12)
+          .get();
 
-    // Filter workouts by exercise name and date
-    List<Workout> filteredWorkouts = snapshot.docs
-        .map((doc) => Workout.fromFirestore(doc))
-        .where((workout) =>
-            workout.date.isBefore(currentWorkoutDate) &&
-            workout.exercises.any((exercise) => exercise.name == exerciseName))
-        .toList();
+      List<Workout> filteredWorkouts = snapshot.docs.map((doc) {
+        final data = doc.data();
 
-    // Sort by date in descending order
-    filteredWorkouts.sort((a, b) => b.date.compareTo(a.date));
+        // ✅ Handle both Firestore Timestamp and String date formats safely
+        DateTime workoutDate;
+        if (data['date'] is Timestamp) {
+          workoutDate = (data['date'] as Timestamp).toDate();
+        } else if (data['date'] is String) {
+          workoutDate = DateTime.tryParse(data['date']) ?? DateTime.now();
+        } else {
+          throw Exception('Invalid date format in Firestore');
+        }
 
-    // Return the top 3 recent workouts
-    return filteredWorkouts.take(3).toList();
+        // ✅ Convert exercises safely
+        List<Exercise> exercises = [];
+        if (data['exercises'] is List) {
+          exercises = (data['exercises'] as List)
+              .map((exercise) => Exercise.fromFirestore(exercise as Map<String, dynamic>))
+              .toList();
+        }
+
+        return Workout(
+          name: data['name'] ?? 'Unnamed Workout',
+          date: workoutDate,
+          exercises: exercises,
+        );
+      }).where((workout) =>
+      workout.date.isBefore(currentWorkoutDate) &&
+          workout.exercises.any((exercise) => exercise.name == exerciseName))
+          .toList();
+
+      return filteredWorkouts;
+    } catch (error) {
+      print('Error fetching workouts: $error');
+      return [];
+    }
   }
+
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Workout Entry'),
+        title: const Text(
+          'Razors Edge',
+          style: TextStyle(fontFamily: 'Verdana'),
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.delete),
@@ -417,6 +721,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
             icon: const Icon(Icons.save),
             onPressed: _saveWorkout,
           ),
+
+
         ],
       ),
       body: SingleChildScrollView(
@@ -461,33 +767,86 @@ class _WorkoutPageState extends State<WorkoutPage> {
               ),
             for (int i = 0; i < _selectedExercises.length; i++)
               Card(
-                margin:
-                    const EdgeInsets.only(left: 0, top: 4, right: 0, bottom: 0),
+                margin: const EdgeInsets.only(left: 0, top: 4, right: 0, bottom: 0),
                 child: ExpansionTile(
                   title: Text(_selectedExercises[i]),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.info_outline),
-                    onPressed: () {
-                      _navigateToExerciseDetails(_selectedExercises[i]);
-                    },
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min, // ✅ Prevents overflow
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.info_outline),
+                        onPressed: () {
+                          _navigateToExerciseDetails(_selectedExercises[i]);
+                        },
+                      ),
+                      const SizedBox(width: 4), // ✅ Adds spacing between buttons
+                      ElevatedButton(
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => TopSetsScreen(),
+                            ),
+                          );
+                        },
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          textStyle: const TextStyle(fontSize: 12), // ✅ Small button text
+                        ),
+                        child: const Text('Top Sets'),
+                      ),
+                    ],
                   ),
                   children: [
+
+
                     for (int j = 0; j < _workoutSets[i].length; j++)
                       Padding(
-                        padding: const EdgeInsets.only(
-                            left: 6, bottom: 0, top: 0, right: 6),
+                        padding: const EdgeInsets.only(left: 6, bottom: 0, top: 0, right: 6),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                Text(
-                                  'Set ${j + 1}',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 12.0,
-                                  ),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        const SizedBox(width: 6), // Small spacing
+                                        const SizedBox(width: 6), // Small spacing
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Text(
+                                                  'Set ${j + 1}',
+                                                  style: const TextStyle(
+                                                    fontWeight: FontWeight.bold,
+                                                    fontSize: 12.0,
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 6), // Small spacing
+
+                                                // ✅ Show Available Rep Targets ONLY for Set 1
+                                                if (j == 0)
+                                                  Text(
+                                                    'Available Rep Targets: ${_getAvailableRepTargets(i, j).join(", ")}',
+                                                    style: const TextStyle(
+                                                      fontSize: 10.0,
+                                                      fontWeight: FontWeight.bold,
+                                                      color: Colors.green,
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  ],
                                 ),
                                 IconButton(
                                   icon: const Icon(Icons.remove),
@@ -496,35 +855,51 @@ class _WorkoutPageState extends State<WorkoutPage> {
                               ],
                             ),
                             const SizedBox(height: 0.0),
+
+                            // ✅ Header Row with aligned labels
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: const [
-                                Expanded(
+                              children: [
+                                const Expanded(
                                     child: Text('Weight',
                                         textAlign: TextAlign.left,
                                         style: TextStyle(fontSize: 10.0))),
-                                SizedBox(width: 8.0),
-                                Expanded(
+                                const SizedBox(width: 4.0), // Reduce spacing for more room
+                                const Expanded(
                                     child: Text('Reps',
                                         textAlign: TextAlign.left,
                                         style: TextStyle(fontSize: 10.0))),
-                                SizedBox(width: 8.0),
-                                Expanded(
+                                const SizedBox(width: 4.0), // Reduce spacing for more room
+                                const Expanded(
                                     child: Text('RIR',
                                         textAlign: TextAlign.left,
-                                        style: TextStyle(fontSize: 10.0)))
+                                        style: TextStyle(fontSize: 10.0))),
+                                const SizedBox(width: 4.0), // Reduce spacing for more room
+
+                                // ✅ E1RM label (same level as the other headers)
+                                const Expanded(
+                                    child: Text('E1RM',
+                                        textAlign: TextAlign.left,
+                                        style: TextStyle(fontSize: 10.0, fontWeight: FontWeight.normal))),
                               ],
                             ),
                             const SizedBox(height: 0.0),
+
+                            // ✅ Input Row with aligned values
+
+
                             Row(
                               children: [
+                                // ✅ Weight Input Field with Suggested Weight for Each Set
                                 Expanded(
                                   child: TextField(
                                     controller: _weightControllers[i][j],
                                     keyboardType: TextInputType.number,
                                     decoration: InputDecoration(
-                                      hintText:
-                                          widget.isNewWorkout ? '20' : null,
+                                      hintText: (j == 0) ? set1SuggestedWeight(i).toStringAsFixed(1)
+                                          : (j == 1) ? set2SuggestedWeight(i).toStringAsFixed(1)
+                                          : (j == 2) ? set3SuggestedWeight(i).toStringAsFixed(1)
+                                          : '20',
                                       hintStyle: const TextStyle(
                                         color: Colors.grey,
                                         fontStyle: FontStyle.italic,
@@ -532,18 +907,29 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                       ),
                                     ),
                                     onChanged: (value) {
-                                      _workoutSets[i][j].weight = value;
+                                      setState(() {});
                                     },
+                                    style: TextStyle(
+                                      color: _weightControllers[i][j].text.isEmpty ? Colors.grey : Colors.black,
+                                    ),
                                   ),
                                 ),
-                                const SizedBox(width: 8.0),
+
+                                const SizedBox(width: 4.0),
+
+                                // ✅ Updated UI for Reps in all Sets
                                 Expanded(
                                   child: TextField(
                                     controller: _repsControllers[i][j],
                                     keyboardType: TextInputType.number,
                                     decoration: InputDecoration(
-                                      hintText:
-                                          widget.isNewWorkout ? '10' : null,
+                                      hintText: (j == 0)
+                                          ? set1SuggestedReps(i).toInt().toString()
+                                          : (j == 1)
+                                          ? set2SuggestedReps(i).toString()
+                                          : (j == 2)
+                                          ? set3SuggestedReps(i).toString()
+                                          : '10', // Default for other sets
                                       hintStyle: const TextStyle(
                                         color: Colors.grey,
                                         fontStyle: FontStyle.italic,
@@ -551,30 +937,79 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                       ),
                                     ),
                                     onChanged: (value) {
-                                      _workoutSets[i][j].reps = value;
+                                      setState(() {});
                                     },
+                                    style: TextStyle(
+                                      color: _repsControllers[i][j].text.isEmpty ? Colors.grey : Colors.black,
+                                    ),
                                   ),
                                 ),
-                                const SizedBox(width: 8.0),
+
+
+                                const SizedBox(width: 4.0),
+
+                                // ✅ Updated UI for RIR Input Field
                                 Expanded(
                                   child: TextField(
                                     controller: _rirControllers[i][j],
                                     keyboardType: TextInputType.number,
                                     decoration: InputDecoration(
-                                      hintText:
-                                          widget.isNewWorkout ? '2' : null,
+                                      hintText: (j == 0) ? set1RIR(i).toString()
+                                          : (j == 1) ? set2RIR(i).toString()
+                                          : (j == 2) ? set3RIR(i).toString()
+                                          : '1', // Default for other sets
                                       hintStyle: const TextStyle(
                                         color: Colors.grey,
                                         fontStyle: FontStyle.italic,
-                                        fontSize: 12,
+                                        fontSize: 14,
                                       ),
                                     ),
                                     onChanged: (value) {
-                                      _workoutSets[i][j].rir = value;
+                                      setState(() {});
                                     },
+                                    style: TextStyle(
+                                      color: _rirControllers[i][j].text.isEmpty ? Colors.grey : Colors.black,
+                                    ),
                                   ),
                                 ),
+
+
+                                const SizedBox(width: 4.0),
+
+                                // ✅ E1RM Display using Brzycki Formula with Suggested Weight, Reps, and RIR as Default
+                                Expanded(
+                                  child: Text(
+                                    calculateE1RM(
+                                        double.tryParse(_weightControllers[i][j].text) ??
+                                            ((j == 0) ? set1SuggestedWeight(i)
+                                                : (j == 1) ? set2SuggestedWeight(i)
+                                                : (j == 2) ? set3SuggestedWeight(i)
+                                                : 20.0),
+                                        (int.tryParse(_repsControllers[i][j].text) ??
+                                            ((j == 0) ? set1SuggestedReps(i).toInt()
+                                                : (j == 1) ? set2SuggestedReps(i).toDouble()
+                                                : (j == 2) ? set3SuggestedReps(i).toDouble()
+                                                : 10)).toDouble(),
+                                        double.tryParse(_rirControllers[i][j].text) ??
+                                            ((j == 0) ? set1RIR(i)
+                                                : (j == 1) ? set2RIR(i)
+                                                : (j == 2) ? set3RIR(i)
+                                                : 1.0) // Now correctly using set-specific RIR
+                                    ).toStringAsFixed(1),
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.bold,
+                                      color: (_weightControllers[i][j].text.isNotEmpty ||
+                                          _repsControllers[i][j].text.isNotEmpty ||
+                                          _rirControllers[i][j].text.isNotEmpty)
+                                          ? Colors.black
+                                          : Colors.grey,
+                                    ),
+                                  ),
+                                ),
+
                               ],
+
                             ),
                           ],
                         ),
@@ -586,7 +1021,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                         onPressed: () => addSet(i),
                       ),
                     ),
-                  ],
+                  ], //paste point
                 ),
               ),
           ],

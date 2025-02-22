@@ -8,22 +8,30 @@ class Workout {
   Workout({required this.name, required this.date, required this.exercises});
 
   // Factory constructor for converting Firestore data into a Workout object
-  factory Workout.fromFirestore(
-      DocumentSnapshot<Map<String, dynamic>> snapshot) {
+  factory Workout.fromFirestore(DocumentSnapshot<Map<String, dynamic>> snapshot) {
     final data = snapshot.data()!;
+
+
+    double _parseToDouble(dynamic value) {
+      if (value is double) return value;
+      if (value is int) return value.toDouble();
+      if (value is String) return double.tryParse(value) ?? 0.0;
+      return 0.0; // Default if null
+    }
 
     // Handle both Firestore Timestamp and String date formats
     DateTime workoutDate;
     if (data['date'] is Timestamp) {
       workoutDate = (data['date'] as Timestamp).toDate();
     } else if (data['date'] is String) {
-      workoutDate = DateTime.parse(data['date']);
+      workoutDate = DateTime.tryParse(data['date']) ?? DateTime.now();
     } else {
       throw Exception('Invalid date format');
     }
 
-    // Parse exercises from List<Map<String, dynamic>>
-    var exercisesData = data['exercises'] as List<dynamic>;
+    // ✅ Ensure `exercisesData` is a List before mapping
+    List<dynamic> exercisesData = data['exercises'] ?? [];
+
     List<Exercise> exercises = exercisesData.map((exercise) {
       return Exercise.fromFirestore(exercise as Map<String, dynamic>);
     }).toList();
@@ -34,6 +42,7 @@ class Workout {
       exercises: exercises,
     );
   }
+
 }
 
 class Exercise {
@@ -42,12 +51,11 @@ class Exercise {
 
   Exercise({required this.name, required this.sets});
 
-  // Factory expects a Map<String, dynamic> instead of DocumentSnapshot
   factory Exercise.fromFirestore(Map<String, dynamic> data) {
     var setsData = data['sets'] as List<dynamic>;
+
     List<SetDetails> sets = setsData.asMap().entries.map((entry) {
-      return SetDetails.fromFirestore(entry.value as Map<String, dynamic>,
-          entry.key + 1); // Pass set index as setNumber
+      return SetDetails.fromFirestore(entry.value as Map<String, dynamic>, entry.key + 1); // ✅ Now passes 2 arguments
     }).toList();
 
     return Exercise(
@@ -55,34 +63,55 @@ class Exercise {
       sets: sets,
     );
   }
+
 }
 
+
 class SetDetails {
-  final int setNumber; // New field for set number
-  String reps;
-  String weight;
-  String rir; // New field for RIR
+  int? reps;
+  double? weight;
+  double? rir;
 
   SetDetails({
-    required this.setNumber,
-    required this.reps,
-    required this.weight,
-    required this.rir,
+    this.reps,  // ✅ Now nullable
+    this.weight,  // ✅ Now nullable
+    this.rir,  // ✅ Now nullable
   });
 
   factory SetDetails.fromFirestore(Map<String, dynamic> data, int setNumber) {
     return SetDetails(
-      setNumber: setNumber, // Assign set number
-      reps: data['reps'] ?? '0',
-      weight: data['weight'] ?? '0',
-      rir: data['rir'] ?? '0', // Default RIR
+      reps: (data['reps'] is int)
+          ? data['reps']
+          : (data['reps'] is double)
+          ? (data['reps'] as double).toInt()
+          : int.tryParse(data['reps']?.toString() ?? '') ?? 0, // ✅ Default to 0 if null
+
+      weight: (data['weight'] is num)
+          ? (data['weight'] as num).toDouble()
+          : 0.0, // ✅ Default to 0.0
+
+      rir: (data['rir'] is num)
+          ? (data['rir'] as num).toDouble()
+          : 0.0, // ✅ Default to 0.0
     );
   }
 
+
+
   Map<String, dynamic> toMap() => {
-        'setNumber': setNumber, // Include set number when converting to map
-        'reps': reps,
-        'weight': weight,
-        'rir': rir,
-      };
+    'reps': reps,
+    'weight': weight,
+    'rir': rir,
+  };
+
+  /// ✅ Check if a SetDetails entry is empty (for hint text logic)
+  bool isEmpty() {
+    return reps == null && weight == null && rir == null;
+  }
 }
+
+
+
+
+
+
