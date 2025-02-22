@@ -9,6 +9,7 @@ import 'templates.dart';
 import 'workout_entry_screen.dart';
 import 'workout_history_screen.dart';
 
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
