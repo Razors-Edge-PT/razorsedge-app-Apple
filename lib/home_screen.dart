@@ -1,13 +1,15 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'body_weight_tracker.dart';
 import 'workout_details_screen.dart';
 import 'workout_entry_screen.dart';
 import 'workout_model.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 import 'main.dart'; // Import for routeObserver
+import 'dart:convert';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -21,11 +23,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   Workout? mostRecentWorkout;
   List<Workout> plannedWorkouts = [];
   bool isLoading = true;
+  bool hasSavedWorkout = false;
 
   @override
   void initState() {
     super.initState();
     _fetchRecentData();
+    _checkSavedWorkout();
   }
 
   Future<void> _fetchRecentData() async {
@@ -88,6 +92,54 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     setState(() => plannedWorkouts = querySnapshot.docs.map((doc) => Workout.fromFirestore(doc)).toList());
   }
 
+  Future<void> _checkSavedWorkout() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() => hasSavedWorkout = prefs.containsKey('savedWorkout'));
+  }
+
+  Future<void> _clearSavedWorkout() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('savedWorkout');
+    setState(() => hasSavedWorkout = false);
+  }
+
+  Future<void> _navigateToWorkoutEntry({bool resume = false}) async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => WorkoutPage(isNewWorkout: !resume),
+      ),
+    );
+    if (result == true) {
+      _checkSavedWorkout();
+    }
+  }
+
+  Future<void> _confirmDiscardWorkout() async {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Discard Active Workout?'),
+          content: const Text('Are you sure you want to discard the active workout?'),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                _clearSavedWorkout();
+                Navigator.of(context).pop();
+              },
+              child: const Text('Yes, Discard'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _signOut() async {
     await FirebaseAuth.instance.signOut();
     await GoogleSignIn().signOut();
@@ -122,10 +174,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               'Most Recent Weight',
               mostRecentWeight ?? 'No recent weight found',
               Icons.fitness_center,
-                  () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const BodyWeightTracker()),
-              ),
+                  () => Navigator.pushNamed(context, '/body_weight_tracker'),
             ),
             const SizedBox(height: 16),
             _buildInfoCard(
@@ -145,22 +194,21 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                 }
               },
             ),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const WorkoutPage()),
-              ),
-              child: const Text('Add Workout'),
-            ),
-            const SizedBox(height: 24),
-            Text('Planned Workouts', style: Theme.of(context).textTheme.headlineSmall),
-            const SizedBox(height: 8),
-            plannedWorkouts.isEmpty
-                ? const Text('No planned workouts.')
-                : Column(children: plannedWorkouts.map(_buildWorkoutCard).toList()),
           ],
         ),
+      ),
+      floatingActionButton: hasSavedWorkout
+          ? FloatingActionButton.extended(
+        onPressed: _navigateToWorkoutEntry,
+        backgroundColor: Colors.orangeAccent,
+        icon: const Icon(Icons.play_arrow, color: Colors.white),
+        label: const Text('Resume Workout', style: TextStyle(color: Colors.white)),
+      )
+          : FloatingActionButton.extended(
+        onPressed: _navigateToWorkoutEntry,
+        backgroundColor: Colors.blueAccent,
+        icon: const Icon(Icons.fitness_center, color: Colors.white),
+        label: const Text('New Workout', style: TextStyle(color: Colors.white)),
       ),
     );
   }
