@@ -8,8 +8,9 @@ import 'template_model.dart';
 import 'templates.dart';
 import 'exercise_details_screen.dart'; // Import your exercise details screen
 import 'top_sets_screen.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'periodization_model_utils.dart';
+
+
 
 Future<void> deleteAllUserWorkouts() async {
   final user = FirebaseAuth.instance.currentUser;
@@ -46,10 +47,6 @@ class WorkoutPage extends StatefulWidget {
   _WorkoutPageState createState() => _WorkoutPageState();
 }
 
-
-
-
-
 class _WorkoutPageState extends State<WorkoutPage> {
   final TextEditingController _workoutNameController = TextEditingController();
   DateTime _selectedDate = DateTime.now(); // Set the default date to today
@@ -61,17 +58,31 @@ class _WorkoutPageState extends State<WorkoutPage> {
   []; // New controller list for RIR
   final int _defaultSets = 3;
 
+  bool _isLoadingData = true; // Tracks whether data is still loading
+
+  Future<void> loadPreviousWorkoutData() async {
+    await PeriodizationModelUtils.fetchLastWorkoutTopSetReps();
+    setState(() {
+      _isLoadingData = false; // ✅ Data has been fetched, UI can update
+    });
+  }
 
 
-  // ✅ Brzycki Formula for E1RM
+  // ✅ Custom Hybrid E1RM Formula: Brzycki for ≤6 reps, Epley for >6 reps
   double calculateE1RM(double? weight, double? reps, double? rir) {
     double w = weight ?? 0.0;
     double r = reps ?? 0.0;
     double rValue = rir ?? 0.0;
+    double totalReps = r + rValue; // ✅ No clamping, keeps raw calculation
 
-    return w * (36 / (37 - (r + rValue)));
+    if (totalReps <= 6) {
+      // ✅ Brzycki for low reps (≤6)
+      return w * (36 / (37 - totalReps));
+    } else {
+      // ✅ Epley for higher reps (>6)
+      return w * (1 + (0.0333 * totalReps));
+    }
   }
-
 
   /// ✅ Helper Function to Parse Any Firestore Value to a Double
   double _parseToDouble(dynamic value) {
@@ -81,11 +92,58 @@ class _WorkoutPageState extends State<WorkoutPage> {
     return 0; // ✅ Default case
   }
 
+  final TextEditingController _mirroredRepsController = TextEditingController();
+
 
   //Determine available rep targets for this workout:
 
-  List<double> _lastWorkoutTopE1RMs = []; // ✅ Stores last 4 top set E1RMs
-  List<int> _lastWorkoutTopSetReps = []; // Stores last twelve top set reps
+  Map<String, List<double>> exercisePreviousE1RMs = {}; // ✅ E1RM history per exercise
+
+  Map<String, List<int>> exercisePreviousTopSetReps = {}; // ✅ Tracks reps per exercise
+
+
+  double getAverageE1RM(String exerciseName) {
+    if (!PeriodizationModelUtils.exercisePreviousE1RMs.containsKey(exerciseName) ||
+        PeriodizationModelUtils.exercisePreviousE1RMs[exerciseName]!.isEmpty) {
+      return 0.0; // ✅ Default if no history
+    }
+
+    List<double> recentE1RMs = PeriodizationModelUtils.exercisePreviousE1RMs[exerciseName]!.take(4).toList();
+    return recentE1RMs.reduce((a, b) => a + b) / recentE1RMs.length;
+  }
+
+
+  double getSet2E1RM(int exerciseIndex) {
+    String exerciseName = _selectedExercises[exerciseIndex]; // ✅ Get exerciseName
+
+    double set1Weight = double.tryParse(_weightControllers[exerciseIndex][0].text) ?? set1SuggestedWeight(exerciseIndex);
+    int set1Reps = int.tryParse(_repsControllers[exerciseIndex][0].text) ?? set1SuggestedReps(exerciseIndex).toInt();
+    double set1RIRValue = double.tryParse(_rirControllers[exerciseIndex][0].text) ?? set1RIR(exerciseIndex);
+    double set1EffectiveReps = set1Reps + set1RIRValue;
+
+    double set1E1RM = (set1EffectiveReps <= 6)
+        ? (set1Weight * (36 / (37 - set1EffectiveReps))) // Brzycki for low reps
+        : (set1Weight * (1 + (0.0333 * set1EffectiveReps))); // Epley for high reps
+
+    print("Set 2 E1RM for $exerciseName: ${set1E1RM.toStringAsFixed(1)}"); // ✅ Debugging
+    return (set1E1RM > 7) ? (set1E1RM - 7) : 1.0;
+  }
+
+  double getSet3E1RM(int exerciseIndex) {
+    String exerciseName = _selectedExercises[exerciseIndex]; // ✅ Get exerciseName
+
+    double set1Weight = double.tryParse(_weightControllers[exerciseIndex][0].text) ?? set1SuggestedWeight(exerciseIndex);
+    int set1Reps = int.tryParse(_repsControllers[exerciseIndex][0].text) ?? set1SuggestedReps(exerciseIndex).toInt();
+    double set1RIRValue = double.tryParse(_rirControllers[exerciseIndex][0].text) ?? set1RIR(exerciseIndex);
+    double set1EffectiveReps = set1Reps + set1RIRValue;
+
+    double set1E1RM = (set1EffectiveReps <= 6)
+        ? (set1Weight * (36 / (37 - set1EffectiveReps))) // Brzycki for low reps
+        : (set1Weight * (1 + (0.0333 * set1EffectiveReps))); // Epley for high reps
+
+    return (set1E1RM > 7) ? (set1E1RM - 10.5) : 1.0;
+  }
+
 
   Future<void> _fetchLastWorkoutTopSetReps() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -101,36 +159,58 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
     if (snapshot.docs.isNotEmpty) {
       setState(() {
-        _lastWorkoutTopSetReps.clear();
-        _lastWorkoutTopE1RMs.clear(); // ✅ Reset stored E1RMs
+        exercisePreviousTopSetReps.clear(); // ✅ Reset reps per exercise
+        exercisePreviousE1RMs.clear(); // ✅ Reset E1RMs per exercise
 
         for (var doc in snapshot.docs) {
           final workout = Workout.fromFirestore(doc);
 
           if (workout.exercises.isNotEmpty) {
-            // ✅ Find the top set with the highest E1RM
-            SetDetails? topSet;
-            double highestE1RM = 0.0;
-
             for (var exercise in workout.exercises) {
+              String exerciseName = exercise.name; // ✅ Exercise-specific tracking
+
+              SetDetails? topSet;
+              double highestE1RM = 0.0;
+
               for (var set in exercise.sets) {
                 double weight = _parseToDouble(set.weight);
                 double reps = _parseToDouble(set.reps);
                 double rir = _parseToDouble(set.rir);
+                double totalReps = reps + rir;
 
-                double e1rm = weight * (36 / (37 - (reps + rir)));
+                double e1rm = (totalReps <= 6)
+                    ? (weight * (36 / (37 - totalReps))) // Brzycki formula
+                    : (weight * (1 + (0.0333 * totalReps))); // Epley formula
 
                 if (topSet == null || e1rm > highestE1RM) {
                   highestE1RM = e1rm;
                   topSet = set;
                 }
               }
-            }
 
-            if (topSet != null) {
-              int effectiveReps = (_parseToDouble(topSet.reps) + _parseToDouble(topSet.rir)).floor();
-              _lastWorkoutTopSetReps.add(effectiveReps); // ✅ Store as INT
-              _lastWorkoutTopE1RMs.add(highestE1RM); // ✅ Store E1RM
+              if (topSet != null) {
+                int effectiveReps = (_parseToDouble(topSet.reps) + _parseToDouble(topSet.rir)).floor();
+
+                // ✅ Store E1RM per exercise
+                exercisePreviousE1RMs.putIfAbsent(exerciseName, () => []);
+                exercisePreviousE1RMs[exerciseName]!.add(highestE1RM);
+
+                // ✅ Keep only last 4 E1RMs per exercise
+                if (exercisePreviousE1RMs[exerciseName]!.length > 4) {
+                  exercisePreviousE1RMs[exerciseName] =
+                      exercisePreviousE1RMs[exerciseName]!.take(4).toList();
+                }
+
+                // ✅ Store reps per exercise
+                exercisePreviousTopSetReps.putIfAbsent(exerciseName, () => []);
+                exercisePreviousTopSetReps[exerciseName]!.add(effectiveReps);
+
+                // ✅ Keep only last 12 reps per exercise
+                if (exercisePreviousTopSetReps[exerciseName]!.length > 12) {
+                  exercisePreviousTopSetReps[exerciseName] =
+                      exercisePreviousTopSetReps[exerciseName]!.take(12).toList();
+                }
+              }
             }
           }
         }
@@ -139,8 +219,11 @@ class _WorkoutPageState extends State<WorkoutPage> {
   }
 
 
-  List<int> _getForbiddenRepTargets(int exerciseIndex, int setIndex) {
-    List<int> pastReps = _lastWorkoutTopSetReps.toList(); // ✅ Already stores Reps + RIR
+  List<int> getForbiddenRepTargets(String exerciseName, int setIndex) {
+    List<int>? pastReps = exercisePreviousTopSetReps[exerciseName]; // ✅ Now exerciseName is defined
+    if (pastReps == null) return []; // ✅ Handle missing data
+
+
     Set<int> forbiddenReps = {};
 
     for (int i = 0; i < pastReps.length; i++) {
@@ -171,82 +254,228 @@ class _WorkoutPageState extends State<WorkoutPage> {
     int effectiveReps = (enteredReps + enteredRIR).floor(); // ✅ Effective reps include RIR
 
     // ✅ Ensure max available reps do not exceed 12
+    String exerciseName = _selectedExercises[exerciseIndex]; // ✅ Get the exercise name
     List<int> allReps = List.generate(12, (index) => index + 1);
-    List<int> forbiddenReps = _getForbiddenRepTargets(exerciseIndex, setIndex);
+    List<int> forbiddenReps = getForbiddenRepTargets(exerciseName, setIndex); // ✅ Now passing the correct name
 
     // ✅ Get available reps by filtering out forbidden ones
     List<int> availableReps = allReps.where((rep) => !forbiddenReps.contains(rep)).toList();
 
     // ✅ Sort available reps so the most distant target is first (i.e., least recently used)
-    availableReps.sort((a, b) => _lastWorkoutTopSetReps.contains(a) ? 1 : -1);
+      List<int>? pastReps = exercisePreviousTopSetReps[exerciseName]; // ✅ Get past reps for this exercise
+
+    if (pastReps != null) {
+      availableReps.sort((a, b) => pastReps.contains(a) ? 1 : -1); // ✅ Sort based on exercise history
+    }
+
 
     return availableReps;
   }
 
 
-  int _getSuggestedRepTarget(int exerciseIndex, int setIndex, {double? weight}) {
+  int getSuggestedRepTarget(int exerciseIndex, int setIndex, {double? weight}) {
+    // ✅ Get the selected exercise name
+    String exerciseName = _selectedExercises[exerciseIndex];
 
-    // ✅ Get available rep targets
-    List<int> availableReps = _getAvailableRepTargets(exerciseIndex, setIndex);
-
-    if (availableReps.isEmpty) return 6; // ✅ Default to 6 if all reps are blocked
-
-    return availableReps.first; // ✅ Return the best available rep target
+    // ✅ Use the global function from PeriodizationModelUtils
+    return PeriodizationModelUtils.getSuggestedRepTarget(exerciseName);
   }
+
 
 
   //Determine hint texts for this workout:NEW METHOD
 
-  // ✅ New function for Set 1 Suggested Reps
   double set1SuggestedReps(int exerciseIndex) {
-    return _getSuggestedRepTarget(exerciseIndex, 0).toDouble();
+    String exerciseName = _selectedExercises[exerciseIndex]; // ✅ Get exercise name
+    List<double>? pastE1RMs = exercisePreviousE1RMs[exerciseName]; // ✅ Get E1RMs for this exercise
+
+    if (pastE1RMs == null || pastE1RMs.isEmpty) {
+      return 6.0; // ✅ Default reps if no history for this exercise
+    }
+
+
+    // ✅ Check if user has entered a weight
+    bool hasUserWeightInput = _weightControllers[exerciseIndex][0].text.isNotEmpty;
+
+    if (hasUserWeightInput) {
+      // ✅ Get the average E1RM
+      String exerciseName = _selectedExercises[exerciseIndex]; // ✅ Get the exercise name
+      double avgE1RM = getAverageE1RM(exerciseName); // ✅ Pass exercise name to get its average E1RM
+
+
+      // ✅ Get the newly entered weight
+      double weight = double.tryParse(_weightControllers[exerciseIndex][0].text) ?? 0.0;
+
+      // ✅ Ensure weight is valid
+      if (weight <= 0 || avgE1RM <= weight) {
+
+        return 1.0; // ✅ If weight is too high, return 1 rep
+      }
+
+      // ✅ Reverse Brzycki formula to calculate reps
+      double rawReps = (weight / avgE1RM < 0.85)
+          ? ((avgE1RM / weight) - 1) / 0.0333  // Epley formula for higher reps
+          : (37 - ((weight * 36) / avgE1RM));  // Brzycki formula for lower reps
+
+      // ✅ Get the current RIR (user input or default)
+      double rir = double.tryParse(_rirControllers[exerciseIndex][0].text) ?? set1RIR(exerciseIndex);
+
+      // ✅ Subtract RIR from the calculated reps
+      double finalReps = (rawReps - rir);
+      double decimalPart = finalReps - finalReps.floor();
+
+      if (decimalPart >= 0.652) { // 1 - 0.098 = 0.902
+        finalReps = finalReps.ceil().toDouble();
+      } else {
+        finalReps = finalReps.floor().toDouble();
+      }
+
+      return finalReps.clamp(1.0, 200.0); // ✅ Ensure reps are between 1 and 200
+    }
+
+    // ✅ Otherwise, return suggested rep target
+    return getSuggestedRepTarget(exerciseIndex, 0).toDouble();
   }
 
-  // ✅ Function to determine suggested reps for Set 2
-  int set2SuggestedReps(int exerciseIndex) {
-    int set1Reps = int.tryParse(_repsControllers[exerciseIndex][0].text) ?? set1SuggestedReps(exerciseIndex).toInt();
-    return (set1Reps - 1).clamp(1, 200); // Ensure reps don't go below 1
+
+  double set2SuggestedReps(int exerciseIndex) {
+    // ✅ Get Set 2's E1RM using the function
+    double set2E1RM = getSet2E1RM(exerciseIndex);
+
+    // ✅ Get Set 1 reps from UI or default to suggested
+    double set1Reps = double.tryParse(_repsControllers[exerciseIndex][0].text) ?? set1SuggestedReps(exerciseIndex).toDouble();
+
+    // ✅ Determine whether user has entered weight for Set 2
+    bool hasUserWeightInput = _weightControllers[exerciseIndex][1].text.isNotEmpty;
+
+    if (!hasUserWeightInput) {
+      // ✅ Default behavior: use Set 1 reps - 1
+      return (set1Reps - 1).clamp(1, 200);
+    }
+
+    // ✅ Get Set 2 weight from user input
+    double weight = double.tryParse(_weightControllers[exerciseIndex][1].text) ?? 0.0;
+
+    // ✅ Ensure weight is valid
+    if (weight <= 0 || set2E1RM <= weight) {
+
+      return 1; // ✅ If weight is too high, or below 0, return 1 rep
+    }
+
+    // ✅ Reverse Hybrid formula to calculate reps
+    double rawReps = (weight / set2E1RM < 0.85)
+        ? ((set2E1RM / weight) - 1) / 0.0333  // Epley formula for higher reps
+        : (37 - ((weight * 36) / set2E1RM));  // Brzycki formula for lower reps
+
+    // ✅ Get Set 2 RIR from UI
+    double rir = double.tryParse(_rirControllers[exerciseIndex][1].text) ?? set2RIR(exerciseIndex);
+
+    // ✅ Subtract RIR from the calculated reps
+    double finalReps = (rawReps - rir);
+    double decimalPart = finalReps - finalReps.floor();
+
+    if (decimalPart >= 0.652) { // 1 - 0.198 = 0.802
+      finalReps = finalReps.ceil().toDouble();
+    } else {
+      finalReps = finalReps.floor().toDouble();
+    }
+
+    return finalReps.clamp(1.0, 200.0); // ✅ Ensure reps are between 1 and 200
   }
 
-  int set3SuggestedReps(int exerciseIndex) {
-    int set2Reps = int.tryParse(_repsControllers[exerciseIndex][1].text) ?? set2SuggestedReps(exerciseIndex);
-    return (set2Reps - 1).clamp(1, 200); // Ensure reps don't go below 1
+
+  double set3SuggestedReps(int exerciseIndex) {
+    // ✅ Get Set 1's E1RM using hint text or user input
+    double set3E1RM = getSet3E1RM(exerciseIndex);
+
+    double set2Reps = double.tryParse(_repsControllers[exerciseIndex][1].text) ?? set2SuggestedReps(exerciseIndex).toDouble();
+
+    // ✅ Determine whether user has entered weight for Set 3
+    bool hasUserWeightInput = _weightControllers[exerciseIndex][2].text.isNotEmpty;
+
+    if (!hasUserWeightInput) {
+      // ✅ Default behavior: use Set 2 reps - 1
+      return (set2Reps - 1).clamp(1, 200);
+    }
+
+    // ✅ Get Set 2 weight from user input
+    double weight = double.tryParse(_weightControllers[exerciseIndex][2].text) ?? 0.0;
+
+    // ✅ Ensure weight is valid
+    if (weight <= 0 || set3E1RM <= weight) {
+
+      return 1; // ✅ If weight is too high, or below 0, return 1 rep
+    }
+
+    // ✅ Reverse Hybrid formula to calculate reps
+    double rawReps = (weight / set3E1RM < 0.85)
+        ? ((set3E1RM / weight) - 1) / 0.0333  // Epley formula for higher reps
+        : (37 - ((weight * 36) / set3E1RM));  // Brzycki formula for lower reps
+
+    // ✅ Get Set 3 RIR from UI
+    double rir = double.tryParse(_rirControllers[exerciseIndex][2].text) ?? set2RIR(exerciseIndex);
+
+    // ✅ Subtract RIR from the calculated reps
+    double finalReps = (rawReps - rir);
+    double decimalPart = finalReps - finalReps.floor();
+
+    if (decimalPart >= 0.652) { // 1 - 0.198 = 0.802
+      finalReps = finalReps.ceil().toDouble();
+    } else {
+      finalReps = finalReps.floor().toDouble();
+    }
+
+    return finalReps.clamp(1.0, 200.0); // ✅ Ensure reps are between 1 and 200
   }
+
 
   // ✅ Function to determine RIR for Set 1 (Default: 0.5, Modifiable in Future)
   double set1RIR(int exerciseIndex) {
-    // Placeholder for now, will later be modified from another page
-    return 0.5;
+    if (_rirControllers[exerciseIndex][0].text.isNotEmpty) {
+      return double.tryParse(_rirControllers[exerciseIndex][0].text) ?? 0.5;
+    }
+    return 0.5; // Default RIR for Set 1
   }
 
-  // ✅ Function to determine RIR for Set 2 (Default: 1.5, Modifiable in Future)
+// ✅ Function to determine RIR for Set 2 (Default: 1.5, Modifiable in Future)
   double set2RIR(int exerciseIndex) {
-    // Placeholder for now, will later be modified from another page
-    return 1.5;
+    if (_rirControllers[exerciseIndex][1].text.isNotEmpty) {
+      return double.tryParse(_rirControllers[exerciseIndex][1].text) ?? 1.5;
+    }
+    return 1.5; // Default RIR for Set 2
   }
 
 // ✅ Function to determine RIR for Set 3 (Default: 2.5, Modifiable in Future)
   double set3RIR(int exerciseIndex) {
-    // Placeholder for now, will later be modified from another page
-    return 2.5;
+    if (_rirControllers[exerciseIndex][2].text.isNotEmpty) {
+      return double.tryParse(_rirControllers[exerciseIndex][2].text) ?? 2.5;
+    }
+    return 2.5; // Default RIR for Set 3
   }
 
 
-// ✅ Reverse Brzycki Formula to Calculate Suggested Weight for Set 1
-// Uses the average of the last 4 top E1RMs if available
-  double set1SuggestedWeight(int exerciseIndex) {
-    if (_lastWorkoutTopE1RMs.isEmpty) return 20.0; // Default weight if no history
 
-    // ✅ Get the last 4 E1RMs (or fewer if not available)
-    List<double> recentE1RMs = _lastWorkoutTopE1RMs.take(4).toList();
-    double avgE1RM = recentE1RMs.reduce((a, b) => a + b) / recentE1RMs.length;
+  double set1SuggestedWeight(int exerciseIndex) {
+    if (exercisePreviousE1RMs.isEmpty) return 20.0; // Default weight if no history
+
+    // ✅ Get the last average of last 4 E1RMs (or fewer if not available)
+    double avgE1RM = getAverageE1RM(_selectedExercises[exerciseIndex]); // ✅ FIXED
+
 
     // ✅ Get reps and RIR from UI or use default values
     int reps = int.tryParse(_repsControllers[exerciseIndex][0].text) ?? set1SuggestedReps(exerciseIndex).toInt();
-    double rir = double.tryParse(_rirControllers[exerciseIndex][0].text) ?? 1.0;
+    double rir = double.tryParse(_rirControllers[exerciseIndex][0].text) ?? set1RIR(exerciseIndex);
     double effectiveReps = reps + rir;
 
-    double suggestedWeight = avgE1RM * (37 - effectiveReps) / 36;
+    double suggestedWeight;
+
+    if (effectiveReps <= 6) {
+      // ✅ Use Brzycki formula for lower rep ranges
+      suggestedWeight = avgE1RM * (37 - effectiveReps) / 36;
+    } else {
+      // ✅ Use Epley formula for higher rep ranges
+      suggestedWeight = avgE1RM / (1 + (0.0333 * effectiveReps));
+    }
 
     // ✅ Prevent negative suggested weight
     suggestedWeight = suggestedWeight.clamp(2.5, double.infinity);
@@ -256,53 +485,58 @@ class _WorkoutPageState extends State<WorkoutPage> {
   }
 
   double set2SuggestedWeight(int exerciseIndex) {
-    if (_lastWorkoutTopE1RMs.isEmpty) return 20.0; // Default weight if no history
+    if (exercisePreviousE1RMs.isEmpty) return 20.0; // Default weight if no history
 
-    // ✅ Calculate Set 1 E1RM using user input or hint values
-    double set1Weight = double.tryParse(_weightControllers[exerciseIndex][0].text) ?? set1SuggestedWeight(exerciseIndex);
-    int set1Reps = int.tryParse(_repsControllers[exerciseIndex][0].text) ?? set1SuggestedReps(exerciseIndex).toInt();
-    double set1RIRValue = double.tryParse(_rirControllers[exerciseIndex][0].text) ?? set1RIR(exerciseIndex); // ✅ Ensure function call
-    double set1EffectiveReps = set1Reps + set1RIRValue;
-    double set1E1RM = calculateE1RM(set1Weight, set1EffectiveReps, set1RIRValue);
-
-    // ✅ Subtract 7 from Set 1 E1RM
-    double adjustedE1RM = (set1E1RM > 7) ? (set1E1RM - 7) : 1.0;
+    // ✅ Get Set 2's E1RM using the function
+    double set2E1RM = getSet2E1RM(exerciseIndex);
 
     // ✅ Use Set 2 reps and RIR for weight calculation
-    int reps = int.tryParse(_repsControllers[exerciseIndex][1].text) ?? set2SuggestedReps(exerciseIndex);
+    double reps = double.tryParse(_repsControllers[exerciseIndex][1].text) ?? set2SuggestedReps(exerciseIndex);
     double rir = double.tryParse(_rirControllers[exerciseIndex][1].text) ?? set2RIR(exerciseIndex);
     double effectiveReps = reps + rir;
 
-    // ✅ Prevent negative multiplier
-    double repMultiplier = (37 - effectiveReps).clamp(1, 37); // Min 1, Max 37
+    double suggestedWeight;
 
-    double suggestedWeight = adjustedE1RM * repMultiplier / 36;
-    return ((suggestedWeight / 2.5).round() * 2.5).clamp(1.0, double.infinity); // ✅ Ensures minimum weight is 1kg
+    if (effectiveReps <= 6) {
+      // ✅ Use Brzycki formula for lower rep ranges
+      suggestedWeight = set2E1RM * (37 - effectiveReps) / 36;
+    } else {
+      // ✅ Use Epley formula for higher rep ranges
+      suggestedWeight = set2E1RM / (1 + (0.0333 * effectiveReps));
+    }
+
+    // ✅ Prevent negative suggested weight
+    suggestedWeight = suggestedWeight.clamp(2.5, double.infinity);
+
+    // ✅ Round to the nearest 2.5kg increment
+    return (suggestedWeight / 2.5).round() * 2.5;
   }
 
   double set3SuggestedWeight(int exerciseIndex) {
-    if (_lastWorkoutTopE1RMs.isEmpty) return 20.0; // Default weight if no history
+    if (exercisePreviousE1RMs.isEmpty) return 20.0; // Default weight if no history
 
-    // ✅ Calculate Set 1 E1RM using user input or hint values
-    double set1Weight = double.tryParse(_weightControllers[exerciseIndex][0].text) ?? set1SuggestedWeight(exerciseIndex);
-    int set1Reps = int.tryParse(_repsControllers[exerciseIndex][0].text) ?? set1SuggestedReps(exerciseIndex).toInt();
-    double set1RIRValue = double.tryParse(_rirControllers[exerciseIndex][0].text) ?? set1RIR(exerciseIndex); // ✅ Ensure function call
-    double set1EffectiveReps = set1Reps + set1RIRValue;
-    double set1E1RM = calculateE1RM(set1Weight, set1EffectiveReps, set1RIRValue);
-
-    // ✅ Subtract 10 from Set 1 E1RM
-    double adjustedE1RM = (set1E1RM > 10) ? (set1E1RM - 10) : 1.0;
+    double set3E1RM = getSet3E1RM(exerciseIndex);
 
     // ✅ Use Set 3 reps and RIR for weight calculation
-    int reps = int.tryParse(_repsControllers[exerciseIndex][2].text) ?? set3SuggestedReps(exerciseIndex);
+    double reps = double.tryParse(_repsControllers[exerciseIndex][2].text) ?? set3SuggestedReps(exerciseIndex);
     double rir = double.tryParse(_rirControllers[exerciseIndex][2].text) ?? set3RIR(exerciseIndex);
     double effectiveReps = reps + rir;
 
-    // ✅ Prevent negative multiplier
-    double repMultiplier = (37 - effectiveReps).clamp(1, 37); // Min 1, Max 37
+    double suggestedWeight;
 
-    double suggestedWeight = adjustedE1RM * repMultiplier / 36;
-    return ((suggestedWeight / 2.5).round() * 2.5).clamp(1.0, double.infinity); // ✅ Ensures minimum weight is 1kg
+    if (effectiveReps <= 6) {
+      // ✅ Use Brzycki formula for lower rep ranges
+      suggestedWeight = set3E1RM * (37 - effectiveReps) / 36;
+    } else {
+      // ✅ Use Epley formula for higher rep ranges
+      suggestedWeight = set3E1RM / (1 + (0.0333 * effectiveReps));
+    }
+
+    // ✅ Prevent negative suggested weight
+    suggestedWeight = suggestedWeight.clamp(2.5, double.infinity);
+
+    // ✅ Round to the nearest 2.5kg increment
+    return (suggestedWeight / 2.5).round() * 2.5;
   }
 
 
@@ -310,6 +544,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
   @override
   void initState() {
     super.initState();
+
+    loadPreviousWorkoutData(); // ✅ Ensures data is fetched before UI load
 
     if (widget.workout != null) {
       _loadWorkout(widget.workout!);
@@ -388,26 +624,41 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
 
   void _initializeControllers() {
-    _repsControllers.clear();
-    _weightControllers.clear();
-    _rirControllers.clear();
+    // ✅ Ensure controller lists are at least as long as _selectedExercises
+    while (_repsControllers.length < _selectedExercises.length) {
+      _repsControllers.add([]);
+    }
+    while (_weightControllers.length < _selectedExercises.length) {
+      _weightControllers.add([]);
+    }
+    while (_rirControllers.length < _selectedExercises.length) {
+      _rirControllers.add([]);
+    }
 
     for (int i = 0; i < _selectedExercises.length; i++) {
       List<SetDetails> sets = _workoutSets[i];
 
-      _repsControllers.add(sets.map((set) {
-        return TextEditingController(text: set.reps?.toString() ?? '');  // ✅ Handles null by setting empty text
-      }).toList());
+      // ✅ Only add controllers if they don't already exist (to keep user-entered data)
+      if (_repsControllers[i].isEmpty) {
+        _repsControllers[i] = sets.map((set) {
+          return TextEditingController(text: set.reps?.toString() ?? '');
+        }).toList();
+      }
 
-      _weightControllers.add(sets.map((set) {
-        return TextEditingController(text: set.weight != null ? set.weight!.toStringAsFixed(1) : ''); // ✅ Handles null properly
-      }).toList());
+      if (_weightControllers[i].isEmpty) {
+        _weightControllers[i] = sets.map((set) {
+          return TextEditingController(text: set.weight != null ? set.weight!.toStringAsFixed(1) : '');
+        }).toList();
+      }
 
-      _rirControllers.add(sets.map((set) {
-        return TextEditingController(text: set.rir != null ? set.rir!.toStringAsFixed(1) : ''); // ✅ Handles null properly
-      }).toList());
+      if (_rirControllers[i].isEmpty) {
+        _rirControllers[i] = sets.map((set) {
+          return TextEditingController(text: set.rir != null ? set.rir!.toStringAsFixed(1) : '');
+        }).toList();
+      }
     }
   }
+
 
 
 
@@ -485,27 +736,35 @@ class _WorkoutPageState extends State<WorkoutPage> {
         int exerciseIndex = exerciseEntry.key;
         String exerciseName = exerciseEntry.value;
 
-        return {
-          'name': exerciseName,
-          'sets': List.generate(_weightControllers[exerciseIndex].length, (setIndex) {
-            TextEditingController weightController = _weightControllers[exerciseIndex][setIndex];
-            TextEditingController repsController = _repsControllers[exerciseIndex][setIndex];
-            TextEditingController rirController = _rirControllers[exerciseIndex][setIndex];
+        // ✅ Filter out sets where weight is 0
+        List<Map<String, dynamic>> validSets = [];
 
-            String weightText = weightController.text.trim();
-            String repsText = repsController.text.trim();
-            String rirText = rirController.text.trim();
+        for (int setIndex = 0; setIndex < _weightControllers[exerciseIndex].length; setIndex++) {
+          String weightText = _weightControllers[exerciseIndex][setIndex].text.trim();
+          double weight = double.tryParse(weightText) ?? 0.0;
 
-            return {
+          if (weight > 0) { // ✅ Only save sets where weight is greater than 0
+            String repsText = _repsControllers[exerciseIndex][setIndex].text.trim();
+            String rirText = _rirControllers[exerciseIndex][setIndex].text.trim();
+
+            validSets.add({
+              'exerciseName': exerciseName, // ✅ Store exerciseName in each set
               'reps': repsText.isNotEmpty ? int.tryParse(repsText) ?? 0 : 0,
-              'weight': weightText.isNotEmpty ? double.tryParse(weightText) ?? 0.0 : 0.0,
+              'weight': weight,
               'rir': rirText.isNotEmpty ? double.tryParse(rirText) ?? 0.0 : 0.0,
-            };
-          }),
-        };
-      }).toList(),
-    };
+            });
+          }
+        }
 
+        // ✅ Only include exercises with at least one valid set
+        return validSets.isNotEmpty
+            ? {
+          'name': exerciseName,
+          'sets': validSets,
+        }
+            : null;
+      }).where((exercise) => exercise != null).toList(), // ✅ Remove null exercises
+    };
 
     try {
       await FirebaseFirestore.instance
@@ -618,6 +877,21 @@ class _WorkoutPageState extends State<WorkoutPage> {
       ),
     );
   }
+
+  void _navigateToTopSets(String exerciseName) async {
+    List<Workout> recentWorkouts = await getRecentWorkoutsForExercise(exerciseName,_selectedDate); // ✅ Fetch all previous workouts
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => TopSetsScreen(
+          exerciseName: exerciseName,
+          recentWorkouts: recentWorkouts, // ✅ Pass the resolved List<Workout>
+        ),
+      ),
+    );
+  }
+
 
 
   Future<List<Workout>> getRecentWorkoutsForExercise(
@@ -736,6 +1010,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
                 labelText: 'Workout Name',
               ),
             ),
+
+
             const SizedBox(height: 10.0),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -782,24 +1058,44 @@ class _WorkoutPageState extends State<WorkoutPage> {
                       const SizedBox(width: 4), // ✅ Adds spacing between buttons
                       ElevatedButton(
                         onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => TopSetsScreen(),
-                            ),
-                          );
+                          _navigateToTopSets(_selectedExercises[i]); // ✅ Call the function
                         },
-                        style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          textStyle: const TextStyle(fontSize: 12), // ✅ Small button text
-                        ),
                         child: const Text('Top Sets'),
                       ),
+
                     ],
                   ),
                   children: [
+                    // New row between selected exercise and workout sets:
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6.0),
+                      child: Row(
+                        children:  [
+                          Text(
+                            _selectedExercises[i],
+                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                          ),
+
+                          SizedBox(width: 8.0),
+                          Text(
+                            ' ${getAverageE1RM(_selectedExercises[i]).toStringAsFixed(1)} kg', // ✅ Now passing exercise name
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.blue),
+                          ),
+
+                          // Extra spacing before the new element
+                          SizedBox(width: 8.0),
+
+                          // Check set 2 E1RM in UI, commented out till needed
+                          //Text(
+                          //'Set 2 E1RM: ${getSet2E1RM(i).toStringAsFixed(1)}',
+                          //  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.red),
+                          // ),
 
 
+
+                        ],
+                      ),
+                    ),
                     for (int j = 0; j < _workoutSets[i].length; j++)
                       Padding(
                         padding: const EdgeInsets.only(left: 6, bottom: 0, top: 0, right: 6),
@@ -814,7 +1110,6 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                   children: [
                                     Row(
                                       children: [
-                                        const SizedBox(width: 6), // Small spacing
                                         const SizedBox(width: 6), // Small spacing
                                         Row(
                                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -923,12 +1218,14 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                     controller: _repsControllers[i][j],
                                     keyboardType: TextInputType.number,
                                     decoration: InputDecoration(
-                                      hintText: (j == 0)
+                                      hintText: _isLoadingData
+                                          ? '' // ✅ Show no hint while loading
+                                          : (j == 0)
                                           ? set1SuggestedReps(i).toInt().toString()
                                           : (j == 1)
-                                          ? set2SuggestedReps(i).toString()
+                                          ? set2SuggestedReps(i).toInt().toString()
                                           : (j == 2)
-                                          ? set3SuggestedReps(i).toString()
+                                          ? set3SuggestedReps(i).toInt().toString()
                                           : '10', // Default for other sets
                                       hintStyle: const TextStyle(
                                         color: Colors.grey,
@@ -943,7 +1240,9 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                       color: _repsControllers[i][j].text.isEmpty ? Colors.grey : Colors.black,
                                     ),
                                   ),
+
                                 ),
+
 
 
                                 const SizedBox(width: 4.0),

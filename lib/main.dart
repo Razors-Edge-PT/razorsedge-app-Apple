@@ -8,6 +8,8 @@ import 'login_screen.dart';
 import 'templates.dart';
 import 'workout_entry_screen.dart';
 import 'workout_history_screen.dart';
+import 'BlockBuilderScreen.dart';
+
 
 
 void main() async {
@@ -35,6 +37,8 @@ class MyApp extends StatelessWidget {
         '/workouts': (context) => const WorkoutPage(),
         '/workouts_list': (context) => const WorkoutHistoryScreen(),
         '/body_weight_tracker': (context) => const BodyWeightTracker(),
+        '/block_builder': (context) => const BlockBuilderScreen(),
+
       },
     );
   }
