@@ -143,16 +143,28 @@ class _WorkoutDetailsScreenState extends State<WorkoutDetailsScreen> {
                         final int setIndex = entry.key + 1; // Set index starts from 1
                         final set = entry.value;
 
-                        // ✅ Calculate E1RM
+                        // ✅ Calculate E1RM using the hybrid formula
                         double weight = set.weight ?? 0.0;
                         double reps = (set.reps ?? 0).toDouble();  // ✅ Convert safely by defaulting to 0
                         double rir = set.rir ?? 0.0;
-                        double e1rm = weight * (1 + (0.0333 * (reps + rir)));
+                        double totalReps = reps + rir;
 
-// ✅ Find the highest E1RM in this workout
+                        double e1rm = (totalReps <= 6)
+                            ? (weight * (36 / (37 - totalReps))) // Brzycki for low reps
+                            : (weight * (1 + (0.0333 * totalReps))); // Epley for high reps
+
+// ✅ Find the highest E1RM in this workout using the hybrid formula
                         double highestE1RM = exercise.sets
-                            .map((s) => (s.weight ?? 0.0) *
-                            (1 + (0.0333 * (((s.reps ?? 0).toDouble()) + (s.rir ?? 0.0)))))
+                            .map((s) {
+                          double sWeight = s.weight ?? 0.0;
+                          double sReps = (s.reps ?? 0).toDouble();
+                          double sRIR = s.rir ?? 0.0;
+                          double sTotalReps = sReps + sRIR;
+
+                          return (sTotalReps <= 6)
+                              ? (sWeight * (36 / (37 - sTotalReps))) // Brzycki for low reps
+                              : (sWeight * (1 + (0.0333 * sTotalReps))); // Epley for high reps
+                        })
                             .reduce((a, b) => a > b ? a : b); // ✅ Find max E1RM safely
 
 
