@@ -12,10 +12,15 @@ class ExerciseDetailsScreen extends StatelessWidget {
     required this.recentWorkouts,
   });
 
-  // ✅ Function to calculate E1RM using Brzycki formula
+  // ✅ Function to calculate E1RM using Hybrid (Brzycki for low reps, Epley for high reps)
   double calculateE1RM(double weight, double reps, double rir) {
-    return weight * (36 / (37 - (reps + rir)));
+    double totalReps = reps + rir;
+
+    return (totalReps <= 6)
+        ? (weight * (36 / (37 - totalReps))) // Brzycki for low reps
+        : (weight * (1 + (0.0333 * totalReps))); // Epley for high reps
   }
+
 
   @override
   Widget build(BuildContext context) {
