@@ -24,7 +24,7 @@ class BlockBuilderScreen extends StatefulWidget {
 class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
   List<String> days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
   List<List<String?>> templateDropdownValues = List.generate(52, (_) => List.filled(7, null, growable: true));
-  List<List<List<String?>>> exerciseSelection = [];
+  Map<int, Map<int, Map<int, String?>>> exerciseSelection = {};
   List<String> savedExercises = [];
   List<List<String>> tableData = List.generate(11, (_) => List.generate(7, (_) => ''));
   List<String> weeks = ['Week 1', 'Week 2', 'Week 3', 'Week 4', 'Week 5', 'Week 6', 'Week 7','Week 8'];
@@ -35,87 +35,75 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
   bool _isLoadingData = true; // Tracks data loading
   List<int> addedWeeks = [];
   List<int> _exerciseRowsPerDay = List.generate(12, (_) => 11); // ✅ Match 12 weeks
-  Map<int, bool> _showAddRowButton = {}; // ✅ Track when to show button
-  ScrollController _scrollController = ScrollController(); // ✅ Detect scrolling
+
 
   late DateTime selectedWeekMonday; // ✅ Declare without assigning
 
-  List<List<List<TextEditingController>>> _weightControllers = [];
-  List<List<List<TextEditingController>>> _repsControllers = [];
-  List<List<List<TextEditingController>>> _rirControllers = [];
-  List<List<List<TextEditingController>>> _e1rmControllers = [];
+  Map<int, Map<int, Map<int, TextEditingController>>> _repsControllers = {};
+  Map<int, Map<int, Map<int, TextEditingController>>> _rirControllers = {};
+  Map<int, Map<int, Map<int, TextEditingController>>> _weightControllers = {};
+  Map<int, Map<int, Map<int, TextEditingController>>> _e1rmControllers = {};
+
+// ✅ Stores only active controllers (created when the user taps a field)
+  Map<String, TextEditingController> _activeControllers = {};
+  TextEditingController _getController(
+      Map<int, Map<int, Map<int, TextEditingController>>> controllers,
+      int week,
+      int day,
+      int row,
+      ) {
+    return controllers
+        .putIfAbsent(week, () => {})
+        .putIfAbsent(day, () => {})
+        .putIfAbsent(row, () => TextEditingController());
+  }
 
 
+  void _initializeMaps() {
+    for (var week = 0; week < 12; week++) {
+      // ✅ Ensure week-level maps exist
+      exerciseSelection[week] = {};
+      _repsControllers[week] = {}; // Do NOT preload controllers here
+      _rirControllers[week] = {};
+      _weightControllers[week] = {};
 
-  @override
-  void initState() {
-    super.initState();
+      for (var day = 0; day < 7; day++) {
+        // ✅ Ensure day-level maps exist
+        exerciseSelection[week]![day] = {};
+        _repsControllers[week]![day] = {}; // Do NOT preload controllers
+        _rirControllers[week]![day] = {};
+        _weightControllers[week]![day] = {};
 
-    selectedWeekMonday = _getMostRecentMonday(); // ✅ Ensure it's initialized
-
-    // ✅ Ensure `addedWeeks` has at least one element before using its length
-    if (addedWeeks.isEmpty) {
-      addedWeeks = List.generate(11, (index) => index); // ✅ Starts with 12 weeks (0 to 11)
+        for (var row = 0; row < 11; row++) {
+          // ✅ Store only `null`, no controllers yet
+          exerciseSelection[week]![day]![row] = null;
+        }
+      }
     }
-
-
-    // ✅ Ensure exerciseSelection initializes with 12 weeks
-    exerciseSelection = List.generate(
-      12, // 🔥 Set to 12 to match addedWeeks
-          (_) => List.generate(7, (_) => List.generate(11, (_) => null, growable: true), growable: true),
-      growable: true,
-    );
-
-
-
   }
 
 
 
 
 
-  // ✅ Function to add a row for a specific day
-  // ✅ Function to add a row for a specific day
-  void _addRow(int weekIndex, int dayIndex) {
-    setState(() {
-      // Increase the row count for this day
-      _exerciseRowsPerDay[dayIndex]++;
+  @override
+  @override
+  void initState() {
+    super.initState();
+    selectedWeekMonday = _getMostRecentMonday();
+    if (addedWeeks.isEmpty) {
+      addedWeeks = List.generate(12, (index) => index);
+    }
+    _initializeMaps(); // ✅ Now fully map-based!
 
-      print("Adding row at week: $weekIndex, day: $dayIndex | Total rows now: ${_exerciseRowsPerDay[dayIndex]}");
+    // ✅ Initialize empty maps (store only raw data, no controllers created yet)
+    _repsControllers = {};
+    _rirControllers = {};
+    _weightControllers = {};
+    _e1rmControllers = {};
 
-      // Ensure `exerciseSelection` is initialized correctly
-      while (exerciseSelection.length <= weekIndex) {
-        exerciseSelection.add(List.generate(7, (_) => [], growable: true));
-      }
-      while (exerciseSelection[weekIndex].length <= dayIndex) {
-        exerciseSelection[weekIndex].add([]);
-      }
-
-      // Add a new exercise entry
-      exerciseSelection[weekIndex][dayIndex].add(null);
-
-      // Ensure `_repsControllers`, `_weightControllers`, `_rirControllers`, `_e1rmControllers` are initialized correctly
-      while (_repsControllers.length <= weekIndex) {
-        _repsControllers.add(List.generate(7, (_) => [], growable: true));
-        _weightControllers.add(List.generate(7, (_) => [], growable: true));
-        _rirControllers.add(List.generate(7, (_) => [], growable: true));
-        _e1rmControllers.add(List.generate(7, (_) => [], growable: true));
-      }
-      while (_repsControllers[weekIndex].length <= dayIndex) {
-        _repsControllers[weekIndex].add([]);
-        _weightControllers[weekIndex].add([]);
-        _rirControllers[weekIndex].add([]);
-        _e1rmControllers[weekIndex].add([]);
-      }
-
-      // Add new controllers for the new row
-      _repsControllers[weekIndex][dayIndex].add(TextEditingController());
-      _weightControllers[weekIndex][dayIndex].add(TextEditingController());
-      _rirControllers[weekIndex][dayIndex].add(TextEditingController());
-      _e1rmControllers[weekIndex][dayIndex].add(TextEditingController());
-
-      print("Updated Lists Lengths -> Exercises: ${exerciseSelection[weekIndex][dayIndex].length}");
-    });
+    // ✅ Store active controllers only for fields being edited
+    _activeControllers = {};
   }
 
 
@@ -466,7 +454,8 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
 
             if (selectedTemplate != null) {
               setState(() {
-                templateDropdownValues[weekIndex][dayIndex] = selectedTemplate;
+                templateDropdownValues[weekIndex]?[dayIndex] = selectedTemplate;
+
 
                 _updateExerciseSelection(weekIndex, dayIndex, selectedTemplate);
               });
@@ -558,7 +547,9 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
         id: doc.id,
         name: doc.get('name'),
         day: doc.get('day'),
-        exercises: List<String>.from(doc.get('exercises')),
+        exercises: (doc.get('exercises') is List)
+            ? List<String>.from(doc.get('exercises'))
+            : [], // Ensure it's a list
       )).toList();
       setState(() {
         templates = templateList;
@@ -579,80 +570,25 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
         orElse: () => Template(id: '', name: '', day: '', exercises: []),
       );
 
-      // ✅ Ensure exerciseSelection is initialized before accessing indices
-      if (exerciseSelection.isEmpty ||
-          weekIndex >= exerciseSelection.length ||
-          dayIndex >= exerciseSelection[weekIndex].length) {
-        debugPrint("Error: exerciseSelection[$weekIndex][$dayIndex] is null or out of bounds!");
-        return;
+      // ✅ Ensure the week index exists in the map
+      if (!exerciseSelection.containsKey(weekIndex)) {
+        exerciseSelection[weekIndex] = {}; // ✅ Initialize if missing
+      }
+
+      // ✅ Ensure the day index exists in the map before accessing
+      if (!exerciseSelection[weekIndex]!.containsKey(dayIndex)) {
+        exerciseSelection[weekIndex]![dayIndex] = {};
       }
 
       setState(() {
         for (int i = 0; i < 11; i++) {
-          exerciseSelection[weekIndex][dayIndex][i] =
+          exerciseSelection[weekIndex]![dayIndex]![i] =
           (i < selectedTemplate.exercises.length) ? selectedTemplate.exercises[i] : null;
         }
       });
     }
   }
 
-  TextEditingController getWeightController(int weekIndex, int dayIndex, int rowIndex) {
-    // Ensure the outermost list has enough weeks
-    while (_weightControllers.length <= weekIndex) {
-      _weightControllers.add([]); // Add a new week level
-    }
-
-    // Ensure the week list has enough days
-    while (_weightControllers[weekIndex].length <= dayIndex) {
-      _weightControllers[weekIndex].add([]); // Add a new day level
-    }
-
-    // Ensure the day list has enough exercise rows
-    while (_weightControllers[weekIndex][dayIndex].length <= rowIndex) {
-      _weightControllers[weekIndex][dayIndex].add(TextEditingController()); // Add actual controller
-    }
-
-    return _weightControllers[weekIndex][dayIndex][rowIndex];
-  }
-
-  TextEditingController getRepsController(int weekIndex, int dayIndex, int rowIndex) {
-    while (_repsControllers.length <= weekIndex) {
-      _repsControllers.add([]);
-    }
-    while (_repsControllers[weekIndex].length <= dayIndex) {
-      _repsControllers[weekIndex].add([]);
-    }
-    while (_repsControllers[weekIndex][dayIndex].length <= rowIndex) {
-      _repsControllers[weekIndex][dayIndex].add(TextEditingController());
-    }
-    return _repsControllers[weekIndex][dayIndex][rowIndex];
-  }
-
-  TextEditingController getRIRController(int weekIndex, int dayIndex, int rowIndex) {
-    while (_rirControllers.length <= weekIndex) {
-      _rirControllers.add([]);
-    }
-    while (_rirControllers[weekIndex].length <= dayIndex) {
-      _rirControllers[weekIndex].add([]);
-    }
-    while (_rirControllers[weekIndex][dayIndex].length <= rowIndex) {
-      _rirControllers[weekIndex][dayIndex].add(TextEditingController());
-    }
-    return _rirControllers[weekIndex][dayIndex][rowIndex];
-  }
-
-  TextEditingController getE1RMController(int weekIndex, int dayIndex, int rowIndex) {
-    while (_e1rmControllers.length <= weekIndex) {
-      _e1rmControllers.add([]);
-    }
-    while (_e1rmControllers[weekIndex].length <= dayIndex) {
-      _e1rmControllers[weekIndex].add([]);
-    }
-    while (_e1rmControllers[weekIndex][dayIndex].length <= rowIndex) {
-      _e1rmControllers[weekIndex][dayIndex].add(TextEditingController());
-    }
-    return _e1rmControllers[weekIndex][dayIndex][rowIndex];
-  }
 
 
 
@@ -671,41 +607,13 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
 
   @override
   void dispose() {
-    // Dispose of all weight controllers
-    for (var week in _weightControllers) {
-      for (var day in week) {
-        for (var controller in day) {
-          controller.dispose();
-        }
-      }
+    // ✅ Dispose all active controllers in one go
+    for (var controller in _activeControllers.values) {
+      controller.dispose();
     }
 
-    // Dispose of all reps controllers
-    for (var week in _repsControllers) {
-      for (var day in week) {
-        for (var controller in day) {
-          controller.dispose();
-        }
-      }
-    }
-
-    // Dispose of all RIR controllers
-    for (var week in _rirControllers) {
-      for (var day in week) {
-        for (var controller in day) {
-          controller.dispose();
-        }
-      }
-    }
-
-    // Dispose of all E1RM controllers
-    for (var week in _e1rmControllers) {
-      for (var day in week) {
-        for (var controller in day) {
-          controller.dispose();
-        }
-      }
-    }
+    // ✅ Clear the map to free memory
+    _activeControllers.clear();
 
     super.dispose();
   }
@@ -774,469 +682,547 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
                             // ✅ Allow full vertical scrolling for all days
                             Expanded(
                               child: SingleChildScrollView(
-                      child: Align( // ✅ Aligns everything inside to the left
-                      alignment: Alignment.centerLeft, // ✅ Forces it to the left
-                                child: Column(
-                                  children: List.generate(7, (dayIndex) {
-                                    return SizedBox(
+                                child: Align( // ✅ Aligns everything inside to the left
+                                  alignment: Alignment.centerLeft, // ✅ Forces it to the left
+                                  child: Column(
+                                    children: List.generate(7, (dayIndex) {
+                                      return SizedBox(
                                         width: MediaQuery.of(context).size.width * 0.85, // ✅ Increase width by 5%
 
-                                    child: Card(
-                                      color: Colors.blueGrey.shade200,
-                                      margin: const EdgeInsets.symmetric(vertical: 1, horizontal:1),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(2), // 🔽 Reduce the rounding (change value)
-                                      ),
-                                      child: Padding(
-                                        padding: const EdgeInsets.all(6.0),
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            // ✅ Show Date Picker & Week Label only on first week
-                                            if (dayIndex == 0)
-                                              Padding(
-                                                padding: const EdgeInsets.only(bottom: 3, top: 3),
-                                                child: Row(
-                                                  crossAxisAlignment: CrossAxisAlignment.center,
-                                                  children: [
-                                                    // ✅ Only show the date picker in the first week
-                                                    if (weekIndex == 0)
-                                                      GestureDetector(
-                                                        onTap: () async {
-                                                          DateTime? newDate = await _selectWeek(context);
-                                                          if (newDate != null) {
-                                                            setState(() {
-                                                              selectedWeekMonday = newDate;
-                                                            });
-                                                          }
-                                                        },
-                                                        child: Container(
-                                                          width: 140, // ✅ Ensure consistent width
-                                                          padding: const EdgeInsets.symmetric(vertical:2, horizontal: 10),
-                                                          decoration: BoxDecoration(
-                                                            color: Color(0xFFDDE3E6),
-                                                            borderRadius: BorderRadius.circular(6),
-                                                            border: Border.all(color: Colors.grey),
-                                                          ),
-                                                          child: Row(
-                                                            mainAxisSize: MainAxisSize.min,
-                                                            children: [
-                                                              Text(
-                                                                DateFormat.yMMMMd().format(selectedWeekMonday),
-                                                                style: const TextStyle(
-                                                                  fontSize: 12,
-                                                                  fontWeight: FontWeight.bold,
-                                                                  color: Colors.black,
-                                                                ),
-                                                              ),
-                                                              const SizedBox(width: 5),
-                                                              const Icon(Icons.calendar_today, size: 14, color: Colors.black),
-                                                            ],
-                                                          ),
-                                                        ),
-                                                      )
-                                                    else
-                                                      SizedBox(width: 4), // ✅ Placeholder to maintain alignment across weeks
-
-                                                    const SizedBox(width: 8), // ✅ Space between picker & label
-                                                    // ✅ "Week X" Label (Appears in every Monday column)
-                                                    SizedBox(
-                                                      width: 99, // ✅ Matches template selector width
-                                                      height: 25, // ✅ Matches template selector height
-                                                      child: Container(
-                                                        padding: EdgeInsets.symmetric(vertical: 2, horizontal: 4), // ✅ Consistent padding
-                                                        decoration: BoxDecoration(
-                                                          border: Border.all(color: Colors.grey), // ✅ Matches the template selector border
-                                                          borderRadius: BorderRadius.circular(6.0), // ✅ Rounded corners for consistency
-                                                          color: Colors.blueGrey.shade500, // ✅ Background color same as template selector
-                                                        ),
-                                                        child: Center(
-                                                          child: Text(
-                                                            "Week ${weekIndex + 1}",
-                                                            style: const TextStyle(
-                                                              fontSize: 13,
-                                                              fontWeight: FontWeight.bold,
-                                                              color: Colors.white, // ✅ Matches the template selector text color
-                                                            ),
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    ),
-
-                                                    const SizedBox(width:5), // ✅ Space between picker & label
-                                                    // ✅ "+ Add Week" Button (Only on Monday, last week)
-                                                    if (dayIndex == 0 && weekIndex == addedWeeks.length)
-                                                      Padding(
-                                                        padding: const EdgeInsets.symmetric(vertical: 1),
-                                                        child: GestureDetector(
-                                                          onTap: () {
-                                                            setState(() {
-                                                              int nextWeekIndex = addedWeeks.isNotEmpty ? addedWeeks.last + 1 : 1;
-                                                              addedWeeks.add(nextWeekIndex);
-
-                                                              // ✅ Ensure new week has 7 days, each with 11 exercise slots
-                                                              // ✅ Ensure the controllers lists are initialized properly for the new week
-                                                              _repsControllers.add(List.generate(7, (_) => [], growable: true));
-                                                              _weightControllers.add(List.generate(7, (_) => [], growable: true));
-                                                              _rirControllers.add(List.generate(7, (_) => [], growable: true));
-                                                              _e1rmControllers.add(List.generate(7, (_) => [], growable: true));
-
-                                                              // ✅ Initialize empty controllers only when needed (per row)
-                                                              for (int j = 0; j < 7; j++) {
-                                                                _repsControllers.last[j] = List.generate(11, (_) => TextEditingController(), growable: true);
-                                                                _weightControllers.last[j] = List.generate(11, (_) => TextEditingController(), growable: true);
-                                                                _rirControllers.last[j] = List.generate(11, (_) => TextEditingController(), growable: true);
-                                                                _e1rmControllers.last[j] = List.generate(11, (_) => TextEditingController(), growable: true);
-
-                                                                _exerciseRowsPerDay.add(11);
+                                        child: Card(
+                                          color: Colors.blueGrey.shade200,
+                                          margin: const EdgeInsets.symmetric(vertical: 1, horizontal:1),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(2), // 🔽 Reduce the rounding (change value)
+                                          ),
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(6.0),
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                // ✅ Show Date Picker & Week Label only on first week
+                                                if (dayIndex == 0)
+                                                  Padding(
+                                                    padding: const EdgeInsets.only(bottom: 3, top: 3),
+                                                    child: Row(
+                                                      crossAxisAlignment: CrossAxisAlignment.center,
+                                                      children: [
+                                                        // ✅ Only show the date picker in the first week
+                                                        if (weekIndex == 0)
+                                                          GestureDetector(
+                                                            onTap: () async {
+                                                              DateTime? newDate = await _selectWeek(context);
+                                                              if (newDate != null) {
+                                                                setState(() {
+                                                                  selectedWeekMonday = newDate;
+                                                                });
                                                               }
+                                                            },
+                                                            child: Container(
+                                                              width: 140, // ✅ Ensure consistent width
+                                                              padding: const EdgeInsets.symmetric(vertical:2, horizontal: 10),
+                                                              decoration: BoxDecoration(
+                                                                color: Color(0xFFDDE3E6),
+                                                                borderRadius: BorderRadius.circular(6),
+                                                                border: Border.all(color: Colors.grey),
+                                                              ),
+                                                              child: Row(
+                                                                mainAxisSize: MainAxisSize.min,
+                                                                children: [
+                                                                  Text(
+                                                                    DateFormat.yMMMMd().format(selectedWeekMonday),
+                                                                    style: const TextStyle(
+                                                                      fontSize: 12,
+                                                                      fontWeight: FontWeight.bold,
+                                                                      color: Colors.black,
+                                                                    ),
+                                                                  ),
+                                                                  const SizedBox(width: 5),
+                                                                  const Icon(Icons.calendar_today, size: 14, color: Colors.black),
+                                                                ],
+                                                              ),
+                                                            ),
+                                                          )
+                                                        else
+                                                          SizedBox(width: 4), // ✅ Placeholder to maintain alignment across weeks
 
-                                                            });
-                                                          },
+                                                        const SizedBox(width: 8), // ✅ Space between picker & label
+                                                        // ✅ "Week X" Label (Appears in every Monday column)
+                                                        SizedBox(
+                                                          width: 99, // ✅ Matches template selector width
+                                                          height: 25, // ✅ Matches template selector height
                                                           child: Container(
-                                                            width: 75,
-                                                            height: 20,
-                                                            padding: EdgeInsets.symmetric(vertical: 2, horizontal: 5),
+                                                            padding: EdgeInsets.symmetric(vertical: 2, horizontal: 4), // ✅ Consistent padding
                                                             decoration: BoxDecoration(
-                                                              color: Colors.blueGrey.shade800,
-                                                              borderRadius: BorderRadius.circular(8),
+                                                              border: Border.all(color: Colors.grey), // ✅ Matches the template selector border
+                                                              borderRadius: BorderRadius.circular(6.0), // ✅ Rounded corners for consistency
+                                                              color: Colors.blueGrey.shade500, // ✅ Background color same as template selector
                                                             ),
                                                             child: Center(
                                                               child: Text(
-                                                                "+ Add Week",
-                                                                textAlign: TextAlign.center,
-                                                                style: TextStyle(
-                                                                  color: Colors.white,
-                                                                  fontSize: 10,
+                                                                "Week ${weekIndex + 1}",
+                                                                style: const TextStyle(
+                                                                  fontSize: 13,
                                                                   fontWeight: FontWeight.bold,
+                                                                  color: Colors.white, // ✅ Matches the template selector text color
                                                                 ),
                                                               ),
                                                             ),
                                                           ),
                                                         ),
-                                                      ),
 
-                                                    const SizedBox(height: 6),
+                                                        const SizedBox(width:5), // ✅ Space between picker & label
+                                                        // ✅ "+ Add Week" Button (Only on Monday, last week)
+                                                        if (dayIndex == 0 && weekIndex == addedWeeks.length)
+                                                          Padding(
+                                                            padding: const EdgeInsets.symmetric(vertical: 1),
+                                                            child: GestureDetector(
+                                      onTap: () {
+                                      setState(() {
+                                      int nextWeekIndex = addedWeeks.isNotEmpty ? addedWeeks.last + 1 : 1;
+                                      addedWeeks.add(nextWeekIndex);
+
+                                      // ✅ Ensure new week exists in all maps
+                                      if (!_repsControllers.containsKey(nextWeekIndex)) {
+                                      _repsControllers[nextWeekIndex] = {};
+                                      _weightControllers[nextWeekIndex] = {};
+                                      _rirControllers[nextWeekIndex] = {};
+                                      _e1rmControllers[nextWeekIndex] = {};
+                                      }
+
+                                      for (int day = 0; day < 7; day++) {
+                                      // ✅ Ensure day exists in each week
+                                      if (!_repsControllers[nextWeekIndex]!.containsKey(day)) {
+                                      _repsControllers[nextWeekIndex]![day] = {};
+                                      _weightControllers[nextWeekIndex]![day] = {};
+                                      _rirControllers[nextWeekIndex]![day] = {};
+                                      _e1rmControllers[nextWeekIndex]![day] = {};
+                                      }
+
+                                      for (int row = 0; row < 11; row++) {
+                                      // ✅ Assign controllers properly (using int keys)
+                                      _repsControllers[nextWeekIndex]![day]![row] = TextEditingController();
+                                      _weightControllers[nextWeekIndex]![day]![row] = TextEditingController();
+                                      _rirControllers[nextWeekIndex]![day]![row] = TextEditingController();
+                                      _e1rmControllers[nextWeekIndex]![day]![row] = TextEditingController();
+                                      }
+                                      }
+                                      });
+                                      },
+
+                                      child: Container(
+                                                                width: 75,
+                                                                height: 20,
+                                                                padding: EdgeInsets.symmetric(vertical: 2, horizontal: 5),
+                                                                decoration: BoxDecoration(
+                                                                  color: Colors.blueGrey.shade800,
+                                                                  borderRadius: BorderRadius.circular(8),
+                                                                ),
+                                                                child: Center(
+                                                                  child: Text(
+                                                                    "+ Add Week",
+                                                                    textAlign: TextAlign.center,
+                                                                    style: TextStyle(
+                                                                      color: Colors.white,
+                                                                      fontSize: 10,
+                                                                      fontWeight: FontWeight.bold,
+                                                                    ),
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ),
+
+                                                        const SizedBox(height: 6),
+                                                      ],
+                                                    ),
+                                                  ),
+
+                                                // ✅ Week Widget (Template, Notes, etc.)
+                                                buildWeekWidget(weekIndex, dayIndex),
+
+                                                const SizedBox(height: 6),
+
+                                                // ✅ HEADER ROW (Weight, Reps, RIR, E1RM)
+                                                Row(
+                                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                                  mainAxisAlignment: MainAxisAlignment.start, // ✅ Aligns with exercise fields
+                                                  children: [
+                                                    const SizedBox(width: 115), // ✅ Align with exercise selection
+
+                                                    const SizedBox(width: 3), // Space before Weight field
+                                                    SizedBox(
+                                                      width: 49, // ✅ Matches Weight field
+                                                      child: Text(
+                                                        'Weight',
+                                                        textAlign: TextAlign.center,
+                                                        style: TextStyle(
+                                                          fontSize: 11,
+                                                          fontWeight: FontWeight.bold,
+                                                          color: Colors.blueGrey.shade800,
+                                                        ),
+                                                      ),
+                                                    ),
+
+                                                    const SizedBox(width: 3), // Space before Reps field
+                                                    SizedBox(
+                                                      width: 37, // ✅ Matches Reps field
+                                                      child: Text(
+                                                        'Reps',
+                                                        textAlign: TextAlign.center,
+                                                        style: TextStyle(
+                                                          fontSize: 11,
+                                                          fontWeight: FontWeight.bold,
+                                                          color: Colors.blueGrey.shade800,
+                                                        ),
+                                                      ),
+                                                    ),
+
+                                                    const SizedBox(width: 2), // Space before RIR field
+                                                    SizedBox(
+                                                      width: 30, // ✅ Matches RIR field
+                                                      child: Text(
+                                                        'RIR',
+                                                        textAlign: TextAlign.center,
+                                                        style: TextStyle(
+                                                          fontSize: 11,
+                                                          fontWeight: FontWeight.bold,
+                                                          color: Colors.blueGrey.shade800,
+                                                        ),
+                                                      ),
+                                                    ),
+
+                                                    const SizedBox(width: 2), // Space before E1RM field
+                                                    SizedBox(
+                                                      width: 48, // ✅ Matches E1RM field
+                                                      child: Text(
+                                                        'E1RM',
+                                                        textAlign: TextAlign.center,
+                                                        style: TextStyle(
+                                                          fontSize: 11,
+                                                          fontWeight: FontWeight.bold,
+                                                          color: Colors.blueGrey.shade800,
+                                                        ),
+                                                      ),
+                                                    ),
                                                   ],
                                                 ),
-                                              ),
 
-                                            // ✅ Week Widget (Template, Notes, etc.)
-                                            buildWeekWidget(weekIndex, dayIndex),
 
-                                            const SizedBox(height: 6),
+                                                const SizedBox(height: 2),
 
-                                            // ✅ HEADER ROW (Weight, Reps, RIR, E1RM)
-                                            Row(
-                                              crossAxisAlignment: CrossAxisAlignment.center,
-                                              mainAxisAlignment: MainAxisAlignment.start, // ✅ Aligns with exercise fields
-                                              children: [
-                                                const SizedBox(width: 115), // ✅ Align with exercise selection
-
-                                                const SizedBox(width: 3), // Space before Weight field
+                                                // ✅ Exercise Table (Scrolls Vertically)
                                                 SizedBox(
-                                                  width: 49, // ✅ Matches Weight field
-                                                  child: Text(
-                                                    'Weight',
-                                                    textAlign: TextAlign.center,
-                                                    style: TextStyle(
-                                                      fontSize: 11,
-                                                      fontWeight: FontWeight.bold,
-                                                      color: Colors.blueGrey.shade800,
-                                                    ),
-                                                  ),
-                                                ),
+                                                  height: 200,
+                                                  child: SingleChildScrollView(
+                                                    child: Column(
+                                                      children: List.generate(_exerciseRowsPerDay[dayIndex], (rowIndex) {
+                                                        return Row(
+                                                          crossAxisAlignment: CrossAxisAlignment.center,
+                                                          children: [
+                                                            // ✅ Exercise Selection
+                                                            GestureDetector(
+                                                              onTap: () async {
+                                                                String? selected = await showMenu<String>(
+                                                                  context: context,
+                                                                  position: RelativeRect.fromLTRB(100, 100, 200, 200),
+                                                                  items: savedExercises.isNotEmpty
+                                                                      ? savedExercises.map((String value) => PopupMenuItem<String>(
+                                                                    value: value,
+                                                                    child: Text(value, style: TextStyle(fontSize: 12)),
+                                                                  ))
+                                                                      .toList()
+                                                                      : [const PopupMenuItem(value: null, child: Text("No exercises available"))],
+                                                                );
+                                                                if (selected != null) {
+                                                                  setState(() {
+                                                                    // ✅ Ensure week map exists
+                                                                    if (!exerciseSelection.containsKey(weekIndex)) {
+                                                                      exerciseSelection[weekIndex] = {};
+                                                                    }
 
-                                                const SizedBox(width: 3), // Space before Reps field
-                                                SizedBox(
-                                                  width: 37, // ✅ Matches Reps field
-                                                  child: Text(
-                                                    'Reps',
-                                                    textAlign: TextAlign.center,
-                                                    style: TextStyle(
-                                                      fontSize: 11,
-                                                      fontWeight: FontWeight.bold,
-                                                      color: Colors.blueGrey.shade800,
-                                                    ),
-                                                  ),
-                                                ),
+                                                                    // ✅ Ensure day map exists
+                                                                    if (!exerciseSelection[weekIndex]!.containsKey(dayIndex)) {
+                                                                      exerciseSelection[weekIndex]![dayIndex] = {};
+                                                                    }
 
-                                                const SizedBox(width: 2), // Space before RIR field
-                                                SizedBox(
-                                                  width: 30, // ✅ Matches RIR field
-                                                  child: Text(
-                                                    'RIR',
-                                                    textAlign: TextAlign.center,
-                                                    style: TextStyle(
-                                                      fontSize: 11,
-                                                      fontWeight: FontWeight.bold,
-                                                      color: Colors.blueGrey.shade800,
-                                                    ),
-                                                  ),
-                                                ),
+                                                                    // ✅ Assign selected exercise
+                                                                    exerciseSelection[weekIndex]![dayIndex]![rowIndex] = selected;
+                                                                  });
+                                                                }
+                                                              },
+                                                              child: Container(
+                                                                width: 114,
+                                                                height: 30,
+                                                                padding: EdgeInsets.symmetric(vertical: 4, horizontal: 3),
+                                                                decoration: BoxDecoration(
+                                                                  color: getRowColor(rowIndex),
+                                                                  border: Border.all(color: Colors.grey),
+                                                                  borderRadius: BorderRadius.circular(4.0),
+                                                                ),
+                                                                child: Text(
+                                                                  (exerciseSelection.containsKey(weekIndex) &&
+                                                                      exerciseSelection[weekIndex]!.containsKey(dayIndex) &&
+                                                                      exerciseSelection[weekIndex]![dayIndex]!.containsKey(rowIndex))
+                                                                      ? exerciseSelection[weekIndex]![dayIndex]![rowIndex] ?? 'Select Exercise'
+                                                                      : 'Select Exercise',
 
-                                                const SizedBox(width: 2), // Space before E1RM field
-                                                SizedBox(
-                                                  width: 48, // ✅ Matches E1RM field
-                                                  child: Text(
-                                                    'E1RM',
-                                                    textAlign: TextAlign.center,
-                                                    style: TextStyle(
-                                                      fontSize: 11,
-                                                      fontWeight: FontWeight.bold,
-                                                      color: Colors.blueGrey.shade800,
+                                                                  style: TextStyle(fontSize: 11, color: Colors.black),
+                                                                ),
+                                                              ),
+                                                            ),
+
+                                                            const SizedBox(width: 3),
+
+                                                            // ✅ Weight Input Field
+                                                            SizedBox(
+                                                              width: 49,
+                                                              height: 30,
+                                                              child: TextField(
+                                                                controller: _getController(_weightControllers, weekIndex, dayIndex, rowIndex),
+
+
+
+                                                                keyboardType: TextInputType.number,
+                                                                textAlign: TextAlign.center,
+                                                                style: TextStyle(
+                                                                  fontSize: 12,
+                                                                  fontWeight: FontWeight.bold,
+                                                                  color: (_weightControllers.containsKey(weekIndex) &&
+                                                        _weightControllers[weekIndex]!.containsKey(dayIndex) &&
+                                                        _weightControllers[weekIndex]![dayIndex]!.containsKey(rowIndex) &&
+                                                        _weightControllers[weekIndex]![dayIndex]![rowIndex]!.text.isNotEmpty)
+                                                                      ? Colors.black
+                                                                      : Colors.grey, // ✅ Grey for hint, black for input
+                                                                ),
+
+                                                                decoration: InputDecoration(
+                                                                  contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+
+                                                                  hintText: (
+                                                                      exerciseSelection.containsKey(weekIndex) &&
+                                                                          exerciseSelection[weekIndex]!.containsKey(dayIndex) &&
+                                                                          exerciseSelection[weekIndex]![dayIndex]!.containsKey(rowIndex) &&
+                                                                          exerciseSelection[weekIndex]![dayIndex]![rowIndex] != null &&
+                                                                          !(_weightControllers.containsKey(weekIndex) &&
+                                                                              _weightControllers[weekIndex]!.containsKey(dayIndex) &&
+                                                                              _weightControllers[weekIndex]![dayIndex]!.containsKey(rowIndex))
+                                                                  )
+
+                                                                      ? PeriodizationModelUtils.getSuggestedWeight(
+                                                                    // ✅ Cleaned-up way to check if the exercise exists
+                                                                    exerciseSelection[weekIndex]?[dayIndex]?[rowIndex] ?? '',
+
+                                                                    // ✅ Use `_getController()` instead of `putIfAbsent()`
+                                                                    _getController(_repsControllers, weekIndex, dayIndex, rowIndex),
+
+                                                                    // ✅ Use `_getController()` for RIR as well (no need for multiple null checks)
+                                                                    _getController(_rirControllers, weekIndex, dayIndex, rowIndex),
+                                                                  ).toStringAsFixed(1)
+
+                                                                      : '',
+
+                                                                  hintStyle: const TextStyle(color: Colors.grey, fontStyle: FontStyle.italic, fontSize: 12),
+                                                                  border: OutlineInputBorder(),
+                                                                  filled: true,
+                                                                  fillColor: getRowColor(rowIndex),
+                                                                ),
+
+
+                                                                onChanged: (value) {
+                                                                  String exerciseName = exerciseSelection[weekIndex]?[dayIndex]?[rowIndex] ?? '';
+
+                                                                  if (exerciseName.isNotEmpty) {
+                                                                    // ✅ When weight changes, trigger UI update for reps hint (without overriding user input)
+                                                                    setState(() {});
+                                                                  }
+                                                                },
+                                                              ),
+                                                            ),
+
+                                                            const SizedBox(width: 3),
+
+// ✅ Reps Input Field
+                                                            SizedBox(
+                                                              width: 37,
+                                                              height: 30,
+                                                              child: TextField(
+                                                                  controller: _getController(_repsControllers, weekIndex, dayIndex, rowIndex),
+                                                                  // ✅ Prevents null access error
+                                                                keyboardType: TextInputType.number,
+                                                                textAlign: TextAlign.center,
+                                                                style: TextStyle(
+                                                                  fontSize: 12,
+                                                                  fontWeight: FontWeight.bold,
+                                                                  color: (_repsControllers[weekIndex] != null &&
+                                                                      _repsControllers[weekIndex]![dayIndex] != null &&
+                                                                      _repsControllers[weekIndex]![dayIndex]![rowIndex] != null &&
+                                                                      _repsControllers[weekIndex]![dayIndex]![rowIndex]!.text.isNotEmpty)
+                                                                      ? Colors.black
+                                                                      : Colors.grey,
+                                                                  // ✅ Black for input, Grey for hint
+                                                                ),
+                                                                decoration: InputDecoration(
+                                                                  contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+                                                                  hintText: (_repsControllers[weekIndex]?.containsKey(dayIndex) == true &&
+                                                                      _repsControllers[weekIndex]![dayIndex]?.containsKey(rowIndex) == true &&
+                                                                      _repsControllers[weekIndex]![dayIndex]![rowIndex]?.text.isEmpty == true &&
+                                                                      exerciseSelection.containsKey(weekIndex) &&
+                                                                      exerciseSelection[weekIndex]?.containsKey(dayIndex) == true &&
+                                                                      exerciseSelection[weekIndex]![dayIndex]?.containsKey(rowIndex) == true &&
+                                                                      exerciseSelection[weekIndex]![dayIndex]![rowIndex] != null)
+                                                                      ? PeriodizationModelUtils.updateRepTarget(
+                                                                    exerciseSelection[weekIndex]![dayIndex]![rowIndex]!,
+                                                                    (_weightControllers[weekIndex]?.containsKey(dayIndex) == true &&
+                                                                        _weightControllers[weekIndex]![dayIndex]?.containsKey(rowIndex) == true)
+                                                                        ? _weightControllers[weekIndex]![dayIndex]![rowIndex]!.text
+                                                                        : "0",
+                                                                    (_rirControllers[weekIndex]?.containsKey(dayIndex) == true &&
+                                                                        _rirControllers[weekIndex]![dayIndex]?.containsKey(rowIndex) == true)
+                                                                        ? _rirControllers[weekIndex]![dayIndex]![rowIndex]!.text
+                                                                        : "0",
+                                                                  ).toString()
+                                                                      : '',
+
+                                                                  hintStyle: const TextStyle(color: Colors.grey, fontStyle: FontStyle.italic, fontSize: 12),
+                                                                  border: OutlineInputBorder(),
+                                                                  filled: true,
+                                                                  fillColor: getRowColor(rowIndex),
+                                                                ),
+
+
+                                                                  onChanged: (value) {
+                                                                    String exerciseName = (exerciseSelection.containsKey(weekIndex) &&
+                                                                        exerciseSelection[weekIndex]!.containsKey(dayIndex) &&
+                                                                        exerciseSelection[weekIndex]![dayIndex]!.containsKey(rowIndex))
+                                                                        ? exerciseSelection[weekIndex]![dayIndex]![rowIndex] ?? ''
+                                                                        : '';
+
+                                                                    if (exerciseName.isNotEmpty) {
+                                                                      if (_weightControllers.containsKey(weekIndex) &&
+                                                                          _weightControllers[weekIndex]!.containsKey(dayIndex) &&
+                                                                          _weightControllers[weekIndex]![dayIndex]!.containsKey(rowIndex) &&
+                                                                          _weightControllers[weekIndex]![dayIndex]![rowIndex]!.text.isEmpty) {
+                                                                        setState(() {}); // ✅ Refresh UI to update hint text for weight
+                                                                      }
+                                                                    }
+                                                                  }
+
+                                                              ),
+                                                            ),
+
+                                                            const SizedBox(width: 3),
+
+// ✅ RIR Input Field
+                                                            SizedBox(
+                                                              width: 30,
+                                                              height: 30,
+                                                              child: TextField(
+                                                                controller: _getController(_rirControllers, weekIndex, dayIndex, rowIndex),
+
+
+                                                                keyboardType: TextInputType.number,
+                                                                textAlign: TextAlign.center,
+                                                                style: TextStyle(
+                                                                  fontSize: 11,
+                                                                  fontWeight: FontWeight.bold,
+                                                                  color: (_rirControllers[weekIndex]?[dayIndex]?[rowIndex]?.text.isNotEmpty ?? false)
+                                                                      ? Colors.black
+                                                                      : Colors.grey,
+                                                                  // ✅ Black for input, Grey for hint
+                                                                ),
+                                                                decoration: InputDecoration(
+                                                                  contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+                                                                  hintText: (_rirControllers[weekIndex]?[dayIndex]?[rowIndex]?.text.isEmpty ?? true)
+                                                                      ? "0.5"
+                                                                      : '',
+                                                                  // ✅ Default RIR hint
+                                                                  hintStyle: const TextStyle(color: Colors.grey, fontStyle: FontStyle.italic, fontSize: 10),
+                                                                  border: OutlineInputBorder(),
+                                                                  filled: true,
+                                                                  fillColor: getRowColor(rowIndex),
+                                                                ),
+                                                                onChanged: (value) {
+                                                                  String key = "$weekIndex-$dayIndex-$rowIndex";
+                                                                  String exerciseName = exerciseSelection[weekIndex]?[dayIndex]?[rowIndex] ?? '';
+                                                                  if (exerciseName.isNotEmpty) {
+                                                                    if ((_weightControllers[weekIndex]?[dayIndex]?[rowIndex]?.text.isEmpty ?? true) ||
+                                                                        (_repsControllers[weekIndex]?[dayIndex]?[rowIndex]?.text.isEmpty ?? true)) {
+                                                                      setState(() {}); // ✅ Refresh UI if needed
+                                                                    }
+
+                                                                  }
+                                                                  setState(() {}); // ✅ Ensures UI refresh when RIR changes
+                                                                },
+                                                              ),
+                                                            ),
+
+
+                                                            const SizedBox(width: 3),
+
+// ✅ E1RM Read-Only Field
+                                                            SizedBox(
+                                                              width: 48,
+                                                              height: 30,
+                                                              child: TextField(
+                                                                controller: TextEditingController(
+                                                                  text: PeriodizationModelUtils.calculateE1RM(
+                                                                    double.tryParse(_weightControllers[weekIndex]?[dayIndex]?[rowIndex]?.text ?? '') ??
+                                                                        PeriodizationModelUtils.getSuggestedWeight(
+                                                                          exerciseSelection[weekIndex]?[dayIndex]?[rowIndex] ?? '',
+                                                                          _repsControllers[weekIndex]?[dayIndex]?[rowIndex] ?? TextEditingController(),
+                                                                          _rirControllers[weekIndex]?[dayIndex]?[rowIndex] ?? TextEditingController(),
+                                                                        ),
+                                                                    (int.tryParse(_repsControllers[weekIndex]?[dayIndex]?[rowIndex]?.text ?? '') ??
+                                                                        PeriodizationModelUtils.updateRepTarget(
+                                                                          exerciseSelection[weekIndex]?[dayIndex]?[rowIndex] ?? '',
+                                                                          _weightControllers[weekIndex]?[dayIndex]?[rowIndex]?.text ?? "0",
+                                                                          _rirControllers[weekIndex]?[dayIndex]?[rowIndex]?.text ?? "0",
+                                                                        )).toDouble(),
+                                                                    double.tryParse(_rirControllers[weekIndex]?[dayIndex]?[rowIndex]?.text ?? '') ?? 0.5,
+                                                                  ).toStringAsFixed(1),
+                                                                ),
+
+                                                                readOnly: true, // ✅ Prevents user input
+                                                                textAlign: TextAlign.center,
+                                                                style: TextStyle(
+                                                                  fontSize: 10,
+                                                                  fontWeight: FontWeight.bold,
+                                                                  color: ((_weightControllers[weekIndex]?[dayIndex]?[rowIndex]?.text?.isNotEmpty ?? false) ||
+                                                                      (_repsControllers[weekIndex]?[dayIndex]?[rowIndex]?.text?.isNotEmpty ?? false) ||
+                                                                      (_rirControllers[weekIndex]?[dayIndex]?[rowIndex]?.text?.isNotEmpty ?? false))
+                                                                      ? Colors.black
+                                                                      : Colors.grey,
+
+// ✅ Grey for hint, black for calculated values
+                                                                ),
+                                                                decoration: InputDecoration(
+                                                                  contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+                                                                  border: OutlineInputBorder(),
+                                                                  filled: true,
+                                                                  fillColor: getRowColor(rowIndex),
+                                                                ),
+                                                              ),
+                                                            ),
+
+                                                          ],
+                                                        );
+                                                      }),
+
                                                     ),
+
                                                   ),
                                                 ),
                                               ],
                                             ),
-
-
-                                            const SizedBox(height: 2),
-
-                                            // ✅ Exercise Table (Scrolls Vertically)
-                                            SizedBox(
-                                              height: 200,
-                                              child: SingleChildScrollView(
-                                                child: Column(
-                                                  children: List.generate(_exerciseRowsPerDay[dayIndex], (rowIndex) {
-                                                    return Row(
-                                                      crossAxisAlignment: CrossAxisAlignment.center,
-                                                      children: [
-                                                        // ✅ Exercise Selection
-                                                        GestureDetector(
-                                                          onTap: () async {
-                                                            String? selected = await showMenu<String>(
-                                                              context: context,
-                                                              position: RelativeRect.fromLTRB(100, 100, 200, 200),
-                                                              items: savedExercises.isNotEmpty
-                                                                  ? savedExercises.map((String value) => PopupMenuItem<String>(
-                                                                value: value,
-                                                                child: Text(value, style: TextStyle(fontSize: 12)),
-                                                              ))
-                                                                  .toList()
-                                                                  : [const PopupMenuItem(value: null, child: Text("No exercises available"))],
-                                                            );
-                                                            if (selected != null) {
-                                                              setState(() {
-                                                                exerciseSelection[weekIndex][dayIndex][rowIndex]  = selected;
-                                                              });
-                                                            }
-                                                          },
-                                                          child: Container(
-                                                            width: 114,
-                                                            height: 30,
-                                                            padding: EdgeInsets.symmetric(vertical: 4, horizontal: 3),
-                                                            decoration: BoxDecoration(
-                                                              color: getRowColor(rowIndex),
-                                                              border: Border.all(color: Colors.grey),
-                                                              borderRadius: BorderRadius.circular(4.0),
-                                                            ),
-                                                            child: Text(
-                                                              exerciseSelection[weekIndex][dayIndex][rowIndex] ?? 'Select Exercise',
-
-                                                              style: TextStyle(fontSize: 11, color: Colors.black),
-                                                            ),
-                                                          ),
-                                                        ),
-
-                                                        const SizedBox(width: 3),
-
-                                                        // ✅ Weight Input Field
-                                                        SizedBox(
-                                                          width: 49,
-                                                          height: 30,
-                                                          child: TextField(
-                                                            controller: getWeightController(weekIndex, dayIndex, rowIndex),
-
-                                                            keyboardType: TextInputType.number,
-                                                            textAlign: TextAlign.center,
-                                                            style: TextStyle(
-                                                              fontSize: 12,
-                                                              fontWeight: FontWeight.bold,
-                                                              color: _weightControllers[weekIndex][dayIndex][rowIndex].text.isEmpty
-                                                                  ? Colors.grey : Colors.black, // ✅ Grey for hint, black for input
-                                                            ),
-                                                            decoration: InputDecoration(
-                                                              contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 2), // ✅ Reduces padding to fit larger numbers
-                                                              hintText: (_weightControllers.length > dayIndex &&
-                                                                  _weightControllers[dayIndex].length > rowIndex &&
-                                                                  _weightControllers[weekIndex][dayIndex][rowIndex].text.isEmpty
-                                                                  &&
-                                                                  exerciseSelection.length > weekIndex &&
-                                                                  exerciseSelection[weekIndex].length > dayIndex &&
-                                                                  exerciseSelection[weekIndex][dayIndex].length > rowIndex &&
-                                                                  exerciseSelection[weekIndex][dayIndex][rowIndex] != null)
-                                                                  ? PeriodizationModelUtils.getSuggestedWeight(
-                                                                exerciseSelection[weekIndex][dayIndex][rowIndex]!,
-                                                                _repsControllers[weekIndex][dayIndex][rowIndex],
-                                                                _rirControllers[weekIndex][dayIndex][rowIndex],
-                                                              ).toStringAsFixed(1) // ✅ Only show hint if weight field is empty
-                                                                  : '',
-                                                              hintStyle: const TextStyle(color: Colors.grey, fontStyle: FontStyle.italic, fontSize: 12),
-                                                              border: OutlineInputBorder(),
-                                                              filled: true,
-                                                              fillColor: getRowColor(rowIndex),
-                                                            ),
-
-                                                            onChanged: (value) {
-                                                              String exerciseName = exerciseSelection[weekIndex][dayIndex][rowIndex] ?? '';
-                                                              if (exerciseName.isNotEmpty) {
-                                                                // ✅ When weight changes, trigger UI update for reps hint (without overriding user input)
-                                                                setState(() {});
-                                                              }
-                                                            },
-                                                          ),
-                                                        ),
-
-                                                        const SizedBox(width: 3),
-
-// ✅ Reps Input Field
-                                                        SizedBox(
-                                                          width: 37,
-                                                          height: 30,
-                                                          child: TextField(
-                                                            controller: getRepsController(weekIndex, dayIndex, rowIndex),
-                                                            keyboardType: TextInputType.number,
-                                                            textAlign: TextAlign.center,
-                                                            style: TextStyle(
-                                                              fontSize: 12,
-                                                              fontWeight: FontWeight.bold,
-                                                              color: _repsControllers[weekIndex][dayIndex][rowIndex].text.isNotEmpty ? Colors.black : Colors.grey, // ✅ Black for input, Grey for hint
-                                                            ),
-                                                            decoration: InputDecoration(
-                                                              contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 2),
-                                                              hintText: (_repsControllers.asMap().containsKey(dayIndex) &&
-                                                                  _repsControllers[dayIndex].asMap().containsKey(rowIndex) &&
-                                                                  _repsControllers[weekIndex][dayIndex][rowIndex].text.isEmpty &&
-                                                                  exerciseSelection.asMap().containsKey(weekIndex) &&
-                                                                  exerciseSelection[weekIndex].asMap().containsKey(dayIndex) &&
-                                                                  exerciseSelection[weekIndex][dayIndex].asMap().containsKey(rowIndex) &&
-                                                                  exerciseSelection[weekIndex][dayIndex][rowIndex] != null)
-                                                                  ? PeriodizationModelUtils.updateRepTarget(
-                                                                exerciseSelection[weekIndex][dayIndex][rowIndex]!,
-                                                                (_weightControllers.asMap().containsKey(dayIndex) &&
-                                                                    _weightControllers[dayIndex].asMap().containsKey(rowIndex))
-                                                                    ? _weightControllers[weekIndex][dayIndex][rowIndex].text
-                                                                    : "0",
-                                                                (_rirControllers.asMap().containsKey(dayIndex) &&
-                                                                    _rirControllers[dayIndex].asMap().containsKey(rowIndex))
-                                                                    ? _rirControllers[weekIndex][dayIndex][rowIndex].text
-                                                                    : "0",
-                                                              ).toString()
-                                                                  : '',
-                                                              hintStyle: const TextStyle(color: Colors.grey, fontStyle: FontStyle.italic, fontSize: 12),
-                                                              border: OutlineInputBorder(),
-                                                              filled: true,
-                                                              fillColor: getRowColor(rowIndex),
-                                                            ),
-
-                                                            onChanged: (value) {
-                                                              String exerciseName = exerciseSelection[weekIndex][dayIndex][rowIndex] ?? '';
-                                                              if (exerciseName.isNotEmpty) {
-                                                                if (_weightControllers[weekIndex][dayIndex][rowIndex].text.isEmpty) {
-                                                                  setState(() {}); // ✅ Refresh UI to update hint text for weight
-                                                                }
-                                                              }
-                                                              setState(() {}); // ✅ Ensures UI refresh for user input
-                                                            },
-                                                          ),
-                                                        ),
-
-                                                        const SizedBox(width: 3),
-
-// ✅ RIR Input Field
-                                                        SizedBox(
-                                                          width: 30,
-                                                          height: 30,
-                                                          child: TextField(
-                                                            controller: getRIRController(weekIndex, dayIndex, rowIndex),
-                                                            keyboardType: TextInputType.number,
-                                                            textAlign: TextAlign.center,
-                                                            style: TextStyle(
-                                                              fontSize: 11,
-                                                              fontWeight: FontWeight.bold,
-                                                              color: _rirControllers[weekIndex][dayIndex][rowIndex].text.isNotEmpty ? Colors.black : Colors.grey, // ✅ Black for input, Grey for hint
-                                                            ),
-                                                            decoration: InputDecoration(
-                                                              contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 2),
-                                                              hintText: _rirControllers[weekIndex][dayIndex][rowIndex].text.isEmpty ? "0.5" : '', // ✅ Default RIR hint
-                                                              hintStyle: const TextStyle(color: Colors.grey, fontStyle: FontStyle.italic, fontSize: 10),
-                                                              border: OutlineInputBorder(),
-                                                              filled: true,
-                                                              fillColor: getRowColor(rowIndex),
-                                                            ),
-                                                            onChanged: (value) {
-                                                              String exerciseName = exerciseSelection[weekIndex][dayIndex][rowIndex] ?? '';
-                                                              if (exerciseName.isNotEmpty) {
-                                                                if (_weightControllers[weekIndex][dayIndex][rowIndex].text.isEmpty || _repsControllers[weekIndex][dayIndex][rowIndex].text.isEmpty) {
-                                                                  setState(() {}); // ✅ Refresh UI
-                                                                }
-                                                              }
-                                                              setState(() {}); // ✅ Ensures UI refresh when RIR changes
-                                                            },
-                                                          ),
-                                                        ),
-
-                                                        const SizedBox(width: 3),
-
-// ✅ E1RM Read-Only Field
-                                                        SizedBox(
-                                                          width: 48,
-                                                          height: 30,
-                                                          child: TextField(
-                                                            controller: TextEditingController(
-                                                              text: PeriodizationModelUtils.calculateE1RM(
-                                                                double.tryParse(_weightControllers[weekIndex][dayIndex][rowIndex].text) ??
-                                                                    PeriodizationModelUtils.getSuggestedWeight(
-                                                                        exerciseSelection[weekIndex][dayIndex][rowIndex] ?? '',
-                                                                        _repsControllers[weekIndex][dayIndex][rowIndex],
-                                                                        _rirControllers[weekIndex][dayIndex][rowIndex]),
-                                                                (int.tryParse(_repsControllers[weekIndex][dayIndex][rowIndex].text) ??
-                                                                    PeriodizationModelUtils.updateRepTarget(
-                                                                        exerciseSelection[weekIndex][dayIndex][rowIndex] ?? '',
-                                                                        _weightControllers[weekIndex][dayIndex][rowIndex].text,
-                                                                        _rirControllers[weekIndex][dayIndex][rowIndex].text)).toDouble(),
-                                                                double.tryParse(_rirControllers[weekIndex][dayIndex][rowIndex].text) ?? 0.5, // ✅ Default RIR hint
-                                                              ).toStringAsFixed(1),
-                                                            ),
-                                                            readOnly: true, // ✅ Prevents user input
-                                                            textAlign: TextAlign.center,
-                                                            style: TextStyle(
-                                                              fontSize: 10,
-                                                              fontWeight: FontWeight.bold,
-                                                              color: (_weightControllers[weekIndex][dayIndex][rowIndex].text.isNotEmpty ||
-                                                                  _repsControllers[weekIndex][dayIndex][rowIndex].text.isNotEmpty ||
-                                                                  _rirControllers[weekIndex][dayIndex][rowIndex].text.isNotEmpty)
-                                                                  ? Colors.black
-                                                                  : Colors.grey, // ✅ Grey for hint, black for calculated values
-                                                            ),
-                                                            decoration: InputDecoration(
-                                                              contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 2),
-                                                              border: OutlineInputBorder(),
-                                                              filled: true,
-                                                              fillColor: getRowColor(rowIndex),
-                                                            ),
-                                                          ),
-                                                        ),
-                                                      ],
-                                                    );
-                                                  }),
-
-                                                ),
-
-                                              ),
-                                            ),
-                                          ],
+                                          ),
                                         ),
-                                      ),
-                                    ),
-                                    );
-                                  }),
-                                  
+                                      );
+                                    }),
+
+                                  ),
                                 ),
                               ),
-                            ),
 
                             ),
                             //this is where I must put the button, before this bracket
