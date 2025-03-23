@@ -1,11 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'template_model.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'workout_entry_screen.dart';
-import 'periodization_model_utils.dart';
-import 'core_exercises.dart';
 
 class BlockBuilder2 extends StatefulWidget {
   const BlockBuilder2({super.key});
@@ -17,147 +11,19 @@ class BlockBuilder2 extends StatefulWidget {
 class _BlockBuilder2State extends State<BlockBuilder2> {
   final int initialWeeks = 12;
   final int exercisesPerDay = 11;
-  List <Template> templates = []; // Make sure Template is imported
-  List<List<String?>> selectedTemplateIds = [];
-  late List<List<List<String?>>> exerciseSelection;
-  List<List<List<TextEditingController>>> exerciseControllers = [];
-  List<List<List<TextEditingController>>> weightControllers = [];
-  List<List<List<TextEditingController>>> repsControllers = [];
-  List<List<List<TextEditingController>>> rirControllers = [];
-  List<List<List<TextEditingController>>> e1rmControllers = [];
-  final ScrollController _horizontalScrollController = ScrollController();
-  final ScrollController _verticalScrollController = ScrollController();
-  List<String> allExerciseNames = [];
-  Map<String, List<int>> scheduledRepTargets = {}; // 🆕
-
 
   late DateTime selectedWeekMonday;
   late DateTime blockStartDate;
 
-  final double exerciseRowHeight = 36; // 👈 Try 32–40 for compact rows
-
   List<int> weekIndices = [];
-
-  Future<void> _fetchTemplates() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
-      final snapshot = await userDoc.collection('templates').get();
-      templates = snapshot.docs.map((doc) {
-        return Template(
-          id: doc.id,
-          name: doc['name'],
-          day: doc.get('day'), // ✅ Add this line
-          exercises: List<String>.from(doc['exercises']),
-        );
-      }).toList();
-      setState(() {}); // Trigger rebuild once loaded
-    }
-  }
 
   @override
   void initState() {
     super.initState();
-
-
     selectedWeekMonday = _getMostRecentMonday();
     blockStartDate = _getMostRecentMonday();
+
     weekIndices = List.generate(initialWeeks, (index) => index);
-
-    exerciseSelection = List.generate(
-      initialWeeks,
-          (_) => List.generate(7, (_) => List.filled(exercisesPerDay, null, growable: true)),
-    );
-
-    _fetchTemplates();
-    _fetchAvailableExercises(); // ✅ Fire this here
-
-    selectedTemplateIds = List.generate(
-      initialWeeks,
-          (_) => List.generate(7, (_) => null),
-    );
-
-    loadBlockDataFromFirestore().then((_) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        scrollToCurrentWeek();
-        scrollToCurrentDay();
-      });
-    });
-
-    final now = DateTime.now();
-    print("🕓 Today: $now");
-    print("📅 Block Start: $blockStartDate");
-  }
-
-
-
-  @override
-  void dispose() {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      for (int week = 0; week < weekIndices.length; week++) {
-        for (int day = 0; day < 7; day++) {
-          saveDayToFirestore(week, day); // Autosave each day before exit
-        }
-      }
-    }
-    super.dispose();
-  }
-
-  Future<void> _fetchAvailableExercises() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    // Fetch user-defined exercises from Firestore
-    final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
-    final firestoreExercises = snapshot.docs.map((doc) => doc['name'] as String).toList();
-
-    // Combine with core exercises (no duplicates)
-    final combinedExercises = {
-      ...coreExercises.map((e) => e['name'] as String),
-      ...firestoreExercises,
-    }.toList();
-
-    combinedExercises.sort(); // Optional: Alphabetical sort
-
-    setState(() {
-      allExerciseNames = combinedExercises;
-    });
-  }
-
-
-
-  void _populateExercisesFromTemplate(int weekIndex, int dayIndex, String templateId) {
-    final template = templates.firstWhere((t) => t.id == templateId, orElse: () => Template(id: '', name: '', day: '', exercises: []));
-
-    for (int i = 0; i < exercisesPerDay; i++) {
-      final controller = _getController(exerciseControllers, weekIndex, dayIndex, i);
-      controller.text = i < template.exercises.length ? template.exercises[i] : '';
-    }
-  }
-
-  TextEditingController _getController(
-      List<List<List<TextEditingController>>> controllerList,
-      int weekIndex,
-      int dayIndex,
-      int rowIndex,
-      ) {
-    // Ensure outer week list is big enough
-    while (controllerList.length <= weekIndex) {
-      controllerList.add([]);
-    }
-
-    // Ensure day list is big enough
-    while (controllerList[weekIndex].length <= dayIndex) {
-      controllerList[weekIndex].add([]);
-    }
-
-    // Ensure row list is big enough
-    while (controllerList[weekIndex][dayIndex].length <= rowIndex) {
-      controllerList[weekIndex][dayIndex].add(TextEditingController());
-    }
-
-    return controllerList[weekIndex][dayIndex][rowIndex];
   }
 
   DateTime _getMostRecentMonday() {
@@ -176,169 +42,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     DateTime date = blockStartDate.add(Duration(days: weekIndex * 7 + dayOffset));
     return DateFormat('EEE d MMM yyyy').format(date);
   }
-
-  Color getRowColor(int rowIndex) {
-    // You can later pull these thresholds and colors from settings
-    if (rowIndex < 3) {
-      return Colors.grey.shade100;
-    } else if (rowIndex < 6) {
-      return Colors.grey.shade300;
-    } else {
-      return Colors.blueGrey.shade200;
-    }
-  }
-
-
-  Future<void> loadBlockDataFromFirestore() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    final weekSnapshots = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .collection('block_data')
-        .doc('current_block')
-        .collection('weeks')
-        .get();
-
-    for (final weekDoc in weekSnapshots.docs) {
-      final weekIndex = int.tryParse(weekDoc.id.replaceAll('week_', '')) ?? 0;
-      final daySnapshots = await weekDoc.reference.collection('days').get();
-
-      for (final dayDoc in daySnapshots.docs) {
-        final dayIndex = int.tryParse(dayDoc.id.replaceAll('day_', '')) ?? 0;
-        final data = dayDoc.data();
-        final exercises = List<Map<String, dynamic>>.from(data['exercises'] ?? []);
-
-
-        for (int i = 0; i < exercises.length; i++) {
-          final ex = exercises[i];
-          final name = ex['name'] ?? '';
-          exerciseSelection[weekIndex][dayIndex][i] = name;
-          _getController(exerciseControllers, weekIndex, dayIndex, i).text = name;
-
-          _getController(exerciseControllers, weekIndex, dayIndex, i).text = ex['name'] ?? '';
-          _getController(weightControllers, weekIndex, dayIndex, i).text = (ex['weight'] ?? '').toString();
-          _getController(repsControllers, weekIndex, dayIndex, i).text = (ex['reps'] ?? '').toString();
-          _getController(rirControllers, weekIndex, dayIndex, i).text = (ex['rir'] ?? '').toString();
-
-        }
-      }
-    }
-    await Future.delayed(Duration(milliseconds: 100));
-    setState(() {
-      print("✅ Data loaded, triggering UI rebuild");
-    });
-
-
-    setState(() {});
-  }
-
-
-
-  Future<void> saveDayToFirestore(int weekIndex, int dayIndex) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    final exercises = <Map<String, dynamic>>[];
-
-    for (int i = 0; i < exercisesPerDay; i++) {
-      final name = _getController(exerciseControllers, weekIndex, dayIndex, i).text.trim();
-      final weightText = _getController(weightControllers, weekIndex, dayIndex, i).text.trim();
-      final repsText = _getController(repsControllers, weekIndex, dayIndex, i).text.trim();
-      final rirText = _getController(rirControllers, weekIndex, dayIndex, i).text.trim();
-
-      if (name.isNotEmpty) {
-        exercises.add({
-          'name': name,
-          'weight': double.tryParse(weightText) ?? 0.0,
-          'reps': int.tryParse(repsText) ?? 0,
-          'rir': double.tryParse(rirText) ?? 0.0,
-        });
-      }
-    }
-
-    final weekDocRef = FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .collection('block_data')
-        .doc('current_block')
-        .collection('weeks')
-        .doc('week_$weekIndex');
-
-    // 🛠️ Make sure parent doc exists
-    await weekDocRef.set({'exists': true}, SetOptions(merge: true));
-
-    await weekDocRef
-        .collection('days')
-        .doc('day_$dayIndex')
-        .set({'exercises': exercises});
-
-    print("✅ Saved day: week $weekIndex, day $dayIndex");
-  }
-
-  Future<void> deleteAllBlockAndWorkoutData() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
-
-    // 🧹 1. Delete all workouts
-    final workoutsSnapshot = await userDoc.collection('workouts').get();
-    for (final doc in workoutsSnapshot.docs) {
-      await doc.reference.delete();
-    }
-    print("🗑️ All workouts deleted.");
-
-    // 🧹 2. Delete block_data > current_block > weeks > days
-    final currentBlockDoc = userDoc.collection('block_data').doc('current_block');
-    final weeksSnapshot = await currentBlockDoc.collection('weeks').get();
-
-    for (final weekDoc in weeksSnapshot.docs) {
-      final daysSnapshot = await weekDoc.reference.collection('days').get();
-      for (final dayDoc in daysSnapshot.docs) {
-        await dayDoc.reference.delete();
-      }
-      await weekDoc.reference.delete();
-    }
-
-    await currentBlockDoc.delete();
-    print("🧼 All block data deleted.");
-  }
-
-
-
-  //Horizontal scroll to current week
-  void scrollToCurrentWeek() {
-    final today = DateTime.now();
-    final daysSinceStart = today.difference(blockStartDate).inDays;
-    final currentWeekIndex = (daysSinceStart / 7).floor().clamp(0, weekIndices.length - 1);
-
-    final double weekCardWidth = MediaQuery.of(context).size.width * 0.85;
-    final double targetScrollOffset = currentWeekIndex * weekCardWidth;
-
-    _horizontalScrollController.animateTo(
-      targetScrollOffset,
-      duration: const Duration(milliseconds: 500),
-      curve: Curves.easeInOut,
-    );
-  }
-
-  void scrollToCurrentDay() {
-    final today = DateTime.now();
-    final daysSinceStart = today.difference(blockStartDate).inDays;
-    final currentDayIndex = daysSinceStart.clamp(0, weekIndices.length * 7 - 1);
-
-    const double dayCardHeight = 250; // Approx. height of each day card (adjust if needed)
-    final double targetScrollOffset = currentDayIndex * dayCardHeight;
-
-    _verticalScrollController.animateTo(
-      targetScrollOffset,
-      duration: const Duration(milliseconds: 500),
-      curve: Curves.easeInOut,
-    );
-  }
-
 
 
 
@@ -376,316 +79,63 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     );
   }
 
-  Widget _smallHeaderButton(String label) {
-    return TextButton(
-      style: TextButton.styleFrom(
-        foregroundColor: Colors.white,
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-        minimumSize: const Size(0, 30),
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      ),
-      onPressed: () {},
-      child: Text(label, style: const TextStyle(fontSize: 11)),
-    );
-  }
-
-
   Widget _buildExerciseRow(int weekIndex, int dayIndex, int rowIndex) {
-    final exerciseName = _getController(exerciseControllers, weekIndex, dayIndex, rowIndex).text;
-
-    final weightController = _getController(weightControllers, weekIndex, dayIndex, rowIndex);
-    final repsController = _getController(repsControllers, weekIndex, dayIndex, rowIndex);
-    final rirController = _getController(rirControllers, weekIndex, dayIndex, rowIndex);
-
-    return StatefulBuilder(
-      builder: (context, localSetState) {
-        // Parse values (or null if not present)
-        final double? weight = double.tryParse(weightController.text);
-        final int? reps = int.tryParse(repsController.text);
-        final double? rir = double.tryParse(rirController.text);
-
-        // Hint logic (only when field is empty)
-        final double hintWeight = (weightController.text.isEmpty && exerciseName.isNotEmpty)
-            ? PeriodizationModelUtils.getSuggestedWeight(
-            exerciseName, repsController, rirController)
-            : 0.0;
-
-        final int hintReps = (repsController.text.isEmpty && exerciseName.isNotEmpty)
-            ? PeriodizationModelUtils.getSuggestedRepTarget(
-          exerciseName,
-          weightText: weightController.text,
-          rirText: rirController.text,
-        )
-            : 0;
-
-        final double? e1rm = PeriodizationModelUtils.calculateE1RM(
-          weight ?? (weightController.text.isEmpty ? hintWeight : null),
-          reps?.toDouble() ?? (repsController.text.isEmpty ? hintReps.toDouble() : null),
-          rir ?? (rirController.text.isEmpty ? 0.5 : null),
-        );
-
-        return Container(
-          height: exerciseRowHeight,
-          padding: const EdgeInsets.symmetric(horizontal: 2),
-          decoration: BoxDecoration(
-            color: Colors.blueGrey.shade800,
-            border: Border(
-              bottom: BorderSide(color: Colors.blueGrey.shade700, width: 0.5),
-            ),
-          ),
-          child: Row(
-            children: [
-              // Exercise
-              Expanded(
-                flex: 3,
-                child: GestureDetector(
-                  onTap: () async {
-                    final RenderBox box = context.findRenderObject() as RenderBox;
-                    final Offset offset = box.localToGlobal(Offset.zero);
-                    final RelativeRect position = RelativeRect.fromLTRB(
-                      offset.dx,
-                      offset.dy,
-                      offset.dx + box.size.width,
-                      offset.dy + box.size.height,
-                    );
-
-                    String? selected = await showMenu<String>(
-                      context: context,
-                      position: position,
-                      items: allExerciseNames.map((value) {
-                        return PopupMenuItem<String>(
-                          value: value,
-                          child: Text(value, style: const TextStyle(fontSize: 13)),
-                        );
-                      }).toList(),
-                    );
-
-                    if (selected != null) {
-                      localSetState(() {
-                        exerciseSelection[weekIndex][dayIndex][rowIndex] = selected;
-                        exerciseControllers[weekIndex][dayIndex][rowIndex].text = selected;
-                      });
-                    }
-                  },
-                  child: Container(
-                    width: 114,
-                    height: 30,
-                    padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 3),
-                    decoration: BoxDecoration(
-                      color: getRowColor(rowIndex),
-                      border: Border.all(color: Colors.grey),
-                      borderRadius: BorderRadius.circular(4.0),
-                    ),
-                    child: Text(
-                      exerciseSelection[weekIndex][dayIndex][rowIndex] ?? 'Select Exercise',
-                      style: const TextStyle(fontSize: 11, color: Colors.black),
-                    ),
-                  ),
-                ),
-              ),
-
-              // Weight
-              Expanded(
-                flex: 2,
-                child: TextField(
-                  controller: weightController,
-                  keyboardType: TextInputType.numberWithOptions(decimal: true),
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
-                  decoration: InputDecoration(
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 8),
-                    hintText: (weightController.text.isEmpty && hintWeight > 0)
-                        ? hintWeight.toStringAsFixed(1)
-                        : null,
-                    hintStyle: const TextStyle(color: Colors.grey),
-                    border: InputBorder.none,
-                  ),
-                  onChanged: (_) => localSetState(() {}),
-                ),
-              ),
-
-              // Reps
-              Expanded(
-                flex: 1,
-                child: TextField(
-                  controller: repsController,
-                  keyboardType: TextInputType.number,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
-                  decoration: InputDecoration(
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 8),
-                    hintText: (repsController.text.isEmpty && hintReps > 0)
-                        ? hintReps.toString()
-                        : null,
-                    hintStyle: const TextStyle(color: Colors.grey),
-                    border: InputBorder.none,
-                  ),
-                  onChanged: (_) => localSetState(() {}),
-                ),
-              ),
-
-              // RIR
-              Expanded(
-                flex: 1,
-                child: TextField(
-                  controller: rirController,
-                  keyboardType: TextInputType.numberWithOptions(decimal: true),
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
-                  decoration: const InputDecoration(
-                    isDense: true,
-                    contentPadding: EdgeInsets.symmetric(vertical: 8),
-                    hintText: "0.5",
-                    hintStyle: TextStyle(color: Colors.grey),
-                    border: InputBorder.none,
-                  ),
-                  onChanged: (_) => localSetState(() {}),
-                ),
-              ),
-
-              // E1RM (as plain text for performance)
-              Expanded(
-                flex: 2,
-                child: Container(
-                  alignment: Alignment.center,
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Text(
-                    e1rm != null && e1rm > 0 ? e1rm.toStringAsFixed(1) : '',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.white, fontSize: 12),
-                  ),
-                ),
-              ),
-
-            ],
-          ),
-        );
-      },
+    return Row(
+      children: const [
+        Expanded(flex: 3, child: Text("Exercise Placeholder")),
+        Expanded(flex: 2, child: Text("Weight")),
+        Expanded(flex: 1, child: Text("Reps")),
+        Expanded(flex: 1, child: Text("RIR")),
+        Expanded(flex: 2, child: Text("E1RM")),
+      ],
     );
-    print("🔥 Building row $rowIndex of day $dayIndex, week $weekIndex");
   }
-
-
-
-  TextEditingController _ensureExerciseController(int w, int d, int r) {
-    while (exerciseControllers.length <= w) {
-      exerciseControllers.add([]);
-    }
-    while (exerciseControllers[w].length <= d) {
-      exerciseControllers[w].add([]);
-    }
-    while (exerciseControllers[w][d].length <= r) {
-      exerciseControllers[w][d].add(TextEditingController());
-    }
-    return exerciseControllers[w][d][r];
-  }
-
-
-
-
 
 
 
   Widget _buildDay(int weekIndex, int dayIndex) {
     final date = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
-    final dayLabel = DateFormat('E d MMM y').format(date); // e.g., "Mon 17 Mar 2025"
+    final dayLabel = DateFormat('E d MMM y').format(date); // e.g., "Mon 25 Mar 2025"
 
     return Card(
-      margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-      color: Colors.blueGrey.shade900,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 3),
+      color: Colors.blueGrey.shade100,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(6, 1, 6, 6), // 👈 Less top padding
-
+        padding: const EdgeInsets.all(5),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 🟣 Day Header Row
+            // 🟡 Day Header Row
             Row(
-              crossAxisAlignment: CrossAxisAlignment.end, // ⬅️ Push contents to bottom
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                // Week + Date Label
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    Text(
-                      "Week ${weekIndex + 1}", // 🟡 Week label
-                      style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white70,
-                      ),
-                    ),
-                    Text(
-                      dayLabel, // 🟡 Date label below it
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ],
+                // Date label
+                Text(
+                  dayLabel,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-                const Spacer(),
-
-                // 🟡 Buttons
+                // Buttons: Template, Notes, Workout
                 Row(
                   children: [
-                    // Template
                     Padding(
                       padding: const EdgeInsets.only(right: 2),
                       child: TextButton(
-                        onPressed: () async {
-                          final selectedTemplateId = await showMenu<String>(
-                            context: context,
-                            position: RelativeRect.fromLTRB(100, 100, 200, 200),
-                            items: templates.map((template) {
-                              return PopupMenuItem<String>(
-                                value: template.id,
-                                child: Text(template.name),
-                              );
-                            }).toList(),
-                          );
-
-                          if (selectedTemplateId != null) {
-                            setState(() {
-                              selectedTemplateIds[weekIndex][dayIndex] = selectedTemplateId;
-                              _populateExercisesFromTemplate(weekIndex, dayIndex, selectedTemplateId);
-                            });
-                          }
-                        },
                         style: TextButton.styleFrom(
                           padding: const EdgeInsets.symmetric(horizontal: 4),
                           minimumSize: const Size(0, 30),
                           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         ),
-                        child: Text(
-                              () {
-                            final id = selectedTemplateIds[weekIndex][dayIndex];
-                            if (id == null) return "Template";
-                            final match = templates.firstWhere(
-                                  (t) => t.id == id,
-                              orElse: () => Template(id: '', name: 'Template', day: '', exercises: []),
-                            );
-                            return match.name;
-                          }(),
-                          style: const TextStyle(fontSize: 11, color: Colors.white),
-                        ),
-
+                        onPressed: () {},
+                        child: const Text("Template", style: TextStyle(fontSize: 11)),
                       ),
-
-
-
                     ),
-                    // Notes
                     Padding(
                       padding: const EdgeInsets.only(right: 2),
                       child: TextButton(
                         style: TextButton.styleFrom(
-                          foregroundColor: Colors.white, // 👈 Makes text white
                           padding: const EdgeInsets.symmetric(horizontal: 4),
                           minimumSize: const Size(0, 30),
                           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -694,152 +144,53 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                         child: const Text("Notes", style: TextStyle(fontSize: 11)),
                       ),
                     ),
-                    // 🟡 Workout Button – formatted like your sketch
                     Padding(
                       padding: const EdgeInsets.only(right: 0),
                       child: TextButton(
                         style: TextButton.styleFrom(
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
                           minimumSize: const Size(0, 30),
                           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         ),
-                        onPressed: () async {
-                          // Now we can use await inside this block
-                          final List<String> exercises = [];
-                          for (int i = 0; i < exercisesPerDay; i++) {
-                            final name = _getController(exerciseControllers, weekIndex, dayIndex, i).text.trim();
-                            if (name.isNotEmpty) exercises.add(name);
-                          }
-
-                          final DateTime workoutDate = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
-                          final String formattedWorkoutName =
-                              "${DateFormat('EEE d MMM').format(workoutDate)} - Week ${weekIndex + 1}";
-
-                          final result = await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => WorkoutPage(
-                                prefilledExercises: exercises,
-                                isNewWorkout: true,
-                                initialDate: workoutDate,
-                                initialWorkoutName: formattedWorkoutName,
-                              ),
-                            ),
-                          );
-
-                          if (result != null && result['topSets'] != null) {
-                            final List<dynamic> topSets = result['topSets'];
-
-                            for (int i = 0; i < topSets.length; i++) {
-                              final entry = topSets[i];
-                              final exerciseName = entry['exercise'] ?? '';
-                              final weight = entry['weight']?.toString() ?? '';
-                              final reps = entry['reps']?.toString() ?? '';
-                              final rir = entry['rir']?.toString() ?? '';
-
-                              final exerciseController = _getController(exerciseControllers, weekIndex, dayIndex, i);
-                              final weightController = _getController(weightControllers, weekIndex, dayIndex, i);
-                              final repsController = _getController(repsControllers, weekIndex, dayIndex, i);
-                              final rirController = _getController(rirControllers, weekIndex, dayIndex, i);
-
-                              exerciseController.text = exerciseName;
-                              weightController.text = weight;
-                              repsController.text = reps;
-                              rirController.text = rir;
-                            }
-
-                            await saveDayToFirestore(weekIndex, dayIndex);
-                            setState(() {});
-
-                          }
-                        },
-
-                        child: const Text(
-                          "Go to\nWorkout",
-                          style: TextStyle(fontSize: 11),
-                          textAlign: TextAlign.center,
-                        ),
+                        onPressed: () {},
+                        child: const Text("Workout", style: TextStyle(fontSize: 11)),
                       ),
                     ),
-
                   ],
+
                 ),
+
               ],
             ),
-
             const SizedBox(height: 6),
 
-            // 🟣 Table Header
+            // 🟡 Table Header
             Container(
-              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-              color: Colors.blueGrey.shade800,
+              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+              color: Colors.blueGrey.shade200,
               child: Row(
                 children: const [
-                  Expanded(
-                      flex: 3,
-                      child: Text("Exercise",
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white))),
-                  Expanded(
-                      flex: 2,
-                      child: Text("Weight",
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white))),
-                  Expanded(
-                      flex: 1,
-                      child: Text("Reps",
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white))),
-                  Expanded(
-                      flex: 1,
-                      child: Text("RIR",
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white))),
-                  Expanded(
-                      flex: 2,
-                      child: Text("E1RM",
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white))),
+                  Expanded(flex: 3, child: Text("Exercise", textAlign: TextAlign.center)),
+                  Expanded(flex: 2, child: Text("Weight", textAlign: TextAlign.center)),
+                  Expanded(flex: 1, child: Text("Reps", textAlign: TextAlign.center)),
+                  Expanded(flex: 1, child: Text("RIR", textAlign: TextAlign.center)),
+                  Expanded(flex: 2, child: Text("E1RM", textAlign: TextAlign.center)),
                 ],
               ),
             ),
 
-            // 🟣 Scrollable Exercise Table (~6.5 visible rows)
-            const SizedBox(height: 6),
-            SizedBox(
-              height: 220, // Enough to show 6.5 rows
-              child: ListView.builder(
-                physics: const BouncingScrollPhysics(),
-                itemCount: exercisesPerDay,
-                itemExtent: exerciseRowHeight, // 👈 Fixed height per row (36)
-                cacheExtent: 220,              // 👈 Just enough to cache 6.5 rows
-                itemBuilder: (context, rowIndex) =>
-                    _buildExerciseRow(weekIndex, dayIndex, rowIndex),
+            // 🟡 Exercise Rows
+            Column(
+              children: List.generate(
+                exercisesPerDay,
+                    (row) => _buildExerciseRow(weekIndex, dayIndex, row),
               ),
             ),
-
           ],
         ),
       ),
     );
   }
-
 
 
 
@@ -858,51 +209,10 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text("Block Builder 2.0"),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.delete_forever),
-            tooltip: "Delete All Data",
-            onPressed: () async {
-              final confirm = await showDialog<bool>(
-                context: context,
-                builder: (_) => AlertDialog(
-                  title: Text("Wipe All Progress?"),
-                  content: Text("This will delete all workouts and block data. Are you sure?"),
-                  actions: [
-                    TextButton(onPressed: () => Navigator.pop(context, false), child: Text("Cancel")),
-                    TextButton(onPressed: () => Navigator.pop(context, true), child: Text("Yes")),
-                  ],
-                ),
-              );
-
-              if (confirm == true) {
-                await deleteAllBlockAndWorkoutData();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('✅ All progress wiped.')),
-                );
-                setState(() {
-                  exerciseControllers.clear();
-                  weightControllers.clear();
-                  repsControllers.clear();
-                  rirControllers.clear();
-                  scheduledRepTargets.clear();
-                  selectedTemplateIds = List.generate(initialWeeks, (_) => List.generate(7, (_) => null));
-                  exerciseSelection = List.generate(initialWeeks, (_) => List.generate(7, (_) => List.filled(exercisesPerDay, null)));
-                });
-              }
-            },
-          ),
-        ],
-      ),
-
+      appBar: AppBar(title: const Text("Block Builder 2.0")),
       body: SingleChildScrollView(
-        controller: _verticalScrollController,
         scrollDirection: Axis.vertical,
-        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         child: SingleChildScrollView(
-          controller: _horizontalScrollController,
           scrollDirection: Axis.horizontal,
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
