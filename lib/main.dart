@@ -9,6 +9,7 @@ import 'templates.dart';
 import 'workout_entry_screen.dart';
 import 'workout_history_screen.dart';
 import 'BlockBuilderScreen.dart';
+import 'BlockBuilder2.0.dart'; // Update path if needed
 
 
 
@@ -38,6 +39,7 @@ class MyApp extends StatelessWidget {
         '/workouts_list': (context) => const WorkoutHistoryScreen(),
         '/body_weight_tracker': (context) => const BodyWeightTracker(),
         '/block_builder': (context) => const BlockBuilderScreen(),
+        '/block_builder_2': (context) => const BlockBuilder2(),
 
       },
     );
