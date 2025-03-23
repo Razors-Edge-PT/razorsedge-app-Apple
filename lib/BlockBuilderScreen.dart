@@ -24,7 +24,7 @@ class BlockBuilderScreen extends StatefulWidget {
 class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
   List<String> days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
   List<List<String?>> templateDropdownValues = List.generate(52, (_) => List.filled(7, null, growable: true));
-  Map<int, Map<int, Map<int, String?>>> exerciseSelection = {};
+  List<List<List<String?>>> exerciseSelection = [];
   List<String> savedExercises = [];
   List<List<String>> tableData = List.generate(11, (_) => List.generate(7, (_) => ''));
   List<String> weeks = ['Week 1', 'Week 2', 'Week 3', 'Week 4', 'Week 5', 'Week 6', 'Week 7','Week 8'];
@@ -35,77 +35,69 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
   bool _isLoadingData = true; // Tracks data loading
   List<int> addedWeeks = [];
   List<int> _exerciseRowsPerDay = List.generate(12, (_) => 11); // ✅ Match 12 weeks
-
+  Map<int, bool> _showAddRowButton = {}; // ✅ Track when to show button
+  ScrollController _scrollController = ScrollController(); // ✅ Detect scrolling
 
   late DateTime selectedWeekMonday; // ✅ Declare without assigning
 
-  Map<int, Map<int, Map<int, TextEditingController>>> _repsControllers = {};
-  Map<int, Map<int, Map<int, TextEditingController>>> _rirControllers = {};
-  Map<int, Map<int, Map<int, TextEditingController>>> _weightControllers = {};
-  Map<int, Map<int, Map<int, TextEditingController>>> _e1rmControllers = {};
-
-// ✅ Stores only active controllers (created when the user taps a field)
-  Map<String, TextEditingController> _activeControllers = {};
-  TextEditingController _getController(
-      Map<int, Map<int, Map<int, TextEditingController>>> controllers,
-      int week,
-      int day,
-      int row,
-      ) {
-    return controllers
-        .putIfAbsent(week, () => {})
-        .putIfAbsent(day, () => {})
-        .putIfAbsent(row, () => TextEditingController());
-  }
+  List<List<TextEditingController>> _repsControllers = [];
+  List<List<TextEditingController>> _rirControllers = [];
+  List<List<TextEditingController>> _weightControllers = [];
+  List<List<TextEditingController>>  _e1rmControllers = [];
 
 
-  void _initializeMaps() {
-    for (var week = 0; week < 12; week++) {
-      // ✅ Ensure week-level maps exist
-      exerciseSelection[week] = {};
-      _repsControllers[week] = {}; // Do NOT preload controllers here
-      _rirControllers[week] = {};
-      _weightControllers[week] = {};
-
-      for (var day = 0; day < 7; day++) {
-        // ✅ Ensure day-level maps exist
-        exerciseSelection[week]![day] = {};
-        _repsControllers[week]![day] = {}; // Do NOT preload controllers
-        _rirControllers[week]![day] = {};
-        _weightControllers[week]![day] = {};
-
-        for (var row = 0; row < 11; row++) {
-          // ✅ Store only `null`, no controllers yet
-          exerciseSelection[week]![day]![row] = null;
-        }
-      }
-    }
-  }
-
-
-
-
-
-  @override
   @override
   void initState() {
     super.initState();
-    selectedWeekMonday = _getMostRecentMonday();
+
+    selectedWeekMonday = _getMostRecentMonday(); // ✅ Ensure it's initialized
+
+    // ✅ Ensure `addedWeeks` has at least one element before using its length
     if (addedWeeks.isEmpty) {
-      addedWeeks = List.generate(12, (index) => index);
+      addedWeeks = List.generate(1, (index) => index); // ✅ Starts with 12 weeks (0 to 11)
     }
-    _initializeMaps(); // ✅ Now fully map-based!
 
-    // ✅ Initialize empty maps (store only raw data, no controllers created yet)
-    _repsControllers = {};
-    _rirControllers = {};
-    _weightControllers = {};
-    _e1rmControllers = {};
 
-    // ✅ Store active controllers only for fields being edited
-    _activeControllers = {};
+    // ✅ Ensure exerciseSelection initializes with 12 weeks
+    exerciseSelection = List.generate(
+      12, // 🔥 Set to 12 to match addedWeeks
+          (_) => List.generate(7, (_) => List.generate(11, (_) => null, growable: true), growable: true),
+      growable: true,
+    );
+
+    // ✅ Initialize controllers for all exercises
+    _repsControllers = List.generate(12, (_) =>
+        List.generate(11, (_) => TextEditingController(), growable: true));
+    _rirControllers = List.generate(12, (_) =>
+        List.generate(11, (_) => TextEditingController(), growable: true));
+    _weightControllers = List.generate(12, (_) =>
+        List.generate(11, (_) => TextEditingController(), growable: true));
+    _e1rmControllers = List.generate(12, (_) =>
+        List.generate(11, (_) => TextEditingController(), growable: true));
+
   }
 
+
+
+
+
+  // ✅ Function to add a row for a specific day
+  // ✅ Function to add a row for a specific day
+  void _addRow(int weekIndex, int dayIndex) {
+    setState(() {
+      _exerciseRowsPerDay[dayIndex]++;
+
+      print("Adding row at week: $weekIndex, day: $dayIndex | Total rows now: ${_exerciseRowsPerDay[dayIndex]}");
+
+      // ✅ Expand list for the correct week and day
+      exerciseSelection[weekIndex][dayIndex].add(null);
+      _repsControllers[dayIndex].add(TextEditingController());
+      _weightControllers[dayIndex].add(TextEditingController());
+      _rirControllers[dayIndex].add(TextEditingController());
+
+      print("Updated Lists Lengths -> Exercises: ${exerciseSelection[weekIndex][dayIndex].length}");
+    });
+  }
 
 
 
@@ -454,8 +446,7 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
 
             if (selectedTemplate != null) {
               setState(() {
-                templateDropdownValues[weekIndex]?[dayIndex] = selectedTemplate;
-
+                templateDropdownValues[weekIndex][dayIndex] = selectedTemplate;
 
                 _updateExerciseSelection(weekIndex, dayIndex, selectedTemplate);
               });
@@ -547,9 +538,7 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
         id: doc.id,
         name: doc.get('name'),
         day: doc.get('day'),
-        exercises: (doc.get('exercises') is List)
-            ? List<String>.from(doc.get('exercises'))
-            : [], // Ensure it's a list
+        exercises: List<String>.from(doc.get('exercises')),
       )).toList();
       setState(() {
         templates = templateList;
@@ -570,25 +559,22 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
         orElse: () => Template(id: '', name: '', day: '', exercises: []),
       );
 
-      // ✅ Ensure the week index exists in the map
-      if (!exerciseSelection.containsKey(weekIndex)) {
-        exerciseSelection[weekIndex] = {}; // ✅ Initialize if missing
-      }
-
-      // ✅ Ensure the day index exists in the map before accessing
-      if (!exerciseSelection[weekIndex]!.containsKey(dayIndex)) {
-        exerciseSelection[weekIndex]![dayIndex] = {};
+      // ✅ Ensure exerciseSelection is initialized before accessing indices
+      if (exerciseSelection.isEmpty ||
+          weekIndex >= exerciseSelection.length ||
+          dayIndex >= exerciseSelection[weekIndex].length) {
+        debugPrint("Error: exerciseSelection[$weekIndex][$dayIndex] is null or out of bounds!");
+        return;
       }
 
       setState(() {
         for (int i = 0; i < 11; i++) {
-          exerciseSelection[weekIndex]![dayIndex]![i] =
+          exerciseSelection[weekIndex][dayIndex][i] =
           (i < selectedTemplate.exercises.length) ? selectedTemplate.exercises[i] : null;
         }
       });
     }
   }
-
 
 
 
@@ -607,17 +593,18 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
 
   @override
   void dispose() {
-    // ✅ Dispose all active controllers in one go
-    for (var controller in _activeControllers.values) {
-      controller.dispose();
+    for (var list in _repsControllers) {
+      for (var controller in list) {
+        controller.dispose();
+      }
     }
-
-    // ✅ Clear the map to free memory
-    _activeControllers.clear();
-
+    for (var list in _rirControllers) {
+      for (var controller in list) {
+        controller.dispose();
+      }
+    }
     super.dispose();
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -777,40 +764,24 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
                                                           Padding(
                                                             padding: const EdgeInsets.symmetric(vertical: 1),
                                                             child: GestureDetector(
-                                      onTap: () {
-                                      setState(() {
-                                      int nextWeekIndex = addedWeeks.isNotEmpty ? addedWeeks.last + 1 : 1;
-                                      addedWeeks.add(nextWeekIndex);
+                                                              onTap: () {
+                                                                setState(() {
+                                                                  int nextWeekIndex = addedWeeks.isNotEmpty ? addedWeeks.last + 1 : 1;
+                                                                  addedWeeks.add(nextWeekIndex);
 
-                                      // ✅ Ensure new week exists in all maps
-                                      if (!_repsControllers.containsKey(nextWeekIndex)) {
-                                      _repsControllers[nextWeekIndex] = {};
-                                      _weightControllers[nextWeekIndex] = {};
-                                      _rirControllers[nextWeekIndex] = {};
-                                      _e1rmControllers[nextWeekIndex] = {};
-                                      }
+                                                                  // ✅ Ensure new week has 7 days, each with 11 exercise slots
+                                                                  for (int i = 0; i < 7; i++) {
+                                                                    exerciseSelection.add(List.generate(7, (_) => List.generate(11, (_) => null, growable: true), growable: true));
+                                                                    _repsControllers.add(List.generate(11, (_) => TextEditingController()));
+                                                                    _weightControllers.add(List.generate(11, (_) => TextEditingController()));
+                                                                    _rirControllers.add(List.generate(11, (_) => TextEditingController()));
+                                                                    _e1rmControllers.add(List.generate(11, (_) => TextEditingController()));
 
-                                      for (int day = 0; day < 7; day++) {
-                                      // ✅ Ensure day exists in each week
-                                      if (!_repsControllers[nextWeekIndex]!.containsKey(day)) {
-                                      _repsControllers[nextWeekIndex]![day] = {};
-                                      _weightControllers[nextWeekIndex]![day] = {};
-                                      _rirControllers[nextWeekIndex]![day] = {};
-                                      _e1rmControllers[nextWeekIndex]![day] = {};
-                                      }
-
-                                      for (int row = 0; row < 11; row++) {
-                                      // ✅ Assign controllers properly (using int keys)
-                                      _repsControllers[nextWeekIndex]![day]![row] = TextEditingController();
-                                      _weightControllers[nextWeekIndex]![day]![row] = TextEditingController();
-                                      _rirControllers[nextWeekIndex]![day]![row] = TextEditingController();
-                                      _e1rmControllers[nextWeekIndex]![day]![row] = TextEditingController();
-                                      }
-                                      }
-                                      });
-                                      },
-
-                                      child: Container(
+                                                                    _exerciseRowsPerDay.add(11);
+                                                                  }
+                                                                });
+                                                              },
+                                                              child: Container(
                                                                 width: 75,
                                                                 height: 20,
                                                                 padding: EdgeInsets.symmetric(vertical: 2, horizontal: 5),
@@ -936,18 +907,7 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
                                                                 );
                                                                 if (selected != null) {
                                                                   setState(() {
-                                                                    // ✅ Ensure week map exists
-                                                                    if (!exerciseSelection.containsKey(weekIndex)) {
-                                                                      exerciseSelection[weekIndex] = {};
-                                                                    }
-
-                                                                    // ✅ Ensure day map exists
-                                                                    if (!exerciseSelection[weekIndex]!.containsKey(dayIndex)) {
-                                                                      exerciseSelection[weekIndex]![dayIndex] = {};
-                                                                    }
-
-                                                                    // ✅ Assign selected exercise
-                                                                    exerciseSelection[weekIndex]![dayIndex]![rowIndex] = selected;
+                                                                    exerciseSelection[weekIndex][dayIndex][rowIndex]  = selected;
                                                                   });
                                                                 }
                                                               },
@@ -961,11 +921,7 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
                                                                   borderRadius: BorderRadius.circular(4.0),
                                                                 ),
                                                                 child: Text(
-                                                                  (exerciseSelection.containsKey(weekIndex) &&
-                                                                      exerciseSelection[weekIndex]!.containsKey(dayIndex) &&
-                                                                      exerciseSelection[weekIndex]![dayIndex]!.containsKey(rowIndex))
-                                                                      ? exerciseSelection[weekIndex]![dayIndex]![rowIndex] ?? 'Select Exercise'
-                                                                      : 'Select Exercise',
+                                                                  exerciseSelection[weekIndex][dayIndex][rowIndex] ?? 'Select Exercise',
 
                                                                   style: TextStyle(fontSize: 11, color: Colors.black),
                                                                 ),
@@ -979,59 +935,37 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
                                                               width: 49,
                                                               height: 30,
                                                               child: TextField(
-                                                                controller: _getController(_weightControllers, weekIndex, dayIndex, rowIndex),
-
-
-
+                                                                controller: _weightControllers[dayIndex][rowIndex],
                                                                 keyboardType: TextInputType.number,
                                                                 textAlign: TextAlign.center,
                                                                 style: TextStyle(
                                                                   fontSize: 12,
                                                                   fontWeight: FontWeight.bold,
-                                                                  color: (_weightControllers.containsKey(weekIndex) &&
-                                                        _weightControllers[weekIndex]!.containsKey(dayIndex) &&
-                                                        _weightControllers[weekIndex]![dayIndex]!.containsKey(rowIndex) &&
-                                                        _weightControllers[weekIndex]![dayIndex]![rowIndex]!.text.isNotEmpty)
-                                                                      ? Colors.black
-                                                                      : Colors.grey, // ✅ Grey for hint, black for input
+                                                                  color: _weightControllers[dayIndex][rowIndex].text.isEmpty ? Colors.grey : Colors.black, // ✅ Grey for hint, black for input
                                                                 ),
-
                                                                 decoration: InputDecoration(
-                                                                  contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 2),
-
-                                                                  hintText: (
-                                                                      exerciseSelection.containsKey(weekIndex) &&
-                                                                          exerciseSelection[weekIndex]!.containsKey(dayIndex) &&
-                                                                          exerciseSelection[weekIndex]![dayIndex]!.containsKey(rowIndex) &&
-                                                                          exerciseSelection[weekIndex]![dayIndex]![rowIndex] != null &&
-                                                                          !(_weightControllers.containsKey(weekIndex) &&
-                                                                              _weightControllers[weekIndex]!.containsKey(dayIndex) &&
-                                                                              _weightControllers[weekIndex]![dayIndex]!.containsKey(rowIndex))
-                                                                  )
-
+                                                                  contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 2), // ✅ Reduces padding to fit larger numbers
+                                                                  hintText: (_weightControllers.length > dayIndex &&
+                                                                      _weightControllers[dayIndex].length > rowIndex &&
+                                                                      _weightControllers[dayIndex][rowIndex].text.isEmpty &&
+                                                                      exerciseSelection.length > weekIndex &&
+                                                                      exerciseSelection[weekIndex].length > dayIndex &&
+                                                                      exerciseSelection[weekIndex][dayIndex].length > rowIndex &&
+                                                                      exerciseSelection[weekIndex][dayIndex][rowIndex] != null)
                                                                       ? PeriodizationModelUtils.getSuggestedWeight(
-                                                                    // ✅ Cleaned-up way to check if the exercise exists
-                                                                    exerciseSelection[weekIndex]?[dayIndex]?[rowIndex] ?? '',
-
-                                                                    // ✅ Use `_getController()` instead of `putIfAbsent()`
-                                                                    _getController(_repsControllers, weekIndex, dayIndex, rowIndex),
-
-                                                                    // ✅ Use `_getController()` for RIR as well (no need for multiple null checks)
-                                                                    _getController(_rirControllers, weekIndex, dayIndex, rowIndex),
-                                                                  ).toStringAsFixed(1)
-
+                                                                    exerciseSelection[weekIndex][dayIndex][rowIndex]!,
+                                                                    _repsControllers[dayIndex][rowIndex],
+                                                                    _rirControllers[dayIndex][rowIndex],
+                                                                  ).toStringAsFixed(1) // ✅ Only show hint if weight field is empty
                                                                       : '',
-
                                                                   hintStyle: const TextStyle(color: Colors.grey, fontStyle: FontStyle.italic, fontSize: 12),
                                                                   border: OutlineInputBorder(),
                                                                   filled: true,
                                                                   fillColor: getRowColor(rowIndex),
                                                                 ),
 
-
                                                                 onChanged: (value) {
-                                                                  String exerciseName = exerciseSelection[weekIndex]?[dayIndex]?[rowIndex] ?? '';
-
+                                                                  String exerciseName = exerciseSelection[weekIndex][dayIndex][rowIndex] ?? '';
                                                                   if (exerciseName.isNotEmpty) {
                                                                     // ✅ When weight changes, trigger UI update for reps hint (without overriding user input)
                                                                     setState(() {});
@@ -1047,67 +981,50 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
                                                               width: 37,
                                                               height: 30,
                                                               child: TextField(
-                                                                  controller: _getController(_repsControllers, weekIndex, dayIndex, rowIndex),
-                                                                  // ✅ Prevents null access error
+                                                                controller: _repsControllers[dayIndex][rowIndex],
                                                                 keyboardType: TextInputType.number,
                                                                 textAlign: TextAlign.center,
                                                                 style: TextStyle(
                                                                   fontSize: 12,
                                                                   fontWeight: FontWeight.bold,
-                                                                  color: (_repsControllers[weekIndex] != null &&
-                                                                      _repsControllers[weekIndex]![dayIndex] != null &&
-                                                                      _repsControllers[weekIndex]![dayIndex]![rowIndex] != null &&
-                                                                      _repsControllers[weekIndex]![dayIndex]![rowIndex]!.text.isNotEmpty)
-                                                                      ? Colors.black
-                                                                      : Colors.grey,
-                                                                  // ✅ Black for input, Grey for hint
+                                                                  color: _repsControllers[dayIndex][rowIndex].text.isNotEmpty ? Colors.black : Colors.grey, // ✅ Black for input, Grey for hint
                                                                 ),
                                                                 decoration: InputDecoration(
                                                                   contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 2),
-                                                                  hintText: (_repsControllers[weekIndex]?.containsKey(dayIndex) == true &&
-                                                                      _repsControllers[weekIndex]![dayIndex]?.containsKey(rowIndex) == true &&
-                                                                      _repsControllers[weekIndex]![dayIndex]![rowIndex]?.text.isEmpty == true &&
-                                                                      exerciseSelection.containsKey(weekIndex) &&
-                                                                      exerciseSelection[weekIndex]?.containsKey(dayIndex) == true &&
-                                                                      exerciseSelection[weekIndex]![dayIndex]?.containsKey(rowIndex) == true &&
-                                                                      exerciseSelection[weekIndex]![dayIndex]![rowIndex] != null)
+                                                                  hintText: (_repsControllers.asMap().containsKey(dayIndex) &&
+                                                                      _repsControllers[dayIndex].asMap().containsKey(rowIndex) &&
+                                                                      _repsControllers[dayIndex][rowIndex].text.isEmpty &&
+                                                                      exerciseSelection.asMap().containsKey(weekIndex) &&
+                                                                      exerciseSelection[weekIndex].asMap().containsKey(dayIndex) &&
+                                                                      exerciseSelection[weekIndex][dayIndex].asMap().containsKey(rowIndex) &&
+                                                                      exerciseSelection[weekIndex][dayIndex][rowIndex] != null)
                                                                       ? PeriodizationModelUtils.updateRepTarget(
-                                                                    exerciseSelection[weekIndex]![dayIndex]![rowIndex]!,
-                                                                    (_weightControllers[weekIndex]?.containsKey(dayIndex) == true &&
-                                                                        _weightControllers[weekIndex]![dayIndex]?.containsKey(rowIndex) == true)
-                                                                        ? _weightControllers[weekIndex]![dayIndex]![rowIndex]!.text
+                                                                    exerciseSelection[weekIndex][dayIndex][rowIndex]!,
+                                                                    (_weightControllers.asMap().containsKey(dayIndex) &&
+                                                                        _weightControllers[dayIndex].asMap().containsKey(rowIndex))
+                                                                        ? _weightControllers[dayIndex][rowIndex].text
                                                                         : "0",
-                                                                    (_rirControllers[weekIndex]?.containsKey(dayIndex) == true &&
-                                                                        _rirControllers[weekIndex]![dayIndex]?.containsKey(rowIndex) == true)
-                                                                        ? _rirControllers[weekIndex]![dayIndex]![rowIndex]!.text
+                                                                    (_rirControllers.asMap().containsKey(dayIndex) &&
+                                                                        _rirControllers[dayIndex].asMap().containsKey(rowIndex))
+                                                                        ? _rirControllers[dayIndex][rowIndex].text
                                                                         : "0",
                                                                   ).toString()
                                                                       : '',
-
                                                                   hintStyle: const TextStyle(color: Colors.grey, fontStyle: FontStyle.italic, fontSize: 12),
                                                                   border: OutlineInputBorder(),
                                                                   filled: true,
                                                                   fillColor: getRowColor(rowIndex),
                                                                 ),
 
-
-                                                                  onChanged: (value) {
-                                                                    String exerciseName = (exerciseSelection.containsKey(weekIndex) &&
-                                                                        exerciseSelection[weekIndex]!.containsKey(dayIndex) &&
-                                                                        exerciseSelection[weekIndex]![dayIndex]!.containsKey(rowIndex))
-                                                                        ? exerciseSelection[weekIndex]![dayIndex]![rowIndex] ?? ''
-                                                                        : '';
-
-                                                                    if (exerciseName.isNotEmpty) {
-                                                                      if (_weightControllers.containsKey(weekIndex) &&
-                                                                          _weightControllers[weekIndex]!.containsKey(dayIndex) &&
-                                                                          _weightControllers[weekIndex]![dayIndex]!.containsKey(rowIndex) &&
-                                                                          _weightControllers[weekIndex]![dayIndex]![rowIndex]!.text.isEmpty) {
-                                                                        setState(() {}); // ✅ Refresh UI to update hint text for weight
-                                                                      }
+                                                                onChanged: (value) {
+                                                                  String exerciseName = exerciseSelection[weekIndex][dayIndex][rowIndex] ?? '';
+                                                                  if (exerciseName.isNotEmpty) {
+                                                                    if (_weightControllers[dayIndex][rowIndex].text.isEmpty) {
+                                                                      setState(() {}); // ✅ Refresh UI to update hint text for weight
                                                                     }
                                                                   }
-
+                                                                  setState(() {}); // ✅ Ensures UI refresh for user input
+                                                                },
                                                               ),
                                                             ),
 
@@ -1118,45 +1035,33 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
                                                               width: 30,
                                                               height: 30,
                                                               child: TextField(
-                                                                controller: _getController(_rirControllers, weekIndex, dayIndex, rowIndex),
-
-
+                                                                controller: _rirControllers[dayIndex][rowIndex],
                                                                 keyboardType: TextInputType.number,
                                                                 textAlign: TextAlign.center,
                                                                 style: TextStyle(
                                                                   fontSize: 11,
                                                                   fontWeight: FontWeight.bold,
-                                                                  color: (_rirControllers[weekIndex]?[dayIndex]?[rowIndex]?.text.isNotEmpty ?? false)
-                                                                      ? Colors.black
-                                                                      : Colors.grey,
-                                                                  // ✅ Black for input, Grey for hint
+                                                                  color: _rirControllers[dayIndex][rowIndex].text.isNotEmpty ? Colors.black : Colors.grey, // ✅ Black for input, Grey for hint
                                                                 ),
                                                                 decoration: InputDecoration(
                                                                   contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 2),
-                                                                  hintText: (_rirControllers[weekIndex]?[dayIndex]?[rowIndex]?.text.isEmpty ?? true)
-                                                                      ? "0.5"
-                                                                      : '',
-                                                                  // ✅ Default RIR hint
+                                                                  hintText: _rirControllers[dayIndex][rowIndex].text.isEmpty ? "0.5" : '', // ✅ Default RIR hint
                                                                   hintStyle: const TextStyle(color: Colors.grey, fontStyle: FontStyle.italic, fontSize: 10),
                                                                   border: OutlineInputBorder(),
                                                                   filled: true,
                                                                   fillColor: getRowColor(rowIndex),
                                                                 ),
                                                                 onChanged: (value) {
-                                                                  String key = "$weekIndex-$dayIndex-$rowIndex";
-                                                                  String exerciseName = exerciseSelection[weekIndex]?[dayIndex]?[rowIndex] ?? '';
+                                                                  String exerciseName = exerciseSelection[weekIndex][dayIndex][rowIndex] ?? '';
                                                                   if (exerciseName.isNotEmpty) {
-                                                                    if ((_weightControllers[weekIndex]?[dayIndex]?[rowIndex]?.text.isEmpty ?? true) ||
-                                                                        (_repsControllers[weekIndex]?[dayIndex]?[rowIndex]?.text.isEmpty ?? true)) {
-                                                                      setState(() {}); // ✅ Refresh UI if needed
+                                                                    if (_weightControllers[dayIndex][rowIndex].text.isEmpty || _repsControllers[dayIndex][rowIndex].text.isEmpty) {
+                                                                      setState(() {}); // ✅ Refresh UI
                                                                     }
-
                                                                   }
                                                                   setState(() {}); // ✅ Ensures UI refresh when RIR changes
                                                                 },
                                                               ),
                                                             ),
-
 
                                                             const SizedBox(width: 3),
 
@@ -1167,34 +1072,29 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
                                                               child: TextField(
                                                                 controller: TextEditingController(
                                                                   text: PeriodizationModelUtils.calculateE1RM(
-                                                                    double.tryParse(_weightControllers[weekIndex]?[dayIndex]?[rowIndex]?.text ?? '') ??
+                                                                    double.tryParse(_weightControllers[dayIndex][rowIndex].text) ??
                                                                         PeriodizationModelUtils.getSuggestedWeight(
-                                                                          exerciseSelection[weekIndex]?[dayIndex]?[rowIndex] ?? '',
-                                                                          _repsControllers[weekIndex]?[dayIndex]?[rowIndex] ?? TextEditingController(),
-                                                                          _rirControllers[weekIndex]?[dayIndex]?[rowIndex] ?? TextEditingController(),
-                                                                        ),
-                                                                    (int.tryParse(_repsControllers[weekIndex]?[dayIndex]?[rowIndex]?.text ?? '') ??
+                                                                            exerciseSelection[weekIndex][dayIndex][rowIndex] ?? '',
+                                                                            _repsControllers[dayIndex][rowIndex],
+                                                                            _rirControllers[dayIndex][rowIndex]),
+                                                                    (int.tryParse(_repsControllers[dayIndex][rowIndex].text) ??
                                                                         PeriodizationModelUtils.updateRepTarget(
-                                                                          exerciseSelection[weekIndex]?[dayIndex]?[rowIndex] ?? '',
-                                                                          _weightControllers[weekIndex]?[dayIndex]?[rowIndex]?.text ?? "0",
-                                                                          _rirControllers[weekIndex]?[dayIndex]?[rowIndex]?.text ?? "0",
-                                                                        )).toDouble(),
-                                                                    double.tryParse(_rirControllers[weekIndex]?[dayIndex]?[rowIndex]?.text ?? '') ?? 0.5,
+                                                                            exerciseSelection[weekIndex][dayIndex][rowIndex] ?? '',
+                                                                            _weightControllers[dayIndex][rowIndex].text,
+                                                                            _rirControllers[dayIndex][rowIndex].text)).toDouble(),
+                                                                    double.tryParse(_rirControllers[dayIndex][rowIndex].text) ?? 0.5, // ✅ Default RIR hint
                                                                   ).toStringAsFixed(1),
                                                                 ),
-
                                                                 readOnly: true, // ✅ Prevents user input
                                                                 textAlign: TextAlign.center,
                                                                 style: TextStyle(
                                                                   fontSize: 10,
                                                                   fontWeight: FontWeight.bold,
-                                                                  color: ((_weightControllers[weekIndex]?[dayIndex]?[rowIndex]?.text?.isNotEmpty ?? false) ||
-                                                                      (_repsControllers[weekIndex]?[dayIndex]?[rowIndex]?.text?.isNotEmpty ?? false) ||
-                                                                      (_rirControllers[weekIndex]?[dayIndex]?[rowIndex]?.text?.isNotEmpty ?? false))
+                                                                  color: (_weightControllers[dayIndex][rowIndex].text.isNotEmpty ||
+                                                                      _repsControllers[dayIndex][rowIndex].text.isNotEmpty ||
+                                                                      _rirControllers[dayIndex][rowIndex].text.isNotEmpty)
                                                                       ? Colors.black
-                                                                      : Colors.grey,
-
-// ✅ Grey for hint, black for calculated values
+                                                                      : Colors.grey, // ✅ Grey for hint, black for calculated values
                                                                 ),
                                                                 decoration: InputDecoration(
                                                                   contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 2),
@@ -1204,7 +1104,6 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
                                                                 ),
                                                               ),
                                                             ),
-
                                                           ],
                                                         );
                                                       }),
