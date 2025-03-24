@@ -39,6 +39,7 @@ class WorkoutPage extends StatefulWidget {
   final Workout? workout; // Make workout optional
   final bool isNewWorkout;
 
+
   const WorkoutPage(
       {Key? key, this.initialTemplate, this.workout, this.isNewWorkout = true})
       : super(key: key);
