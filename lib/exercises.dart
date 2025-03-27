@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'core_exercises.dart'; // at the top
 
 class ExercisesScreen extends StatefulWidget {
   const ExercisesScreen({super.key});

@@ -38,11 +38,20 @@ class WorkoutPage extends StatefulWidget {
   final Template? initialTemplate;
   final Workout? workout; // Make workout optional
   final bool isNewWorkout;
+  final List<String>? prefilledExercises;
+  final DateTime? initialDate; // ✅ Add this line
+  final String? initialWorkoutName; // ✅ Add this
 
+  const WorkoutPage({
+    Key? key,
+    this.initialTemplate,
+    this.workout,
+    this.isNewWorkout = true,
+    this.prefilledExercises,
+    this.initialDate,
+    this.initialWorkoutName, // ✅ Add this
+  }) : super(key: key);
 
-  const WorkoutPage(
-      {Key? key, this.initialTemplate, this.workout, this.isNewWorkout = true})
-      : super(key: key);
 
   @override
   _WorkoutPageState createState() => _WorkoutPageState();
@@ -50,7 +59,7 @@ class WorkoutPage extends StatefulWidget {
 
 class _WorkoutPageState extends State<WorkoutPage> {
   final TextEditingController _workoutNameController = TextEditingController();
-  DateTime _selectedDate = DateTime.now(); // Set the default date to today
+  late DateTime _selectedDate; // move this to the top of the State class
   final List<String> _selectedExercises = [];
   final List<List<SetDetails>> _workoutSets = [];
   final List<List<TextEditingController>> _repsControllers = [];
@@ -546,9 +555,25 @@ class _WorkoutPageState extends State<WorkoutPage> {
   void initState() {
     super.initState();
 
+    _selectedDate = widget.initialDate ?? DateTime.now();
+
+    // ✅ Set the workout name first, before any template/workout logic can override it
+    if (widget.initialWorkoutName != null) {
+      _workoutNameController.text = widget.initialWorkoutName!;
+    }
+
     loadPreviousWorkoutData(); // ✅ Ensures data is fetched before UI load
 
-    if (widget.workout != null) {
+    if (widget.prefilledExercises != null) {
+      // ✅ Initialize based on prefilled exercises
+      _selectedExercises.addAll(widget.prefilledExercises!);
+      for (int i = 0; i < _selectedExercises.length; i++) {
+        _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
+        _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+        _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+        _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+      }
+    } else if (widget.workout != null) {
       _loadWorkout(widget.workout!);
     } else if (widget.initialTemplate != null) {
       _loadTemplate(widget.initialTemplate!);
@@ -556,8 +581,10 @@ class _WorkoutPageState extends State<WorkoutPage> {
       _initializeControllers();
     }
 
-    _fetchLastWorkoutTopSetReps(); // ✅ Load top set reps
+    _fetchLastWorkoutTopSetReps();
   }
+
+
 
   void _loadWorkout(Workout workout) {
     _workoutNameController.text = workout.name;
@@ -729,6 +756,20 @@ class _WorkoutPageState extends State<WorkoutPage> {
       return;
     }
 
+    // ✅ Sync TextField input into _workoutSets
+    for (int i = 0; i < _selectedExercises.length; i++) {
+      for (int j = 0; j < _workoutSets[i].length; j++) {
+        final repsText = _repsControllers[i][j].text.trim();
+        final weightText = _weightControllers[i][j].text.trim();
+        final rirText = _rirControllers[i][j].text.trim();
+
+        _workoutSets[i][j].reps = repsText.isNotEmpty ? int.tryParse(repsText) : null;
+        _workoutSets[i][j].weight = weightText.isNotEmpty ? double.tryParse(weightText) : null;
+        _workoutSets[i][j].rir = rirText.isNotEmpty ? double.tryParse(rirText) : null;
+      }
+    }
+
+    // ✅ Create Firestore save payload
     final workoutData = {
       'name': _workoutNameController.text,
       'date': _selectedDate.toIso8601String(),
@@ -737,34 +778,29 @@ class _WorkoutPageState extends State<WorkoutPage> {
         int exerciseIndex = exerciseEntry.key;
         String exerciseName = exerciseEntry.value;
 
-        // ✅ Filter out sets where weight is 0
         List<Map<String, dynamic>> validSets = [];
 
-        for (int setIndex = 0; setIndex < _weightControllers[exerciseIndex].length; setIndex++) {
-          String weightText = _weightControllers[exerciseIndex][setIndex].text.trim();
-          double weight = double.tryParse(weightText) ?? 0.0;
+        for (int setIndex = 0; setIndex < _workoutSets[exerciseIndex].length; setIndex++) {
+          final set = _workoutSets[exerciseIndex][setIndex];
+          final weight = set.weight ?? 0.0;
 
-          if (weight > 0) { // ✅ Only save sets where weight is greater than 0
-            String repsText = _repsControllers[exerciseIndex][setIndex].text.trim();
-            String rirText = _rirControllers[exerciseIndex][setIndex].text.trim();
-
+          if (weight > 0) {
             validSets.add({
-              'exerciseName': exerciseName, // ✅ Store exerciseName in each set
-              'reps': repsText.isNotEmpty ? int.tryParse(repsText) ?? 0 : 0,
+              'exerciseName': exerciseName,
+              'reps': set.reps ?? 0,
               'weight': weight,
-              'rir': rirText.isNotEmpty ? double.tryParse(rirText) ?? 0.0 : 0.0,
+              'rir': set.rir ?? 0.0,
             });
           }
         }
 
-        // ✅ Only include exercises with at least one valid set
         return validSets.isNotEmpty
             ? {
           'name': exerciseName,
           'sets': validSets,
         }
             : null;
-      }).where((exercise) => exercise != null).toList(), // ✅ Remove null exercises
+      }).where((e) => e != null).toList(),
     };
 
     try {
@@ -777,12 +813,28 @@ class _WorkoutPageState extends State<WorkoutPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Workout saved successfully.')),
       );
+
+      // ✅ Return top sets to BlockBuilder
+      Navigator.pop(context, {
+        'date': _selectedDate,
+        'topSets': List.generate(_selectedExercises.length, (i) {
+          if (_workoutSets[i].isEmpty) return null;
+          final topSet = _workoutSets[i][0]; // Customize later
+          return {
+            'exercise': _selectedExercises[i],
+            'weight': topSet.weight,
+            'reps': topSet.reps,
+            'rir': topSet.rir,
+          };
+        }).where((e) => e != null).toList(),
+      });
     } catch (error) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to save workout: $error')),
       );
     }
   }
+
 
 
 

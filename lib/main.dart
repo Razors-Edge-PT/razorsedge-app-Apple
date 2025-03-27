@@ -1,5 +1,7 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'dart:io'; // 👈 Needed for Platform check
 
 import 'body_weight_tracker.dart'; // Import the new file
 import 'exercises.dart';
@@ -15,7 +17,19 @@ import 'BlockBuilder2.0.dart'; // Update path if needed
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
+
+  // Initialize Firebase for all platforms
+  if (kIsWeb || Platform.isAndroid || Platform.isIOS) {
+    await Firebase.initializeApp();
+  } else {
+    // Avoid crashing on unsupported platforms (e.g. desktop)
+    try {
+      await Firebase.initializeApp();
+    } catch (e) {
+      debugPrint("Firebase not supported on this platform.");
+    }
+  }
+
   runApp(const MyApp());
 }
 
