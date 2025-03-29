@@ -70,7 +70,7 @@ class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen> {
             shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12)),
             child: ListTile(
-              leading: Icon(
+              leading: const Icon(
                 Icons.fitness_center,
                 color: Colors.blueAccent,
               ),

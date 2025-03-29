@@ -4,12 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'body_weight_tracker.dart';
 import 'workout_details_screen.dart';
 import 'workout_entry_screen.dart';
 import 'workout_model.dart';
-import 'main.dart'; // Import for routeObserver
-import 'dart:convert';
+// Import for routeObserver
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});

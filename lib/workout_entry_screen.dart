@@ -1,13 +1,9 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'workout_model.dart';
 import 'exercise_selection_screen.dart';
 import 'template_model.dart';
 import 'templates.dart';
-import 'exercise_details_screen.dart';
 import 'set_details.dart';
 
 class WorkoutPage extends StatefulWidget {
@@ -15,7 +11,7 @@ class WorkoutPage extends StatefulWidget {
   final Workout? workout;
   final bool isNewWorkout;
 
-  const WorkoutPage({Key? key, this.initialTemplate, this.workout, this.isNewWorkout = true}) : super(key: key);
+  const WorkoutPage({super.key, this.initialTemplate, this.workout, this.isNewWorkout = true});
 
   @override
   _WorkoutPageState createState() => _WorkoutPageState();
