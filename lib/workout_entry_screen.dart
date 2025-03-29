@@ -1006,11 +1006,15 @@ class _WorkoutPageState extends State<WorkoutPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.blueGrey.shade900,
       appBar: AppBar(
+        backgroundColor: Colors.blueGrey.shade800,
         title: const Text(
           'Razors Edge',
-          style: TextStyle(fontFamily: 'Verdana'),
+          style: TextStyle(fontFamily: 'Verdana', color: Colors.white),
         ),
+        iconTheme: const IconThemeData(color: Colors.white),
+        actionsIconTheme: const IconThemeData(color: Colors.white),
         actions: [
           IconButton(
             icon: const Icon(Icons.delete),
@@ -1096,6 +1100,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
               ),
             for (int i = 0; i < _selectedExercises.length; i++)
               Card(
+                color: Colors.blueGrey.shade700,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 margin: const EdgeInsets.only(left: 0, top: 4, right: 0, bottom: 0),
                 child: ExpansionTile(
                   title: Text(_selectedExercises[i]),
@@ -1241,6 +1247,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                 // ✅ Weight Input Field with Suggested Weight for Each Set
                                 Expanded(
                                   child: TextField(
+
                                     controller: _weightControllers[i][j],
                                     keyboardType: TextInputType.number,
                                     decoration: InputDecoration(

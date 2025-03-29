@@ -277,6 +277,36 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     print("✅ Saved day: week $weekIndex, day $dayIndex");
   }
 
+  Future<void> deleteAllBlockAndWorkoutData() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
+
+    // 🧹 1. Delete all workouts
+    final workoutsSnapshot = await userDoc.collection('workouts').get();
+    for (final doc in workoutsSnapshot.docs) {
+      await doc.reference.delete();
+    }
+    print("🗑️ All workouts deleted.");
+
+    // 🧹 2. Delete block_data > current_block > weeks > days
+    final currentBlockDoc = userDoc.collection('block_data').doc('current_block');
+    final weeksSnapshot = await currentBlockDoc.collection('weeks').get();
+
+    for (final weekDoc in weeksSnapshot.docs) {
+      final daysSnapshot = await weekDoc.reference.collection('days').get();
+      for (final dayDoc in daysSnapshot.docs) {
+        await dayDoc.reference.delete();
+      }
+      await weekDoc.reference.delete();
+    }
+
+    await currentBlockDoc.delete();
+    print("🧼 All block data deleted.");
+  }
+
+
 
   //Horizontal scroll to current week
   void scrollToCurrentWeek() {
@@ -515,30 +545,27 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                 ),
               ),
 
-              // E1RM (read-only)
+              // E1RM (as plain text for performance)
               Expanded(
                 flex: 2,
-                child: TextField(
-                  controller: TextEditingController(
-                    text: e1rm != null && e1rm > 0 ? e1rm.toStringAsFixed(1) : '',
-                  ),
-                  readOnly: true,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
-                  decoration: const InputDecoration(
-                    isDense: true,
-                    contentPadding: EdgeInsets.symmetric(vertical: 8),
-                    border: InputBorder.none,
+                child: Container(
+                  alignment: Alignment.center,
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Text(
+                    e1rm != null && e1rm > 0 ? e1rm.toStringAsFixed(1) : '',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
                   ),
                 ),
               ),
+
             ],
           ),
         );
       },
     );
+    print("🔥 Building row $rowIndex of day $dayIndex, week $weekIndex");
   }
-
 
 
 
@@ -800,10 +827,13 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
               child: ListView.builder(
                 physics: const BouncingScrollPhysics(),
                 itemCount: exercisesPerDay,
+                itemExtent: exerciseRowHeight, // 👈 Fixed height per row (36)
+                cacheExtent: 220,              // 👈 Just enough to cache 6.5 rows
                 itemBuilder: (context, rowIndex) =>
                     _buildExerciseRow(weekIndex, dayIndex, rowIndex),
               ),
             ),
+
           ],
         ),
       ),
@@ -828,10 +858,49 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Block Builder 2.0")),
+      appBar: AppBar(
+        title: const Text("Block Builder 2.0"),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.delete_forever),
+            tooltip: "Delete All Data",
+            onPressed: () async {
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (_) => AlertDialog(
+                  title: Text("Wipe All Progress?"),
+                  content: Text("This will delete all workouts and block data. Are you sure?"),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(context, false), child: Text("Cancel")),
+                    TextButton(onPressed: () => Navigator.pop(context, true), child: Text("Yes")),
+                  ],
+                ),
+              );
+
+              if (confirm == true) {
+                await deleteAllBlockAndWorkoutData();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('✅ All progress wiped.')),
+                );
+                setState(() {
+                  exerciseControllers.clear();
+                  weightControllers.clear();
+                  repsControllers.clear();
+                  rirControllers.clear();
+                  scheduledRepTargets.clear();
+                  selectedTemplateIds = List.generate(initialWeeks, (_) => List.generate(7, (_) => null));
+                  exerciseSelection = List.generate(initialWeeks, (_) => List.generate(7, (_) => List.filled(exercisesPerDay, null)));
+                });
+              }
+            },
+          ),
+        ],
+      ),
+
       body: SingleChildScrollView(
         controller: _verticalScrollController,
         scrollDirection: Axis.vertical,
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         child: SingleChildScrollView(
           controller: _horizontalScrollController,
           scrollDirection: Axis.horizontal,
