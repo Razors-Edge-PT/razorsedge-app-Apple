@@ -7,6 +7,8 @@ import 'body_weight_tracker.dart';
 import 'workout_details_screen.dart'; // Import workout details screen
 import 'workout_entry_screen.dart'; // Import workout entry screen
 import 'workout_model.dart'; // Import Workout model
+import 'block_planner.dart'; // 👈 Add this line
+
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -182,6 +184,19 @@ class _HomeScreenState extends State<HomeScreen> {
                 Navigator.pushNamed(context, '/block_builder_2'); // 👈 Match the route
               },
             ),
+            ListTile(
+              title: const Text('Block Planner 🧠'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const Block_Planner(), // ✅ Correct name with underscore
+                  ),
+                );
+              },
+            ),
+
 
           ],
         ),

@@ -16,6 +16,8 @@ class BlockBuilder2 extends StatefulWidget {
 
 class _BlockBuilder2State extends State<BlockBuilder2> {
   final int initialWeeks = 12;
+  int visibleWeekCount = 3; // Initially load 3 weeks
+  final int totalWeeks = 12;
   final int exercisesPerDay = 11;
   List <Template> templates = []; // Make sure Template is imported
   List<List<String?>> selectedTemplateIds = [];
@@ -58,6 +60,18 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   @override
   void initState() {
     super.initState();
+
+    _horizontalScrollController.addListener(() {
+      final maxScroll = _horizontalScrollController.position.maxScrollExtent;
+      final currentScroll = _horizontalScrollController.position.pixels;
+
+      // Load more when user scrolls to 80% of max
+      if (currentScroll / maxScroll > 0.8 && visibleWeekCount < totalWeeks) {
+        setState(() {
+          visibleWeekCount = (visibleWeekCount + 2).clamp(0, totalWeeks);
+        });
+      }
+    });
 
 
     selectedWeekMonday = _getMostRecentMonday();
@@ -180,11 +194,11 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   Color getRowColor(int rowIndex) {
     // You can later pull these thresholds and colors from settings
     if (rowIndex < 3) {
-      return Colors.grey.shade100;
+      return Colors.blueGrey.shade700;
     } else if (rowIndex < 6) {
-      return Colors.grey.shade300;
+      return Colors.blueGrey.shade900;
     } else {
-      return Colors.blueGrey.shade200;
+      return Colors.blueGrey.shade800;
     }
   }
 
@@ -214,15 +228,24 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         for (int i = 0; i < exercises.length; i++) {
           final ex = exercises[i];
           final name = ex['name'] ?? '';
+          final weight = ex['weight'];
+          final reps = ex['reps'];
+          final rir = ex['rir'];
+
           exerciseSelection[weekIndex][dayIndex][i] = name;
           _getController(exerciseControllers, weekIndex, dayIndex, i).text = name;
 
-          _getController(exerciseControllers, weekIndex, dayIndex, i).text = ex['name'] ?? '';
-          _getController(weightControllers, weekIndex, dayIndex, i).text = (ex['weight'] ?? '').toString();
-          _getController(repsControllers, weekIndex, dayIndex, i).text = (ex['reps'] ?? '').toString();
-          _getController(rirControllers, weekIndex, dayIndex, i).text = (ex['rir'] ?? '').toString();
-
+          if (weight != null && weight > 0) {
+            _getController(weightControllers, weekIndex, dayIndex, i).text = weight.toString();
+          }
+          if (reps != null && reps > 0) {
+            _getController(repsControllers, weekIndex, dayIndex, i).text = reps.toString();
+          }
+          if (rir != null && rir > 0) {
+            _getController(rirControllers, weekIndex, dayIndex, i).text = rir.toString();
+          }
         }
+
       }
     }
     await Future.delayed(Duration(milliseconds: 100));
@@ -507,12 +530,13 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           reps?.toDouble() ?? (repsController.text.isEmpty ? hintReps.toDouble() : null),
           rir ?? (rirController.text.isEmpty ? 0.5 : null),
         );
-
+//Colors.blueGrey.shade800,
         return Container(
           height: exerciseRowHeight,
           padding: const EdgeInsets.symmetric(horizontal: 2),
           decoration: BoxDecoration(
-            color: Colors.blueGrey.shade800,
+            color: getRowColor(rowIndex),
+
             border: Border(
               bottom: BorderSide(color: Colors.blueGrey.shade700, width: 0.5),
             ),
@@ -568,7 +592,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                     ),
                     child: Text(
                       exerciseSelection[weekIndex][dayIndex][rowIndex] ?? 'Select Exercise',
-                      style: const TextStyle(fontSize: 11, color: Colors.black),
+                      style: const TextStyle(fontSize: 11, color: Colors.white),
                     ),
                   ),
                 ),
@@ -1059,16 +1083,22 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         ],
       ),
 
-      body: SingleChildScrollView(
-        controller: _verticalScrollController,
-        scrollDirection: Axis.vertical,
-        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+    body: GestureDetector(
+    onTap: () => FocusScope.of(context).unfocus(), // ✅ Dismiss keyboard
+    child: SingleChildScrollView(
+    controller: _verticalScrollController,
+    scrollDirection: Axis.vertical,
+    keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         child: SingleChildScrollView(
           controller: _horizontalScrollController,
           scrollDirection: Axis.horizontal,
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
-            children: weekIndices.map((i) => _buildWeek(i)).toList(),
+            children: weekIndices
+                .take(visibleWeekCount) // 👈 Only load X weeks
+                .map((i) => _buildWeek(i))
+                .toList(),
+          ),
           ),
         ),
       ),
