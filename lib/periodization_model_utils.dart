@@ -200,10 +200,17 @@ class PeriodizationModelUtils {
     return availableReps;
   }
 
-  static int getSuggestedRepTarget(String exerciseName, {String? weightText, String? rirText}) {
+  static int getSuggestedRepTarget(
+      String exerciseName, {
+        String? weightText,
+        String? rirText,
+        required int plannedIndex,
+      })
+  {
     // ✅ If weight is entered, use `updateRepTarget()` to calculate reps based on weight.
     if (weightText != null && weightText.isNotEmpty) {
-      return updateRepTarget(exerciseName, weightText, rirText ?? "0.5");
+      return updateRepTarget(exerciseName, weightText, rirText ?? "0.5",  plannedIndex,
+      );
     }
 
     // ✅ Step 1: Get Available Rep Targets (which removes forbidden reps)
@@ -278,12 +285,69 @@ class PeriodizationModelUtils {
     return candidates.first; // ✅ Return the best available rep
   }
 
-
-  static int updateRepTarget(
+  static int getPlannedCountBefore(
+      List<String?> plannedExercises,
       String exerciseName,
-      String weightText,
-      String rirText
+      int currentIndex,
       ) {
+    int count = 0;
+    for (int i = 0; i < currentIndex; i++) {
+      if (plannedExercises[i] == exerciseName) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+
+  static List<int> upcomingRepTargetSequence(String exerciseName, int count) {
+    // Start with current rep history
+    List<int> history = List.from(exercisePreviousTopSetReps[exerciseName] ?? []);
+
+    List<int> result = [];
+
+    for (int i = 0; i < count; i++) {
+      // Define inner logic for forbidden reps, scoped to current history
+      Set<int> forbidden = {};
+      for (int j = 0; j < history.length && j < 4; j++) {
+        int rep = history[j];
+        if (j == 0) {
+          forbidden.addAll([rep - 2, rep - 1, rep, rep + 1, rep + 2]);
+        } else if (j == 1) {
+          forbidden.addAll([rep - 1, rep, rep + 1]);
+        } else if (j == 2 || j == 3) {
+          forbidden.add(rep);
+        }
+      }
+
+      // Cap rep range
+      List<int> allReps = List.generate(12, (i) => i + 1);
+      List<int> available = allReps.where((r) => !forbidden.contains(r)).toList();
+
+      // Sort by least recent usage
+      available.sort((a, b) {
+        int aIndex = history.indexOf(a);
+        int bIndex = history.indexOf(b);
+        if (aIndex == -1 && bIndex == -1) return a.compareTo(b); // both unused
+        if (aIndex == -1) return -1; // a is less used
+        if (bIndex == -1) return 1; // b is less used
+        return aIndex.compareTo(bIndex);
+      });
+
+      // Pick best candidate
+      int next = available.isNotEmpty ? available.first : 6; // fallback to 6
+      result.add(next);
+
+      // Prepend to history to simulate it becoming the most recent
+      history.insert(0, next);
+    }
+
+    return result;
+  }
+
+
+  static int updateRepTarget(String exerciseName, String weightText, String rirText, int plannedIndex)
+  {
     if (exerciseName.isEmpty) return 6; // ✅ Default to 6 if no exercise is selected
 
     // ✅ Check if the user has entered a weight
@@ -317,43 +381,72 @@ class PeriodizationModelUtils {
     }
 
     // ✅ If no weight entered, return default suggested rep target
-    return getSuggestedRepTarget(exerciseName);
+    return upcomingRepTargetSequence(exerciseName, plannedIndex + 1).last;
+
   }
 
 
 
-  static double getSuggestedWeight(String exerciseName, TextEditingController repsController, TextEditingController rirController) {
+  static double getSuggestedWeight(
+      String exerciseName,
+      TextEditingController repsController,
+      TextEditingController rirController,
+      int plannedIndex,
+      ) {
     if (!exercisePreviousE1RMs.containsKey(exerciseName) || exercisePreviousE1RMs[exerciseName]!.isEmpty) {
-      return 20.0; // ✅ Default weight if no history
+      return 20.0;
     }
 
-    // ✅ Get the last average of last 4 E1RMs (or fewer if not available)
     double avgE1RM = getAverageE1RM(exerciseName);
 
-    // ✅ Get reps and RIR from UI (or use default values)
-    int reps = int.tryParse(repsController.text) ?? getSuggestedRepTarget(exerciseName);
-    double rir = double.tryParse(rirController.text) ?? 0.5; // ✅ Default RIR is 0.5 if not entered
+    // ✅ Use upcoming rep target based on the planned index
+    int reps = int.tryParse(repsController.text) ??
+        upcomingRepTargetSequence(exerciseName, plannedIndex + 1).last;
+    double rir = double.tryParse(rirController.text) ?? 0.5;
     double effectiveReps = reps + rir;
 
     double suggestedWeight;
 
     if (effectiveReps <= 6) {
-      // ✅ Use Brzycki formula for lower rep ranges
       suggestedWeight = avgE1RM * (37 - effectiveReps) / 36;
     } else {
-      // ✅ Use Epley formula for higher rep ranges
       suggestedWeight = avgE1RM / (1 + (0.0333 * effectiveReps));
     }
 
-    // ✅ Prevent negative or too-low weight
     suggestedWeight = suggestedWeight.clamp(2.5, double.infinity);
-
-    // ✅ Round to the nearest 2.5kg increment
     return (suggestedWeight / 2.5).round() * 2.5;
   }
 
+
+  static double getSuggestedWeightFromRep(String exerciseName, int reps, double rir) {
+    final e1rms = exercisePreviousE1RMs[exerciseName];
+    if (e1rms == null || e1rms.isEmpty) return 20.0;
+
+    final recent = e1rms.take(4).toList();
+    final avgE1RM = recent.reduce((a, b) => a + b) / recent.length;
+    final effectiveReps = reps + rir;
+
+    double suggestedWeight;
+
+    if (effectiveReps <= 6) {
+      suggestedWeight = avgE1RM * (37 - effectiveReps) / 36;
+    } else {
+      suggestedWeight = avgE1RM / (1 + 0.0333 * effectiveReps);
+    }
+
+    return (suggestedWeight / 2.5).round() * 2.5; // round to nearest 2.5kg
+  }
+
+
+
   static void updateWeight(
-      String exerciseName, TextEditingController weightController, TextEditingController repsController, TextEditingController rirController) {
+      String exerciseName,
+      TextEditingController weightController,
+      TextEditingController repsController,
+      TextEditingController rirController,
+      int plannedIndex,
+      )
+  {
 
     if (!exercisePreviousE1RMs.containsKey(exerciseName) ||
         exercisePreviousE1RMs[exerciseName]!.isEmpty) {
@@ -365,7 +458,11 @@ class PeriodizationModelUtils {
     double avgE1RM = getAverageE1RM(exerciseName);
 
     // ✅ Get reps and RIR from UI (or use defaults)
-    int reps = int.tryParse(repsController.text) ?? getSuggestedRepTarget(exerciseName);
+    int reps = int.tryParse(repsController.text) ??
+        getSuggestedRepTarget(
+          exerciseName,
+          plannedIndex: plannedIndex,
+        );
     double rir = double.tryParse(rirController.text) ?? 0.5; // Default RIR if none entered
     double effectiveReps = reps + rir;
 

@@ -284,12 +284,22 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
 
   int getSuggestedRepTarget(int exerciseIndex, int setIndex, {double? weight}) {
-    // ✅ Get the selected exercise name
     String exerciseName = _selectedExercises[exerciseIndex];
 
-    // ✅ Use the global function from PeriodizationModelUtils
-    return PeriodizationModelUtils.getSuggestedRepTarget(exerciseName);
+    // 🔢 Count how many times this exercise appears before the current set
+    int plannedCountBefore = 0;
+    for (int i = 0; i < setIndex; i++) {
+      if (_selectedExercises[i] == exerciseName) {
+        plannedCountBefore++;
+      }
+    }
+
+    return PeriodizationModelUtils.getSuggestedRepTarget(
+      exerciseName,
+      plannedIndex: plannedCountBefore,
+    );
   }
+
 
 
 
@@ -344,7 +354,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
     }
 
     // ✅ Otherwise, return suggested rep target
-    return getSuggestedRepTarget(exerciseIndex, 0).toDouble();
+    return PeriodizationModelUtils.upcomingRepTargetSequence(exerciseName, 1).first.toDouble();
   }
 
 
@@ -1023,8 +1033,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
                 context: context,
                 builder: (BuildContext context) {
                   return AlertDialog(
-                    title: const Text('Clear Workout'),
-                    content: const Text('Delete this workout?'),
+                    title: const Text('Clear Workout', style: TextStyle(fontFamily: 'Verdana', color: Colors.white),),
+                    content: const Text('Delete this workout?', style: TextStyle(fontFamily: 'Verdana', color: Colors.white),),
                     actions: <Widget>[
                       TextButton(
                         onPressed: () => Navigator.of(context).pop(),
@@ -1063,8 +1073,12 @@ class _WorkoutPageState extends State<WorkoutPage> {
           children: [
             TextField(
               controller: _workoutNameController,
-              decoration: const InputDecoration(
+              decoration: InputDecoration( // ✅ remove `const`
                 labelText: 'Workout Name',
+                labelStyle: const TextStyle(color: Colors.white),
+                filled: true,
+                fillColor: Colors.blueGrey.shade900, // ✅ works now
+                border: OutlineInputBorder(borderSide: BorderSide.none),
               ),
             ),
 
@@ -1073,10 +1087,13 @@ class _WorkoutPageState extends State<WorkoutPage> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Date: ${DateFormat('yMMMd').format(_selectedDate)}'),
+                Text('Date: ${DateFormat('yMMMd').format(_selectedDate)}',style: TextStyle(fontFamily: 'Verdana', color: Colors.white),),
                 ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blueGrey, // 👈 Change this to any color you like
+                  ),
                   onPressed: () => _selectDate(context),
-                  child: const Text('Select Date'),
+                  child: const Text('Select Date', style: TextStyle(fontFamily: 'Verdana', color: Colors.black),),
                 ),
               ],
             ),
@@ -1085,14 +1102,14 @@ class _WorkoutPageState extends State<WorkoutPage> {
               Column(
                 children: [
                   const Text(
-                      'No exercises selected yet. Add some to get started.'),
+                      'No exercises selected yet. Add some to get started.', style: TextStyle(fontFamily: 'Verdana', color: Colors.white),),
                   const SizedBox(height: 10.0),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
                       ElevatedButton(
                         onPressed: _navigateToTemplateSelection,
-                        child: const Text('Load Template'),
+                        child: const Text('Load Template', style: TextStyle(fontFamily: 'Verdana', color: Colors.black),),
                       ),
                     ],
                   ),
@@ -1101,25 +1118,36 @@ class _WorkoutPageState extends State<WorkoutPage> {
             for (int i = 0; i < _selectedExercises.length; i++)
               Card(
                 color: Colors.blueGrey.shade700,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                margin: const EdgeInsets.only(left: 0, top: 4, right: 0, bottom: 0),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(3)),
+                margin: const EdgeInsets.only(left: 0, top: 2, right: 0, bottom: 0),
                 child: ExpansionTile(
-                  title: Text(_selectedExercises[i]),
+                  title: Text(_selectedExercises[i],
+                    style:  TextStyle(
+                      color: Colors.grey.shade300, // Or any other color you want
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min, // ✅ Prevents overflow
                     children: [
                       IconButton(
                         icon: const Icon(Icons.info_outline),
+                        color: Colors.blueGrey, // 👈 change to whatever color you want
                         onPressed: () {
                           _navigateToExerciseDetails(_selectedExercises[i]);
                         },
                       ),
                       const SizedBox(width: 4), // ✅ Adds spacing between buttons
                       ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blueGrey, // 👈 Change this to any color you like
+                        ),
                         onPressed: () {
                           _navigateToTopSets(_selectedExercises[i]); // ✅ Call the function
                         },
-                        child: const Text('Top Sets'),
+                        child:  Text('Top Sets', style: TextStyle(fontFamily: 'Verdana', color: Colors.blueGrey.shade900, // Deep Blue
+                        ) ),
                       ),
 
                     ],
@@ -1135,9 +1163,9 @@ class _WorkoutPageState extends State<WorkoutPage> {
                             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                           ),
 
-                          SizedBox(width: 8.0),
+                          SizedBox(width: 4.0),
                           Text(
-                            ' ${getAverageE1RM(_selectedExercises[i]).toStringAsFixed(1)} kg', // ✅ Now passing exercise name
+                            ' Avg E1RM:${getAverageE1RM(_selectedExercises[i]).toStringAsFixed(1)} kg', // ✅ Now passing exercise name
                             style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.blue),
                           ),
 
@@ -1161,6 +1189,18 @@ class _WorkoutPageState extends State<WorkoutPage> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            if (j == 0)
+                              Padding(
+                                padding: const EdgeInsets.only(left: 6.0, bottom: 4.0),
+                                child: Text(
+                                  'Upcoming Rep Targets: ${PeriodizationModelUtils.upcomingRepTargetSequence(_selectedExercises[i], 7).join(", ")}',
+                                  style: const TextStyle(
+                                    fontSize: 10.0,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.orange,
+                                  ),
+                                ),
+                              ),
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
@@ -1173,6 +1213,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                         Row(
                                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                           children: [
+
                                             Row(
                                               children: [
                                                 Text(
@@ -1180,6 +1221,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                                   style: const TextStyle(
                                                     fontWeight: FontWeight.bold,
                                                     fontSize: 12.0,
+                                                    color:Colors.black ,
                                                   ),
                                                 ),
                                                 const SizedBox(width: 6), // Small spacing
@@ -1217,24 +1259,24 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                 const Expanded(
                                     child: Text('Weight',
                                         textAlign: TextAlign.left,
-                                        style: TextStyle(fontSize: 10.0))),
+                                        style: TextStyle(fontSize: 10.0, color: Colors.black, fontWeight: FontWeight.bold))),
                                 const SizedBox(width: 4.0), // Reduce spacing for more room
                                 const Expanded(
                                     child: Text('Reps',
                                         textAlign: TextAlign.left,
-                                        style: TextStyle(fontSize: 10.0))),
+                                        style: TextStyle(fontSize: 10.0,  color: Colors.black, fontWeight: FontWeight.bold))),
                                 const SizedBox(width: 4.0), // Reduce spacing for more room
                                 const Expanded(
                                     child: Text('RIR',
                                         textAlign: TextAlign.left,
-                                        style: TextStyle(fontSize: 10.0))),
+                                        style: TextStyle(fontSize: 10.0,  color: Colors.black, fontWeight: FontWeight.bold))),
                                 const SizedBox(width: 4.0), // Reduce spacing for more room
 
                                 // ✅ E1RM label (same level as the other headers)
                                 const Expanded(
                                     child: Text('E1RM',
                                         textAlign: TextAlign.left,
-                                        style: TextStyle(fontSize: 10.0, fontWeight: FontWeight.normal))),
+                                        style: TextStyle(fontSize: 10.0, fontWeight: FontWeight.bold))),
                               ],
                             ),
                             const SizedBox(height: 0.0),
@@ -1265,7 +1307,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                       setState(() {});
                                     },
                                     style: TextStyle(
-                                      color: _weightControllers[i][j].text.isEmpty ? Colors.grey : Colors.black,
+                                      color: _weightControllers[i][j].text.isEmpty ? Colors.grey : Colors.white,
                                     ),
                                   ),
                                 ),
@@ -1297,7 +1339,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                       setState(() {});
                                     },
                                     style: TextStyle(
-                                      color: _repsControllers[i][j].text.isEmpty ? Colors.grey : Colors.black,
+                                      color: _repsControllers[i][j].text.isEmpty ? Colors.grey : Colors.white,
                                     ),
                                   ),
 
@@ -1327,7 +1369,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                       setState(() {});
                                     },
                                     style: TextStyle(
-                                      color: _rirControllers[i][j].text.isEmpty ? Colors.grey : Colors.black,
+                                      color: _rirControllers[i][j].text.isEmpty ? Colors.grey : Colors.white,
                                     ),
                                   ),
                                 ),
@@ -1361,7 +1403,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                       color: (_weightControllers[i][j].text.isNotEmpty ||
                                           _repsControllers[i][j].text.isNotEmpty ||
                                           _rirControllers[i][j].text.isNotEmpty)
-                                          ? Colors.black
+                                          ? Colors.white
                                           : Colors.grey,
                                     ),
                                   ),

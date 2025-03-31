@@ -306,6 +306,68 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     print("🧼 All block data deleted.");
   }
 
+  Future<void> deleteBlockBuilderDataOnly() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final currentBlockDoc = FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('block_data')
+        .doc('current_block');
+
+    final weeksSnapshot = await currentBlockDoc.collection('weeks').get();
+
+    for (final weekDoc in weeksSnapshot.docs) {
+      final daysSnapshot = await weekDoc.reference.collection('days').get();
+      for (final dayDoc in daysSnapshot.docs) {
+        await dayDoc.reference.delete();
+      }
+      await weekDoc.reference.delete();
+    }
+
+    await currentBlockDoc.delete(); // Optional: keep this if you want to remove the doc shell
+    print("🧼 BlockBuilder-only data deleted.");
+  }
+
+  void clearDay(int weekIndex, int dayIndex) {
+    setState(() {
+      for (int i = 0; i < exercisesPerDay; i++) {
+        exerciseSelection[weekIndex][dayIndex][i] = null;
+        _getController(exerciseControllers, weekIndex, dayIndex, i).clear();
+        _getController(weightControllers, weekIndex, dayIndex, i).clear();
+        _getController(repsControllers, weekIndex, dayIndex, i).clear();
+        _getController(rirControllers, weekIndex, dayIndex, i).clear();
+      }
+    });
+
+    // Optional: delete it from Firestore too
+    saveDayToFirestore(weekIndex, dayIndex);
+  }
+
+
+
+  int getExercisePlannedCountBefore(String exerciseName, int targetWeek, int targetDay, int targetRow) {
+    int count = 0;
+
+    for (int w = 0; w <= targetWeek; w++) {
+      for (int d = 0; d < 7; d++) {
+        if (w == targetWeek && d > targetDay) break;
+
+        for (int r = 0; r < exercisesPerDay; r++) {
+          if (w == targetWeek && d == targetDay && r >= targetRow) break;
+
+          final name = exerciseSelection[w][d][r];
+          if (name == exerciseName) {
+            count++;
+          }
+        }
+      }
+    }
+
+    return count;
+  }
+
 
 
   //Horizontal scroll to current week
@@ -391,7 +453,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
 
   Widget _buildExerciseRow(int weekIndex, int dayIndex, int rowIndex) {
-    final exerciseName = _getController(exerciseControllers, weekIndex, dayIndex, rowIndex).text;
+
 
     final weightController = _getController(weightControllers, weekIndex, dayIndex, rowIndex);
     final repsController = _getController(repsControllers, weekIndex, dayIndex, rowIndex);
@@ -399,24 +461,46 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
     return StatefulBuilder(
       builder: (context, localSetState) {
+        final exerciseName = _getController(exerciseControllers, weekIndex, dayIndex, rowIndex).text;
         // Parse values (or null if not present)
         final double? weight = double.tryParse(weightController.text);
         final int? reps = int.tryParse(repsController.text);
         final double? rir = double.tryParse(rirController.text);
 
         // Hint logic (only when field is empty)
+        int hintReps = 0;
+        if (repsController.text.isEmpty && exerciseName.isNotEmpty) {
+          final plannedIndex = getExercisePlannedCountBefore(exerciseName, weekIndex, dayIndex, rowIndex);
+          if (weightController.text.isNotEmpty) {
+            // Calculate reps from weight input and correct sequence index
+            hintReps = PeriodizationModelUtils.updateRepTarget(
+              exerciseName,
+              weightController.text,
+              rirController.text,
+              plannedIndex,
+            );
+          } else {
+            // Use rep target from sequence based on planned position
+            hintReps = PeriodizationModelUtils.upcomingRepTargetSequence(
+              exerciseName,
+              plannedIndex + 1,
+            ).last;
+          }
+        }
+
+
+
+        final int plannedIndex = getExercisePlannedCountBefore(exerciseName, weekIndex, dayIndex, rowIndex);
+
         final double hintWeight = (weightController.text.isEmpty && exerciseName.isNotEmpty)
             ? PeriodizationModelUtils.getSuggestedWeight(
-            exerciseName, repsController, rirController)
+          exerciseName,
+          repsController,
+          rirController,
+          plannedIndex,
+        )
             : 0.0;
 
-        final int hintReps = (repsController.text.isEmpty && exerciseName.isNotEmpty)
-            ? PeriodizationModelUtils.getSuggestedRepTarget(
-          exerciseName,
-          weightText: weightController.text,
-          rirText: rirController.text,
-        )
-            : 0;
 
         final double? e1rm = PeriodizationModelUtils.calculateE1RM(
           weight ?? (weightController.text.isEmpty ? hintWeight : null),
@@ -464,8 +548,14 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                       localSetState(() {
                         exerciseSelection[weekIndex][dayIndex][rowIndex] = selected;
                         exerciseControllers[weekIndex][dayIndex][rowIndex].text = selected;
+
+                        // Clear fields so that hintText logic can apply
+                        repsControllers[weekIndex][dayIndex][rowIndex].clear();
+                        weightControllers[weekIndex][dayIndex][rowIndex].clear();
+                        rirControllers[weekIndex][dayIndex][rowIndex].clear(); // ❗ remove "0.5"
                       });
                     }
+
                   },
                   child: Container(
                     width: 114,
@@ -564,7 +654,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         );
       },
     );
-    print("🔥 Building row $rowIndex of day $dayIndex, week $weekIndex");
+
   }
 
 
@@ -611,16 +701,51 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
-                    Text(
-                      "Week ${weekIndex + 1}", // 🟡 Week label
-                      style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white70,
-                      ),
+                    Row(
+                      children: [
+                        Text(
+                          "Week ${weekIndex + 1}",
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white70,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        IconButton(
+                          icon: const Icon(Icons.delete_sweep_outlined),
+                          color: Colors.white,
+                          tooltip: "Clear this day",
+                          iconSize: 16,
+                          padding: EdgeInsets.zero,
+                          constraints: BoxConstraints(),
+                          onPressed: () {
+                            showDialog(
+                              context: context,
+                              builder: (ctx) => AlertDialog(
+                                title: const Text("Clear this day?"),
+                                content: const Text("This will remove all exercises from this day."),
+                                actions: [
+                                  TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
+                                  TextButton(
+                                    onPressed: () {
+                                      Navigator.pop(ctx);
+                                      clearDay(weekIndex, dayIndex);
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(content: Text("✅ Day cleared.")),
+                                      );
+                                    },
+                                    child: const Text("Yes"),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ],
                     ),
                     Text(
-                      dayLabel, // 🟡 Date label below it
+                      dayLabel,
                       style: const TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.bold,
@@ -629,6 +754,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                     ),
                   ],
                 ),
+
+
                 const Spacer(),
 
                 // 🟡 Buttons
@@ -894,6 +1021,41 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
               }
             },
           ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            tooltip: "Delete BlockBuilder Only",
+            onPressed: () async {
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (_) => AlertDialog(
+                  title: Text("Clear Block Builder?"),
+                  content: Text("This will delete all exercise planning from BlockBuilder, but not any workouts you've done."),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(context, false), child: Text("Cancel")),
+                    TextButton(onPressed: () => Navigator.pop(context, true), child: Text("Yes")),
+                  ],
+                ),
+              );
+
+              if (confirm == true) {
+                await deleteBlockBuilderDataOnly();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('🧼 BlockBuilder data deleted.')),
+                );
+
+                setState(() {
+                  exerciseControllers.clear();
+                  weightControllers.clear();
+                  repsControllers.clear();
+                  rirControllers.clear();
+                  selectedTemplateIds = List.generate(initialWeeks, (_) => List.generate(7, (_) => null));
+                  exerciseSelection = List.generate(initialWeeks, (_) => List.generate(7, (_) => List.filled(exercisesPerDay, null)));
+                  scheduledRepTargets.clear();
+                });
+              }
+            },
+          ),
+
         ],
       ),
 

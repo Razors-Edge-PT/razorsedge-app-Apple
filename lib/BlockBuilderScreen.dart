@@ -101,6 +101,8 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
 
 
 
+
+
   DateTime _getMostRecentMonday() {
     DateTime now = DateTime.now();
     int daysSinceMonday = now.weekday - DateTime.monday;
@@ -216,6 +218,8 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
       },
     );
   }
+
+
 
   void showAddNotesDialog(BuildContext context) {
     TextEditingController weightController = TextEditingController();
@@ -398,6 +402,8 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
       },
     );
   }
+
+
 
   Widget buildWeekWidget(int weekIndex, int dayIndex) {
     DateTime currentDayDate = selectedWeekMonday.add(Duration(days: weekIndex * 7 + dayIndex));
@@ -589,6 +595,26 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
     ];
 
     return rowColors[(rowIndex ~/ 3) % rowColors.length]; // Cycles every 3 rows
+  }
+
+  int getExercisePlannedCountBefore(String exerciseName, int weekIndex, int dayIndex, int rowIndex) {
+    int count = 0;
+
+    for (int w = 0; w <= weekIndex; w++) {
+      for (int d = 0; d < 7; d++) {
+        if (w == weekIndex && d > dayIndex) break;
+
+        for (int r = 0; r < 11; r++) {
+          if (w == weekIndex && d == dayIndex && r >= rowIndex) break;
+
+          if (exerciseSelection[w][d][r] == exerciseName) {
+            count++;
+          }
+        }
+      }
+    }
+
+    return count;
   }
 
   @override
@@ -956,7 +982,14 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
                                                                     exerciseSelection[weekIndex][dayIndex][rowIndex]!,
                                                                     _repsControllers[dayIndex][rowIndex],
                                                                     _rirControllers[dayIndex][rowIndex],
-                                                                  ).toStringAsFixed(1) // ✅ Only show hint if weight field is empty
+                                                                    getExercisePlannedCountBefore(
+                                                                      exerciseSelection[weekIndex][dayIndex][rowIndex]!,
+                                                                      weekIndex,
+                                                                      dayIndex,
+                                                                      rowIndex,
+                                                                    ),
+                                                                  ).toStringAsFixed(1)
+                                                                  // ✅ Only show hint if weight field is empty
                                                                       : '',
                                                                   hintStyle: const TextStyle(color: Colors.grey, fontStyle: FontStyle.italic, fontSize: 12),
                                                                   border: OutlineInputBorder(),
@@ -1008,8 +1041,15 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
                                                                         _rirControllers[dayIndex].asMap().containsKey(rowIndex))
                                                                         ? _rirControllers[dayIndex][rowIndex].text
                                                                         : "0",
+                                                                    getExercisePlannedCountBefore(
+                                                                      exerciseSelection[weekIndex][dayIndex][rowIndex]!,
+                                                                      weekIndex,
+                                                                      dayIndex,
+                                                                      rowIndex,
+                                                                    ),
                                                                   ).toString()
                                                                       : '',
+
                                                                   hintStyle: const TextStyle(color: Colors.grey, fontStyle: FontStyle.italic, fontSize: 12),
                                                                   border: OutlineInputBorder(),
                                                                   filled: true,
@@ -1074,16 +1114,33 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
                                                                   text: PeriodizationModelUtils.calculateE1RM(
                                                                     double.tryParse(_weightControllers[dayIndex][rowIndex].text) ??
                                                                         PeriodizationModelUtils.getSuggestedWeight(
+                                                                          exerciseSelection[weekIndex][dayIndex][rowIndex] ?? '',
+                                                                          _repsControllers[dayIndex][rowIndex],
+                                                                          _rirControllers[dayIndex][rowIndex],
+                                                                          getExercisePlannedCountBefore(
                                                                             exerciseSelection[weekIndex][dayIndex][rowIndex] ?? '',
-                                                                            _repsControllers[dayIndex][rowIndex],
-                                                                            _rirControllers[dayIndex][rowIndex]),
+                                                                            weekIndex,
+                                                                            dayIndex,
+                                                                            rowIndex,
+                                                                          ),
+                                                                        ),
                                                                     (int.tryParse(_repsControllers[dayIndex][rowIndex].text) ??
                                                                         PeriodizationModelUtils.updateRepTarget(
+                                                                          exerciseSelection[weekIndex][dayIndex][rowIndex] ?? '',
+                                                                          _weightControllers[dayIndex][rowIndex].text,
+                                                                          _rirControllers[dayIndex][rowIndex].text,
+                                                                          getExercisePlannedCountBefore(
                                                                             exerciseSelection[weekIndex][dayIndex][rowIndex] ?? '',
-                                                                            _weightControllers[dayIndex][rowIndex].text,
-                                                                            _rirControllers[dayIndex][rowIndex].text)).toDouble(),
-                                                                    double.tryParse(_rirControllers[dayIndex][rowIndex].text) ?? 0.5, // ✅ Default RIR hint
+                                                                            weekIndex,
+                                                                            dayIndex,
+                                                                            rowIndex,
+                                                                          ),
+                                                                        )
+                                                                    ).toDouble(),
+
+                                                                    double.tryParse(_rirControllers[dayIndex][rowIndex].text) ?? 0.5,
                                                                   ).toStringAsFixed(1),
+
                                                                 ),
                                                                 readOnly: true, // ✅ Prevents user input
                                                                 textAlign: TextAlign.center,
