@@ -7,12 +7,71 @@ import 'workout_entry_screen.dart';
 import 'periodization_model_utils.dart';
 import 'core_exercises.dart';
 
+
+// 🧠 Group exercises by category for dropdown UI
+Map<String, List<String>> groupExercisesByCategory(List<Map<String, String>> allExercises) {
+  const desiredOrder = [
+    'Horizontal Press',
+    'Horizontal Pull',
+    'Squat Pattern',
+
+    'Vertical Press',
+    'Lateral Raise',
+    'Vertical Pull',
+    'Hip Hinge',
+
+    'Arm Extension',
+    'Arm Curl',
+    'Core',
+    'Calf Raise',
+  ];
+
+  // Create raw grouping
+  final Map<String, List<String>> grouped = {};
+  for (final exercise in allExercises) {
+    final category = exercise['category'] ?? 'Other';
+    final name = exercise['name'] ?? 'Unnamed';
+
+    grouped.putIfAbsent(category, () => []);
+    grouped[category]!.add(name);
+  }
+
+  // Sort each group alphabetically
+  for (final group in grouped.values) {
+    group.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+  }
+
+  // Build ordered output map
+  final Map<String, List<String>> orderedGrouped = {};
+  for (final category in desiredOrder) {
+    if (grouped.containsKey(category)) {
+      orderedGrouped[category] = grouped[category]!;
+    }
+  }
+
+  // Include any extra categories not in desiredOrder
+  for (final entry in grouped.entries) {
+    if (!orderedGrouped.containsKey(entry.key)) {
+      orderedGrouped[entry.key] = entry.value;
+    }
+  }
+
+  return orderedGrouped;
+}
+
+// Near the top of your file (outside of any class or method):
+const double exerciseRowHeight = 36.0;
+const double circuitEndRowHeight = 70.0;
+
+
+
 class BlockBuilder2 extends StatefulWidget {
   const BlockBuilder2({super.key});
 
   @override
   State<BlockBuilder2> createState() => _BlockBuilder2State();
 }
+
 
 class _BlockBuilder2State extends State<BlockBuilder2> {
   final int initialWeeks = 12;
@@ -29,14 +88,16 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   List<List<List<TextEditingController>>> e1rmControllers = [];
   final ScrollController _horizontalScrollController = ScrollController();
   final ScrollController _verticalScrollController = ScrollController();
-  List<String> allExerciseNames = [];
   Map<String, List<int>> scheduledRepTargets = {}; // 🆕
+
+
+
 
 
   late DateTime selectedWeekMonday;
   late DateTime blockStartDate;
 
-  final double exerciseRowHeight = 36; // 👈 Try 32–40 for compact rows
+
 
   List<int> weekIndices = [];
 
@@ -56,6 +117,22 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       setState(() {}); // Trigger rebuild once loaded
     }
   }
+
+  Map<String, List<String>> groupedExercises = {};
+
+  Future<void> loadExercisesFromFirestore() async {
+    final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
+    final exercises = snapshot.docs.map((doc) => {
+      'name': doc['name'] as String,
+      'category': doc['category'] as String,
+      'bodyPart': doc['bodyPart'] as String,
+    }).toList();
+
+    setState(() {
+      groupedExercises = groupExercisesByCategory(exercises);
+    });
+  }
+
 
   @override
   void initState() {
@@ -84,7 +161,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     );
 
     _fetchTemplates();
-    _fetchAvailableExercises(); // ✅ Fire this here
+
+    loadExercisesFromFirestore(); // ✅ NEW: Firestore-only fetch (non-blocking)
 
     selectedTemplateIds = List.generate(
       initialWeeks,
@@ -118,26 +196,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     super.dispose();
   }
 
-  Future<void> _fetchAvailableExercises() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
 
-    // Fetch user-defined exercises from Firestore
-    final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
-    final firestoreExercises = snapshot.docs.map((doc) => doc['name'] as String).toList();
 
-    // Combine with core exercises (no duplicates)
-    final combinedExercises = {
-      ...coreExercises.map((e) => e['name'] as String),
-      ...firestoreExercises,
-    }.toList();
-
-    combinedExercises.sort(); // Optional: Alphabetical sort
-
-    setState(() {
-      allExerciseNames = combinedExercises;
-    });
-  }
 
 
 
@@ -201,6 +261,41 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       return Colors.blueGrey.shade800;
     }
   }
+  bool _isLastOfColorBlock(int rowIndex, int dayIndex, int weekIndex) {
+    final currentColor = getRowColor(rowIndex);
+    final totalRows = exerciseSelection[weekIndex][dayIndex].length;
+
+    if (rowIndex >= totalRows - 1) return true;
+
+    final nextColor = getRowColor(rowIndex + 1);
+    return currentColor != nextColor;
+  }
+
+  void _addCircuitRowBelow(int weekIndex, int dayIndex, int rowIndex) {
+    setState(() {
+      final colorToMaintain = getRowColor(rowIndex);
+
+      // Insert one row below the current row
+      final insertIndex = rowIndex + 1;
+
+      exerciseSelection[weekIndex][dayIndex]
+          .insert(insertIndex, null);
+      exerciseControllers[weekIndex][dayIndex]
+          .insert(insertIndex, TextEditingController());
+      weightControllers[weekIndex][dayIndex]
+          .insert(insertIndex, TextEditingController());
+      repsControllers[weekIndex][dayIndex]
+          .insert(insertIndex, TextEditingController());
+      rirControllers[weekIndex][dayIndex]
+          .insert(insertIndex, TextEditingController());
+
+      // If needed, update any other structures like hint maps or saved state
+
+      // Optionally scroll to the new row or give visual feedback
+    });
+  }
+
+
 
 
   Future<void> loadBlockDataFromFirestore() async {
@@ -477,7 +572,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
   Widget _buildExerciseRow(int weekIndex, int dayIndex, int rowIndex) {
 
-
     final weightController = _getController(weightControllers, weekIndex, dayIndex, rowIndex);
     final repsController = _getController(repsControllers, weekIndex, dayIndex, rowIndex);
     final rirController = _getController(rirControllers, weekIndex, dayIndex, rowIndex);
@@ -510,9 +604,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             ).last;
           }
         }
-
-
-
         final int plannedIndex = getExercisePlannedCountBefore(exerciseName, weekIndex, dayIndex, rowIndex);
 
         final double hintWeight = (weightController.text.isEmpty && exerciseName.isNotEmpty)
@@ -531,8 +622,10 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           rir ?? (rirController.text.isEmpty ? 0.5 : null),
         );
 //Colors.blueGrey.shade800,
+        final bool isLastOfColor = _isLastOfColorBlock(rowIndex, dayIndex, weekIndex);
         return Container(
-          height: exerciseRowHeight,
+          height: isLastOfColor ? circuitEndRowHeight : exerciseRowHeight,
+
           padding: const EdgeInsets.symmetric(horizontal: 2),
           decoration: BoxDecoration(
             color: getRowColor(rowIndex),
@@ -542,6 +635,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             ),
           ),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+
             children: [
               // Exercise
               Expanded(
@@ -560,12 +655,29 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                     String? selected = await showMenu<String>(
                       context: context,
                       position: position,
-                      items: allExerciseNames.map((value) {
-                        return PopupMenuItem<String>(
-                          value: value,
-                          child: Text(value, style: const TextStyle(fontSize: 13)),
-                        );
+                      items: groupedExercises.entries.expand((entry) {
+                        final category = entry.key;
+                        final exercises = entry.value;
+
+                        return [
+                          PopupMenuItem<String>(
+                            enabled: false,
+                            child: Text(
+                              category,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.grey,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                          ...exercises.map((name) => PopupMenuItem<String>(
+                            value: name,
+                            child: Text(name, style: const TextStyle(fontSize: 13)),
+                          )),
+                        ];
                       }).toList(),
+
                     );
 
                     if (selected != null) {
@@ -576,7 +688,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                         // Clear fields so that hintText logic can apply
                         repsControllers[weekIndex][dayIndex][rowIndex].clear();
                         weightControllers[weekIndex][dayIndex][rowIndex].clear();
-                        rirControllers[weekIndex][dayIndex][rowIndex].clear(); // ❗ remove "0.5"
+                        rirControllers[weekIndex][dayIndex][rowIndex].clear(); //
                       });
                     }
 
@@ -660,18 +772,43 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
               ),
 
               // E1RM (as plain text for performance)
+              // E1RM with Add Button
               Expanded(
                 flex: 2,
                 child: Container(
                   alignment: Alignment.center,
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Text(
-                    e1rm != null && e1rm > 0 ? e1rm.toStringAsFixed(1) : '',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                  child: Stack(
+                    children: [
+                      // E1RM stays centered
+                      Align(
+                        alignment: Alignment.center,
+                        child: Text(
+                          e1rm != null && e1rm > 0 ? e1rm.toStringAsFixed(1) : '',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.white, fontSize: 12),
+                        ),
+                      ),
+                      // Add button slightly below center (approx 5px below E1RM visually)
+                      if (isLastOfColor)
+                        Positioned(
+                          top: (circuitEndRowHeight / 2) + 5, // Move 5px below vertical center
+                          right: 0,
+                          child: IconButton(
+                            icon: const Icon(Icons.add_circle, size: 18, color: Colors.white70),
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                            onPressed: () {
+                              _addCircuitRowBelow(weekIndex, dayIndex, rowIndex);
+                            },
+                          ),
+                        ),
+                    ],
                   ),
                 ),
               ),
+
+
+
 
             ],
           ),
@@ -974,16 +1111,16 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             // 🟣 Scrollable Exercise Table (~6.5 visible rows)
             const SizedBox(height: 6),
             SizedBox(
-              height: 220, // Enough to show 6.5 rows
+              height: 220,
               child: ListView.builder(
                 physics: const BouncingScrollPhysics(),
                 itemCount: exercisesPerDay,
-                itemExtent: exerciseRowHeight, // 👈 Fixed height per row (36)
-                cacheExtent: 220,              // 👈 Just enough to cache 6.5 rows
+                cacheExtent: 220,
                 itemBuilder: (context, rowIndex) =>
                     _buildExerciseRow(weekIndex, dayIndex, rowIndex),
               ),
             ),
+
 
           ],
         ),
