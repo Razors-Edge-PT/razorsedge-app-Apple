@@ -2,7 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-
+import 'core_exercises.dart';
 import 'body_weight_tracker.dart';
 import 'workout_details_screen.dart'; // Import workout details screen
 import 'workout_entry_screen.dart'; // Import workout entry screen
@@ -267,6 +267,18 @@ class _HomeScreenState extends State<HomeScreen> {
                             },
                             child: const Text('Add Workout'),
                           ),
+                         // const SizedBox(height: 20), // Space between buttons
+                         // ElevatedButton.icon(
+                           // icon: const Icon(Icons.cloud_upload),
+                          //  label: const Text('Upload Core Exercises to Firestore'),
+                           // style: ElevatedButton.styleFrom(
+                            //  backgroundColor: Colors.blueGrey.shade700,
+                             // foregroundColor: Colors.white,
+                           // ),
+                           // onPressed: () async {
+                           //   await uploadCoreExercisesToFirestore();
+                           // },
+                         // ),
                         ],
                       ),
                     ],
