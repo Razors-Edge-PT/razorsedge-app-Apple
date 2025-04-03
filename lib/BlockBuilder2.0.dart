@@ -89,11 +89,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   final ScrollController _horizontalScrollController = ScrollController();
   final ScrollController _verticalScrollController = ScrollController();
   Map<String, List<int>> scheduledRepTargets = {}; // 🆕
-
-
-
-
-
   late DateTime selectedWeekMonday;
   late DateTime blockStartDate;
 
