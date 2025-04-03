@@ -41,8 +41,35 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Re App',
       theme: ThemeData(
-        primarySwatch: Colors.blue,
+        brightness: Brightness.dark,
+        scaffoldBackgroundColor: Colors.blueGrey.shade900,
+        primaryColor: Colors.lightBlueAccent,
+        colorScheme: ColorScheme.dark(
+          primary: Colors.lightBlueAccent,
+          onPrimary: Colors.white,
+          surface: Colors.blueGrey.shade800,
+          onSurface: Colors.white,
+          background: Colors.blueGrey.shade900,
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.blueGrey.shade700,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+        ),
+        iconTheme: const IconThemeData(
+          color: Colors.white70,
+        ),
+        textTheme: const TextTheme(
+          bodyMedium: TextStyle(color: Colors.white),
+          labelLarge: TextStyle(color: Colors.white),
+        ),
       ),
+
       initialRoute: '/login',
       routes: {
         '/login': (context) => const LoginScreen(),

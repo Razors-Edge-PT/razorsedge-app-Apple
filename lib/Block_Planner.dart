@@ -23,53 +23,210 @@ class _BlockPlannerState extends State<Block_Planner> {
     'Deadlift, Conventional',
   ];
 
+  Map<String, List<String>> groupedExercises = {};
+
+  Future<void> loadExercisesFromFirestore() async {
+    final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
+    final exercises = snapshot.docs.map((doc) => {
+      'name': doc['name'] as String,
+      'category': doc['category'] as String,
+      'bodyPart': doc['bodyPart'] as String,
+    }).toList();
+
+    setState(() {
+      groupedExercises = groupExercisesByCategory(exercises);
+    });
+  }
+
+  // 🧠 Group exercises by category for dropdown UI
+  Map<String, List<String>> groupExercisesByCategory(List<Map<String, String>> allExercises) {
+    const desiredOrder = [
+      'Horizontal Press',
+      'Horizontal Pull',
+      'Vertical Press',
+      'Vertical Pull',
+      'Lateral Raise',
+      'Arm Extension',
+      'Arm Curl',
+      'Squat Pattern',
+      'Hip Hinge',
+      'Leg Extension',
+      'Leg Curl',
+      'Hip Abduction/adduction',
+      'Calf Raise',
+      'Core',
+    ];
+
+    // Create raw grouping
+    final Map<String, List<String>> grouped = {};
+    for (final exercise in allExercises) {
+      final category = exercise['category'] ?? 'Other';
+      final name = exercise['name'] ?? 'Unnamed';
+
+      grouped.putIfAbsent(category, () => []);
+      grouped[category]!.add(name);
+    }
+
+    // Sort each group alphabetically
+    for (final group in grouped.values) {
+      group.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    }
+
+    // Build ordered output map
+    final Map<String, List<String>> orderedGrouped = {};
+    for (final category in desiredOrder) {
+      if (grouped.containsKey(category)) {
+        orderedGrouped[category] = grouped[category]!;
+      }
+    }
+
+    // Include any extra categories not in desiredOrder
+    for (final entry in grouped.entries) {
+      if (!orderedGrouped.containsKey(entry.key)) {
+        orderedGrouped[entry.key] = entry.value;
+      }
+    }
+
+    return orderedGrouped;
+  }
+
   void _showExercisePickerDialog() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    // Fetch user-defined exercises
+    // 🔥 Fetch exercises from Firestore
     final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
-    final firestoreExercises = snapshot.docs.map((doc) => doc['name'] as String).toList();
+    final exercisesFromFirestore = snapshot.docs.map((doc) => {
+      'name': doc['name'] as String,
+      'category': doc['category'] as String,
+    }).toList();
 
-    // Combine with local core exercises
-    final allExercises = {
-      ...coreExercises.map((e) => e['name'] as String),
-      ...firestoreExercises,
-    }.toList();
+    // 🧠 Desired category order
+    const categoryOrder = [
+      'Horizontal Press',
+      'Horizontal Pull',
+      'Vertical Press',
+      'Vertical Pull',
+      'Lateral Raise',
+      'Arm Extension',
+      'Arm Curl',
+      'Squat Pattern',
+      'Hip Hinge',
+      'Leg Extension',
+      'Leg Curl',
+      'Hip Abduction/adduction',
+      'Calf Raise',
+      'Core',
+    ];
 
-    allExercises.sort();
+    // 🧩 Group exercises by category
+    final Map<String, List<String>> grouped = {};
+    for (final exercise in exercisesFromFirestore) {
+      final category = exercise['category'] ?? 'Other';
+      final name = exercise['name'] ?? 'Unnamed';
+      grouped.putIfAbsent(category, () => []).add(name);
+    }
+
+    // 🔠 Sort names within each group
+    for (final group in grouped.values) {
+      group.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    }
+
+    // 🧱 Ordered + any extras
+    final Map<String, List<String>> orderedGrouped = {};
+    for (final cat in categoryOrder) {
+      if (grouped.containsKey(cat)) {
+        orderedGrouped[cat] = grouped[cat]!;
+      }
+    }
+    for (final entry in grouped.entries) {
+      if (!orderedGrouped.containsKey(entry.key)) {
+        orderedGrouped[entry.key] = entry.value;
+      }
+    }
+
+    // 📦 Expand/collapse state
+    final Map<String, bool> expandedGroups = {
+      for (final category in orderedGrouped.keys) category: true
+    };
 
     final List<String> selected = await showDialog<List<String>>(
       context: context,
       builder: (ctx) {
-        List<String> selected = [...exercises]; // copy current state
-        return AlertDialog(
-          title: const Text("Select Exercises"),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: ListView(
-              children: allExercises.map((exerciseName) {
-                final isSelected = selected.contains(exerciseName);
-                return CheckboxListTile(
-                  value: isSelected,
-                  title: Text(exerciseName),
-                  onChanged: (checked) {
-                    if (checked == true) {
-                      selected.add(exerciseName);
-                    } else {
-                      selected.remove(exerciseName);
-                    }
-                    setState(() {}); // Force update during selection
-                  },
-                );
-              }).toList(),
+        List<String> tempSelected = [...exercises]; // Copy of selected exercises
+
+        return StatefulBuilder(builder: (context, setLocalState) {
+          return AlertDialog(
+            backgroundColor: Colors.blueGrey.shade900,
+            title: const Text(
+              "Select Exercises",
+              style: TextStyle(color: Colors.white),
             ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
-            TextButton(onPressed: () => Navigator.pop(ctx, selected), child: const Text("Save")),
-          ],
-        );
+            content: SizedBox(
+              width: double.maxFinite,
+              child: ListView(
+                children: orderedGrouped.entries.map((entry) {
+                  final category = entry.key;
+                  final exercises = entry.value;
+                  final isExpanded = expandedGroups[category] ?? true;
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ListTile(
+                        tileColor: Colors.blueGrey.shade800,
+                        title: Text(
+                          category,
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                        ),
+                        trailing: Icon(
+                          isExpanded ? Icons.expand_less : Icons.expand_more,
+                          color: Colors.white70,
+                        ),
+                        onTap: () {
+                          setLocalState(() {
+                            expandedGroups[category] = !isExpanded;
+                          });
+                        },
+                      ),
+                      if (isExpanded)
+                        ...exercises.map((name) {
+                          final isChecked = tempSelected.contains(name);
+                          return CheckboxListTile(
+                            value: isChecked,
+                            title: Text(name, style: const TextStyle(color: Colors.white)),
+                            controlAffinity: ListTileControlAffinity.leading,
+                            activeColor: Colors.lightBlueAccent,
+                            checkColor: Colors.black,
+                            onChanged: (checked) {
+                              setLocalState(() {
+                                if (checked == true) {
+                                  tempSelected.add(name);
+                                } else {
+                                  tempSelected.remove(name);
+                                }
+                              });
+                            },
+                          );
+                        }),
+                      const Divider(height: 10, color: Colors.grey),
+                    ],
+                  );
+                }).toList(),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text("Cancel"),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, tempSelected),
+                child: const Text("Save"),
+              ),
+            ],
+          );
+        });
       },
     ) ?? [];
 
@@ -77,6 +234,8 @@ class _BlockPlannerState extends State<Block_Planner> {
       exercises = selected;
     });
   }
+
+
 
 
   @override
@@ -147,8 +306,64 @@ class _BlockPlannerState extends State<Block_Planner> {
             ),
 
 
-            const SizedBox(height: 4),
-            ...exercises.map((e) => _buildExerciseCard(e)).toList(),
+            const SizedBox(height: 12),
+            SizedBox(
+              height: exercises.length * 100, // 👈 Tweak if your cards are taller/shorter
+              child: ReorderableListView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(), // Prevent internal scrolling
+                onReorder: (oldIndex, newIndex) {
+                  setState(() {
+                    if (newIndex > oldIndex) newIndex -= 1;
+                    final item = exercises.removeAt(oldIndex);
+                    exercises.insert(newIndex, item);
+                  });
+                },
+                itemCount: exercises.length,
+                itemBuilder: (context, index) {
+                  final exercise = exercises[index];
+                  return Dismissible(
+                    key: ValueKey(exercise),
+                    direction: DismissDirection.endToStart,
+                    onDismissed: (_) {
+                      final removedExercise = exercises[index];
+
+                      setState(() {
+                        exercises.removeAt(index);
+                      });
+
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Removed "${removedExercise}"'),
+                          action: SnackBarAction(
+                            label: 'Undo',
+                            textColor: Colors.amberAccent,
+                            onPressed: () {
+                              setState(() {
+                                exercises.insert(index, removedExercise);
+                              });
+                            },
+                          ),
+                          duration: const Duration(seconds: 4),
+                          backgroundColor: Colors.blueGrey.shade700,
+                          behavior: SnackBarBehavior.floating,
+                          margin: const EdgeInsets.all(16),
+                        ),
+                      );
+                    },
+
+                    background: Container(
+                      color: Colors.red,
+                      padding: const EdgeInsets.only(left: 16),
+                      alignment: Alignment.centerLeft,
+                      child: const Icon(Icons.delete, color: Colors.white),
+                    ),
+                    child: _buildExerciseCard(exercise),
+                  );
+                },
+              ),
+            ),
+
           ],
         ),
       ),
@@ -264,7 +479,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   text: TextSpan(
                     children: [
                       TextSpan(
-                        text: isExpanded ? "▼  " : "▶  ",
+                        text: isExpanded ? "▼  " : "➤  ",
                         style: const TextStyle(
                           color: Colors.white, // 👈 More subtle than white
                           fontSize: 12,
