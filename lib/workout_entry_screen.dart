@@ -58,6 +58,7 @@ class WorkoutPage extends StatefulWidget {
 }
 
 class _WorkoutPageState extends State<WorkoutPage> {
+  List<String> exercises = []; // Use this to store selected exercises from the dialog
   final TextEditingController _workoutNameController = TextEditingController();
   late DateTime _selectedDate; // move this to the top of the State class
   final List<String> _selectedExercises = [];
@@ -697,10 +698,6 @@ class _WorkoutPageState extends State<WorkoutPage> {
     }
   }
 
-
-
-
-
   void _navigateToTemplateSelection() {
     Navigator.push(
       context,
@@ -713,6 +710,177 @@ class _WorkoutPageState extends State<WorkoutPage> {
       }
     });
   }
+
+  void _showExercisePickerDialog() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
+    final exercisesFromFirestore = snapshot.docs.map((doc) => {
+      'name': doc['name'] as String,
+      'category': doc['category'] as String,
+    }).toList();
+
+    const categoryOrder = [
+      'Horizontal Press',
+      'Horizontal Pull',
+      'Vertical Press',
+      'Vertical Pull',
+      'Lateral Raise',
+      'Arm Extension',
+      'Arm Curl',
+      'Squat Pattern',
+      'Hip Hinge',
+      'Leg Extension',
+      'Leg Curl',
+      'Hip Abduction/adduction',
+      'Calf Raise',
+      'Core',
+    ];
+
+    final Map<String, List<String>> grouped = {};
+    for (final exercise in exercisesFromFirestore) {
+      final category = exercise['category'] ?? 'Other';
+      final name = exercise['name'] ?? 'Unnamed';
+      grouped.putIfAbsent(category, () => []).add(name);
+    }
+
+    for (final group in grouped.values) {
+      group.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    }
+
+    final Map<String, List<String>> orderedGrouped = {};
+    for (final cat in categoryOrder) {
+      if (grouped.containsKey(cat)) {
+        orderedGrouped[cat] = grouped[cat]!;
+      }
+    }
+    for (final entry in grouped.entries) {
+      if (!orderedGrouped.containsKey(entry.key)) {
+        orderedGrouped[entry.key] = entry.value;
+      }
+    }
+
+    final Map<String, bool> expandedGroups = {
+      for (final category in orderedGrouped.keys) category: true
+    };
+
+    final List<String> selected = await showDialog<List<String>>(
+      context: context,
+      builder: (ctx) {
+        List<String> tempSelected = [..._selectedExercises];
+
+        return StatefulBuilder(builder: (context, setLocalState) {
+          return AlertDialog(
+            backgroundColor: Colors.blueGrey.shade900,
+            title: const Text("Select Exercises", style: TextStyle(color: Colors.white)),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: ListView(
+                children: orderedGrouped.entries.map((entry) {
+                  final category = entry.key;
+                  final exercises = entry.value;
+                  final isExpanded = expandedGroups[category] ?? true;
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ListTile(
+                        tileColor: Colors.blueGrey.shade800,
+                        title: Text(
+                          category,
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                        ),
+                        trailing: Icon(
+                          isExpanded ? Icons.expand_less : Icons.expand_more,
+                          color: Colors.white70,
+                        ),
+                        onTap: () {
+                          setLocalState(() {
+                            expandedGroups[category] = !isExpanded;
+                          });
+                        },
+                      ),
+                      if (isExpanded)
+                        ...exercises.map((name) {
+                          final isChecked = tempSelected.contains(name);
+                          return CheckboxListTile(
+                            value: isChecked,
+                            title: Text(name, style: const TextStyle(color: Colors.white)),
+                            controlAffinity: ListTileControlAffinity.leading,
+                            activeColor: Colors.lightBlueAccent,
+                            checkColor: Colors.black,
+                            onChanged: (checked) {
+                              setLocalState(() {
+                                if (checked == true) {
+                                  tempSelected.add(name);
+                                } else {
+                                  tempSelected.remove(name);
+                                }
+                              });
+                            },
+                          );
+                        }),
+                      const Divider(height: 10, color: Colors.grey),
+                    ],
+                  );
+                }).toList(),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text("Cancel"),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, tempSelected),
+                child: const Text("Save"),
+              ),
+            ],
+          );
+        });
+      },
+    ) ?? [];
+
+    setState(() {
+      _selectedExercises.clear();
+      _selectedExercises.addAll(selected);
+
+      _workoutSets.clear();
+      _workoutSets.addAll(
+        List.generate(
+          _selectedExercises.length,
+              (index) => List.generate(
+            _defaultSets,
+                (_) => SetDetails(),
+          ),
+        ),
+      );
+
+      _initializeControllers();
+    });
+  }
+
+  void _onReorderExercises(int oldIndex, int newIndex) {
+    setState(() {
+      if (newIndex > oldIndex) newIndex--;
+
+      final movedExercise = _selectedExercises.removeAt(oldIndex);
+      final movedSets = _workoutSets.removeAt(oldIndex);
+      final movedReps = _repsControllers.removeAt(oldIndex);
+      final movedWeight = _weightControllers.removeAt(oldIndex);
+      final movedRir = _rirControllers.removeAt(oldIndex);
+
+      _selectedExercises.insert(newIndex, movedExercise);
+      _workoutSets.insert(newIndex, movedSets);
+      _repsControllers.insert(newIndex, movedReps);
+      _weightControllers.insert(newIndex, movedWeight);
+      _rirControllers.insert(newIndex, movedRir);
+    });
+  }
+
+
+
 
   void _navigateToExerciseSelection() {
     Navigator.push(
@@ -1087,13 +1255,22 @@ class _WorkoutPageState extends State<WorkoutPage> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Date: ${DateFormat('yMMMd').format(_selectedDate)}',style: TextStyle(fontFamily: 'Verdana', color: Colors.white),),
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text("Add Exercises"),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blueGrey.shade700,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  ),
+                  onPressed: _showExercisePickerDialog,
+                ),
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blueGrey, // 👈 Change this to any color you like
+                    backgroundColor: Colors.blueGrey,
                   ),
                   onPressed: () => _selectDate(context),
-                  child: const Text('Select Date', style: TextStyle(fontFamily: 'Verdana', color: Colors.black),),
+                  child: const Text('Select Date', style: TextStyle(fontFamily: 'Verdana', color: Colors.black)),
                 ),
               ],
             ),
@@ -1115,44 +1292,73 @@ class _WorkoutPageState extends State<WorkoutPage> {
                   ),
                 ],
               ),
-            for (int i = 0; i < _selectedExercises.length; i++)
-              Card(
-                color: Colors.blueGrey.shade700,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(3)),
-                margin: const EdgeInsets.only(left: 0, top: 2, right: 0, bottom: 0),
-                child: ExpansionTile(
-                  title: Text(_selectedExercises[i],
-                    style:  TextStyle(
-                      color: Colors.grey.shade300, // Or any other color you want
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
-                  ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min, // ✅ Prevents overflow
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.info_outline),
-                        color: Colors.blueGrey, // 👈 change to whatever color you want
-                        onPressed: () {
-                          _navigateToExerciseDetails(_selectedExercises[i]);
-                        },
-                      ),
-                      const SizedBox(width: 4), // ✅ Adds spacing between buttons
-                      ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blueGrey, // 👈 Change this to any color you like
-                        ),
-                        onPressed: () {
-                          _navigateToTopSets(_selectedExercises[i]); // ✅ Call the function
-                        },
-                        child:  Text('Top Sets', style: TextStyle(fontFamily: 'Verdana', color: Colors.blueGrey.shade900, // Deep Blue
-                        ) ),
-                      ),
-
-                    ],
-                  ),
-                  children: [
+    ReorderableListView(
+    shrinkWrap: true,
+    physics: const NeverScrollableScrollPhysics(),
+    onReorder: _onReorderExercises,
+    children: List.generate(_selectedExercises.length, (i) {
+    return Dismissible(
+    key: ValueKey(_selectedExercises[i]),
+    direction: DismissDirection.endToStart,
+    background: Container(
+    color: Colors.red,
+    alignment: Alignment.centerRight,
+    padding: const EdgeInsets.only(right: 16),
+    child: const Icon(Icons.delete, color: Colors.white),
+    ),
+    onDismissed: (_) {
+    setState(() {
+    _selectedExercises.removeAt(i);
+    _workoutSets.removeAt(i);
+    _repsControllers.removeAt(i);
+    _weightControllers.removeAt(i);
+    _rirControllers.removeAt(i);
+    });
+    },
+    child: Card(
+    key: ValueKey("card_$i"), // 👈 Ensure each card also has a key for ReorderableListView
+    color: Colors.blueGrey.shade700,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(3)),
+    margin: const EdgeInsets.only(left: 0, top: 2, right: 0, bottom: 0),
+    child: ExpansionTile(
+    // 🧠 Everything you already had inside the card
+    title: Text(
+    _selectedExercises[i],
+    style: TextStyle(
+    color: Colors.grey.shade300,
+    fontWeight: FontWeight.bold,
+    fontSize: 14,
+    ),
+    ),
+    trailing: Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+    IconButton(
+    icon: const Icon(Icons.info_outline),
+    color: Colors.blueGrey,
+    onPressed: () {
+    _navigateToExerciseDetails(_selectedExercises[i]);
+    },
+    ),
+    const SizedBox(width: 4),
+    ElevatedButton(
+    style: ElevatedButton.styleFrom(
+    backgroundColor: Colors.blueGrey,
+    ),
+    onPressed: () {
+    _navigateToTopSets(_selectedExercises[i]);
+    },
+    child: Text(
+    'Top Sets',
+    style: TextStyle(
+    fontFamily: 'Verdana',
+    color: Colors.blueGrey.shade900,
+    ),
+    ),
+    ),
+    ],
+    ),
+    children: [
                     // New row between selected exercise and workout sets:
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 6.0),
@@ -1193,7 +1399,11 @@ class _WorkoutPageState extends State<WorkoutPage> {
                               Padding(
                                 padding: const EdgeInsets.only(left: 6.0, bottom: 4.0),
                                 child: Text(
-                                  'Upcoming Rep Targets: ${PeriodizationModelUtils.upcomingRepTargetSequence(_selectedExercises[i], 7).join(", ")}',
+                                      () {
+                                    final reps = exercisePreviousTopSetReps[_selectedExercises[i]] ?? [];
+                                    final recent = reps.take(7).join(", ");
+                                    return 'Previous Rep Targets: ${recent.isEmpty ? "None" : recent}';
+                                  }(),
                                   style: const TextStyle(
                                     fontSize: 10.0,
                                     fontWeight: FontWeight.bold,
@@ -1201,6 +1411,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                   ),
                                 ),
                               ),
+
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
@@ -1209,11 +1420,10 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                   children: [
                                     Row(
                                       children: [
-                                        const SizedBox(width: 6), // Small spacing
+                                        const SizedBox(width: 6),
                                         Row(
                                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                           children: [
-
                                             Row(
                                               children: [
                                                 Text(
@@ -1221,20 +1431,25 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                                   style: const TextStyle(
                                                     fontWeight: FontWeight.bold,
                                                     fontSize: 12.0,
-                                                    color:Colors.black ,
+                                                    color: Colors.black,
                                                   ),
                                                 ),
-                                                const SizedBox(width: 6), // Small spacing
+                                                const SizedBox(width: 6),
 
-                                                // ✅ Show Available Rep Targets ONLY for Set 1
                                                 if (j == 0)
-                                                  Text(
-                                                    'Available Rep Targets: ${_getAvailableRepTargets(i, j).join(", ")}',
-                                                    style: const TextStyle(
-                                                      fontSize: 10.0,
-                                                      fontWeight: FontWeight.bold,
-                                                      color: Colors.green,
-                                                    ),
+                                                  Builder(
+                                                    builder: (context) {
+                                                      final reps = _getAvailableRepTargets(i, j);
+                                                      final displayText = reps.length >= 11 ? 'All (1–12)' : reps.join(", ");
+                                                      return Text(
+                                                        'Available Rep Targets: $displayText',
+                                                        style: const TextStyle(
+                                                          fontSize: 10.0,
+                                                          fontWeight: FontWeight.bold,
+                                                          color: Colors.white,
+                                                        ),
+                                                      );
+                                                    },
                                                   ),
                                               ],
                                             ),
@@ -1244,6 +1459,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                     ),
                                   ],
                                 ),
+
                                 IconButton(
                                   icon: const Icon(Icons.remove),
                                   onPressed: () => removeSet(i, j),
@@ -1425,7 +1641,9 @@ class _WorkoutPageState extends State<WorkoutPage> {
                   ], //paste point
                 ),
               ),
-          ],
+    );
+    }),
+    ),],
         ),
       ),
       floatingActionButton: FloatingActionButton(

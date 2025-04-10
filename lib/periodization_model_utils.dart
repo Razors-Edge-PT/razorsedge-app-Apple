@@ -392,6 +392,7 @@ class PeriodizationModelUtils {
       TextEditingController repsController,
       TextEditingController rirController,
       int plannedIndex,
+      Map<String, List<Map<String, dynamic>>>? topSetsByExercise, // ✅ new optional param
       ) {
     if (!exercisePreviousE1RMs.containsKey(exerciseName) || exercisePreviousE1RMs[exerciseName]!.isEmpty) {
       return 20.0;
