@@ -460,7 +460,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   Widget build(BuildContext context) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 6),
-      padding: const EdgeInsets.all(10),
+      padding: const EdgeInsets.fromLTRB(6, 10, 6, 10), // reduced horizontal padding
       decoration: BoxDecoration(
         color: Colors.blueGrey.shade800,
         borderRadius: BorderRadius.circular(8),
@@ -506,17 +506,17 @@ class _ExerciseCardState extends State<_ExerciseCard> {
           ),
 
           if (isExpanded) ...[
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             Wrap(
-              spacing: 10,
-              runSpacing: 6,
+              spacing: 5,
+              runSpacing: 4,
               children: [
-                _smallInput("Periodization Model", width: 160),
-                _smallInput("Weekly Frequency", width: 140),
-                _smallInput("Progression Model", width: 160),
-                _smallInput("Rep Targets", width: 140),
-                _smallInput("Max Weight X Reps", width: 140),
-                _smallInput("Notes", multiline: true, width: 140, verticalPadding: 1),
+                _smallInput("Periodization Model", width: 158),
+                _smallInput("Weekly Frequency", width: 158),
+                _smallInput("Progression Model", width: 158),
+                _smallInput("Rep Targets", width: 158),
+                _smallInput("Max Weight X Reps", width: 158),
+                _smallInput("Notes", width: 158),
               ],
             )
 

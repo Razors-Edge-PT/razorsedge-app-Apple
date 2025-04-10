@@ -44,6 +44,7 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
   List<List<TextEditingController>> _rirControllers = [];
   List<List<TextEditingController>> _weightControllers = [];
   List<List<TextEditingController>>  _e1rmControllers = [];
+  Map<String, List<Map<String, dynamic>>> topSetsByExercise = {};
 
 
   @override
@@ -56,6 +57,7 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
     if (addedWeeks.isEmpty) {
       addedWeeks = List.generate(1, (index) => index); // ✅ Starts with 12 weeks (0 to 11)
     }
+    loadTopSetsFromWorkouts(); // 🔥 Load top sets early
 
 
     // ✅ Ensure exerciseSelection initializes with 12 weeks
@@ -101,6 +103,35 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
 
 
 
+  Future<void> loadTopSetsFromWorkouts() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final snapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('workouts')
+        .get();
+
+    final Map<String, List<Map<String, dynamic>>> tempTopSets = {};
+
+    for (final doc in snapshot.docs) {
+      final data = doc.data();
+      final topSets = List<Map<String, dynamic>>.from(data['topSets'] ?? []);
+
+      for (final set in topSets) {
+        final name = set['exercise'];
+        if (name != null && name is String && name.trim().isNotEmpty) {
+          tempTopSets.putIfAbsent(name, () => []).add(set);
+        }
+      }
+    }
+
+    setState(() {
+      topSetsByExercise = tempTopSets;
+      print("✅ Top sets loaded for ${topSetsByExercise.length} exercises.");
+    });
+  }
 
 
   DateTime _getMostRecentMonday() {
@@ -988,6 +1019,7 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
                                                                       dayIndex,
                                                                       rowIndex,
                                                                     ),
+                                                                    topSetsByExercise, // 🔥 new argument
                                                                   ).toStringAsFixed(1)
                                                                   // ✅ Only show hint if weight field is empty
                                                                       : '',
@@ -1123,6 +1155,7 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
                                                                             dayIndex,
                                                                             rowIndex,
                                                                           ),
+                                                                          topSetsByExercise, // 🔥 new argument
                                                                         ),
                                                                     (int.tryParse(_repsControllers[dayIndex][rowIndex].text) ??
                                                                         PeriodizationModelUtils.updateRepTarget(
