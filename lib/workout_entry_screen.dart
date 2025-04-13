@@ -1369,10 +1369,10 @@ class _WorkoutPageState extends State<WorkoutPage> {
                             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                           ),
 
-                          SizedBox(width: 4.0),
+                          SizedBox(width: 28.0),
                           Text(
                             ' Avg E1RM:${getAverageE1RM(_selectedExercises[i]).toStringAsFixed(1)} kg', // ✅ Now passing exercise name
-                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.blue),
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.blueGrey),
                           ),
 
                           // Extra spacing before the new element
@@ -1395,22 +1395,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            if (j == 0)
-                              Padding(
-                                padding: const EdgeInsets.only(left: 6.0, bottom: 4.0),
-                                child: Text(
-                                      () {
-                                    final reps = exercisePreviousTopSetReps[_selectedExercises[i]] ?? [];
-                                    final recent = reps.take(7).join(", ");
-                                    return 'Previous Rep Targets: ${recent.isEmpty ? "None" : recent}';
-                                  }(),
-                                  style: const TextStyle(
-                                    fontSize: 10.0,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.orange,
-                                  ),
-                                ),
-                              ),
+
+
 
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1434,22 +1420,39 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                                     color: Colors.black,
                                                   ),
                                                 ),
-                                                const SizedBox(width: 6),
+                                                const SizedBox(width: 16),
 
                                                 if (j == 0)
-                                                  Builder(
-                                                    builder: (context) {
-                                                      final reps = _getAvailableRepTargets(i, j);
-                                                      final displayText = reps.length >= 11 ? 'All (1–12)' : reps.join(", ");
-                                                      return Text(
-                                                        'Available Rep Targets: $displayText',
+                                                  Column(
+                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                    children: [
+                                                      Text(
+                                                            () {
+                                                          final reps = exercisePreviousTopSetReps[_selectedExercises[i]] ?? [];
+                                                          final recent = reps.take(7).join(", ");
+                                                          return 'Previous Rep Targets: ${recent.isEmpty ? "None" : recent}';
+                                                        }(),
                                                         style: const TextStyle(
                                                           fontSize: 10.0,
                                                           fontWeight: FontWeight.bold,
-                                                          color: Colors.white,
+                                                          color: Colors.white24
                                                         ),
-                                                      );
-                                                    },
+                                                      ),
+                                                      Builder(
+                                                        builder: (context) {
+                                                          final reps = _getAvailableRepTargets(i, j);
+                                                          final displayText = reps.length >= 11 ? 'All (1–12)' : reps.join(", ");
+                                                          return Text(
+                                                            'Available Rep Targets: $displayText',
+                                                            style: const TextStyle(
+                                                              fontSize: 10.0,
+                                                              fontWeight: FontWeight.bold,
+                                                              color: Colors.white54,
+                                                            ),
+                                                          );
+                                                        },
+                                                      ),
+                                                    ],
                                                   ),
                                               ],
                                             ),
@@ -1492,7 +1495,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                 const Expanded(
                                     child: Text('E1RM',
                                         textAlign: TextAlign.left,
-                                        style: TextStyle(fontSize: 10.0, fontWeight: FontWeight.bold))),
+                                        style: TextStyle(fontSize: 10.0, color: Colors.black, fontWeight: FontWeight.bold))),
                               ],
                             ),
                             const SizedBox(height: 0.0),

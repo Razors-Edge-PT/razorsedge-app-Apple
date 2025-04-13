@@ -18,10 +18,45 @@ class Block_Planner extends StatefulWidget {
 
 class _BlockPlannerState extends State<Block_Planner> {
   // Example list of tracked exercises
-  List<String> exercises = [
-    'Bench Press, Barbell',
-    'Deadlift, Conventional',
-  ];
+  List<String> exercises = [];
+
+  DateTime? _blockStartDate;
+  DateTime? _blockEndDate;
+
+  @override
+  void initState() {
+    super.initState();
+    loadExercisesFromFirestore();
+    _loadBlockDatesFromFirestore(); // 🔥 new
+    _loadPlannedExercises();
+
+  }
+
+  Future<void> _loadBlockDatesFromFirestore() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final doc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('block_planner')
+        .doc('current_block')
+        .get();
+
+    if (doc.exists) {
+      final data = doc.data();
+      if (data != null) {
+        setState(() {
+          _blockStartDate = data['blockStartDate'] != null
+              ? DateTime.parse(data['blockStartDate'])
+              : null;
+          _blockEndDate = data['blockEndDate'] != null
+              ? DateTime.parse(data['blockEndDate'])
+              : null;
+        });
+      }
+    }
+  }
 
   Map<String, List<String>> groupedExercises = {};
 
@@ -36,6 +71,12 @@ class _BlockPlannerState extends State<Block_Planner> {
     setState(() {
       groupedExercises = groupExercisesByCategory(exercises);
     });
+  }
+
+  @override
+  void dispose() {
+    _savePlannedExercises();
+    super.dispose();
   }
 
   // 🧠 Group exercises by category for dropdown UI
@@ -235,7 +276,50 @@ class _BlockPlannerState extends State<Block_Planner> {
     });
   }
 
+  Future<void> _savePlannedExercises() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
 
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('block_planner')
+        .doc('current_block')
+        .set({
+      'plannedExercises': exercises,
+    }, SetOptions(merge: true));
+
+    print("✅ Planned exercises saved.");
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('✅ Planned exercises saved.')),
+      );
+    }
+  }
+
+  Future<void> _loadPlannedExercises() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final snapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('block_planner')
+        .doc('current_block')
+        .get();
+
+    if (snapshot.exists) {
+      final data = snapshot.data();
+      if (data != null && data.containsKey('plannedExercises')) {
+        final List<dynamic> loaded = data['plannedExercises'];
+        setState(() {
+          exercises = List<String>.from(loaded);
+        });
+        print("📦 Loaded ${exercises.length} planned exercises");
+      }
+    }
+  }
 
 
   @override
@@ -375,7 +459,71 @@ class _BlockPlannerState extends State<Block_Planner> {
       children: [
         Row(
           children: [
-            _buildInputBox("Block length"),
+            Expanded(
+              child: InkWell(
+                onTap: () async {
+                  final now = DateTime.now();
+                  final DateTimeRange? picked = await showDateRangePicker(
+                    context: context,
+                    firstDate: now.subtract(const Duration(days: 365)),
+                    lastDate: now.add(const Duration(days: 365 * 2)),
+                    initialDateRange: _blockStartDate != null && _blockEndDate != null
+                        ? DateTimeRange(start: _blockStartDate!, end: _blockEndDate!)
+                        : null,
+                    builder: (context, child) {
+                      return Theme(
+                        data: ThemeData.dark().copyWith(
+                          colorScheme: ColorScheme.dark(
+                            primary: Colors.blueGrey.shade300,
+                            surface: Colors.blueGrey.shade800,
+                          ),
+                        ),
+                        child: child!,
+                      );
+                    },
+                  );
+
+                  if (picked != null) {
+                    setState(() {
+                      _blockStartDate = picked.start;
+                      _blockEndDate = picked.end;
+                    });
+
+                    // Optional: save to Firestore here
+                    final user = FirebaseAuth.instance.currentUser;
+                    if (user != null) {
+                      await FirebaseFirestore.instance
+                          .collection('users')
+                          .doc(user.uid)
+                          .collection('block_planner')
+                          .doc('current_block')
+                          .set({
+                        'blockStartDate': picked.start.toIso8601String(),
+                        'blockEndDate': picked.end.toIso8601String(),
+                      }, SetOptions(merge: true));
+                    }
+                  }
+                },
+                child: Container(
+                  height: 56,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.blueGrey.shade800,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: Colors.white30),
+                  ),
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    _blockStartDate != null && _blockEndDate != null
+                        ? 'Block: ${DateFormat('d MMM').format(_blockStartDate!)} – ${DateFormat('d MMM y').format(_blockEndDate!)}'
+                        : 'Select Block Dates',
+                    style: const TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
+                ),
+              ),
+            ),
+
+
             const SizedBox(width: 8),
             _buildInputBox("Training days per week"),
           ],

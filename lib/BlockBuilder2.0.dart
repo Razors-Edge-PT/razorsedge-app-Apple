@@ -13,17 +13,18 @@ Map<String, List<String>> groupExercisesByCategory(List<Map<String, String>> all
   const desiredOrder = [
     'Horizontal Press',
     'Horizontal Pull',
-    'Squat Pattern',
-
     'Vertical Press',
-    'Lateral Raise',
     'Vertical Pull',
-    'Hip Hinge',
-
+    'Lateral Raise',
     'Arm Extension',
     'Arm Curl',
-    'Core',
+    'Squat Pattern',
+    'Hip Hinge',
+    'Leg Extension',
+    'Leg Curl',
+    'Hip Abduction/adduction',
     'Calf Raise',
+    'Core',
   ];
 
   // Create raw grouping
@@ -76,7 +77,7 @@ class BlockBuilder2 extends StatefulWidget {
 class _BlockBuilder2State extends State<BlockBuilder2> {
   final int initialWeeks = 12;
   int visibleWeekCount = 2; // Initially load 3 weeks
-  final int totalWeeks = 12;
+  int totalWeeks = 12;
   final int exercisesPerDay = 3;
   List <Template> templates = []; // Make sure Template is imported
   List<List<String?>> selectedTemplateIds = [];
@@ -94,6 +95,9 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   late DateTime selectedWeekMonday;
   late DateTime blockStartDate;
   int? _draggedRowIndex;
+  List<Map<String, String>> allExercisesFromFirestore = []; // 🔥 Full list
+  List<String> plannedExercises = []; // 💡 Selected in BlockPlanner
+
 
 
   final Map<String, FocusNode> _focusNodes = {};
@@ -102,9 +106,39 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     return _focusNodes.putIfAbsent(key, () => FocusNode());
   }
 
-
-
   List<int> weekIndices = [];
+
+  Future<void> loadBlockDateRange() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final doc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('block_planner')
+        .doc('current_block')
+        .get();
+
+    if (doc.exists) {
+      final data = doc.data();
+      final startDateStr = data?['blockStartDate'];
+      final endDateStr = data?['blockEndDate'];
+
+      if (startDateStr != null && endDateStr != null) {
+        final start = DateTime.parse(startDateStr);
+        final end = DateTime.parse(endDateStr);
+
+        setState(() {
+          blockStartDate = start;
+          selectedWeekMonday = _getMostRecentMonday(start);
+          totalWeeks = ((end.difference(start).inDays) / 7).ceil();
+          visibleWeekCount = 2;
+          weekIndices = List.generate(totalWeeks, (i) => i);
+        });
+      }
+    }
+  }
+
 
   Future<void> _fetchTemplates() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -133,9 +167,30 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       'bodyPart': doc['bodyPart'] as String,
     }).toList();
 
+    allExercisesFromFirestore = exercises; // 🔐 Save the full list
     setState(() {
       groupedExercises = groupExercisesByCategory(exercises);
     });
+  }
+  Future<void> loadPlannedExercisesFromFirestore() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final doc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('block_planner')
+        .doc('current_block')
+        .get();
+
+    if (doc.exists) {
+      final data = doc.data();
+      if (data != null && data['plannedExercises'] != null) {
+        plannedExercises = List<String>.from(data['plannedExercises']);
+      }
+    }
+
+    setState(() {});
   }
 
 
@@ -146,53 +201,32 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     _horizontalScrollController.addListener(() {
       final maxScroll = _horizontalScrollController.position.maxScrollExtent;
       final currentScroll = _horizontalScrollController.position.pixels;
-
-      // Load more when user scrolls to 80% of max
       if (currentScroll / maxScroll > 0.8 && visibleWeekCount < totalWeeks) {
         setState(() {
           visibleWeekCount = (visibleWeekCount + 2).clamp(0, totalWeeks);
         });
       }
-
-      circuitStartIndices = List.generate(
-        initialWeeks,
-            (_) => List.generate(7, (_) => [0]), // Start with one circuit at index 0
-      );
-
     });
 
+    loadBlockDateRange().then((_) {
+      _fetchTemplates();
+      loadExercisesFromFirestore();
+      loadTopSetsFromWorkouts();
+      loadPlannedExercisesFromFirestore(); // ✅ ADD THIS LINE
 
-    selectedWeekMonday = _getMostRecentMonday();
-    blockStartDate = _getMostRecentMonday();
-    weekIndices = List.generate(initialWeeks, (index) => index);
+      selectedTemplateIds = List.generate(totalWeeks, (_) => List.generate(7, (_) => null));
+      exerciseSelection = List.generate(totalWeeks, (_) => List.generate(7, (_) => List.filled(exercisesPerDay, null, growable: true)));
 
-    exerciseSelection = List.generate(
-      initialWeeks,
-          (_) => List.generate(7, (_) => List.filled(exercisesPerDay, null, growable: true)),
-    );
-
-    _fetchTemplates();
-
-    loadExercisesFromFirestore(); // ✅ NEW: Firestore-only fetch (non-blocking)
-    loadTopSetsFromWorkouts(); // 🔥 Load top sets early
-
-
-    selectedTemplateIds = List.generate(
-      initialWeeks,
-          (_) => List.generate(7, (_) => null),
-    );
-
-    loadBlockDataFromFirestore().then((_) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        scrollToCurrentWeek();
-        scrollToCurrentDay();
+      loadBlockDataFromFirestore().then((_) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          scrollToCurrentWeek();
+          scrollToCurrentDay();
+        });
       });
     });
-
-    final now = DateTime.now();
-    print("🕓 Today: $now");
-    print("📅 Block Start: $blockStartDate");
   }
+
+
 
 
 
@@ -251,11 +285,12 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     return controllerList[weekIndex][dayIndex][rowIndex];
   }
 
-  DateTime _getMostRecentMonday() {
-    DateTime now = DateTime.now();
+  DateTime _getMostRecentMonday([DateTime? reference]) {
+    DateTime now = reference ?? DateTime.now();
     int diff = now.weekday - DateTime.monday;
     return now.subtract(Duration(days: diff < 0 ? 7 + diff : diff));
   }
+
 
   void _addWeek() {
     setState(() {
@@ -355,6 +390,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         .collection('weeks')
         .get();
 
+
+
     for (final weekDoc in weekSnapshots.docs) {
       final weekIndex = int.tryParse(weekDoc.id.replaceAll('week_', '')) ?? 0;
       final daySnapshots = await weekDoc.reference.collection('days').get();
@@ -372,6 +409,15 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           final reps = ex['reps'];
           final rir = ex['rir'];
 
+          // 🧠 Ensure lists are long enough
+          while (exerciseSelection[weekIndex][dayIndex].length <= i) {
+            exerciseSelection[weekIndex][dayIndex].add(null);
+            exerciseControllers[weekIndex][dayIndex].add(TextEditingController());
+            weightControllers[weekIndex][dayIndex].add(TextEditingController());
+            repsControllers[weekIndex][dayIndex].add(TextEditingController());
+            rirControllers[weekIndex][dayIndex].add(TextEditingController());
+          }
+
           exerciseSelection[weekIndex][dayIndex][i] = name;
           _getController(exerciseControllers, weekIndex, dayIndex, i).text = name;
 
@@ -385,6 +431,11 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             _getController(rirControllers, weekIndex, dayIndex, i).text = rir.toString();
           }
         }
+        final savedCircuitStartIndices = List<int>.from(data['circuitStartIndices'] ?? [0]);
+
+        _ensureCircuitStartIndicesInitialized(weekIndex, dayIndex);
+        circuitStartIndices[weekIndex][dayIndex] = savedCircuitStartIndices;
+
 
       }
     }
@@ -468,9 +519,13 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     await weekDocRef
         .collection('days')
         .doc('day_$dayIndex')
-        .set({'exercises': exercises});
+        .set({
+      'exercises': exercises,
+      'circuitStartIndices': circuitStartIndices[weekIndex][dayIndex], // ✅ Save circuit structure
+    });
 
     print("✅ Saved day: week $weekIndex, day $dayIndex");
+
   }
 
   void _trimEmptyExerciseRows(int weekIndex, int dayIndex) {
@@ -635,6 +690,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     required Map<String, List<String>> groupedExercises,
     required void Function(String selectedExercise) onSelected,
   }) async {
+    bool showPlannedOnly = true;
+
     // Maintain expanded state for each group
     final Map<String, bool> expandedGroups = {
       for (final category in groupedExercises.keys) category: true,
@@ -702,19 +759,24 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       onTap: () async {
         await showCollapsibleExercisePicker(
           context: context,
-          groupedExercises: groupedExercises,
+          groupedExercises: groupExercisesByCategory(
+            allExercisesFromFirestore
+                .where((ex) => plannedExercises.contains(ex['name']))
+                .toList(),
+          ),
           onSelected: (selectedExercise) {
             setState(() {
               exerciseSelection[weekIndex][dayIndex][rowIndex] = selectedExercise;
               _getController(exerciseControllers, weekIndex, dayIndex, rowIndex).text = selectedExercise;
 
-              // Reset fields
-              _getController(repsControllers, weekIndex, dayIndex, rowIndex).clear();
+              // Clear related inputs
               _getController(weightControllers, weekIndex, dayIndex, rowIndex).clear();
+              _getController(repsControllers, weekIndex, dayIndex, rowIndex).clear();
               _getController(rirControllers, weekIndex, dayIndex, rowIndex).clear();
             });
           },
         );
+
       },
       child: Container(
         width: 114,
