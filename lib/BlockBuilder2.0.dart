@@ -97,6 +97,9 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   int? _draggedRowIndex;
   List<Map<String, String>> allExercisesFromFirestore = []; // 🔥 Full list
   List<String> plannedExercises = []; // 💡 Selected in BlockPlanner
+  List<int> weekIndices = [];
+
+  late Future<void> _initialLoad;
 
 
 
@@ -106,7 +109,22 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     return _focusNodes.putIfAbsent(key, () => FocusNode());
   }
 
-  List<int> weekIndices = [];
+  Future<void> loadAllData() async {
+    await loadBlockDateRange();
+    await Future.wait([
+      _fetchTemplates(),
+      loadExercisesFromFirestore(),
+      loadTopSetsFromWorkouts(),
+      loadPlannedExercisesFromFirestore(),
+    ]);
+
+    selectedTemplateIds = List.generate(totalWeeks, (_) => List.generate(7, (_) => null));
+    exerciseSelection = List.generate(totalWeeks, (_) => List.generate(7, (_) => List.filled(exercisesPerDay, null, growable: true)));
+
+    await loadBlockDataFromFirestore();
+  }
+
+
 
   Future<void> loadBlockDateRange() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -208,23 +226,9 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       }
     });
 
-    loadBlockDateRange().then((_) {
-      _fetchTemplates();
-      loadExercisesFromFirestore();
-      loadTopSetsFromWorkouts();
-      loadPlannedExercisesFromFirestore(); // ✅ ADD THIS LINE
-
-      selectedTemplateIds = List.generate(totalWeeks, (_) => List.generate(7, (_) => null));
-      exerciseSelection = List.generate(totalWeeks, (_) => List.generate(7, (_) => List.filled(exercisesPerDay, null, growable: true)));
-
-      loadBlockDataFromFirestore().then((_) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          scrollToCurrentWeek();
-          scrollToCurrentDay();
-        });
-      });
-    });
+    _initialLoad = loadAllData();
   }
+
 
 
 
@@ -467,19 +471,21 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       for (final set in topSets) {
         final name = set['exercise'];
         if (name != null && name is String && name.trim().isNotEmpty) {
-          tempTopSets.putIfAbsent(name, () => []).add(set);
+          tempTopSets.putIfAbsent(name, () => []);
+          tempTopSets[name]!.add(set);
         }
       }
     }
 
+    // ✅ Keep only the most recent 4 sets per exercise
+    tempTopSets.updateAll((_, sets) => sets.take(4).toList());
+
     setState(() {
       topSetsByExercise = tempTopSets;
-      print("✅ Top sets loaded for ${topSetsByExercise.length} exercises.");
+      print("✅ Top sets loaded (max 4 per exercise): ${topSetsByExercise.length} exercises.");
     });
-
-    await Future.delayed(const Duration(milliseconds: 50));
-    if (mounted) setState(() {});
   }
+
 
 
   Future<void> saveDayToFirestore(int weekIndex, int dayIndex) async {
@@ -687,14 +693,13 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
   Future<void> showCollapsibleExercisePicker({
     required BuildContext context,
-    required Map<String, List<String>> groupedExercises,
+    required Map<String, List<String>> allGroupedExercises,
+    required List<String> plannedExercises,
     required void Function(String selectedExercise) onSelected,
   }) async {
     bool showPlannedOnly = true;
-
-    // Maintain expanded state for each group
     final Map<String, bool> expandedGroups = {
-      for (final category in groupedExercises.keys) category: true,
+      for (final category in allGroupedExercises.keys) category: false,
     };
 
     await showDialog<String>(
@@ -702,23 +707,45 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setState) {
+            // 🔄 Filter exercises if Planned Only is active
+            final filteredGrouped = <String, List<String>>{};
+            allGroupedExercises.forEach((category, exercises) {
+              final filtered = showPlannedOnly
+                  ? exercises.where((e) => plannedExercises.contains(e)).toList()
+                  : exercises;
+              if (filtered.isNotEmpty) {
+                filteredGrouped[category] = filtered;
+              }
+            });
+
             return AlertDialog(
-              title: const Text('Select Exercise'),
+              title: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Select Exercise', style: TextStyle(fontSize: 12)),
+                  Row(
+                    children: [
+                      const Text("Planned Only", style: TextStyle(fontSize: 12)),
+                      Switch(
+                        value: showPlannedOnly,
+                        onChanged: (value) => setState(() => showPlannedOnly = value),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
               content: SizedBox(
                 width: double.maxFinite,
                 height: 500,
                 child: ListView(
-                  children: groupedExercises.entries.map((entry) {
+                  children: filteredGrouped.entries.map((entry) {
                     final category = entry.key;
                     final exercises = entry.value;
 
                     return ExpansionTile(
                       title: Text(
                         category,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 13,
-                        ),
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                       ),
                       initiallyExpanded: expandedGroups[category]!,
                       onExpansionChanged: (expanded) {
@@ -730,8 +757,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                         return ListTile(
                           title: Text(name),
                           onTap: () {
-                            Navigator.of(context).pop(); // Close the dialog
-                            onSelected(name); // Return selected exercise
+                            Navigator.of(context).pop(); // Close dialog
+                            onSelected(name); // Send back selected exercise
                           },
                         );
                       }).toList(),
@@ -741,8 +768,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
               ),
               actions: [
                 TextButton(
-                  child: const Text('Cancel'),
                   onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
                 ),
               ],
             );
@@ -752,6 +779,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     );
   }
 
+
   Widget _buildExerciseField(int weekIndex, int dayIndex, int rowIndex) {
     final selected = exerciseSelection[weekIndex][dayIndex][rowIndex];
 
@@ -759,11 +787,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       onTap: () async {
         await showCollapsibleExercisePicker(
           context: context,
-          groupedExercises: groupExercisesByCategory(
-            allExercisesFromFirestore
-                .where((ex) => plannedExercises.contains(ex['name']))
-                .toList(),
-          ),
+          allGroupedExercises: groupExercisesByCategory(allExercisesFromFirestore),
+          plannedExercises: plannedExercises,
           onSelected: (selectedExercise) {
             setState(() {
               exerciseSelection[weekIndex][dayIndex][rowIndex] = selectedExercise;
@@ -776,7 +801,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             });
           },
         );
-
       },
       child: Container(
         width: 114,
@@ -1249,12 +1273,12 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                           onPressed: () async {
                             // Now we can use await inside this block
                             final List<String> exercises = [];
-                            for (int i = 0; i < exercisesPerDay; i++) {
-                              final name = _getController(
-                                  exerciseControllers, weekIndex, dayIndex, i)
-                                  .text.trim();
+                            final int totalRows = exerciseControllers[weekIndex][dayIndex].length;
+                            for (int i = 0; i < totalRows; i++) {
+                              final name = _getController(exerciseControllers, weekIndex, dayIndex, i).text.trim();
                               if (name.isNotEmpty) exercises.add(name);
                             }
+
 
                             final DateTime workoutDate = blockStartDate.add(
                                 Duration(days: weekIndex * 7 + dayIndex));
@@ -1438,6 +1462,20 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                                   repsControllers[weekIndex][dayIndex].removeAt(rowIndex);
                                   rirControllers[weekIndex][dayIndex].removeAt(rowIndex);
                                 });
+                                // 🧠 After removing a row, update the circuitStartIndices
+                                final circuitStarts = circuitStartIndices[weekIndex][dayIndex];
+
+// Remove circuit starts that now point past the list length
+                                circuitStarts.removeWhere((start) => start >= exerciseSelection[weekIndex][dayIndex].length);
+
+// Ensure first circuit always starts at 0
+                                if (circuitStarts.isEmpty || circuitStarts.first != 0) {
+                                  circuitStarts.insert(0, 0);
+                                }
+
+// Sort and dedupe just to be safe
+                                circuitStartIndices[weekIndex][dayIndex] = circuitStarts.toSet().toList()..sort();
+
 
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
@@ -1569,9 +1607,19 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("Block Builder 2.0"),
+    return FutureBuilder<void>(
+        future: _initialLoad,
+        builder: (context, snapshot) {
+      if (snapshot.connectionState != ConnectionState.done) {
+        return const Scaffold(
+          backgroundColor: Colors.black,
+          body: Center(child: CircularProgressIndicator()),
+        );
+      }
+
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text("Block Builder 2.0"),
         actions: [
           IconButton(
             icon: const Icon(Icons.delete_forever),
@@ -1660,9 +1708,12 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                 .map((i) => _buildWeek(i))
                 .toList(),
           ),
-          ),
         ),
-      ),
+    ),
+    ),
+      );
+        },
     );
-  }
-}
+  }}
+
+
