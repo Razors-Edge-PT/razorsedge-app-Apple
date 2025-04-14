@@ -62,6 +62,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
   final TextEditingController _workoutNameController = TextEditingController();
   late DateTime _selectedDate; // move this to the top of the State class
   final List<String> _selectedExercises = [];
+  List<String> plannedExercises = [];
   final List<List<SetDetails>> _workoutSets = [];
   final List<List<TextEditingController>> _repsControllers = [];
   final List<List<TextEditingController>> _weightControllers = [];
@@ -76,6 +77,27 @@ class _WorkoutPageState extends State<WorkoutPage> {
     setState(() {
       _isLoadingData = false; // ✅ Data has been fetched, UI can update
     });
+  }
+
+  Future<void> loadPlannedExercisesFromFirestore() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final doc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('block_planner')
+        .doc('current_block')
+        .get();
+
+    if (doc.exists) {
+      final data = doc.data();
+      if (data != null && data['plannedExercises'] != null) {
+        setState(() {
+          plannedExercises = List<String>.from(data['plannedExercises']);
+        });
+      }
+    }
   }
 
 
@@ -573,6 +595,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
       _workoutNameController.text = widget.initialWorkoutName!;
     }
 
+    loadPlannedExercisesFromFirestore(); // 🔥 Add this line
     loadPreviousWorkoutData(); // ✅ Ensures data is fetched before UI load
 
     if (widget.prefilledExercises != null) {
@@ -716,54 +739,14 @@ class _WorkoutPageState extends State<WorkoutPage> {
     if (user == null) return;
 
     final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
-    final exercisesFromFirestore = snapshot.docs.map((doc) => {
+
+    final allExercises = snapshot.docs.map((doc) => {
       'name': doc['name'] as String,
       'category': doc['category'] as String,
     }).toList();
 
-    const categoryOrder = [
-      'Horizontal Press',
-      'Horizontal Pull',
-      'Vertical Press',
-      'Vertical Pull',
-      'Lateral Raise',
-      'Arm Extension',
-      'Arm Curl',
-      'Squat Pattern',
-      'Hip Hinge',
-      'Leg Extension',
-      'Leg Curl',
-      'Hip Abduction/adduction',
-      'Calf Raise',
-      'Core',
-    ];
-
-    final Map<String, List<String>> grouped = {};
-    for (final exercise in exercisesFromFirestore) {
-      final category = exercise['category'] ?? 'Other';
-      final name = exercise['name'] ?? 'Unnamed';
-      grouped.putIfAbsent(category, () => []).add(name);
-    }
-
-    for (final group in grouped.values) {
-      group.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-    }
-
-    final Map<String, List<String>> orderedGrouped = {};
-    for (final cat in categoryOrder) {
-      if (grouped.containsKey(cat)) {
-        orderedGrouped[cat] = grouped[cat]!;
-      }
-    }
-    for (final entry in grouped.entries) {
-      if (!orderedGrouped.containsKey(entry.key)) {
-        orderedGrouped[entry.key] = entry.value;
-      }
-    }
-
-    final Map<String, bool> expandedGroups = {
-      for (final category in orderedGrouped.keys) category: true
-    };
+    bool showPlannedOnly = true;
+    final Map<String, bool> expandedGroups = {}; // ✅ Moved outside StatefulBuilder
 
     final List<String> selected = await showDialog<List<String>>(
       context: context,
@@ -771,26 +754,87 @@ class _WorkoutPageState extends State<WorkoutPage> {
         List<String> tempSelected = [..._selectedExercises];
 
         return StatefulBuilder(builder: (context, setLocalState) {
+          final filteredExercises = showPlannedOnly
+              ? allExercises.where((ex) => plannedExercises.contains(ex['name'])).toList()
+              : allExercises;
+
+          final Map<String, List<String>> grouped = {};
+          for (final exercise in filteredExercises) {
+            final category = exercise['category'] ?? 'Other';
+            final name = exercise['name'] ?? 'Unnamed';
+            grouped.putIfAbsent(category, () => []).add(name);
+          }
+
+          for (final group in grouped.values) {
+            group.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+          }
+
+          const categoryOrder = [
+            'Horizontal Press',
+            'Horizontal Pull',
+            'Vertical Press',
+            'Vertical Pull',
+            'Lateral Raise',
+            'Arm Extension',
+            'Arm Curl',
+            'Squat Pattern',
+            'Hip Hinge',
+            'Leg Extension',
+            'Leg Curl',
+            'Hip Abduction/adduction',
+            'Calf Raise',
+            'Core',
+          ];
+
+          final Map<String, List<String>> orderedGrouped = {};
+          for (final cat in categoryOrder) {
+            if (grouped.containsKey(cat)) {
+              orderedGrouped[cat] = grouped[cat]!;
+            }
+          }
+          for (final entry in grouped.entries) {
+            if (!orderedGrouped.containsKey(entry.key)) {
+              orderedGrouped[entry.key] = entry.value;
+            }
+          }
+
+          // ✅ Only initialize new entries without overwriting toggled states
+          for (final category in orderedGrouped.keys) {
+            expandedGroups.putIfAbsent(category, () => false);
+          }
+
           return AlertDialog(
             backgroundColor: Colors.blueGrey.shade900,
-            title: const Text("Select Exercises", style: TextStyle(color: Colors.white)),
+            title: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text("Select Exercises", style: TextStyle(fontSize: 13, color: Colors.white)),
+                Row(
+                  children: [
+                    const Text("Planned Only", style: TextStyle(fontSize: 12, color: Colors.white70)),
+                    Switch(
+                      value: showPlannedOnly,
+                      onChanged: (value) => setLocalState(() => showPlannedOnly = value),
+                      activeColor: Colors.lightBlueAccent,
+                    ),
+                  ],
+                ),
+              ],
+            ),
             content: SizedBox(
               width: double.maxFinite,
               child: ListView(
                 children: orderedGrouped.entries.map((entry) {
                   final category = entry.key;
                   final exercises = entry.value;
-                  final isExpanded = expandedGroups[category] ?? true;
+                  final isExpanded = expandedGroups[category] ?? false;
 
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       ListTile(
                         tileColor: Colors.blueGrey.shade800,
-                        title: Text(
-                          category,
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                        ),
+                        title: Text(category, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                         trailing: Icon(
                           isExpanded ? Icons.expand_less : Icons.expand_more,
                           color: Colors.white70,
@@ -850,16 +894,15 @@ class _WorkoutPageState extends State<WorkoutPage> {
       _workoutSets.addAll(
         List.generate(
           _selectedExercises.length,
-              (index) => List.generate(
-            _defaultSets,
-                (_) => SetDetails(),
-          ),
+              (_) => List.generate(_defaultSets, (_) => SetDetails()),
         ),
       );
 
       _initializeControllers();
     });
   }
+
+
 
   void _onReorderExercises(int oldIndex, int newIndex) {
     setState(() {
@@ -992,6 +1035,78 @@ class _WorkoutPageState extends State<WorkoutPage> {
         const SnackBar(content: Text('Workout saved successfully.')),
       );
 
+      // ✅ Push workout into BlockBuilder day (block_data)
+      final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
+
+// Get block start date
+      final blockDoc = await userDoc.collection('block_planner').doc('current_block').get();
+      if (blockDoc.exists) {
+        final blockStartStr = blockDoc.data()?['blockStartDate'];
+        if (blockStartStr != null) {
+          final blockStart = DateTime.parse(blockStartStr);
+          final daysSinceStart = _selectedDate.difference(blockStart).inDays;
+          final weekIndex = (daysSinceStart / 7).floor();
+          final dayIndex = daysSinceStart % 7;
+
+          final weekDocRef = userDoc
+              .collection('block_data')
+              .doc('current_block')
+              .collection('weeks')
+              .doc('week_$weekIndex');
+
+          // Ensure week doc exists
+          await weekDocRef.set({'exists': true}, SetOptions(merge: true));
+
+          final List<Map<String, dynamic>> updatedExercises = [];
+
+          for (int i = 0; i < _selectedExercises.length; i++) {
+            final name = _selectedExercises[i];
+            final sets = _workoutSets[i];
+            final bestSet = sets.where((s) => s.weight != null && s.reps != null).fold<SetDetails?>(null, (prev, curr) {
+              if (prev == null) return curr;
+              final prevE1RM = calculateE1RM(prev.weight, prev.reps?.toDouble(), prev.rir);
+              final currE1RM = calculateE1RM(curr.weight, curr.reps?.toDouble(), curr.rir);
+              return (currE1RM > prevE1RM) ? curr : prev;
+            });
+
+            if (bestSet != null && bestSet.weight != null && bestSet.reps != null) {
+              updatedExercises.add({
+                'name': name,
+                'weight': bestSet.weight,
+                'reps': bestSet.reps,
+                'rir': bestSet.rir ?? 0.0,
+              });
+            }
+          }
+
+          // Fetch current day data
+          final dayDoc = await weekDocRef.collection('days').doc('day_$dayIndex').get();
+          final existing = dayDoc.data();
+          final List<Map<String, dynamic>> existingExercises = List<Map<String, dynamic>>.from(existing?['exercises'] ?? []);
+
+          // Merge existing + new, keeping highest E1RM
+          for (final newEx in updatedExercises) {
+            final matchIndex = existingExercises.indexWhere((e) => e['name'] == newEx['name']);
+            if (matchIndex == -1) {
+              existingExercises.add(newEx);
+            } else {
+              final existingEx = existingExercises[matchIndex];
+              final oldE1RM = calculateE1RM(existingEx['weight'], existingEx['reps']?.toDouble(), existingEx['rir']);
+              final newE1RM = calculateE1RM(newEx['weight'], newEx['reps']?.toDouble(), newEx['rir']);
+              if (newE1RM > oldE1RM) {
+                existingExercises[matchIndex] = newEx;
+              }
+            }
+          }
+
+          await weekDocRef
+              .collection('days')
+              .doc('day_$dayIndex')
+              .set({'exercises': existingExercises}, SetOptions(merge: true));
+        }
+      }
+
+
       // ✅ Return top sets to BlockBuilder
       Navigator.pop(context, {
         'date': _selectedDate,
@@ -1012,6 +1127,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
       );
     }
   }
+
+
 
 
 
