@@ -98,6 +98,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   List<Map<String, String>> allExercisesFromFirestore = []; // 🔥 Full list
   List<String> plannedExercises = []; // 💡 Selected in BlockPlanner
   List<int> weekIndices = [];
+  VoidCallback? _lastUndoAction;
+
 
   late Future<void> _initialLoad;
 
@@ -613,6 +615,28 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       }
     });
 
+    final backup = List.generate(
+      exercisesPerDay,
+          (i) => {
+        'name': exerciseSelection[weekIndex][dayIndex][i],
+        'nameCtrl': exerciseControllers[weekIndex][dayIndex][i].text,
+        'weightCtrl': weightControllers[weekIndex][dayIndex][i].text,
+        'repsCtrl': repsControllers[weekIndex][dayIndex][i].text,
+        'rirCtrl': rirControllers[weekIndex][dayIndex][i].text,
+      },
+    );
+
+    _lastUndoAction = () {
+      setState(() {
+        for (int i = 0; i < backup.length; i++) {
+          exerciseSelection[weekIndex][dayIndex][i] = backup[i]['name'] as String?;
+          _getController(exerciseControllers, weekIndex, dayIndex, i).text = backup[i]['nameCtrl']!;
+          _getController(weightControllers, weekIndex, dayIndex, i).text = backup[i]['weightCtrl']!;
+          _getController(repsControllers, weekIndex, dayIndex, i).text = backup[i]['repsCtrl']!;
+          _getController(rirControllers, weekIndex, dayIndex, i).text = backup[i]['rirCtrl']!;
+        }
+      });
+    };
     // Optional: delete it from Firestore too
     saveDayToFirestore(weekIndex, dayIndex);
   }
@@ -1110,7 +1134,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         color: Colors.blueGrey.shade900,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(6, 1, 6, 6), // 👈 Less top padding
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+
 
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1125,65 +1150,70 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
+                      Text(
+                        "Week ${weekIndex + 1}",
+                        style: const TextStyle(
+                          fontSize: 11,
+                          height: 0.9, // ⬅️ less than 1 = tighter
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white70,
+                        ),
+                      ),
+                      const SizedBox(height: 0), // Optional: keeps it tidy
                       Row(
                         children: [
                           Text(
-                            "Week ${weekIndex + 1}",
+                            dayLabel,
                             style: const TextStyle(
-                              fontSize: 11,
+                              fontSize: 12,
+                              height: 0.5, // ⬅️ less than 1 = tighter
                               fontWeight: FontWeight.bold,
-                              color: Colors.white70,
+                              color: Colors.white,
                             ),
                           ),
-                          const SizedBox(width: 4),
+                          const SizedBox(width: 6),
                           IconButton(
                             icon: const Icon(Icons.delete_sweep_outlined),
-                            color: Colors.white,
-                            tooltip: "Clear this day",
+                            visualDensity: VisualDensity.compact,
                             iconSize: 16,
                             padding: EdgeInsets.zero,
-                            constraints: BoxConstraints(),
+                            constraints: const BoxConstraints(
+                              minWidth: 28,
+                              minHeight: 28,
+                            ),
+                            color: Colors.white,
+                            tooltip: "Clear this day",
                             onPressed: () {
                               showDialog(
                                 context: context,
-                                builder: (ctx) =>
-                                    AlertDialog(
-                                      title: const Text("Clear this day?"),
-                                      content: const Text(
-                                          "This will remove all exercises from this day."),
-                                      actions: [
-                                        TextButton(
-                                            onPressed: () => Navigator.pop(ctx),
-                                            child: const Text("Cancel")),
-                                        TextButton(
-                                          onPressed: () {
-                                            Navigator.pop(ctx);
-                                            clearDay(weekIndex, dayIndex);
-                                            ScaffoldMessenger.of(context)
-                                                .showSnackBar(
-                                              const SnackBar(content: Text(
-                                                  "✅ Day cleared.")),
-                                            );
-                                          },
-                                          child: const Text("Yes"),
-                                        ),
-                                      ],
+                                builder: (ctx) => AlertDialog(
+                                  title: const Text("Clear this day?"),
+                                  content: const Text("This will remove all exercises from this day."),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(ctx),
+                                      child: const Text("Cancel"),
                                     ),
+                                    TextButton(
+                                      onPressed: () {
+                                        Navigator.pop(ctx);
+                                        clearDay(weekIndex, dayIndex);
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          const SnackBar(content: Text("✅ Day cleared.")),
+                                        );
+                                      },
+                                      child: const Text("Yes"),
+                                    ),
+                                  ],
+                                ),
                               );
                             },
                           ),
                         ],
                       ),
-                      Text(
-                        dayLabel,
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
-                      ),
                     ],
                   ),
+
 
 
                   const Spacer(),
@@ -1344,7 +1374,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                 ],
               ),
 
-              const SizedBox(height: 6),
+              const SizedBox(height: 3),
 
               // 🟣 Table Header
               Container(
@@ -1399,7 +1429,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
               // 🟣 Scrollable Exercise Table (~6.5 visible rows)
               const SizedBox(height: 6),
               SizedBox(
-                height: 220,
+                height: 255,
                 child: ListView(
                   physics: const BouncingScrollPhysics(),
                   children: [
@@ -1476,21 +1506,25 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 // Sort and dedupe just to be safe
                                 circuitStartIndices[weekIndex][dayIndex] = circuitStarts.toSet().toList()..sort();
 
+                                _lastUndoAction = () {
+                                  setState(() {
+                                    exerciseSelection[weekIndex][dayIndex].insert(rowIndex, removed['name'] as String?);
+                                    exerciseControllers[weekIndex][dayIndex].insert(rowIndex, removed['nameCtrl'] as TextEditingController);
+                                    weightControllers[weekIndex][dayIndex].insert(rowIndex, removed['weightCtrl'] as TextEditingController);
+                                    repsControllers[weekIndex][dayIndex].insert(rowIndex, removed['repsCtrl'] as TextEditingController);
+                                    rirControllers[weekIndex][dayIndex].insert(rowIndex, removed['rirCtrl'] as TextEditingController);
+                                  });
+                                };
 
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                     content: Text('Deleted "${removed['name']}"'),
                                     action: SnackBarAction(
-                                      label: 'Undo',
-                                      onPressed: () {
-                                        setState(() {
-                                          exerciseSelection[weekIndex][dayIndex].insert(rowIndex, removed['name'] as String?);
-                                          exerciseControllers[weekIndex][dayIndex].insert(rowIndex, removed['nameCtrl'] as TextEditingController);
-                                          weightControllers[weekIndex][dayIndex].insert(rowIndex, removed['weightCtrl'] as TextEditingController);
-                                          repsControllers[weekIndex][dayIndex].insert(rowIndex, removed['repsCtrl'] as TextEditingController);
-                                          rirControllers[weekIndex][dayIndex].insert(rowIndex, removed['rirCtrl'] as TextEditingController);
-                                        });
-                                      },
+                                      label: 'Undo', textColor: Colors.black, // 👈 Force it to be visible
+                                        onPressed: () {
+                                          _lastUndoAction?.call(); // 🔁 Run undo
+                                          _lastUndoAction = null;
+                                        },
                                     ),
                                   ),
                                 );
@@ -1503,11 +1537,12 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
 
                         // Add the circuit-level "+" button
-                        widgets.add(const SizedBox(height: 4));
+                        widgets.add(const SizedBox(height: 2));
                         widgets.add(
                           Align(
                             alignment: Alignment.centerRight,
                             child: TextButton.icon(
+
                               icon: const Icon(Icons.add_circle_outline, color: Colors.white),
                               label: const Text("Add Exercise", style: TextStyle(color: Colors.white, fontSize: 11)),
                               onPressed: () {
@@ -1530,14 +1565,15 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                               },
 
                               style: TextButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                padding: EdgeInsets.zero, // ⬅️ Tightest possible
                                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                minimumSize: const Size(0, 24),
+                                minimumSize: const Size(0, 20), // ⬇️ smaller height
                               ),
+
                             ),
                           ),
                         );
-                        widgets.add(const SizedBox(height: 8));
+                        widgets.add(const SizedBox(height: 3));
                       }
 
                       return widgets;
@@ -1622,38 +1658,19 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           title: const Text("Block Builder 2.0"),
         actions: [
           IconButton(
-            icon: const Icon(Icons.delete_forever),
-            tooltip: "Delete All Data",
-            onPressed: () async {
-              final confirm = await showDialog<bool>(
-                context: context,
-                builder: (_) => AlertDialog(
-                  title: Text("Wipe All Progress?"),
-                  content: Text("This will delete all workouts and block data. Are you sure?"),
-                  actions: [
-                    TextButton(onPressed: () => Navigator.pop(context, false), child: Text("Cancel")),
-                    TextButton(onPressed: () => Navigator.pop(context, true), child: Text("Yes")),
-                  ],
-                ),
+            icon: const Icon(Icons.undo),
+            tooltip: "Undo last action",
+            onPressed: _lastUndoAction != null
+                ? () {
+              _lastUndoAction?.call();
+              _lastUndoAction = null;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text("✅ Last action undone.")),
               );
-
-              if (confirm == true) {
-                await deleteAllBlockAndWorkoutData();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('✅ All progress wiped.')),
-                );
-                setState(() {
-                  exerciseControllers.clear();
-                  weightControllers.clear();
-                  repsControllers.clear();
-                  rirControllers.clear();
-                  scheduledRepTargets.clear();
-                  selectedTemplateIds = List.generate(initialWeeks, (_) => List.generate(7, (_) => null));
-                  exerciseSelection = List.generate(initialWeeks, (_) => List.generate(7, (_) => List.filled(exercisesPerDay, null)));
-                });
-              }
-            },
+            }
+                : null, // Disable button if nothing to undo
           ),
+
           IconButton(
             icon: const Icon(Icons.delete_outline),
             tooltip: "Delete BlockBuilder Only",
