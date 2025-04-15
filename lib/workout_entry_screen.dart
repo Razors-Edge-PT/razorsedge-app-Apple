@@ -69,6 +69,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
   final List<List<TextEditingController>> _rirControllers =
   []; // New controller list for RIR
   final int _defaultSets = 3;
+  VoidCallback? _lastUndoAction;
+
 
   bool _isLoadingData = true; // Tracks whether data is still loading
 
@@ -1129,12 +1131,6 @@ class _WorkoutPageState extends State<WorkoutPage> {
   }
 
 
-
-
-
-
-
-
   void addSet(int exerciseIndex) {
     setState(() {
       _workoutSets[exerciseIndex]
@@ -1312,6 +1308,16 @@ class _WorkoutPageState extends State<WorkoutPage> {
         actionsIconTheme: const IconThemeData(color: Colors.white),
         actions: [
           IconButton(
+            icon: const Icon(Icons.undo),
+            tooltip: "Undo last action",
+            onPressed: _lastUndoAction != null
+                ? () {
+              _lastUndoAction?.call();
+              _lastUndoAction = null;
+            }
+                : null,
+          ),
+          IconButton(
             icon: const Icon(Icons.delete),
             onPressed: () {
               showDialog(
@@ -1423,16 +1429,48 @@ class _WorkoutPageState extends State<WorkoutPage> {
     padding: const EdgeInsets.only(right: 16),
     child: const Icon(Icons.delete, color: Colors.white),
     ),
-    onDismissed: (_) {
-    setState(() {
-    _selectedExercises.removeAt(i);
-    _workoutSets.removeAt(i);
-    _repsControllers.removeAt(i);
-    _weightControllers.removeAt(i);
-    _rirControllers.removeAt(i);
-    });
-    },
-    child: Card(
+      onDismissed: (_) {
+        final removedExercise = _selectedExercises[i];
+        final removedSets = _workoutSets[i];
+        final removedReps = _repsControllers[i];
+        final removedWeight = _weightControllers[i];
+        final removedRIR = _rirControllers[i];
+
+        setState(() {
+          _selectedExercises.removeAt(i);
+          _workoutSets.removeAt(i);
+          _repsControllers.removeAt(i);
+          _weightControllers.removeAt(i);
+          _rirControllers.removeAt(i);
+        });
+
+        _lastUndoAction = () {
+          setState(() {
+            _selectedExercises.insert(i, removedExercise);
+            _workoutSets.insert(i, removedSets);
+            _repsControllers.insert(i, removedReps);
+            _weightControllers.insert(i, removedWeight);
+            _rirControllers.insert(i, removedRIR);
+          });
+        };
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Deleted "$removedExercise"'),
+            action: SnackBarAction(
+              label: 'Undo',
+              textColor: Colors.blueGrey.shade700, // 🔧 Optional: make 'Undo' visible
+              onPressed: () {
+                _lastUndoAction?.call();
+                _lastUndoAction = null;
+              },
+            ),
+          ),
+        );
+      },
+
+
+      child: Card(
     key: ValueKey("card_$i"), // 👈 Ensure each card also has a key for ReorderableListView
     color: Colors.blueGrey.shade700,
     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(3)),
