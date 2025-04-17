@@ -64,6 +64,16 @@ Map<String, List<String>> groupExercisesByCategory(List<Map<String, String>> all
 const double exerciseRowHeight = 36.0;
 const double circuitEndRowHeight = 70.0;
 
+class ExerciseRow {
+  String? exercise;
+  TextEditingController exerciseController = TextEditingController();
+  TextEditingController weightController = TextEditingController();
+  TextEditingController repsController = TextEditingController();
+  TextEditingController rirController = TextEditingController();
+  int circuitIndex;
+
+  ExerciseRow({this.exercise, required this.circuitIndex});
+}
 
 
 class BlockBuilder2 extends StatefulWidget {
@@ -82,10 +92,12 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   List <Template> templates = []; // Make sure Template is imported
   List<List<String?>> selectedTemplateIds = [];
   late List<List<List<String?>>> exerciseSelection;
-  List<List<List<TextEditingController>>> exerciseControllers = [];
-  List<List<List<TextEditingController>>> weightControllers = [];
-  List<List<List<TextEditingController>>> repsControllers = [];
-  List<List<List<TextEditingController>>> rirControllers = [];
+  List<List<List<ExerciseRow>>> exerciseRows = [];
+
+  //List<List<List<TextEditingController>>> exerciseControllers = [];
+  //List<List<List<TextEditingController>>> weightControllers = [];
+  //List<List<List<TextEditingController>>> repsControllers = [];
+  //List<List<List<TextEditingController>>> rirControllers = [];
   List<List<List<TextEditingController>>> e1rmControllers = [];
   List<List<List<int>>> circuitStartIndices = [];
   final ScrollController _horizontalScrollController = ScrollController();
@@ -119,6 +131,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       loadTopSetsFromWorkouts(),
       loadPlannedExercisesFromFirestore(),
     ]);
+
 
     selectedTemplateIds = List.generate(totalWeeks, (_) => List.generate(7, (_) => null));
     exerciseSelection = List.generate(totalWeeks, (_) => List.generate(7, (_) => List.filled(exercisesPerDay, null, growable: true)));
@@ -154,9 +167,22 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           totalWeeks = ((end.difference(start).inDays) / 7).ceil();
           visibleWeekCount = 2;
           weekIndices = List.generate(totalWeeks, (i) => i);
+
+          // ✅ INITIALIZE 2 STARTING ROWS PER DAY:
+          exerciseRows = List.generate(
+            totalWeeks,
+                (_) => List.generate(
+              7,
+                  (_) => [
+                ExerciseRow(circuitIndex: 0),
+                ExerciseRow(circuitIndex: 0),
+              ],
+            ),
+          );
         });
       }
     }
+
   }
 
 
@@ -232,10 +258,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   }
 
 
-
-
-
-
   @override
   void dispose() {
     final user = FirebaseAuth.instance.currentUser;
@@ -262,8 +284,12 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     final template = templates.firstWhere((t) => t.id == templateId, orElse: () => Template(id: '', name: '', day: '', exercises: []));
 
     for (int i = 0; i < exercisesPerDay; i++) {
-      final controller = _getController(exerciseControllers, weekIndex, dayIndex, i);
-      controller.text = i < template.exercises.length ? template.exercises[i] : '';
+      if (i < exerciseRows[weekIndex][dayIndex].length) {
+        exerciseRows[weekIndex][dayIndex][i].exerciseController.text =
+        i < template.exercises.length ? template.exercises[i] : '';
+        exerciseRows[weekIndex][dayIndex][i].exercise = template.exercises[i];
+      }
+
     }
   }
 
@@ -338,23 +364,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
 
 
-  void _addCircuitRowBelow(int weekIndex, int dayIndex, int rowIndex) {
-    setState(() {
-      final insertIndex = rowIndex + 1;
-
-      exerciseSelection[weekIndex][dayIndex]
-          .insert(insertIndex, null);
-      exerciseControllers[weekIndex][dayIndex]
-          .insert(insertIndex, TextEditingController());
-      weightControllers[weekIndex][dayIndex]
-          .insert(insertIndex, TextEditingController());
-      repsControllers[weekIndex][dayIndex]
-          .insert(insertIndex, TextEditingController());
-      rirControllers[weekIndex][dayIndex]
-          .insert(insertIndex, TextEditingController());
-    });
-  }
-
   void _ensureCircuitStartIndicesInitialized(int weekIndex, int dayIndex) {
     while (circuitStartIndices.length <= weekIndex) {
       circuitStartIndices.add([]);
@@ -371,17 +380,11 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
 
   void _reorderRow(int weekIndex, int dayIndex, int from, int to) {
-    void move<T>(List<List<List<T>>> list) {
-      final item = list[weekIndex][dayIndex].removeAt(from);
-      list[weekIndex][dayIndex].insert(to, item);
-    }
-
-    move(exerciseSelection);
-    move(exerciseControllers);
-    move(weightControllers);
-    move(repsControllers);
-    move(rirControllers);
+    final list = exerciseRows[weekIndex][dayIndex];
+    final row = list.removeAt(from);
+    list.insert(to, row);
   }
+
 
 
   Future<void> loadBlockDataFromFirestore() async {
@@ -396,8 +399,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         .collection('weeks')
         .get();
 
-
-
     for (final weekDoc in weekSnapshots.docs) {
       final weekIndex = int.tryParse(weekDoc.id.replaceAll('week_', '')) ?? 0;
       final daySnapshots = await weekDoc.reference.collection('days').get();
@@ -405,53 +406,51 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       for (final dayDoc in daySnapshots.docs) {
         final dayIndex = int.tryParse(dayDoc.id.replaceAll('day_', '')) ?? 0;
         final data = dayDoc.data();
-        final exercises = List<Map<String, dynamic>>.from(data['exercises'] ?? []);
 
+        final exercises = List<Map<String, dynamic>>.from(data['exercises'] ?? []);
+        final savedCircuitIndices = List<int>.from(data['circuitStartIndices'] ?? [0]);
+
+        final List<ExerciseRow> loadedRows = [];
 
         for (int i = 0; i < exercises.length; i++) {
           final ex = exercises[i];
-          final name = ex['name'] ?? '';
-          final weight = ex['weight'];
-          final reps = ex['reps'];
-          final rir = ex['rir'];
+          final name = (ex['name'] ?? '').toString().trim();
 
-          // 🧠 Ensure lists are long enough
-          while (exerciseSelection[weekIndex][dayIndex].length <= i) {
-            exerciseSelection[weekIndex][dayIndex].add(null);
-            exerciseControllers[weekIndex][dayIndex].add(TextEditingController());
-            weightControllers[weekIndex][dayIndex].add(TextEditingController());
-            repsControllers[weekIndex][dayIndex].add(TextEditingController());
-            rirControllers[weekIndex][dayIndex].add(TextEditingController());
-          }
+          if (name.isEmpty) continue; // 🧹 Skip blanks
 
-          exerciseSelection[weekIndex][dayIndex][i] = name;
-          _getController(exerciseControllers, weekIndex, dayIndex, i).text = name;
+          final row = ExerciseRow(
+            exercise: name,
+            circuitIndex: _getCircuitIndexForRow(i, savedCircuitIndices),
+          );
 
-          if (weight != null && weight > 0) {
-            _getController(weightControllers, weekIndex, dayIndex, i).text = weight.toString();
-          }
-          if (reps != null && reps > 0) {
-            _getController(repsControllers, weekIndex, dayIndex, i).text = reps.toString();
-          }
-          if (rir != null && rir > 0) {
-            _getController(rirControllers, weekIndex, dayIndex, i).text = rir.toString();
-          }
+          row.exerciseController.text = name;
+          row.weightController.text = (ex['weight'] != null && ex['weight'] != 0) ? ex['weight'].toString() : '';
+          row.repsController.text = (ex['reps'] != null && ex['reps'] != 0) ? ex['reps'].toString() : '';
+          row.rirController.text = (ex['rir'] != null && ex['rir'] != 0) ? ex['rir'].toString() : '';
+
+
+          loadedRows.add(row);
         }
-        final savedCircuitStartIndices = List<int>.from(data['circuitStartIndices'] ?? [0]);
 
-        _ensureCircuitStartIndicesInitialized(weekIndex, dayIndex);
-        circuitStartIndices[weekIndex][dayIndex] = savedCircuitStartIndices;
-
-
+        // ✅ Assign the loaded list
+        exerciseRows[weekIndex][dayIndex] = loadedRows;
       }
     }
-    await Future.delayed(Duration(milliseconds: 100));
-    setState(() {
-      print("✅ Data loaded, triggering UI rebuild");
-    });
-
 
     setState(() {});
+  }
+
+
+  int _getCircuitIndexForRow(int rowIndex, List<int> circuitStartIndices) {
+    int index = 0;
+    for (int i = 0; i < circuitStartIndices.length; i++) {
+      if (rowIndex >= circuitStartIndices[i]) {
+        index = i;
+      } else {
+        break;
+      }
+    }
+    return index;
   }
 
   Future<void> loadTopSetsFromWorkouts() async {
@@ -496,22 +495,18 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
     final exercises = <Map<String, dynamic>>[];
 
-    for (int i = 0; i < exerciseSelection[weekIndex][dayIndex].length; i++) {
-      final name = _getController(exerciseControllers, weekIndex, dayIndex, i).text.trim();
-      final weightText = _getController(weightControllers, weekIndex, dayIndex, i).text.trim();
-      final repsText = _getController(repsControllers, weekIndex, dayIndex, i).text.trim();
-      final rirText = _getController(rirControllers, weekIndex, dayIndex, i).text.trim();
+    final rows = exerciseRows[weekIndex][dayIndex];
+    for (final row in rows) {
+      final name = (row.exercise ?? '').trim();
+      if (name.isEmpty) continue;
 
-      if (name.isNotEmpty) {
-        exercises.add({
-          'name': name,
-          'weight': double.tryParse(weightText) ?? 0.0,
-          'reps': int.tryParse(repsText) ?? 0,
-          'rir': double.tryParse(rirText) ?? 0.0,
-        });
-      }
+      exercises.add({
+        'name': name,
+        'weight': double.tryParse(row.weightController.text) ?? 0.0,
+        'reps': int.tryParse(row.repsController.text) ?? 0,
+        'rir': double.tryParse(row.rirController.text) ?? 0.0,
+      });
     }
-
 
     final weekDocRef = FirebaseFirestore.instance
         .collection('users')
@@ -521,7 +516,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         .collection('weeks')
         .doc('week_$weekIndex');
 
-    // 🛠️ Make sure parent doc exists
     await weekDocRef.set({'exists': true}, SetOptions(merge: true));
 
     await weekDocRef
@@ -529,27 +523,37 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         .doc('day_$dayIndex')
         .set({
       'exercises': exercises,
-      'circuitStartIndices': circuitStartIndices[weekIndex][dayIndex], // ✅ Save circuit structure
+      'circuitStartIndices': circuitStartIndices[weekIndex]?[dayIndex] ?? [0],
     });
 
     print("✅ Saved day: week $weekIndex, day $dayIndex");
-
   }
+
+
 
   void _trimEmptyExerciseRows(int weekIndex, int dayIndex) {
-    final names = exerciseControllers[weekIndex][dayIndex];
+    if (weekIndex >= exerciseRows.length || dayIndex >= exerciseRows[weekIndex].length) return;
 
-    for (int i = exerciseSelection[weekIndex][dayIndex].length - 1; i >= 0; i--) {
-      final name = names[i].text.trim();
-      if (name.isEmpty) {
-        exerciseSelection[weekIndex][dayIndex].removeAt(i);
-        exerciseControllers[weekIndex][dayIndex].removeAt(i);
-        weightControllers[weekIndex][dayIndex].removeAt(i);
-        repsControllers[weekIndex][dayIndex].removeAt(i);
-        rirControllers[weekIndex][dayIndex].removeAt(i);
-      }
+    final rows = exerciseRows[weekIndex][dayIndex];
+
+    rows.removeWhere((row) => (row.exercise ?? '').trim().isEmpty);
+
+    // Optional: clean up circuitStartIndices if needed
+    final totalRows = rows.length;
+    final starts = circuitStartIndices[weekIndex][dayIndex];
+
+    starts.removeWhere((start) => start >= totalRows);
+
+    // Always ensure the first circuit starts at 0
+    if (starts.isEmpty || starts.first != 0) {
+      starts.insert(0, 0);
     }
+
+    circuitStartIndices[weekIndex][dayIndex] = starts.toSet().toList()..sort();
   }
+
+
+
 
   Future<void> deleteAllBlockAndWorkoutData() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -605,41 +609,42 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   }
 
   void clearDay(int weekIndex, int dayIndex) {
-    setState(() {
-      for (int i = 0; i < exercisesPerDay; i++) {
-        exerciseSelection[weekIndex][dayIndex][i] = null;
-        _getController(exerciseControllers, weekIndex, dayIndex, i).clear();
-        _getController(weightControllers, weekIndex, dayIndex, i).clear();
-        _getController(repsControllers, weekIndex, dayIndex, i).clear();
-        _getController(rirControllers, weekIndex, dayIndex, i).clear();
-      }
-    });
-
     final backup = List.generate(
       exercisesPerDay,
           (i) => {
-        'name': exerciseSelection[weekIndex][dayIndex][i],
-        'nameCtrl': exerciseControllers[weekIndex][dayIndex][i].text,
-        'weightCtrl': weightControllers[weekIndex][dayIndex][i].text,
-        'repsCtrl': repsControllers[weekIndex][dayIndex][i].text,
-        'rirCtrl': rirControllers[weekIndex][dayIndex][i].text,
+        'name': exerciseRows[weekIndex][dayIndex][i].exercise,
+        'nameCtrl': exerciseRows[weekIndex][dayIndex][i].exerciseController.text,
+        'weightCtrl': exerciseRows[weekIndex][dayIndex][i].weightController.text,
+        'repsCtrl': exerciseRows[weekIndex][dayIndex][i].repsController.text,
+        'rirCtrl': exerciseRows[weekIndex][dayIndex][i].rirController.text,
       },
     );
+
+    setState(() {
+      for (int i = 0; i < exercisesPerDay; i++) {
+        exerciseRows[weekIndex][dayIndex][i].exercise = null;
+        exerciseRows[weekIndex][dayIndex][i].exerciseController.clear();
+        exerciseRows[weekIndex][dayIndex][i].weightController.clear();
+        exerciseRows[weekIndex][dayIndex][i].repsController.clear();
+        exerciseRows[weekIndex][dayIndex][i].rirController.clear();
+      }
+    });
 
     _lastUndoAction = () {
       setState(() {
         for (int i = 0; i < backup.length; i++) {
-          exerciseSelection[weekIndex][dayIndex][i] = backup[i]['name'] as String?;
-          _getController(exerciseControllers, weekIndex, dayIndex, i).text = backup[i]['nameCtrl']!;
-          _getController(weightControllers, weekIndex, dayIndex, i).text = backup[i]['weightCtrl']!;
-          _getController(repsControllers, weekIndex, dayIndex, i).text = backup[i]['repsCtrl']!;
-          _getController(rirControllers, weekIndex, dayIndex, i).text = backup[i]['rirCtrl']!;
+          exerciseRows[weekIndex][dayIndex][i].exercise = backup[i]['name'] as String?;
+          exerciseRows[weekIndex][dayIndex][i].exerciseController.text = backup[i]['nameCtrl']!;
+          exerciseRows[weekIndex][dayIndex][i].weightController.text = backup[i]['weightCtrl']!;
+          exerciseRows[weekIndex][dayIndex][i].repsController.text = backup[i]['repsCtrl']!;
+          exerciseRows[weekIndex][dayIndex][i].rirController.text = backup[i]['rirCtrl']!;
         }
       });
     };
-    // Optional: delete it from Firestore too
+
     saveDayToFirestore(weekIndex, dayIndex);
   }
+
 
 
 
@@ -807,6 +812,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   Widget _buildExerciseField(int weekIndex, int dayIndex, int rowIndex) {
     final selected = exerciseSelection[weekIndex][dayIndex][rowIndex];
 
+    final row = exerciseRows[weekIndex][dayIndex][rowIndex];
+
     return GestureDetector(
       onTap: () async {
         await showCollapsibleExercisePicker(
@@ -815,13 +822,13 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           plannedExercises: plannedExercises,
           onSelected: (selectedExercise) {
             setState(() {
-              exerciseSelection[weekIndex][dayIndex][rowIndex] = selectedExercise;
-              _getController(exerciseControllers, weekIndex, dayIndex, rowIndex).text = selectedExercise;
+              row.exercise = selectedExercise;
+              row.exerciseController.text = selectedExercise;
 
               // Clear related inputs
-              _getController(weightControllers, weekIndex, dayIndex, rowIndex).clear();
-              _getController(repsControllers, weekIndex, dayIndex, rowIndex).clear();
-              _getController(rirControllers, weekIndex, dayIndex, rowIndex).clear();
+              row.weightController.clear();
+              row.repsController.clear();
+              row.rirController.clear();
             });
           },
         );
@@ -838,13 +845,14 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         child: Align(
           alignment: Alignment.centerLeft,
           child: Text(
-            selected ?? 'Select Exercise',
+            row.exercise ?? 'Select Exercise',
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontSize: 11, color: Colors.white),
           ),
         ),
       ),
     );
+
   }
 
 
@@ -899,26 +907,30 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
 
   Widget _buildExerciseRow(int weekIndex, int dayIndex, int rowIndex) {
+    if (weekIndex >= exerciseRows.length ||
+        dayIndex >= exerciseRows[weekIndex].length ||
+        rowIndex >= exerciseRows[weekIndex][dayIndex].length) {
+      return const SizedBox.shrink();
+    }
 
-    final weightController = _getController(weightControllers, weekIndex, dayIndex, rowIndex);
-    final repsController = _getController(repsControllers, weekIndex, dayIndex, rowIndex);
-    final rirController = _getController(rirControllers, weekIndex, dayIndex, rowIndex);
-
+    final row = exerciseRows[weekIndex][dayIndex][rowIndex];
+    final weightController = row.weightController;
+    final repsController = row.repsController;
+    final rirController = row.rirController;
+    final exerciseController = row.exerciseController;
 
     return StatefulBuilder(
       builder: (context, localSetState) {
-        final exerciseName = _getController(exerciseControllers, weekIndex, dayIndex, rowIndex).text;
-        // Parse values (or null if not present)
+        final exerciseName = exerciseController.text;
+
         final double? weight = double.tryParse(weightController.text);
         final int? reps = int.tryParse(repsController.text);
         final double? rir = double.tryParse(rirController.text);
 
-        // Hint logic (only when field is empty)
         int hintReps = 0;
         if (repsController.text.isEmpty && exerciseName.isNotEmpty) {
           final plannedIndex = getExercisePlannedCountBefore(exerciseName, weekIndex, dayIndex, rowIndex);
           if (weightController.text.isNotEmpty) {
-            // Calculate reps from weight input and correct sequence index
             hintReps = PeriodizationModelUtils.updateRepTarget(
               exerciseName,
               weightController.text,
@@ -926,14 +938,14 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
               plannedIndex,
             );
           } else {
-            // Use rep target from sequence based on planned position
             hintReps = PeriodizationModelUtils.upcomingRepTargetSequence(
               exerciseName,
               plannedIndex + 1,
             ).last;
           }
         }
-        final int plannedIndex = getExercisePlannedCountBefore(exerciseName, weekIndex, dayIndex, rowIndex);
+
+        final plannedIndex = getExercisePlannedCountBefore(exerciseName, weekIndex, dayIndex, rowIndex);
 
         final double hintWeight = (weightController.text.isEmpty && exerciseName.isNotEmpty)
             ? PeriodizationModelUtils.getSuggestedWeight(
@@ -941,184 +953,131 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           repsController,
           rirController,
           plannedIndex,
-          topSetsByExercise, // 🔥 new argument
+          topSetsByExercise,
         )
             : 0.0;
-
-
 
         final double? e1rm = PeriodizationModelUtils.calculateE1RM(
           weight ?? (weightController.text.isEmpty ? hintWeight : null),
           reps?.toDouble() ?? (repsController.text.isEmpty ? hintReps.toDouble() : null),
           rir ?? (rirController.text.isEmpty ? 0.5 : null),
         );
-//Colors.blueGrey.shade800,
 
-        return DragTarget<int>(
-          onWillAccept: (fromIndex) => fromIndex != rowIndex,
-          onAccept: (fromIndex) {
-            setState(() {
-              _reorderRow(weekIndex, dayIndex, fromIndex, rowIndex);
-              _draggedRowIndex = null;
-            });
-          },
-          builder: (context, candidateData, rejectedData) {
-            return Container(
-              height: exerciseRowHeight,
-              padding: const EdgeInsets.symmetric(horizontal: 2),
-              decoration: BoxDecoration(
-                color: getRowColor(weekIndex, dayIndex, rowIndex),
-                border: Border(
-                  bottom: BorderSide(color: Colors.blueGrey.shade700, width: 0.5),
-                ),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // 🟡 Exercise Cell with Drag
-                  Expanded(
-                    flex: 4,
-                    child: LongPressDraggable<int>(
-                      data: rowIndex,
-                      dragAnchorStrategy: pointerDragAnchorStrategy,
-                      onDragStarted: () => setState(() => _draggedRowIndex = rowIndex),
-                      onDraggableCanceled: (_, __) => setState(() => _draggedRowIndex = null),
-                      onDragEnd: (_) => setState(() => _draggedRowIndex = null),
-                      feedback: Material(
-                        color: Colors.transparent,
-                        child: Opacity(
-                          opacity: 0.8,
-                          child: _buildExerciseDragPreview(
-                            exerciseSelection[weekIndex][dayIndex][rowIndex],
-                          ),
+        return Container(
+          height: exerciseRowHeight,
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          decoration: BoxDecoration(
+            color: getRowColor(weekIndex, dayIndex, rowIndex),
+            border: Border(
+              bottom: BorderSide(color: Colors.blueGrey.shade700, width: 0.5),
+            ),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // 🟡 Drag handle only in exercise name
+              Expanded(
+                flex: 4,
+                child: ReorderableDragStartListener(
+                  index: rowIndex,
+                  child: GestureDetector(
+                    onTap: () async {
+                      await showCollapsibleExercisePicker(
+                        context: context,
+                        allGroupedExercises: groupExercisesByCategory(allExercisesFromFirestore),
+                        plannedExercises: plannedExercises,
+                        onSelected: (selectedExercise) {
+                          setState(() {
+                            row.exercise = selectedExercise;
+                            exerciseController.text = selectedExercise;
+                            weightController.clear();
+                            repsController.clear();
+                            rirController.clear();
+                          });
+                        },
+                      );
+                    },
+                    child: Container(
+                      width: 114,
+                      height: 30,
+                      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 1),
+                      decoration: BoxDecoration(
+                        color: getRowColor(weekIndex, dayIndex, rowIndex),
+                        border: Border.all(color: Colors.grey),
+                        borderRadius: BorderRadius.circular(4.0),
+                      ),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          row.exercise ?? 'Select Exercise',
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 11, color: Colors.white),
                         ),
                       ),
-                      child: _buildExerciseField(weekIndex, dayIndex, rowIndex),
                     ),
                   ),
-
-                  // Weight
-                  Expanded(
-                    flex: 2,
-                    child: TextField(
-                      controller: weightController,
-                      focusNode: _getFocusNode('w${weekIndex}_d${dayIndex}_r${rowIndex}_weight'),
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white, fontSize: 12),
-                      decoration: InputDecoration(
-                        isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(vertical: 8),
-                        hintText: (weightController.text.isEmpty && hintWeight > 0)
-                            ? hintWeight.toStringAsFixed(1)
-                            : null,
-                        hintStyle: const TextStyle(color: Colors.grey),
-                        border: InputBorder.none,
-                      ),
-                      onChanged: (_) => localSetState(() {}),
-                      onEditingComplete: () {
-                        _getFocusNode('w${weekIndex}_d${dayIndex}_r${rowIndex}_weight').unfocus();
-                      },
-                    ),
-                  ),
-
-                  // Reps
-                  Expanded(
-                    flex: 1,
-                    child: TextField(
-                      controller: repsController,
-                      focusNode: _getFocusNode('w${weekIndex}_d${dayIndex}_r${rowIndex}_reps'),
-                      keyboardType: TextInputType.number,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white, fontSize: 12),
-                      decoration: InputDecoration(
-                        isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(vertical: 8),
-                        hintText: (repsController.text.isEmpty && hintReps > 0)
-                            ? hintReps.toString()
-                            : null,
-                        hintStyle: const TextStyle(color: Colors.grey),
-                        border: InputBorder.none,
-                      ),
-                      onChanged: (_) => localSetState(() {}),
-                      onEditingComplete: () {
-                        _getFocusNode('w${weekIndex}_d${dayIndex}_r${rowIndex}_reps').unfocus();
-                      },
-                    ),
-                  ),
-
-                  // RIR
-                  Expanded(
-                    flex: 1,
-                    child: TextField(
-                      controller: rirController,
-                      focusNode: _getFocusNode('w${weekIndex}_d${dayIndex}_r${rowIndex}_rir'),
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white, fontSize: 12),
-                      decoration: const InputDecoration(
-                        isDense: true,
-                        contentPadding: EdgeInsets.symmetric(vertical: 8),
-                        hintText: "0.5",
-                        hintStyle: TextStyle(color: Colors.grey),
-                        border: InputBorder.none,
-                      ),
-                      onChanged: (_) => localSetState(() {}),
-                      onEditingComplete: () {
-                        _getFocusNode('w${weekIndex}_d${dayIndex}_r${rowIndex}_rir').unfocus();
-                      },
-                    ),
-                  ),
-
-                  // E1RM + Add Button
-                  Expanded(
-                    flex: 2,
-                    child: Container(
-                      alignment: Alignment.center,
-                      child: Stack(
-                        children: [
-                          Align(
-                            alignment: Alignment.center,
-                            child: Text(
-                              e1rm != null && e1rm > 0 ? e1rm.toStringAsFixed(1) : '',
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(color: Colors.white, fontSize: 12),
-                            ),
-                          ),
-
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
+                ),
               ),
-            );
-          },
-        );
 
+              // Weight
+              _buildFieldBox(weightController, hintWeight > 0 ? hintWeight.toStringAsFixed(1) : null,
+                  weekIndex, dayIndex, rowIndex, "weight", localSetState),
+
+              // Reps
+              _buildFieldBox(repsController, hintReps > 0 ? hintReps.toString() : null,
+                  weekIndex, dayIndex, rowIndex, "reps", localSetState),
+
+              // RIR
+              _buildFieldBox(rirController, "0.5",
+                  weekIndex, dayIndex, rowIndex, "rir", localSetState),
+
+              // E1RM
+              Expanded(
+                flex: 2,
+                child: Container(
+                  alignment: Alignment.center,
+                  child: Text(
+                    e1rm != null && e1rm > 0 ? e1rm.toStringAsFixed(1) : '',
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
       },
     );
 
   }
 
 
-
-  TextEditingController _ensureExerciseController(int w, int d, int r) {
-    while (exerciseControllers.length <= w) {
-      exerciseControllers.add([]);
-    }
-    while (exerciseControllers[w].length <= d) {
-      exerciseControllers[w].add([]);
-    }
-    while (exerciseControllers[w][d].length <= r) {
-      exerciseControllers[w][d].add(TextEditingController());
-    }
-    return exerciseControllers[w][d][r];
+  Widget _buildFieldBox(
+      TextEditingController controller,
+      String? hint,
+      int week, int day, int row,
+      String fieldKey,
+      void Function(void Function()) localSetState,
+      ) {
+    return Expanded(
+      flex: fieldKey == "weight" ? 2 : 1,
+      child: TextField(
+        controller: controller,
+        focusNode: _getFocusNode('w${week}_d${day}_r${row}_$fieldKey'),
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        textAlign: TextAlign.center,
+        style: const TextStyle(color: Colors.white, fontSize: 12),
+        decoration: InputDecoration(
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(vertical: 8),
+          hintText: controller.text.isEmpty ? hint : null,
+          hintStyle: const TextStyle(color: Colors.grey),
+          border: InputBorder.none,
+        ),
+        onChanged: (_) => localSetState(() {}),
+        onEditingComplete: () => _getFocusNode('w${week}_d${day}_r${row}_$fieldKey').unfocus(),
+      ),
+    );
   }
-
-
-
-
 
 
 
@@ -1301,13 +1260,14 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                           ),
                           onPressed: () async {
-                            // Now we can use await inside this block
                             final List<String> exercises = [];
-                            final int totalRows = exerciseControllers[weekIndex][dayIndex].length;
-                            for (int i = 0; i < totalRows; i++) {
-                              final name = _getController(exerciseControllers, weekIndex, dayIndex, i).text.trim();
+
+                            final rows = exerciseRows[weekIndex][dayIndex];
+                            for (final row in rows) {
+                              final name = row.exerciseController.text.trim();
                               if (name.isNotEmpty) exercises.add(name);
                             }
+
 
 
                             final DateTime workoutDate = blockStartDate.add(
@@ -1340,15 +1300,12 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                                 final reps = entry['reps']?.toString() ?? '';
                                 final rir = entry['rir']?.toString() ?? '';
 
-                                final exerciseController = _getController(
-                                    exerciseControllers, weekIndex, dayIndex,
-                                    i);
-                                final weightController = _getController(
-                                    weightControllers, weekIndex, dayIndex, i);
-                                final repsController = _getController(
-                                    repsControllers, weekIndex, dayIndex, i);
-                                final rirController = _getController(
-                                    rirControllers, weekIndex, dayIndex, i);
+                                final row = exerciseRows[weekIndex][dayIndex][i];
+                                final exerciseController = row.exerciseController;
+                                final weightController = row.weightController;
+                                final repsController = row.repsController;
+                                final rirController = row.rirController;
+
 
                                 exerciseController.text = exerciseName;
                                 weightController.text = weight;
@@ -1430,158 +1387,98 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
               const SizedBox(height: 6),
               SizedBox(
                 height: 255,
-                child: ListView(
-                  physics: const BouncingScrollPhysics(),
-                  children: [
-                    ...() {
-                      final widgets = <Widget>[];
-                      final circuits = _getCircuitStartIndices(weekIndex, dayIndex);
-                      final totalRows = exerciseSelection[weekIndex][dayIndex].length;
+                child: ReorderableListView.builder(
+                  itemCount: exerciseRows[weekIndex][dayIndex].length,
+                  onReorder: (oldIndex, newIndex) {
+                    setState(() {
+                      if (newIndex > oldIndex) newIndex -= 1;
+                      final movedRow = exerciseRows[weekIndex][dayIndex].removeAt(oldIndex);
+                      exerciseRows[weekIndex][dayIndex].insert(newIndex, movedRow);
 
-                      for (int c = 0; c < circuits.length; c++) {
-                        final start = circuits[c];
-                        final end = (c + 1 < circuits.length) ? circuits[c + 1] : totalRows;
+                      // Optional: Update circuitStartIndices if you rely on circuit logic
+                    });
+                  },
+                  proxyDecorator: (child, index, animation) {
+                    return Material(
+                      elevation: 2,
+                      child: child,
+                    );
+                  },
+                  buildDefaultDragHandles: false,
+                  itemBuilder: (context, rowIndex) {
+                    final row = exerciseRows[weekIndex][dayIndex][rowIndex];
+                    final isOriginalRow = rowIndex < exercisesPerDay;
 
-                        for (int rowIndex = start; rowIndex < end; rowIndex++) {
-                          final isOriginalRow = rowIndex < exercisesPerDay;
-
-                          widgets.add(
-                            Dismissible(
-                              key: ValueKey('week${weekIndex}_day${dayIndex}_row${rowIndex}_${exerciseSelection[weekIndex][dayIndex][rowIndex] ?? 'none'}'),
-                              direction: DismissDirection.endToStart,
-                              background: Container(
-                                color: Colors.red,
-                                alignment: Alignment.centerRight,
-                                padding: const EdgeInsets.only(right: 16),
-                                child: const Icon(Icons.delete, color: Colors.white),
-                              ),
-                              confirmDismiss: (_) async {
-                                // Prevent removal of original rows, but still allow the swipe gesture
-                                if (isOriginalRow) {
-                                  setState(() {
-                                    exerciseSelection[weekIndex][dayIndex][rowIndex] = null;
-                                    exerciseControllers[weekIndex][dayIndex][rowIndex].clear();
-                                    weightControllers[weekIndex][dayIndex][rowIndex].clear();
-                                    repsControllers[weekIndex][dayIndex][rowIndex].clear();
-                                    rirControllers[weekIndex][dayIndex][rowIndex].clear();
-                                  });
-
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('Row cleared.')),
-                                  );
-
-                                  return false; // Don't actually dismiss
-                                }
-
-                                return true; // Proceed with dismissal for added rows
-                              },
-                              onDismissed: (_) {
-                                // Only runs for non-original rows now
-                                final removed = {
-                                  'name': exerciseSelection[weekIndex][dayIndex][rowIndex],
-                                  'nameCtrl': exerciseControllers[weekIndex][dayIndex][rowIndex],
-                                  'weightCtrl': weightControllers[weekIndex][dayIndex][rowIndex],
-                                  'repsCtrl': repsControllers[weekIndex][dayIndex][rowIndex],
-                                  'rirCtrl': rirControllers[weekIndex][dayIndex][rowIndex],
-                                };
-
-                                setState(() {
-                                  exerciseSelection[weekIndex][dayIndex].removeAt(rowIndex);
-                                  exerciseControllers[weekIndex][dayIndex].removeAt(rowIndex);
-                                  weightControllers[weekIndex][dayIndex].removeAt(rowIndex);
-                                  repsControllers[weekIndex][dayIndex].removeAt(rowIndex);
-                                  rirControllers[weekIndex][dayIndex].removeAt(rowIndex);
-                                });
-                                // 🧠 After removing a row, update the circuitStartIndices
-                                final circuitStarts = circuitStartIndices[weekIndex][dayIndex];
-
-// Remove circuit starts that now point past the list length
-                                circuitStarts.removeWhere((start) => start >= exerciseSelection[weekIndex][dayIndex].length);
-
-// Ensure first circuit always starts at 0
-                                if (circuitStarts.isEmpty || circuitStarts.first != 0) {
-                                  circuitStarts.insert(0, 0);
-                                }
-
-// Sort and dedupe just to be safe
-                                circuitStartIndices[weekIndex][dayIndex] = circuitStarts.toSet().toList()..sort();
-
-                                _lastUndoAction = () {
-                                  setState(() {
-                                    exerciseSelection[weekIndex][dayIndex].insert(rowIndex, removed['name'] as String?);
-                                    exerciseControllers[weekIndex][dayIndex].insert(rowIndex, removed['nameCtrl'] as TextEditingController);
-                                    weightControllers[weekIndex][dayIndex].insert(rowIndex, removed['weightCtrl'] as TextEditingController);
-                                    repsControllers[weekIndex][dayIndex].insert(rowIndex, removed['repsCtrl'] as TextEditingController);
-                                    rirControllers[weekIndex][dayIndex].insert(rowIndex, removed['rirCtrl'] as TextEditingController);
-                                  });
-                                };
-
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('Deleted "${removed['name']}"'),
-                                    action: SnackBarAction(
-                                      label: 'Undo', textColor: Colors.black, // 👈 Force it to be visible
-                                        onPressed: () {
-                                          _lastUndoAction?.call(); // 🔁 Run undo
-                                          _lastUndoAction = null;
-                                        },
-                                    ),
-                                  ),
-                                );
-                              },
-                              child: _buildExerciseRow(weekIndex, dayIndex, rowIndex),
-                            ),
+                    return Dismissible(
+                      key: ValueKey('week${weekIndex}_day${dayIndex}_row${rowIndex}_${row.exercise ?? 'none'}'),
+                      direction: DismissDirection.endToStart,
+                      background: Container(
+                        color: Colors.red,
+                        alignment: Alignment.centerRight,
+                        padding: const EdgeInsets.only(right: 16),
+                        child: const Icon(Icons.delete, color: Colors.white),
+                      ),
+                      confirmDismiss: (_) async {
+                        if (isOriginalRow) {
+                          setState(() {
+                            row.exercise = null;
+                            row.exerciseController.clear();
+                            row.weightController.clear();
+                            row.repsController.clear();
+                            row.rirController.clear();
+                          });
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Row cleared.')),
                           );
+                          return false;
                         }
+                        return true;
+                      },
+                      onDismissed: (_) {
+                        final removedRow = row;
+                        setState(() {
+                          exerciseRows[weekIndex][dayIndex].removeAt(rowIndex);
+                          final starts = circuitStartIndices[weekIndex][dayIndex];
+                          starts.removeWhere((start) => start >= exerciseRows[weekIndex][dayIndex].length);
+                          if (starts.isEmpty || starts.first != 0) {
+                            starts.insert(0, 0);
+                          }
+                          circuitStartIndices[weekIndex][dayIndex] = starts.toSet().toList()..sort();
+                        });
 
+                        _lastUndoAction = () {
+                          setState(() {
+                            exerciseRows[weekIndex][dayIndex].insert(rowIndex, removedRow);
+                          });
+                        };
 
-
-                        // Add the circuit-level "+" button
-                        widgets.add(const SizedBox(height: 2));
-                        widgets.add(
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: TextButton.icon(
-
-                              icon: const Icon(Icons.add_circle_outline, color: Colors.white),
-                              label: const Text("Add Exercise", style: TextStyle(color: Colors.white, fontSize: 11)),
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('Deleted "${removedRow.exercise ?? 'Unnamed'}"'),
+                            action: SnackBarAction(
+                              label: 'Undo',
+                              textColor: Colors.black,
                               onPressed: () {
-                                setState(() {
-                                  final insertIndex = end;
-
-                                  exerciseSelection[weekIndex][dayIndex].insert(insertIndex, null);
-                                  exerciseControllers[weekIndex][dayIndex].insert(insertIndex, TextEditingController());
-                                  weightControllers[weekIndex][dayIndex].insert(insertIndex, TextEditingController());
-                                  repsControllers[weekIndex][dayIndex].insert(insertIndex, TextEditingController());
-                                  rirControllers[weekIndex][dayIndex].insert(insertIndex, TextEditingController());
-
-                                  // 🧠 Shift all circuit starts that come after this insert
-                                  for (int i = 0; i < circuitStartIndices[weekIndex][dayIndex].length; i++) {
-                                    if (circuitStartIndices[weekIndex][dayIndex][i] > insertIndex) {
-                                      circuitStartIndices[weekIndex][dayIndex][i]++;
-                                    }
-                                  }
-                                });
+                                _lastUndoAction?.call();
+                                _lastUndoAction = null;
                               },
-
-                              style: TextButton.styleFrom(
-                                padding: EdgeInsets.zero, // ⬅️ Tightest possible
-                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                minimumSize: const Size(0, 20), // ⬇️ smaller height
-                              ),
-
                             ),
                           ),
                         );
-                        widgets.add(const SizedBox(height: 3));
-                      }
-
-                      return widgets;
-                    }(),
-                  ],
-
+                      },
+                      child: Row(
+                        children: [
+                          const Padding(
+                            padding: EdgeInsets.only(left: 6, right: 4),
+                          ),
+                          Expanded(child: _buildExerciseRow(weekIndex, dayIndex, rowIndex)),
+                        ],
+                      ),
+                    );
+                  },
                 ),
               ),
+
 
               const SizedBox(height: 8),
 
@@ -1592,21 +1489,21 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                     setState(() {
                       _ensureCircuitStartIndicesInitialized(weekIndex, dayIndex);
 
-                      final insertIndex = exerciseSelection[weekIndex][dayIndex].length;
+                      final insertIndex = exerciseRows[weekIndex][dayIndex].length;
 
+                      // Insert 2 new ExerciseRows into the current day
                       for (int i = 0; i < 2; i++) {
-                        exerciseSelection[weekIndex][dayIndex].insert(insertIndex + i, null);
-                        exerciseControllers[weekIndex][dayIndex].insert(insertIndex + i, TextEditingController());
-                        weightControllers[weekIndex][dayIndex].insert(insertIndex + i, TextEditingController());
-                        repsControllers[weekIndex][dayIndex].insert(insertIndex + i, TextEditingController());
-                        rirControllers[weekIndex][dayIndex].insert(insertIndex + i, TextEditingController());
+                        exerciseRows[weekIndex][dayIndex].insert(
+                          insertIndex + i,
+                          ExerciseRow(circuitIndex: circuitStartIndices[weekIndex][dayIndex].length),
+                        );
                       }
 
+                      // Add circuit start index and sort
                       circuitStartIndices[weekIndex][dayIndex].add(insertIndex);
-                      circuitStartIndices[weekIndex][dayIndex].sort(); // optional but safe
+                      circuitStartIndices[weekIndex][dayIndex].sort();
                     });
                   },
-
                   icon: const Icon(Icons.add, size: 16, color: Colors.white70),
                   label: const Text("Add New Circuit", style: TextStyle(color: Colors.white70, fontSize: 11)),
                   style: TextButton.styleFrom(
@@ -1615,6 +1512,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                   ),
                 ),
               ),
+
 
 
 
@@ -1678,33 +1576,40 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
               final confirm = await showDialog<bool>(
                 context: context,
                 builder: (_) => AlertDialog(
-                  title: Text("Clear Block Builder?"),
-                  content: Text("This will delete all exercise planning from BlockBuilder, but not any workouts you've done."),
+                  title: const Text("Clear Block Builder?"),
+                  content: const Text("This will delete all exercise planning from BlockBuilder, but not any workouts you've done."),
                   actions: [
-                    TextButton(onPressed: () => Navigator.pop(context, false), child: Text("Cancel")),
-                    TextButton(onPressed: () => Navigator.pop(context, true), child: Text("Yes")),
+                    TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Cancel")),
+                    TextButton(onPressed: () => Navigator.pop(context, true), child: const Text("Yes")),
                   ],
                 ),
               );
 
               if (confirm == true) {
                 await deleteBlockBuilderDataOnly();
+
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('🧼 BlockBuilder data deleted.')),
+                  const SnackBar(content: Text('🧼 BlockBuilder data deleted.')),
                 );
 
                 setState(() {
-                  exerciseControllers.clear();
-                  weightControllers.clear();
-                  repsControllers.clear();
-                  rirControllers.clear();
+                  exerciseRows = List.generate(
+                    initialWeeks,
+                        (_) => List.generate(7, (_) => [
+                      ExerciseRow(circuitIndex: 0),
+                      ExerciseRow(circuitIndex: 0),
+                    ]),
+                  );
+
                   selectedTemplateIds = List.generate(initialWeeks, (_) => List.generate(7, (_) => null));
-                  exerciseSelection = List.generate(initialWeeks, (_) => List.generate(7, (_) => List.filled(exercisesPerDay, null)));
+                  circuitStartIndices = List.generate(initialWeeks, (_) => List.generate(7, (_) => [0]));
                   scheduledRepTargets.clear();
+                  _lastUndoAction = null;
                 });
               }
             },
           ),
+
 
         ],
       ),
