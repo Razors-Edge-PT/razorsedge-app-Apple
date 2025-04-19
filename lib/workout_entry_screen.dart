@@ -1515,36 +1515,26 @@ class _WorkoutPageState extends State<WorkoutPage> {
     ),
     children: [
                     // New row between selected exercise and workout sets:
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 6.0),
-                      child: Row(
-                        children:  [
-                          Text(
-                            _selectedExercises[i],
-                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                          ),
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6.0, vertical: 2.0),
+        child: Row(
 
-                          SizedBox(width: 28.0),
-                          Text(
-                            ' Avg E1RM:${getAverageE1RM(_selectedExercises[i]).toStringAsFixed(1)} kg', // ✅ Now passing exercise name
-                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.blueGrey),
-                          ),
-
-                          // Extra spacing before the new element
-                          SizedBox(width: 8.0),
-
-                          // Check set 2 E1RM in UI, commented out till needed
-                          //Text(
-                          //'Set 2 E1RM: ${getSet2E1RM(i).toStringAsFixed(1)}',
-                          //  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.red),
-                          // ),
+          mainAxisAlignment: MainAxisAlignment.end, // 👈 Pushes to the right
+          children: [
+            Text(
+              'Avg E1RM: ${getAverageE1RM(_selectedExercises[i]).toStringAsFixed(1)} kg',
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: Colors.blueGrey,
+              ),
+            ),
+          ],
+        ),
+      ),
 
 
-
-                        ],
-                      ),
-                    ),
-                    for (int j = 0; j < _workoutSets[i].length; j++)
+      for (int j = 0; j < _workoutSets[i].length; j++)
                       Padding(
                         padding: const EdgeInsets.only(left: 6, bottom: 0, top: 0, right: 6),
                         child: Column(
@@ -1609,6 +1599,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                                       ),
                                                     ],
                                                   ),
+
+
                                               ],
                                             ),
                                           ],

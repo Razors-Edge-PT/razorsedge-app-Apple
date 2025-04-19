@@ -6,6 +6,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'workout_entry_screen.dart';
 import 'periodization_model_utils.dart';
 import 'core_exercises.dart';
+import 'package:uuid/uuid.dart';
+import 'template_details.dart'; // if you're navigating directly to TemplateDetailsScreen
+import 'templates.dart'; // ✅ this is the one that defines TemplatesScreen
+
+
 
 
 // 🧠 Group exercises by category for dropdown UI
@@ -65,6 +70,7 @@ const double exerciseRowHeight = 36.0;
 const double circuitEndRowHeight = 70.0;
 
 class ExerciseRow {
+  final String id; // ✅ Unique per row
   String? exercise;
   TextEditingController exerciseController = TextEditingController();
   TextEditingController weightController = TextEditingController();
@@ -72,7 +78,8 @@ class ExerciseRow {
   TextEditingController rirController = TextEditingController();
   int circuitIndex;
 
-  ExerciseRow({this.exercise, required this.circuitIndex});
+  ExerciseRow({String? id, this.exercise, required this.circuitIndex})
+      : id = id ?? const Uuid().v4(); // <-- generate if not provided
 }
 
 
@@ -91,7 +98,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   final int exercisesPerDay = 3;
   List <Template> templates = []; // Make sure Template is imported
   List<List<String?>> selectedTemplateIds = [];
-  late List<List<List<String?>>> exerciseSelection;
+ // late List<List<List<String?>>> exerciseSelection;
   List<List<List<ExerciseRow>>> exerciseRows = [];
 
   //List<List<List<TextEditingController>>> exerciseControllers = [];
@@ -113,6 +120,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   VoidCallback? _lastUndoAction;
 
 
+
   late Future<void> _initialLoad;
 
 
@@ -123,6 +131,15 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     return _focusNodes.putIfAbsent(key, () => FocusNode());
   }
 
+  Map<int, List<ExerciseRow>> groupByCircuitIndex(List<ExerciseRow> rows) {
+    final Map<int, List<ExerciseRow>> grouped = {};
+    for (final row in rows) {
+      grouped.putIfAbsent(row.circuitIndex, () => []).add(row);
+    }
+    return grouped;
+  }
+
+
   Future<void> loadAllData() async {
     await loadBlockDateRange();
     await Future.wait([
@@ -132,9 +149,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       loadPlannedExercisesFromFirestore(),
     ]);
 
-
     selectedTemplateIds = List.generate(totalWeeks, (_) => List.generate(7, (_) => null));
-    exerciseSelection = List.generate(totalWeeks, (_) => List.generate(7, (_) => List.filled(exercisesPerDay, null, growable: true)));
+    //exerciseSelection = List.generate(totalWeeks, (_) => List.generate(7, (_) => List.filled(exercisesPerDay, null, growable: true)));
 
     await loadBlockDataFromFirestore();
   }
@@ -174,8 +190,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                 (_) => List.generate(
               7,
                   (_) => [
-                ExerciseRow(circuitIndex: 0),
-                ExerciseRow(circuitIndex: 0),
+                    ExerciseRow(id: const Uuid().v4(), circuitIndex: 0),
+                    ExerciseRow(id: const Uuid().v4(), circuitIndex: 0),
               ],
             ),
           );
@@ -195,12 +211,21 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         return Template(
           id: doc.id,
           name: doc['name'],
-          day: doc.get('day'), // ✅ Add this line
-          exercises: List<String>.from(doc['exercises']),
+          day: doc.data().containsKey('day') ? doc.get('day') : null,
+
+          exercises: (() {
+            final rawExercises = doc['exercises'];
+            return rawExercises is List && rawExercises.isNotEmpty
+                ? (rawExercises.first is Map
+                ? List<String>.from(rawExercises.map((e) => e['name'] ?? 'Unnamed'))
+                : List<String>.from(rawExercises))
+                : <String>[];
+          })(),
         );
       }).toList();
       setState(() {}); // Trigger rebuild once loaded
     }
+    print("✅ Templates loaded: ${templates.map((t) => t.name).toList()}");
   }
 
   Map<String, List<String>> groupedExercises = {};
@@ -244,6 +269,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   void initState() {
     super.initState();
 
+
     _horizontalScrollController.addListener(() {
       final maxScroll = _horizontalScrollController.position.maxScrollExtent;
       final currentScroll = _horizontalScrollController.position.pixels;
@@ -281,17 +307,59 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
 
   void _populateExercisesFromTemplate(int weekIndex, int dayIndex, String templateId) {
-    final template = templates.firstWhere((t) => t.id == templateId, orElse: () => Template(id: '', name: '', day: '', exercises: []));
+    final template = templates.firstWhere(
+          (t) => t.id == templateId,
+      orElse: () => Template(id: '', name: '', day: '', exercises: []),
+    );
 
-    for (int i = 0; i < exercisesPerDay; i++) {
-      if (i < exerciseRows[weekIndex][dayIndex].length) {
-        exerciseRows[weekIndex][dayIndex][i].exerciseController.text =
-        i < template.exercises.length ? template.exercises[i] : '';
-        exerciseRows[weekIndex][dayIndex][i].exercise = template.exercises[i];
+    // Determine if the exercises are in new structured format
+    final List<Map<String, dynamic>> parsedExercises = template.exercises.map((e) {
+      if (e is String) {
+        return {'name': e, 'circuitIndex': 0}; // fallback default
       }
+      return e as Map<String, dynamic>;
+    }).toList();
 
+    final rows = exerciseRows[weekIndex][dayIndex];
+
+    // 🔧 Add enough rows
+    while (rows.length < parsedExercises.length) {
+      rows.add(ExerciseRow(circuitIndex: 0));
     }
+
+    // 🧹 Clear all first
+    for (final row in rows) {
+      row.exercise = null;
+      row.exerciseController.clear();
+      row.weightController.clear();
+      row.repsController.clear();
+      row.rirController.clear();
+    }
+
+    // ✅ Fill from parsed data
+    for (int i = 0; i < parsedExercises.length; i++) {
+      final name = parsedExercises[i]['name'] ?? '';
+      final circuitIndex = parsedExercises[i]['circuitIndex'] ?? 0;
+
+      rows[i].exercise = name;
+      rows[i].exerciseController.text = name;
+      rows[i].circuitIndex = circuitIndex;
+    }
+
+    // ✅ Rebuild circuitStartIndices
+    _ensureCircuitStartIndicesInitialized(weekIndex, dayIndex);
+    final newStarts = <int>{};
+    for (int i = 0; i < rows.length; i++) {
+      if (i == 0 || rows[i].circuitIndex != rows[i - 1].circuitIndex) {
+        newStarts.add(i);
+      }
+    }
+    circuitStartIndices[weekIndex][dayIndex] = newStarts.toList()..sort();
+
+    setState(() {});
   }
+
+
 
   TextEditingController _getController(
       List<List<List<TextEditingController>>> controllerList,
@@ -419,8 +487,11 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           if (name.isEmpty) continue; // 🧹 Skip blanks
 
           final row = ExerciseRow(
+            id: const Uuid().v4(),
             exercise: name,
-            circuitIndex: _getCircuitIndexForRow(i, savedCircuitIndices),
+            circuitIndex: ex.containsKey('circuitIndex')
+                ? ex['circuitIndex']
+                : _getCircuitIndexForRow(i, savedCircuitIndices), // ✅ fallback
           );
 
           row.exerciseController.text = name;
@@ -428,17 +499,31 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           row.repsController.text = (ex['reps'] != null && ex['reps'] != 0) ? ex['reps'].toString() : '';
           row.rirController.text = (ex['rir'] != null && ex['rir'] != 0) ? ex['rir'].toString() : '';
 
-
           loadedRows.add(row);
         }
 
         // ✅ Assign the loaded list
         exerciseRows[weekIndex][dayIndex] = loadedRows;
+
+        // ✅ Rebuild circuitStartIndices based on circuitIndex values
+        final List<int> newStarts = [];
+        int? lastCircuit;
+        for (int i = 0; i < loadedRows.length; i++) {
+          final currentCircuit = loadedRows[i].circuitIndex;
+          if (i == 0 || currentCircuit != lastCircuit) {
+            newStarts.add(i);
+            lastCircuit = currentCircuit;
+          }
+        }
+
+        _ensureCircuitStartIndicesInitialized(weekIndex, dayIndex);
+        circuitStartIndices[weekIndex][dayIndex] = newStarts;
       }
     }
 
     setState(() {});
   }
+
 
 
   int _getCircuitIndexForRow(int rowIndex, List<int> circuitStartIndices) {
@@ -505,7 +590,9 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         'weight': double.tryParse(row.weightController.text) ?? 0.0,
         'reps': int.tryParse(row.repsController.text) ?? 0,
         'rir': double.tryParse(row.rirController.text) ?? 0.0,
+        'circuitIndex': row.circuitIndex, // ✅ NEW
       });
+
     }
 
     final weekDocRef = FirebaseFirestore.instance
@@ -655,11 +742,12 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       for (int d = 0; d < 7; d++) {
         if (w == targetWeek && d > targetDay) break;
 
-        for (int r = 0; r < exercisesPerDay; r++) {
-          if (w == targetWeek && d == targetDay && r >= targetRow) break;
+        final rows = exerciseRows[w][d];
+        final int lastRow = (w == targetWeek && d == targetDay) ? targetRow : rows.length;
 
-          final name = exerciseSelection[w][d][r];
-          if (name == exerciseName) {
+        for (int r = 0; r < lastRow; r++) {
+          final row = rows[r];
+          if ((row.exercise ?? '').trim() == exerciseName) {
             count++;
           }
         }
@@ -668,6 +756,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
     return count;
   }
+
 
 
 
@@ -810,8 +899,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
 
   Widget _buildExerciseField(int weekIndex, int dayIndex, int rowIndex) {
-    final selected = exerciseSelection[weekIndex][dayIndex][rowIndex];
-
     final row = exerciseRows[weekIndex][dayIndex][rowIndex];
 
     return GestureDetector(
@@ -852,10 +939,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         ),
       ),
     );
-
   }
-
-
 
 
   Widget _inputBox({required String hint, int flex = 1}) {
@@ -978,7 +1062,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
               // 🟡 Drag handle only in exercise name
               Expanded(
                 flex: 4,
-                child: ReorderableDragStartListener(
+                child: ReorderableDelayedDragStartListener(
                   index: rowIndex,
                   child: GestureDetector(
                     onTap: () async {
@@ -1185,27 +1269,57 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                         padding: const EdgeInsets.only(right: 2),
                         child: TextButton(
                           onPressed: () async {
-                            final selectedTemplateId = await showMenu<String>(
+                            // Wait for templates to finish loading (safe guard)
+                            await _initialLoad;
+
+                            if (templates.isEmpty) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text("⚠️ No templates found.")),
+                              );
+                              return;
+                            }
+
+                            final selectedTemplate = await showDialog<Template>(
                               context: context,
-                              position: RelativeRect.fromLTRB(
-                                  100, 100, 200, 200),
-                              items: templates.map((template) {
-                                return PopupMenuItem<String>(
-                                  value: template.id,
-                                  child: Text(template.name),
+                              builder: (context) {
+                                return AlertDialog(
+                                  title: const Text('Select a Template'),
+                                  content: SizedBox(
+                                    width: double.maxFinite,
+                                    height: 400,
+                                    child: ListView.builder(
+                                      itemCount: templates.length,
+                                      itemBuilder: (context, index) {
+                                        final template = templates[index];
+                                        return ListTile(
+                                          title: Text(template.name),
+                                          onTap: () {
+                                            Navigator.of(context).pop(template);
+                                          },
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(context),
+                                      child: const Text("Cancel"),
+                                    ),
+                                  ],
                                 );
-                              }).toList(),
+                              },
                             );
 
-                            if (selectedTemplateId != null) {
+                            if (selectedTemplate != null) {
                               setState(() {
-                                selectedTemplateIds[weekIndex][dayIndex] =
-                                    selectedTemplateId;
-                                _populateExercisesFromTemplate(
-                                    weekIndex, dayIndex, selectedTemplateId);
+                                selectedTemplateIds[weekIndex][dayIndex] = selectedTemplate.id;
+                                _populateExercisesFromTemplate(weekIndex, dayIndex, selectedTemplate.id);
                               });
                             }
                           },
+
+
+
                           style: TextButton.styleFrom(
                             padding: const EdgeInsets.symmetric(horizontal: 4),
                             minimumSize: const Size(0, 30),
@@ -1213,20 +1327,28 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                           ),
                           child: Text(
                                 () {
+                              if (weekIndex >= selectedTemplateIds.length ||
+                                  dayIndex >= selectedTemplateIds[weekIndex].length) {
+                                return "Template";
+                              }
+
                               final id = selectedTemplateIds[weekIndex][dayIndex];
-                              if (id == null) return "Template";
+                              if (id == null || id.isEmpty) return "Template";
+
                               final match = templates.firstWhere(
                                     (t) => t.id == id,
-                                orElse: () => Template(id: '',
-                                    name: 'Template',
-                                    day: '',
-                                    exercises: []),
+                                orElse: () => Template(
+                                  id: '',
+                                  name: 'Template',
+                                  day: '',
+                                  exercises: [],
+                                ),
                               );
                               return match.name;
                             }(),
-                            style: const TextStyle(fontSize: 11,
-                                color: Colors.white),
+                            style: const TextStyle(fontSize: 11, color: Colors.white),
                           ),
+
 
                         ),
 
@@ -1410,7 +1532,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                     final isOriginalRow = rowIndex < exercisesPerDay;
 
                     return Dismissible(
-                      key: ValueKey('week${weekIndex}_day${dayIndex}_row${rowIndex}_${row.exercise ?? 'none'}'),
+                      key: ValueKey(row.id),
                       direction: DismissDirection.endToStart,
                       background: Container(
                         color: Colors.red,
@@ -1478,6 +1600,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                   },
                 ),
               ),
+
 
 
               const SizedBox(height: 8),
