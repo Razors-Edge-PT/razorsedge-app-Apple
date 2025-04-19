@@ -52,17 +52,31 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
           FirebaseFirestore.instance.collection('users').doc(user.uid);
       templateSnapshot = await userDoc.collection('templates').get();
       if (templateSnapshot != null) {
-        final templateList = templateSnapshot!.docs
-            .map((doc) => Template(
-                  id: doc.id,
-                  name: doc.get('name'),
-                  day: doc.get('day'),
-                  exercises: List<String>.from(doc.get('exercises')),
-                ))
-            .toList();
+        print("📦 Raw Firestore template snapshot: ${templateSnapshot!.docs.length} templates");
+
+        final templateList = templateSnapshot!.docs.map((doc) {
+          final rawExercises = doc.get('exercises');
+
+          // 🧠 Detect whether it's the new format or the old one
+          final parsedExercises = rawExercises is List && rawExercises.isNotEmpty
+              ? (rawExercises.first is Map
+              ? List<String>.from(rawExercises.map((e) => e['name'] ?? 'Unnamed'))
+              : List<String>.from(rawExercises)) // fallback for old string-only list
+              : <String>[];
+
+          return Template(
+            id: doc.id,
+            name: doc.get('name') ?? 'Unnamed',
+            day: doc.data().containsKey('day') ? doc.get('day') : null,
+
+            exercises: parsedExercises,
+          );
+        }).toList();
+
+
         setState(() {
           templates = templateList;
-          print(templates.length); // Check the length of the list
+          print("✅ Parsed templates: ${templates.length}");
         });
       }
     }
@@ -126,7 +140,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Templates'),
+        title: const Text('Workout Planner'),
         actions: [
           IconButton(
             icon: const Icon(Icons.add),

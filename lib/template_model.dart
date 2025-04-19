@@ -1,13 +1,13 @@
 class Template {
   final String id; // Add the id property
   final String name;
-  final String day;
+  final String? day; // ✅ make nullable
   final List<String> exercises; // List of exercise IDs
 
   Template({
     required this.id,
     required this.name,
-    required this.day,
+   this.day,
     required this.exercises,
   });
 
@@ -15,19 +15,19 @@ class Template {
     return {
       'id': id,
       'name': name,
-      'day': day,
+      if (day != null) 'day': day, // ✅ only include if present
       'exercises': exercises,
     };
   }
 
   Template copyWith({
-    String? id, // Make id nullable for updates
+    String? id,
     String? name,
     String? day,
     List<String>? exercises,
   }) {
     return Template(
-      id: '',
+      id: id ?? this.id,
       name: name ?? this.name,
       day: day ?? this.day,
       exercises: exercises ?? List.from(this.exercises),
