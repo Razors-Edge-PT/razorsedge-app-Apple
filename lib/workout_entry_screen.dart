@@ -38,7 +38,8 @@ class WorkoutPage extends StatefulWidget {
   final Template? initialTemplate;
   final Workout? workout; // Make workout optional
   final bool isNewWorkout;
-  final List<String>? prefilledExercises;
+  final List<Map<String, dynamic>>? prefilledExercisesWithCircuits;
+  final List<String>? prefilledExercises; // 👈 Add this line back
   final DateTime? initialDate; // ✅ Add this line
   final String? initialWorkoutName; // ✅ Add this
 
@@ -47,7 +48,8 @@ class WorkoutPage extends StatefulWidget {
     this.initialTemplate,
     this.workout,
     this.isNewWorkout = true,
-    this.prefilledExercises,
+    this.prefilledExercisesWithCircuits,
+    this.prefilledExercises, // ✅ Don't forget this!
     this.initialDate,
     this.initialWorkoutName, // ✅ Add this
   }) : super(key: key);
@@ -601,12 +603,17 @@ class _WorkoutPageState extends State<WorkoutPage> {
     loadPlannedExercisesFromFirestore(); // 🔥 Load planned exercises
     loadPreviousWorkoutData(); // ✅ Fetch past E1RMs & reps
 
-    if (widget.prefilledExercises != null) {
-      // ✅ Use circuit-aware structure
+    if (widget.prefilledExercisesWithCircuits != null) {
+      // ✅ Preferred circuit-aware format
+      _selectedExercisesWithCircuits.addAll(widget.prefilledExercisesWithCircuits!);
+    } else if (widget.prefilledExercises != null) {
+      // ✅ Fallback to single circuit (index 0)
       _selectedExercisesWithCircuits.addAll(
         widget.prefilledExercises!.map((e) => {'name': e, 'circuitIndex': 0}),
       );
+    }
 
+    if (_selectedExercisesWithCircuits.isNotEmpty) {
       for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
         _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
         _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
@@ -623,6 +630,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
     _fetchLastWorkoutTopSetReps();
   }
+
 
 
 
@@ -680,6 +688,161 @@ class _WorkoutPageState extends State<WorkoutPage> {
     });
   }
 
+
+  void _addNewCircuitExercise() {
+    setState(() {
+      int nextCircuitIndex = 0;
+
+      if (_selectedExercisesWithCircuits.isNotEmpty) {
+        final lastCircuitIndex = _selectedExercisesWithCircuits.last['circuitIndex'] ?? 0;
+        nextCircuitIndex = lastCircuitIndex + 1;
+      }
+
+      _selectedExercisesWithCircuits.add({
+        'name': '',
+        'circuitIndex': nextCircuitIndex,
+      });
+
+      _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
+      _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+      _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+      _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+    });
+  }
+
+  void _showExercisePickerForRow(int index) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
+
+    final allExercises = snapshot.docs.map((doc) => {
+      'name': doc['name'] as String,
+      'category': doc['category'] as String,
+    }).toList();
+
+    bool showPlannedOnly = true;
+    final Map<String, bool> expandedGroups = {};
+
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(builder: (context, setLocalState) {
+          final filteredExercises = showPlannedOnly
+              ? allExercises.where((ex) => plannedExercises.contains(ex['name'])).toList()
+              : allExercises;
+
+          final Map<String, List<String>> grouped = {};
+          for (final exercise in filteredExercises) {
+            final category = exercise['category'] ?? 'Other';
+            final name = exercise['name'] ?? 'Unnamed';
+            grouped.putIfAbsent(category, () => []).add(name);
+          }
+
+          for (final group in grouped.values) {
+            group.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+          }
+
+          const categoryOrder = [
+            'Horizontal Press',
+            'Horizontal Pull',
+            'Vertical Press',
+            'Vertical Pull',
+            'Lateral Raise',
+            'Arm Extension',
+            'Arm Curl',
+            'Squat Pattern',
+            'Hip Hinge',
+            'Leg Extension',
+            'Leg Curl',
+            'Hip Abduction/adduction',
+            'Calf Raise',
+            'Core',
+          ];
+
+          final Map<String, List<String>> orderedGrouped = {};
+          for (final cat in categoryOrder) {
+            if (grouped.containsKey(cat)) {
+              orderedGrouped[cat] = grouped[cat]!;
+            }
+          }
+          for (final entry in grouped.entries) {
+            if (!orderedGrouped.containsKey(entry.key)) {
+              orderedGrouped[entry.key] = entry.value;
+            }
+          }
+
+          for (final category in orderedGrouped.keys) {
+            expandedGroups.putIfAbsent(category, () => false);
+          }
+
+          return AlertDialog(
+            backgroundColor: Colors.blueGrey.shade900,
+            title: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text("Select Exercise", style: TextStyle(fontSize: 13, color: Colors.white)),
+                Row(
+                  children: [
+                    const Text("Planned Only", style: TextStyle(fontSize: 12, color: Colors.white70)),
+                    Switch(
+                      value: showPlannedOnly,
+                      onChanged: (value) => setLocalState(() => showPlannedOnly = value),
+                      activeColor: Colors.lightBlueAccent,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              height: 400,
+              child: ListView(
+                children: orderedGrouped.entries.map((entry) {
+                  final category = entry.key;
+                  final exercises = entry.value;
+                  final isExpanded = expandedGroups[category] ?? false;
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ListTile(
+                        tileColor: Colors.blueGrey.shade800,
+                        title: Text(category, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                        trailing: Icon(
+                          isExpanded ? Icons.expand_less : Icons.expand_more,
+                          color: Colors.white70,
+                        ),
+                        onTap: () {
+                          setLocalState(() {
+                            expandedGroups[category] = !isExpanded;
+                          });
+                        },
+                      ),
+                      if (isExpanded)
+                        ...exercises.map((name) {
+                          return ListTile(
+                            title: Text(name, style: const TextStyle(color: Colors.white70)),
+                            onTap: () => Navigator.pop(ctx, name),
+                          );
+                        }),
+                      const Divider(height: 10, color: Colors.grey),
+                    ],
+                  );
+                }).toList(),
+              ),
+            ),
+          );
+        });
+      },
+    );
+
+    if (selected != null && selected.isNotEmpty) {
+      setState(() {
+        _selectedExercisesWithCircuits[index]['name'] = selected;
+      });
+    }
+  }
 
 
 
@@ -933,17 +1096,32 @@ class _WorkoutPageState extends State<WorkoutPage> {
   }
 
 
-
   void _onReorderExercises(int oldIndex, int newIndex) {
     setState(() {
       if (newIndex > oldIndex) newIndex--;
 
+      // Remove data from old position
       final movedExercise = _selectedExercisesWithCircuits.removeAt(oldIndex);
       final movedSets = _workoutSets.removeAt(oldIndex);
       final movedReps = _repsControllers.removeAt(oldIndex);
       final movedWeight = _weightControllers.removeAt(oldIndex);
       final movedRir = _rirControllers.removeAt(oldIndex);
 
+      // Get new circuit index from neighbor (fallback to 0)
+      int newCircuitIndex = 0;
+      if (_selectedExercisesWithCircuits.isNotEmpty) {
+        if (newIndex == 0) {
+          newCircuitIndex = _selectedExercisesWithCircuits.first['circuitIndex'] ?? 0;
+        } else if (newIndex >= _selectedExercisesWithCircuits.length) {
+          newCircuitIndex = _selectedExercisesWithCircuits.last['circuitIndex'] ?? 0;
+        } else {
+          newCircuitIndex = _selectedExercisesWithCircuits[newIndex]['circuitIndex'] ?? 0;
+        }
+      }
+
+      movedExercise['circuitIndex'] = newCircuitIndex;
+
+      // Insert at new position
       _selectedExercisesWithCircuits.insert(newIndex, movedExercise);
       _workoutSets.insert(newIndex, movedSets);
       _repsControllers.insert(newIndex, movedReps);
@@ -951,6 +1129,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
       _rirControllers.insert(newIndex, movedRir);
     });
   }
+
 
 
 
@@ -1256,18 +1435,39 @@ class _WorkoutPageState extends State<WorkoutPage> {
   }
 
   void _navigateToTopSets(String exerciseName) async {
-    List<Workout> recentWorkouts = await getRecentWorkoutsForExercise(exerciseName,_selectedDate); // ✅ Fetch all previous workouts
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final snapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('workouts')
+        .orderBy('date', descending: true)
+        .limit(20)
+        .get();
+
+    final recentWorkouts = snapshot.docs.map((doc) {
+      return Workout.fromFirestore(doc);
+    }).where((workout) => workout.exercises.any((ex) => ex.name == exerciseName)).toList();
+
+    if (recentWorkouts.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No recent workouts found for this exercise.')),
+      );
+      return;
+    }
 
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => TopSetsScreen(
           exerciseName: exerciseName,
-          recentWorkouts: recentWorkouts, // ✅ Pass the resolved List<Workout>
+          recentWorkouts: recentWorkouts,
         ),
       ),
     );
   }
+
 
 
 
@@ -1448,21 +1648,43 @@ class _WorkoutPageState extends State<WorkoutPage> {
                   ),
                 ],
               ),
+
+
     ReorderableListView(
     shrinkWrap: true,
     physics: const NeverScrollableScrollPhysics(),
     onReorder: _onReorderExercises,
-    children: List.generate(_selectedExercisesWithCircuits.length, (i) {
-    return Dismissible(
-    key: ValueKey(_selectedExercisesWithCircuits[i]),
-    direction: DismissDirection.endToStart,
-    background: Container(
-    color: Colors.red,
-    alignment: Alignment.centerRight,
-    padding: const EdgeInsets.only(right: 16),
-    child: const Icon(Icons.delete, color: Colors.white),
-    ),
-      onDismissed: (_) {
+      children: List.generate(_selectedExercisesWithCircuits.length, (i) {
+        final current = _selectedExercisesWithCircuits[i];
+        final prev = i > 0 ? _selectedExercisesWithCircuits[i - 1] : null;
+        final isNewCircuit = i == 0 || current['circuitIndex'] != prev?['circuitIndex'];
+
+        return Column(
+            key: ValueKey("column_$i"),
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+            if (isNewCircuit)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+          child: Text(
+            'Circuit ${current['circuitIndex'] + 1}',
+            style: const TextStyle(
+              color: Colors.lightBlueAccent,
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
+            ),
+          ),
+        ),
+        Dismissible(
+        key: ValueKey(current['name']),
+        direction: DismissDirection.endToStart,
+        background: Container(
+        color: Colors.red,
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 16),
+        child: const Icon(Icons.delete, color: Colors.white),
+        ),
+        onDismissed: (_) {
         final removedExercise = _selectedExercisesWithCircuits[i];
         final removedSets = _workoutSets[i];
         final removedReps = _repsControllers[i];
@@ -1470,56 +1692,63 @@ class _WorkoutPageState extends State<WorkoutPage> {
         final removedRIR = _rirControllers[i];
 
         setState(() {
-          _selectedExercisesWithCircuits.removeAt(i);
-          _workoutSets.removeAt(i);
-          _repsControllers.removeAt(i);
-          _weightControllers.removeAt(i);
-          _rirControllers.removeAt(i);
+        _selectedExercisesWithCircuits.removeAt(i);
+        _workoutSets.removeAt(i);
+        _repsControllers.removeAt(i);
+        _weightControllers.removeAt(i);
+        _rirControllers.removeAt(i);
         });
 
         _lastUndoAction = () {
-          setState(() {
-            _selectedExercisesWithCircuits.insert(i, removedExercise);
-            _workoutSets.insert(i, removedSets);
-            _repsControllers.insert(i, removedReps);
-            _weightControllers.insert(i, removedWeight);
-            _rirControllers.insert(i, removedRIR);
-          });
+        setState(() {
+        _selectedExercisesWithCircuits.insert(i, removedExercise);
+        _workoutSets.insert(i, removedSets);
+        _repsControllers.insert(i, removedReps);
+        _weightControllers.insert(i, removedWeight);
+        _rirControllers.insert(i, removedRIR);
+        });
         };
 
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Deleted "$removedExercise"'),
-            action: SnackBarAction(
-              label: 'Undo',
-              textColor: Colors.blueGrey.shade700, // 🔧 Optional: make 'Undo' visible
-              onPressed: () {
-                _lastUndoAction?.call();
-                _lastUndoAction = null;
-              },
-            ),
-          ),
+        SnackBar(
+        content: Text('Deleted "${removedExercise['name']}"'),
+        action: SnackBarAction(
+        label: 'Undo',
+        textColor: Colors.blueGrey.shade700,
+        onPressed: () {
+        _lastUndoAction?.call();
+        _lastUndoAction = null;
+        },
+        ),
+        ),
         );
-      },
-
-
-      child: Card(
-    key: ValueKey("card_$i"), // 👈 Ensure each card also has a key for ReorderableListView
+        },
+        child: Card(
+        key: ValueKey("card_$i"), // 👈 Unique per exercise
+        // 🔁 All your existing ExpansionTile UI goes here
     color: Colors.blueGrey.shade700,
     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(3)),
     margin: const EdgeInsets.only(left: 0, top: 2, right: 0, bottom: 0),
     child: ExpansionTile(
     // 🧠 Everything you already had inside the card
-      title: Text(
-        _selectedExercisesWithCircuits[i]['name'] ?? 'Unnamed',
-
+      title: (_selectedExercisesWithCircuits[i]['name'] ?? '').isEmpty
+          ? TextButton(
+        onPressed: () => _showExercisePickerForRow(i),
+        child: const Text(
+          'Select Exercise',
+          style: TextStyle(color: Colors.white70),
+        ),
+      )
+          : Text(
+        _selectedExercisesWithCircuits[i]['name'],
         style: TextStyle(
-    color: Colors.grey.shade300,
-    fontWeight: FontWeight.bold,
-    fontSize: 14,
-    ),
-    ),
-    trailing: Row(
+          color: Colors.grey.shade300,
+          fontWeight: FontWeight.bold,
+          fontSize: 14,
+        ),
+      ),
+
+      trailing: Row(
     mainAxisSize: MainAxisSize.min,
     children: [
     IconButton(
@@ -1826,10 +2055,31 @@ class _WorkoutPageState extends State<WorkoutPage> {
                     ),
                   ], //paste point
                 ),
-              ),
+              ), //old bracket for Card
+        ),
+            ],
+
     );
     }),
-    ),],
+    ),
+            Padding(
+              padding: const EdgeInsets.only(top: 12.0),
+              child: Align(
+                alignment: Alignment.center,
+                child: ElevatedButton.icon(
+                  onPressed: _addNewCircuitExercise,
+                  icon: const Icon(Icons.add),
+                  label: const Text("Add Circuit"),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blueGrey,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+
+
+          ],
         ),
       ),
       floatingActionButton: FloatingActionButton(
