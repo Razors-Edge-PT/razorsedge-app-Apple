@@ -1382,32 +1382,34 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                           ),
                           onPressed: () async {
-                            final List<String> exercises = [];
+                            final List<Map<String, dynamic>> exercisesWithCircuits = [];
 
                             final rows = exerciseRows[weekIndex][dayIndex];
                             for (final row in rows) {
                               final name = row.exerciseController.text.trim();
-                              if (name.isNotEmpty) exercises.add(name);
+                              if (name.isNotEmpty) {
+                                exercisesWithCircuits.add({
+                                  'name': name,
+                                  'circuitIndex': row.circuitIndex,
+                                });
+                              }
                             }
 
-
-
                             final DateTime workoutDate = blockStartDate.add(
-                                Duration(days: weekIndex * 7 + dayIndex));
+                              Duration(days: weekIndex * 7 + dayIndex),
+                            );
                             final String formattedWorkoutName =
-                                "${DateFormat('EEE d MMM').format(
-                                workoutDate)} - Week ${weekIndex + 1}";
+                                "${DateFormat('EEE d MMM').format(workoutDate)} - Week ${weekIndex + 1}";
 
                             final result = await Navigator.push(
                               context,
                               MaterialPageRoute(
-                                builder: (context) =>
-                                    WorkoutPage(
-                                      prefilledExercises: exercises,
-                                      isNewWorkout: true,
-                                      initialDate: workoutDate,
-                                      initialWorkoutName: formattedWorkoutName,
-                                    ),
+                                builder: (context) => WorkoutPage(
+                                  prefilledExercisesWithCircuits: exercisesWithCircuits,
+                                  isNewWorkout: true,
+                                  initialDate: workoutDate,
+                                  initialWorkoutName: formattedWorkoutName,
+                                ),
                               ),
                             );
 

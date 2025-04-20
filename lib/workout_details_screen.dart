@@ -62,17 +62,16 @@ class _WorkoutDetailsScreenState extends State<WorkoutDetailsScreen> {
   }
 
   List<Workout> getRecentWorkoutsForExercise(String exerciseName, DateTime currentWorkoutDate) {
-    // Filter workouts that contain the specified exercise and occurred before the specified date
-    List<Workout> filteredWorkouts = allWorkouts.where((w) =>
-    w.date.isBefore(currentWorkoutDate) &&
-        w.exercises.any((ex) => ex.name == exerciseName)).toList();
+    // Return the 12 most recent workouts that contain the exercise, regardless of date
+    List<Workout> filteredWorkouts = allWorkouts.where(
+            (w) => w.exercises.any((ex) => ex.name == exerciseName)
+    ).toList();
 
-    // Sort workouts by date in descending order (most recent first)
     filteredWorkouts.sort((a, b) => b.date.compareTo(a.date));
-
-    // Return only the three most recent workouts before the given date
     return filteredWorkouts.take(12).toList();
   }
+
+
 
   @override
   Widget build(BuildContext context) {
