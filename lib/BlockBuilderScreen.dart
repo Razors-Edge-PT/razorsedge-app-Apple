@@ -571,17 +571,32 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
     if (user != null) {
       final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
       final templateSnapshot = await userDoc.collection('templates').get();
-      final templateList = templateSnapshot.docs.map((doc) => Template(
-        id: doc.id,
-        name: doc.get('name'),
-        day: doc.get('day'),
-        exercises: List<String>.from(doc.get('exercises')),
-      )).toList();
+
+      final templateList = templateSnapshot.docs.map((doc) {
+        final rawExercises = doc.get('exercises');
+
+        // Support both formats: List<String> and List<Map<String, dynamic>>
+        final parsedExercises = rawExercises is List && rawExercises.isNotEmpty
+            ? (rawExercises.first is Map
+            ? List<Map<String, dynamic>>.from(rawExercises)
+            : List<Map<String, dynamic>>.from(
+            rawExercises.map((e) => {'name': e, 'circuitIndex': 0})))
+            : <Map<String, dynamic>>[];
+
+        return Template(
+          id: doc.id,
+          name: doc.get('name'),
+          day: doc.data().containsKey('day') ? doc.get('day') : null,
+          exercises: parsedExercises,
+        );
+      }).toList();
+
       setState(() {
         templates = templateList;
       });
     }
   }
+
   Future<void> _loadPreviousWorkoutData() async {
     await PeriodizationModelUtils.fetchLastWorkoutTopSetReps();
     setState(() {
@@ -606,12 +621,18 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
 
       setState(() {
         for (int i = 0; i < 11; i++) {
-          exerciseSelection[weekIndex][dayIndex][i] =
-          (i < selectedTemplate.exercises.length) ? selectedTemplate.exercises[i] : null;
+          if (i < selectedTemplate.exercises.length) {
+            final entry = selectedTemplate.exercises[i];
+            final name = entry is String ? entry : entry['name'];
+            exerciseSelection[weekIndex][dayIndex][i] = name;
+          } else {
+            exerciseSelection[weekIndex][dayIndex][i] = null;
+          }
         }
       });
     }
   }
+
 
 
 
