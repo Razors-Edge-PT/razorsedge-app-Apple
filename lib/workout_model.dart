@@ -48,23 +48,37 @@ class Workout {
 class Exercise {
   final String name;
   final List<SetDetails> sets;
+  final int circuitIndex; // ✅ Added for circuit support
 
-  Exercise({required this.name, required this.sets});
+  Exercise({
+    required this.name,
+    required this.sets,
+    this.circuitIndex = 0, // ✅ Default to 0 for backward compatibility
+  });
 
   factory Exercise.fromFirestore(Map<String, dynamic> data) {
     var setsData = data['sets'] as List<dynamic>;
 
     List<SetDetails> sets = setsData.asMap().entries.map((entry) {
-      return SetDetails.fromFirestore(entry.value as Map<String, dynamic>, entry.key + 1); // ✅ Now passes 2 arguments
+      return SetDetails.fromFirestore(entry.value as Map<String, dynamic>, entry.key + 1);
     }).toList();
 
     return Exercise(
       name: data['name'] ?? 'Unnamed Exercise',
       sets: sets,
+      circuitIndex: data['circuitIndex'] ?? 0, // ✅ Read from Firestore or fallback
     );
   }
 
+  Map<String, dynamic> toFirestore() {
+    return {
+      'name': name,
+      'circuitIndex': circuitIndex, // ✅ Include in save
+      'sets': sets.map((s) => s.toMap()).toList(),
+    };
+  }
 }
+
 
 
 class SetDetails {

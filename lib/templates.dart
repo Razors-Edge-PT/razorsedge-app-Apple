@@ -48,31 +48,29 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   Future<void> _fetchTemplates() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
-      final userDoc =
-          FirebaseFirestore.instance.collection('users').doc(user.uid);
+      final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
       templateSnapshot = await userDoc.collection('templates').get();
+
       if (templateSnapshot != null) {
         print("📦 Raw Firestore template snapshot: ${templateSnapshot!.docs.length} templates");
 
         final templateList = templateSnapshot!.docs.map((doc) {
           final rawExercises = doc.get('exercises');
 
-          // 🧠 Detect whether it's the new format or the old one
           final parsedExercises = rawExercises is List && rawExercises.isNotEmpty
               ? (rawExercises.first is Map
-              ? List<String>.from(rawExercises.map((e) => e['name'] ?? 'Unnamed'))
-              : List<String>.from(rawExercises)) // fallback for old string-only list
-              : <String>[];
+              ? List<Map<String, dynamic>>.from(rawExercises)
+              : List<Map<String, dynamic>>.from(
+              (rawExercises as List).map((e) => {'name': e, 'circuitIndex': 0})))
+              : <Map<String, dynamic>>[];
 
           return Template(
             id: doc.id,
             name: doc.get('name') ?? 'Unnamed',
             day: doc.data().containsKey('day') ? doc.get('day') : null,
-
             exercises: parsedExercises,
           );
         }).toList();
-
 
         setState(() {
           templates = templateList;
@@ -81,6 +79,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       }
     }
   }
+
+
 
   Future<bool> _confirmDeleteTemplate(
       BuildContext context, String templateId) async {

@@ -61,7 +61,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
   List<String> exercises = []; // Use this to store selected exercises from the dialog
   final TextEditingController _workoutNameController = TextEditingController();
   late DateTime _selectedDate; // move this to the top of the State class
-  final List<String> _selectedExercises = [];
+  final List<Map<String, dynamic>> _selectedExercisesWithCircuits = [];
+
   List<String> plannedExercises = [];
   final List<List<SetDetails>> _workoutSets = [];
   final List<List<TextEditingController>> _repsControllers = [];
@@ -149,7 +150,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
 
   double getSet2E1RM(int exerciseIndex) {
-    String exerciseName = _selectedExercises[exerciseIndex]; // ✅ Get exerciseName
+    String exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
 
     double set1Weight = double.tryParse(_weightControllers[exerciseIndex][0].text) ?? set1SuggestedWeight(exerciseIndex);
     int set1Reps = int.tryParse(_repsControllers[exerciseIndex][0].text) ?? set1SuggestedReps(exerciseIndex).toInt();
@@ -164,8 +165,9 @@ class _WorkoutPageState extends State<WorkoutPage> {
     return (set1E1RM > 7) ? (set1E1RM - 7) : 1.0;
   }
 
+
   double getSet3E1RM(int exerciseIndex) {
-    String exerciseName = _selectedExercises[exerciseIndex]; // ✅ Get exerciseName
+    String exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
 
     double set1Weight = double.tryParse(_weightControllers[exerciseIndex][0].text) ?? set1SuggestedWeight(exerciseIndex);
     int set1Reps = int.tryParse(_repsControllers[exerciseIndex][0].text) ?? set1SuggestedReps(exerciseIndex).toInt();
@@ -289,7 +291,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
     int effectiveReps = (enteredReps + enteredRIR).floor(); // ✅ Effective reps include RIR
 
     // ✅ Ensure max available reps do not exceed 12
-    String exerciseName = _selectedExercises[exerciseIndex]; // ✅ Get the exercise name
+    String exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
     List<int> allReps = List.generate(12, (index) => index + 1);
     List<int> forbiddenReps = getForbiddenRepTargets(exerciseName, setIndex); // ✅ Now passing the correct name
 
@@ -309,12 +311,12 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
 
   int getSuggestedRepTarget(int exerciseIndex, int setIndex, {double? weight}) {
-    String exerciseName = _selectedExercises[exerciseIndex];
+    String exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
 
-    // 🔢 Count how many times this exercise appears before the current set
+    // 🔢 Count how many times this exercise appears before this exerciseIndex
     int plannedCountBefore = 0;
-    for (int i = 0; i < setIndex; i++) {
-      if (_selectedExercises[i] == exerciseName) {
+    for (int i = 0; i < exerciseIndex; i++) {
+      if (_selectedExercisesWithCircuits[i]['name'] == exerciseName) {
         plannedCountBefore++;
       }
     }
@@ -328,10 +330,11 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
 
 
+
   //Determine hint texts for this workout:NEW METHOD
 
   double set1SuggestedReps(int exerciseIndex) {
-    String exerciseName = _selectedExercises[exerciseIndex]; // ✅ Get exercise name
+    String exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
     List<double>? pastE1RMs = exercisePreviousE1RMs[exerciseName]; // ✅ Get E1RMs for this exercise
 
     if (pastE1RMs == null || pastE1RMs.isEmpty) {
@@ -344,7 +347,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
     if (hasUserWeightInput) {
       // ✅ Get the average E1RM
-      String exerciseName = _selectedExercises[exerciseIndex]; // ✅ Get the exercise name
+      String exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
       double avgE1RM = getAverageE1RM(exerciseName); // ✅ Pass exercise name to get its average E1RM
 
 
@@ -501,13 +504,14 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
 
   double set1SuggestedWeight(int exerciseIndex) {
-    if (exercisePreviousE1RMs.isEmpty) return 20.0; // Default weight if no history
+    if (exercisePreviousE1RMs.isEmpty) return 20.0;
 
-    // ✅ Get the last average of last 4 E1RMs (or fewer if not available)
-    double avgE1RM = getAverageE1RM(_selectedExercises[exerciseIndex]); // ✅ FIXED
+    // ✅ Use name from circuit-aware structure
+    final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
 
+    // ✅ Get average E1RM
+    double avgE1RM = getAverageE1RM(exerciseName);
 
-    // ✅ Get reps and RIR from UI or use default values
     int reps = int.tryParse(_repsControllers[exerciseIndex][0].text) ?? set1SuggestedReps(exerciseIndex).toInt();
     double rir = double.tryParse(_rirControllers[exerciseIndex][0].text) ?? set1RIR(exerciseIndex);
     double effectiveReps = reps + rir;
@@ -515,19 +519,16 @@ class _WorkoutPageState extends State<WorkoutPage> {
     double suggestedWeight;
 
     if (effectiveReps <= 6) {
-      // ✅ Use Brzycki formula for lower rep ranges
       suggestedWeight = avgE1RM * (37 - effectiveReps) / 36;
     } else {
-      // ✅ Use Epley formula for higher rep ranges
       suggestedWeight = avgE1RM / (1 + (0.0333 * effectiveReps));
     }
 
-    // ✅ Prevent negative suggested weight
     suggestedWeight = suggestedWeight.clamp(2.5, double.infinity);
 
-    // ✅ Round to the nearest 2.5kg increment
     return (suggestedWeight / 2.5).round() * 2.5;
   }
+
 
   double set2SuggestedWeight(int exerciseIndex) {
     if (exercisePreviousE1RMs.isEmpty) return 20.0; // Default weight if no history
@@ -597,13 +598,16 @@ class _WorkoutPageState extends State<WorkoutPage> {
       _workoutNameController.text = widget.initialWorkoutName!;
     }
 
-    loadPlannedExercisesFromFirestore(); // 🔥 Add this line
-    loadPreviousWorkoutData(); // ✅ Ensures data is fetched before UI load
+    loadPlannedExercisesFromFirestore(); // 🔥 Load planned exercises
+    loadPreviousWorkoutData(); // ✅ Fetch past E1RMs & reps
 
     if (widget.prefilledExercises != null) {
-      // ✅ Initialize based on prefilled exercises
-      _selectedExercises.addAll(widget.prefilledExercises!);
-      for (int i = 0; i < _selectedExercises.length; i++) {
+      // ✅ Use circuit-aware structure
+      _selectedExercisesWithCircuits.addAll(
+        widget.prefilledExercises!.map((e) => {'name': e, 'circuitIndex': 0}),
+      );
+
+      for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
         _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
         _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
         _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
@@ -622,47 +626,61 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
 
 
+
   void _loadWorkout(Workout workout) {
     _workoutNameController.text = workout.name;
     _selectedDate = workout.date;
-    _selectedExercises.clear();
-    _selectedExercises.addAll(workout.exercises.map((exercise) => exercise.name));
 
+    _selectedExercisesWithCircuits.clear();
     _workoutSets.clear();
-    _workoutSets.addAll(
-      workout.exercises.map((exercise) {
-        return exercise.sets.map((set) => SetDetails(
-          reps: set.reps,    // ✅ Now allows null
+
+    for (var exercise in workout.exercises) {
+      _selectedExercisesWithCircuits.add({
+        'name': exercise.name,
+        'circuitIndex': exercise.circuitIndex ?? 0, // ✅ fallback to 0 if missing
+      });
+
+      _workoutSets.add(
+        exercise.sets.map((set) => SetDetails(
+          reps: set.reps,
           weight: set.weight,
           rir: set.rir,
-        )).toList();
-      }).toList(),
-    );
+        )).toList(),
+      );
+    }
 
     _initializeControllers();
   }
 
+
   void _loadTemplate(Template template) {
     setState(() {
       _workoutNameController.text = template.name;
-      _selectedExercises.clear();
+      _selectedExercisesWithCircuits.clear();
       _workoutSets.clear();
 
-      _selectedExercises.addAll(template.exercises);
+      // ✅ Convert each exercise into a Map with name + circuitIndex
+      for (var e in template.exercises) {
+        _selectedExercisesWithCircuits.add({
+          'name': (e is String) ? e : (e['name'] ?? 'Unnamed'),
+          'circuitIndex': (e is Map && e.containsKey('circuitIndex')) ? e['circuitIndex'] : 0,
+        });
+      }
+
+      // ✅ Initialize sets and controllers
       _workoutSets.addAll(List.generate(
-        _selectedExercises.length,
-            (index) => List.generate(
+        _selectedExercisesWithCircuits.length,
+            (_) => List.generate(
           _defaultSets,
-              (setIndex) => SetDetails(
-            reps: null,  // ✅ Now null instead of placeholder
-            weight: null,
-            rir: null,
-          ),
+              (_) => SetDetails(reps: null, weight: null, rir: null),
         ),
       ));
+
       _initializeControllers();
     });
   }
+
+
 
 
   @override
@@ -688,21 +706,21 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
 
   void _initializeControllers() {
-    // ✅ Ensure controller lists are at least as long as _selectedExercises
-    while (_repsControllers.length < _selectedExercises.length) {
+    // ✅ Ensure controller lists are at least as long as the exercise list
+    while (_repsControllers.length < _selectedExercisesWithCircuits.length) {
       _repsControllers.add([]);
     }
-    while (_weightControllers.length < _selectedExercises.length) {
+    while (_weightControllers.length < _selectedExercisesWithCircuits.length) {
       _weightControllers.add([]);
     }
-    while (_rirControllers.length < _selectedExercises.length) {
+    while (_rirControllers.length < _selectedExercisesWithCircuits.length) {
       _rirControllers.add([]);
     }
 
-    for (int i = 0; i < _selectedExercises.length; i++) {
+    for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
       List<SetDetails> sets = _workoutSets[i];
 
-      // ✅ Only add controllers if they don't already exist (to keep user-entered data)
+      // ✅ Only add controllers if they don't already exist
       if (_repsControllers[i].isEmpty) {
         _repsControllers[i] = sets.map((set) {
           return TextEditingController(text: set.reps?.toString() ?? '');
@@ -711,17 +729,20 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
       if (_weightControllers[i].isEmpty) {
         _weightControllers[i] = sets.map((set) {
-          return TextEditingController(text: set.weight != null ? set.weight!.toStringAsFixed(1) : '');
+          return TextEditingController(
+              text: set.weight != null ? set.weight!.toStringAsFixed(1) : '');
         }).toList();
       }
 
       if (_rirControllers[i].isEmpty) {
         _rirControllers[i] = sets.map((set) {
-          return TextEditingController(text: set.rir != null ? set.rir!.toStringAsFixed(1) : '');
+          return TextEditingController(
+              text: set.rir != null ? set.rir!.toStringAsFixed(1) : '');
         }).toList();
       }
     }
   }
+
 
   void _navigateToTemplateSelection() {
     Navigator.push(
@@ -753,7 +774,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
     final List<String> selected = await showDialog<List<String>>(
       context: context,
       builder: (ctx) {
-        List<String> tempSelected = [..._selectedExercises];
+        List<String> tempSelected = _selectedExercisesWithCircuits.map((e) => e['name'] as String).toList();
+
 
         return StatefulBuilder(builder: (context, setLocalState) {
           final filteredExercises = showPlannedOnly
@@ -889,19 +911,25 @@ class _WorkoutPageState extends State<WorkoutPage> {
     ) ?? [];
 
     setState(() {
-      _selectedExercises.clear();
-      _selectedExercises.addAll(selected);
+      _selectedExercisesWithCircuits.clear();
+      _selectedExercisesWithCircuits.addAll(
+        selected.map((name) => {
+          'name': name,
+          'circuitIndex': 0, // Default circuit index
+        }),
+      );
 
       _workoutSets.clear();
       _workoutSets.addAll(
         List.generate(
-          _selectedExercises.length,
+          _selectedExercisesWithCircuits.length,
               (_) => List.generate(_defaultSets, (_) => SetDetails()),
         ),
       );
 
       _initializeControllers();
     });
+
   }
 
 
@@ -910,13 +938,13 @@ class _WorkoutPageState extends State<WorkoutPage> {
     setState(() {
       if (newIndex > oldIndex) newIndex--;
 
-      final movedExercise = _selectedExercises.removeAt(oldIndex);
+      final movedExercise = _selectedExercisesWithCircuits.removeAt(oldIndex);
       final movedSets = _workoutSets.removeAt(oldIndex);
       final movedReps = _repsControllers.removeAt(oldIndex);
       final movedWeight = _weightControllers.removeAt(oldIndex);
       final movedRir = _rirControllers.removeAt(oldIndex);
 
-      _selectedExercises.insert(newIndex, movedExercise);
+      _selectedExercisesWithCircuits.insert(newIndex, movedExercise);
       _workoutSets.insert(newIndex, movedSets);
       _repsControllers.insert(newIndex, movedReps);
       _weightControllers.insert(newIndex, movedWeight);
@@ -927,32 +955,31 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
 
 
+
   void _navigateToExerciseSelection() {
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => ExerciseSelectionScreen(
-          selectedExercises: _selectedExercises,
+          selectedExercises: _selectedExercisesWithCircuits.map((e) => e['name'] as String).toList(),
         ),
       ),
     ).then((selectedExercises) {
       if (selectedExercises != null && selectedExercises is List<String>) {
         setState(() {
-          _selectedExercises.clear();
-          _selectedExercises.addAll(selectedExercises);
+          _selectedExercisesWithCircuits.clear();
+          _selectedExercisesWithCircuits.addAll(
+            selectedExercises.map((name) => {
+              'name': name,
+              'circuitIndex': 0, // ✅ Default for new selection
+            }),
+          );
 
           _workoutSets.clear();
           _workoutSets.addAll(
             List.generate(
-              _selectedExercises.length,
-                  (index) => List.generate(
-                _defaultSets,
-                    (setIndex) => SetDetails(
-                  reps: null,  // ✅ Now using null instead of placeholder
-                  weight: null,
-                  rir: null,
-                ),
-              ),
+              _selectedExercisesWithCircuits.length,
+                  (_) => List.generate(_defaultSets, (_) => SetDetails()),
             ),
           );
 
@@ -963,8 +990,10 @@ class _WorkoutPageState extends State<WorkoutPage> {
   }
 
 
+
   Future<void> _saveWorkout() async {
-    if (_workoutNameController.text.isEmpty || _selectedExercises.isEmpty) {
+    if (_workoutNameController.text.isEmpty || _selectedExercisesWithCircuits.isEmpty) {
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please fill in all required fields.')),
       );
@@ -980,7 +1009,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
     }
 
     // ✅ Sync TextField input into _workoutSets
-    for (int i = 0; i < _selectedExercises.length; i++) {
+    for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+
       for (int j = 0; j < _workoutSets[i].length; j++) {
         final repsText = _repsControllers[i][j].text.trim();
         final weightText = _weightControllers[i][j].text.trim();
@@ -997,9 +1027,10 @@ class _WorkoutPageState extends State<WorkoutPage> {
       'name': _workoutNameController.text,
       'date': _selectedDate.toIso8601String(),
       'userId': user.uid,
-      'exercises': _selectedExercises.asMap().entries.map((exerciseEntry) {
-        int exerciseIndex = exerciseEntry.key;
-        String exerciseName = exerciseEntry.value;
+      'exercises': _selectedExercisesWithCircuits.asMap().entries.map((entry) {
+        int exerciseIndex = entry.key;
+        String exerciseName = entry.value['name'] ?? 'Unnamed';
+        int circuitIndex = entry.value['circuitIndex'] ?? 0;
 
         List<Map<String, dynamic>> validSets = [];
 
@@ -1020,11 +1051,13 @@ class _WorkoutPageState extends State<WorkoutPage> {
         return validSets.isNotEmpty
             ? {
           'name': exerciseName,
+          'circuitIndex': circuitIndex,
           'sets': validSets,
         }
             : null;
       }).where((e) => e != null).toList(),
     };
+
 
     try {
       await FirebaseFirestore.instance
@@ -1061,8 +1094,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
           final List<Map<String, dynamic>> updatedExercises = [];
 
-          for (int i = 0; i < _selectedExercises.length; i++) {
-            final name = _selectedExercises[i];
+          for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+            final name = _selectedExercisesWithCircuits[i];
             final sets = _workoutSets[i];
             final bestSet = sets.where((s) => s.weight != null && s.reps != null).fold<SetDetails?>(null, (prev, curr) {
               if (prev == null) return curr;
@@ -1112,11 +1145,11 @@ class _WorkoutPageState extends State<WorkoutPage> {
       // ✅ Return top sets to BlockBuilder
       Navigator.pop(context, {
         'date': _selectedDate,
-        'topSets': List.generate(_selectedExercises.length, (i) {
+        'topSets': List.generate(_selectedExercisesWithCircuits.length, (i) {
           if (_workoutSets[i].isEmpty) return null;
           final topSet = _workoutSets[i][0]; // Customize later
           return {
-            'exercise': _selectedExercises[i],
+            'exercise': _selectedExercisesWithCircuits[i],
             'weight': topSet.weight,
             'reps': topSet.reps,
             'rir': topSet.rir,
@@ -1160,7 +1193,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                 TextButton(
                   onPressed: () {
                     setState(() {
-                      _selectedExercises.removeAt(exerciseIndex);
+                      _selectedExercisesWithCircuits.removeAt(exerciseIndex);
                       _workoutSets.removeAt(exerciseIndex);
                       _repsControllers.removeAt(exerciseIndex);
                       _weightControllers.removeAt(exerciseIndex);
@@ -1335,7 +1368,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                         onPressed: () {
                           setState(() {
                             _workoutNameController.clear();
-                            _selectedExercises.clear();
+                            _selectedExercisesWithCircuits.clear();
                             _workoutSets.clear();
                             _initializeControllers();
                           });
@@ -1398,7 +1431,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
               ],
             ),
             const SizedBox(height: 0.0),
-            if (_selectedExercises.isEmpty)
+            if (_selectedExercisesWithCircuits.isEmpty)
               Column(
                 children: [
                   const Text(
@@ -1419,9 +1452,9 @@ class _WorkoutPageState extends State<WorkoutPage> {
     shrinkWrap: true,
     physics: const NeverScrollableScrollPhysics(),
     onReorder: _onReorderExercises,
-    children: List.generate(_selectedExercises.length, (i) {
+    children: List.generate(_selectedExercisesWithCircuits.length, (i) {
     return Dismissible(
-    key: ValueKey(_selectedExercises[i]),
+    key: ValueKey(_selectedExercisesWithCircuits[i]),
     direction: DismissDirection.endToStart,
     background: Container(
     color: Colors.red,
@@ -1430,14 +1463,14 @@ class _WorkoutPageState extends State<WorkoutPage> {
     child: const Icon(Icons.delete, color: Colors.white),
     ),
       onDismissed: (_) {
-        final removedExercise = _selectedExercises[i];
+        final removedExercise = _selectedExercisesWithCircuits[i];
         final removedSets = _workoutSets[i];
         final removedReps = _repsControllers[i];
         final removedWeight = _weightControllers[i];
         final removedRIR = _rirControllers[i];
 
         setState(() {
-          _selectedExercises.removeAt(i);
+          _selectedExercisesWithCircuits.removeAt(i);
           _workoutSets.removeAt(i);
           _repsControllers.removeAt(i);
           _weightControllers.removeAt(i);
@@ -1446,7 +1479,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
         _lastUndoAction = () {
           setState(() {
-            _selectedExercises.insert(i, removedExercise);
+            _selectedExercisesWithCircuits.insert(i, removedExercise);
             _workoutSets.insert(i, removedSets);
             _repsControllers.insert(i, removedReps);
             _weightControllers.insert(i, removedWeight);
@@ -1477,9 +1510,10 @@ class _WorkoutPageState extends State<WorkoutPage> {
     margin: const EdgeInsets.only(left: 0, top: 2, right: 0, bottom: 0),
     child: ExpansionTile(
     // 🧠 Everything you already had inside the card
-    title: Text(
-    _selectedExercises[i],
-    style: TextStyle(
+      title: Text(
+        _selectedExercisesWithCircuits[i]['name'] ?? 'Unnamed',
+
+        style: TextStyle(
     color: Colors.grey.shade300,
     fontWeight: FontWeight.bold,
     fontSize: 14,
@@ -1492,7 +1526,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
     icon: const Icon(Icons.info_outline),
     color: Colors.blueGrey,
     onPressed: () {
-    _navigateToExerciseDetails(_selectedExercises[i]);
+      _navigateToExerciseDetails(_selectedExercisesWithCircuits[i]['name'] ?? '');
+
     },
     ),
     const SizedBox(width: 4),
@@ -1501,7 +1536,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
     backgroundColor: Colors.blueGrey,
     ),
     onPressed: () {
-    _navigateToTopSets(_selectedExercises[i]);
+    _navigateToTopSets(_selectedExercisesWithCircuits[i]['name'] ?? '');
     },
     child: Text(
     'Top Sets',
@@ -1522,7 +1557,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
           mainAxisAlignment: MainAxisAlignment.end, // 👈 Pushes to the right
           children: [
             Text(
-              'Avg E1RM: ${getAverageE1RM(_selectedExercises[i]).toStringAsFixed(1)} kg',
+              'Avg E1RM: ${getAverageE1RM(_selectedExercisesWithCircuits[i]['name'] ?? '').toStringAsFixed(1)} kg',
               style: const TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.bold,
@@ -1573,8 +1608,9 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                                     children: [
                                                       Text(
                                                             () {
-                                                          final reps = exercisePreviousTopSetReps[_selectedExercises[i]] ?? [];
-                                                          final recent = reps.take(7).join(", ");
+                                                              final reps = exercisePreviousTopSetReps[_selectedExercisesWithCircuits[i]['name'] ?? ''] ?? [];
+
+                                                              final recent = reps.take(7).join(", ");
                                                           return 'Previous Rep Targets: ${recent.isEmpty ? "None" : recent}';
                                                         }(),
                                                         style: const TextStyle(

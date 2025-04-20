@@ -207,26 +207,31 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     if (user != null) {
       final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
       final snapshot = await userDoc.collection('templates').get();
+
       templates = snapshot.docs.map((doc) {
+        final rawExercises = doc.get('exercises');
+
+        // 🧠 Detect whether it's the new format or the old one
+        final List<Map<String, dynamic>> parsedExercises = rawExercises is List && rawExercises.isNotEmpty
+            ? (rawExercises.first is Map
+            ? List<Map<String, dynamic>>.from(rawExercises)
+            : List<Map<String, dynamic>>.from(
+            rawExercises.map((e) => {'name': e, 'circuitIndex': 0})))
+            : <Map<String, dynamic>>[];
+
         return Template(
           id: doc.id,
-          name: doc['name'],
+          name: doc.get('name') ?? 'Unnamed',
           day: doc.data().containsKey('day') ? doc.get('day') : null,
-
-          exercises: (() {
-            final rawExercises = doc['exercises'];
-            return rawExercises is List && rawExercises.isNotEmpty
-                ? (rawExercises.first is Map
-                ? List<String>.from(rawExercises.map((e) => e['name'] ?? 'Unnamed'))
-                : List<String>.from(rawExercises))
-                : <String>[];
-          })(),
+          exercises: parsedExercises,
         );
       }).toList();
-      setState(() {}); // Trigger rebuild once loaded
+
+      setState(() {});
+      print("✅ Templates loaded: ${templates.map((t) => t.name).toList()}");
     }
-    print("✅ Templates loaded: ${templates.map((t) => t.name).toList()}");
   }
+
 
   Map<String, List<String>> groupedExercises = {};
 
@@ -312,52 +317,47 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       orElse: () => Template(id: '', name: '', day: '', exercises: []),
     );
 
-    // Determine if the exercises are in new structured format
-    final List<Map<String, dynamic>> parsedExercises = template.exercises.map((e) {
-      if (e is String) {
-        return {'name': e, 'circuitIndex': 0}; // fallback default
-      }
-      return e as Map<String, dynamic>;
-    }).toList();
+    // 🔄 Detect if the template used the new circuit-based format
+    final List<Map<String, dynamic>> parsedRows = template.exercises is List<Map<String, dynamic>>
+        ? List<Map<String, dynamic>>.from(template.exercises)
+        : (template.exercises as List)
+        .map((e) => {'name': e.toString(), 'circuitIndex': 0})
+        .toList();
 
+    final requiredCount = parsedRows.length;
     final rows = exerciseRows[weekIndex][dayIndex];
 
-    // 🔧 Add enough rows
-    while (rows.length < parsedExercises.length) {
-      rows.add(ExerciseRow(circuitIndex: 0));
+    // 🧹 Clear existing rows
+    rows.clear();
+
+    for (int i = 0; i < requiredCount; i++) {
+      final entry = parsedRows[i];
+      final row = ExerciseRow(
+        exercise: entry['name'],
+        circuitIndex: entry['circuitIndex'] ?? 0,
+      );
+
+      row.exerciseController.text = entry['name'];
+      rows.add(row);
     }
 
-    // 🧹 Clear all first
-    for (final row in rows) {
-      row.exercise = null;
-      row.exerciseController.clear();
-      row.weightController.clear();
-      row.repsController.clear();
-      row.rirController.clear();
-    }
-
-    // ✅ Fill from parsed data
-    for (int i = 0; i < parsedExercises.length; i++) {
-      final name = parsedExercises[i]['name'] ?? '';
-      final circuitIndex = parsedExercises[i]['circuitIndex'] ?? 0;
-
-      rows[i].exercise = name;
-      rows[i].exerciseController.text = name;
-      rows[i].circuitIndex = circuitIndex;
-    }
-
-    // ✅ Rebuild circuitStartIndices
-    _ensureCircuitStartIndicesInitialized(weekIndex, dayIndex);
-    final newStarts = <int>{};
+    // 🔄 Update circuitStartIndices
+    final List<int> newStarts = [];
+    int? lastCircuit;
     for (int i = 0; i < rows.length; i++) {
-      if (i == 0 || rows[i].circuitIndex != rows[i - 1].circuitIndex) {
+      final current = rows[i].circuitIndex;
+      if (i == 0 || current != lastCircuit) {
         newStarts.add(i);
+        lastCircuit = current;
       }
     }
-    circuitStartIndices[weekIndex][dayIndex] = newStarts.toList()..sort();
+
+    _ensureCircuitStartIndicesInitialized(weekIndex, dayIndex);
+    circuitStartIndices[weekIndex][dayIndex] = newStarts;
 
     setState(() {});
   }
+
 
 
 

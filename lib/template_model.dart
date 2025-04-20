@@ -1,13 +1,13 @@
 class Template {
-  final String id; // Add the id property
+  final String id;
   final String name;
-  final String? day; // ✅ make nullable
-  final List<String> exercises; // List of exercise IDs
+  final String? day;
+  final List<Map<String, dynamic>> exercises; // ✅ circuit-aware
 
   Template({
     required this.id,
     required this.name,
-   this.day,
+    this.day,
     required this.exercises,
   });
 
@@ -15,7 +15,7 @@ class Template {
     return {
       'id': id,
       'name': name,
-      if (day != null) 'day': day, // ✅ only include if present
+      if (day != null) 'day': day,
       'exercises': exercises,
     };
   }
@@ -24,13 +24,34 @@ class Template {
     String? id,
     String? name,
     String? day,
-    List<String>? exercises,
+    List<Map<String, dynamic>>? exercises,
   }) {
     return Template(
       id: id ?? this.id,
       name: name ?? this.name,
       day: day ?? this.day,
       exercises: exercises ?? List.from(this.exercises),
+    );
+  }
+
+  // 🧠 Helper: create from Firestore snapshot with backward compatibility
+  factory Template.fromFirestore(Map<String, dynamic> data, String docId) {
+    final rawExercises = data['exercises'];
+
+    // Backward compatibility with string-only exercise templates
+    final parsedExercises = rawExercises is List && rawExercises.isNotEmpty
+        ? (rawExercises.first is Map
+        ? List<Map<String, dynamic>>.from(rawExercises)
+        : rawExercises
+        .map((e) => {'name': e.toString(), 'circuitIndex': 0})
+        .toList())
+        : <Map<String, dynamic>>[];
+
+    return Template(
+      id: docId,
+      name: data['name'] ?? 'Unnamed',
+      day: data.containsKey('day') ? data['day'] : null,
+      exercises: parsedExercises,
     );
   }
 }
