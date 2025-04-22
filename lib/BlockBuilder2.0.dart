@@ -9,6 +9,7 @@ import 'core_exercises.dart';
 import 'package:uuid/uuid.dart';
 import 'template_details.dart'; // if you're navigating directly to TemplateDetailsScreen
 import 'templates.dart'; // ✅ this is the one that defines TemplatesScreen
+import 'WorkoutSummaryScreen.dart';
 
 
 
@@ -248,6 +249,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       groupedExercises = groupExercisesByCategory(exercises);
     });
   }
+
   Future<void> loadPlannedExercisesFromFirestore() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -267,6 +269,14 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     }
 
     setState(() {});
+  }
+
+  bool isWorkoutCompleted(int weekIndex, int dayIndex) {
+    final rows = exerciseRows[weekIndex][dayIndex];
+    return rows.any((row) =>
+    row.exerciseController.text.trim().isNotEmpty &&
+        row.weightController.text.trim().isNotEmpty &&
+        row.repsController.text.trim().isNotEmpty);
   }
 
 
@@ -1197,24 +1207,36 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                         "Week ${weekIndex + 1}",
                         style: const TextStyle(
                           fontSize: 11,
-                          height: 0.9, // ⬅️ less than 1 = tighter
+                          height: 0.9,
                           fontWeight: FontWeight.w600,
                           color: Colors.white70,
                         ),
                       ),
-                      const SizedBox(height: 0), // Optional: keeps it tidy
+                      const SizedBox(height: 0),
                       Row(
                         children: [
                           Text(
                             dayLabel,
                             style: const TextStyle(
                               fontSize: 12,
-                              height: 0.5, // ⬅️ less than 1 = tighter
+                              height: 0.5,
                               fontWeight: FontWeight.bold,
                               color: Colors.white,
                             ),
                           ),
+
                           const SizedBox(width: 6),
+
+                          // ✅ Tick icon to indicate completed workout
+                          if (isWorkoutCompleted(weekIndex, dayIndex))
+                            const Icon(
+                              Icons.check_circle,
+                              size: 16,
+                              color: Colors.lightGreenAccent,
+                            ),
+
+                          const SizedBox(width: 6),
+
                           IconButton(
                             icon: const Icon(Icons.delete_sweep_outlined),
                             visualDensity: VisualDensity.compact,
@@ -1256,6 +1278,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                       ),
                     ],
                   ),
+
 
 
 
@@ -1382,65 +1405,80 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                           ),
                           onPressed: () async {
-                            final List<Map<String, dynamic>> exercisesWithCircuits = [];
-
                             final rows = exerciseRows[weekIndex][dayIndex];
+                            final List<Map<String, dynamic>> prefilled = [];
+
                             for (final row in rows) {
                               final name = row.exerciseController.text.trim();
                               if (name.isNotEmpty) {
-                                exercisesWithCircuits.add({
+                                prefilled.add({
                                   'name': name,
                                   'circuitIndex': row.circuitIndex,
                                 });
                               }
                             }
 
-                            final DateTime workoutDate = blockStartDate.add(
-                              Duration(days: weekIndex * 7 + dayIndex),
-                            );
-                            final String formattedWorkoutName =
-                                "${DateFormat('EEE d MMM').format(workoutDate)} - Week ${weekIndex + 1}";
+                            final DateTime workoutDate = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
+                            final String formattedWorkoutName = "${DateFormat('EEE d MMM').format(workoutDate)} - Week ${weekIndex + 1}";
 
-                            final result = await Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => WorkoutPage(
-                                  prefilledExercisesWithCircuits: exercisesWithCircuits,
-                                  isNewWorkout: true,
-                                  initialDate: workoutDate,
-                                  initialWorkoutName: formattedWorkoutName,
+                            final user = FirebaseAuth.instance.currentUser;
+                            final userDoc = FirebaseFirestore.instance.collection('users').doc(user!.uid);
+                            final weekDoc = userDoc
+                                .collection('block_data')
+                                .doc('current_block')
+                                .collection('weeks')
+                                .doc('week_$weekIndex');
+
+                            final dayDoc = await weekDoc.collection('days').doc('day_$dayIndex').get();
+                            final savedExercises = dayDoc.data()?['exercises'] ?? [];
+
+                            final now = DateTime.now();
+                            final today = DateTime(now.year, now.month, now.day);
+                            final yesterday = today.subtract(const Duration(days: 1));
+                            final bool isOlderThanYesterday = workoutDate.isBefore(yesterday);
+                            final bool hasSavedExercises = savedExercises.isNotEmpty;
+
+                            if (isOlderThanYesterday && hasSavedExercises) {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => WorkoutSummaryScreen(
+                                    date: workoutDate,
+                                    workoutName: formattedWorkoutName,
+                                    exercises: List<Map<String, dynamic>>.from(savedExercises),
+                                  ),
                                 ),
-                              ),
-                            );
+                              );
+                            } else {
+                              final result = await Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => WorkoutPage(
+                                    prefilledExercisesWithCircuits: prefilled,
+                                    isNewWorkout: true,
+                                    initialDate: workoutDate,
+                                    initialWorkoutName: formattedWorkoutName,
+                                  ),
+                                ),
+                              );
 
-                            if (result != null && result['topSets'] != null) {
-                              final List<dynamic> topSets = result['topSets'];
-
-                              for (int i = 0; i < topSets.length; i++) {
-                                final entry = topSets[i];
-                                final exerciseName = entry['exercise'] ?? '';
-                                final weight = entry['weight']?.toString() ??
-                                    '';
-                                final reps = entry['reps']?.toString() ?? '';
-                                final rir = entry['rir']?.toString() ?? '';
-
-                                final row = exerciseRows[weekIndex][dayIndex][i];
-                                final exerciseController = row.exerciseController;
-                                final weightController = row.weightController;
-                                final repsController = row.repsController;
-                                final rirController = row.rirController;
-
-
-                                exerciseController.text = exerciseName;
-                                weightController.text = weight;
-                                repsController.text = reps;
-                                rirController.text = rir;
+                              if (result != null && result['topSets'] != null) {
+                                final List<dynamic> topSets = result['topSets'];
+                                for (int i = 0; i < topSets.length; i++) {
+                                  final entry = topSets[i];
+                                  final row = exerciseRows[weekIndex][dayIndex][i];
+                                  row.exerciseController.text = entry['exercise'] ?? '';
+                                  row.weightController.text = entry['weight']?.toString() ?? '';
+                                  row.repsController.text = entry['reps']?.toString() ?? '';
+                                  row.rirController.text = entry['rir']?.toString() ?? '';
+                                }
+                                await saveDayToFirestore(weekIndex, dayIndex);
+                                setState(() {});
                               }
-
-                              await saveDayToFirestore(weekIndex, dayIndex);
-                              setState(() {});
                             }
                           },
+
+
 
                           child: const Text(
                             "Go to\nWorkout",

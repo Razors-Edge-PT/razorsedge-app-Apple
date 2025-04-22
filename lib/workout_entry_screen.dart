@@ -9,6 +9,10 @@ import 'templates.dart';
 import 'exercise_details_screen.dart'; // Import your exercise details screen
 import 'top_sets_screen.dart';
 import 'periodization_model_utils.dart';
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert'; // For JSON encoding
+import 'debounce_Utils.dart';
 
 
 
@@ -60,11 +64,11 @@ class WorkoutPage extends StatefulWidget {
 }
 
 class _WorkoutPageState extends State<WorkoutPage> {
+  late final Debouncer _autoSaveDebouncer;
   List<String> exercises = []; // Use this to store selected exercises from the dialog
   final TextEditingController _workoutNameController = TextEditingController();
   late DateTime _selectedDate; // move this to the top of the State class
   final List<Map<String, dynamic>> _selectedExercisesWithCircuits = [];
-
   List<String> plannedExercises = [];
   final List<List<SetDetails>> _workoutSets = [];
   final List<List<TextEditingController>> _repsControllers = [];
@@ -330,9 +334,6 @@ class _WorkoutPageState extends State<WorkoutPage> {
   }
 
 
-
-
-
   //Determine hint texts for this workout:NEW METHOD
 
   double set1SuggestedReps(int exerciseIndex) {
@@ -594,6 +595,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
     super.initState();
 
     _selectedDate = widget.initialDate ?? DateTime.now();
+    late final Debouncer _autoSaveDebouncer;
 
     // ✅ Set the workout name first, before any template/workout logic can override it
     if (widget.initialWorkoutName != null) {
@@ -622,17 +624,15 @@ class _WorkoutPageState extends State<WorkoutPage> {
       }
     } else if (widget.workout != null) {
       _loadWorkout(widget.workout!);
-    } else if (widget.initialTemplate != null) {
+    }
+    else if (widget.initialTemplate != null) {
       _loadTemplate(widget.initialTemplate!);
     } else {
-      _initializeControllers();
+      _loadWorkoutDraftFromCache(); // ✅ Replaces it
     }
 
     _fetchLastWorkoutTopSetReps();
   }
-
-
-
 
 
   void _loadWorkout(Workout workout) {
@@ -848,6 +848,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
   @override
   void dispose() {
+    _saveWorkoutDraftToCache(); // ✅ Auto-save workout on screen exit
+
     _workoutNameController.dispose();
     for (var controllers in _repsControllers) {
       for (var controller in controllers) {
@@ -865,6 +867,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
       }
     }
     super.dispose();
+    _autoSaveDebouncer.cancel();
+
   }
 
 
@@ -1131,10 +1135,6 @@ class _WorkoutPageState extends State<WorkoutPage> {
   }
 
 
-
-
-
-
   void _navigateToExerciseSelection() {
     Navigator.push(
       context,
@@ -1274,8 +1274,10 @@ class _WorkoutPageState extends State<WorkoutPage> {
           final List<Map<String, dynamic>> updatedExercises = [];
 
           for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
-            final name = _selectedExercisesWithCircuits[i];
+            final name = _selectedExercisesWithCircuits[i]['name'] ?? 'Unnamed';
+            final circuitIndex = _selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0;
             final sets = _workoutSets[i];
+
             final bestSet = sets.where((s) => s.weight != null && s.reps != null).fold<SetDetails?>(null, (prev, curr) {
               if (prev == null) return curr;
               final prevE1RM = calculateE1RM(prev.weight, prev.reps?.toDouble(), prev.rir);
@@ -1286,12 +1288,14 @@ class _WorkoutPageState extends State<WorkoutPage> {
             if (bestSet != null && bestSet.weight != null && bestSet.reps != null) {
               updatedExercises.add({
                 'name': name,
+                'circuitIndex': circuitIndex,
                 'weight': bestSet.weight,
                 'reps': bestSet.reps,
                 'rir': bestSet.rir ?? 0.0,
               });
             }
           }
+
 
           // Fetch current day data
           final dayDoc = await weekDocRef.collection('days').doc('day_$dayIndex').get();
@@ -1335,12 +1339,70 @@ class _WorkoutPageState extends State<WorkoutPage> {
           };
         }).where((e) => e != null).toList(),
       });
+      await clearWorkoutDraftCache(); // ✅ Clear saved draft once workout is committed
+      print('Draft cache cleared after workout save.');
+
+
+
     } catch (error) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to save workout: $error')),
       );
     }
   }
+
+  Future<void> _saveWorkoutDraftToCache() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    final workoutDraft = {
+      'name': _workoutNameController.text,
+      'date': _selectedDate.toIso8601String(),
+      'exercises': _selectedExercisesWithCircuits,
+      'sets': _workoutSets.map((setsForExercise) {
+        return setsForExercise.map((set) => {
+          'reps': set.reps,
+          'weight': set.weight,
+          'rir': set.rir,
+        }).toList();
+      }).toList(),
+    };
+
+    await prefs.setString('workout_draft', jsonEncode(workoutDraft)); // ✅ Match load key
+
+  }
+
+  Future<void> _loadWorkoutDraftFromCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    final draftJson = prefs.getString('workout_draft');
+
+    if (draftJson == null) return; // No cached draft
+
+    try {
+      final draft = jsonDecode(draftJson);
+
+      // Restore fields
+      setState(() {
+        _workoutNameController.text = draft['name'] ?? '';
+        _selectedDate = DateTime.tryParse(draft['date'] ?? '') ?? DateTime.now();
+        _selectedExercisesWithCircuits.clear();
+        _selectedExercisesWithCircuits.addAll(List<Map<String, dynamic>>.from(draft['exercises'] ?? []));
+
+        _workoutSets.clear();
+        _workoutSets.addAll((draft['sets'] as List).map((exerciseSets) {
+          return (exerciseSets as List).map((set) => SetDetails(
+            reps: set['reps'],
+            weight: (set['weight'] as num?)?.toDouble(),
+            rir: (set['rir'] as num?)?.toDouble(),
+          )).toList();
+        }));
+
+        _initializeControllers(); // Rebuild all input controllers
+      });
+    } catch (e) {
+      debugPrint('Failed to load workout draft: $e');
+    }
+  }
+
 
 
   void addSet(int exerciseIndex) {
@@ -1935,6 +1997,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                       ),
                                     ),
                                     onChanged: (value) {
+
                                       setState(() {});
                                     },
                                     style: TextStyle(
@@ -1967,6 +2030,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                       ),
                                     ),
                                     onChanged: (value) {
+
                                       setState(() {});
                                     },
                                     style: TextStyle(
@@ -1997,6 +2061,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                       ),
                                     ),
                                     onChanged: (value) {
+
                                       setState(() {});
                                     },
                                     style: TextStyle(
