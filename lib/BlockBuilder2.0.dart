@@ -14,6 +14,8 @@ import 'WorkoutSummaryScreen.dart';
 
 
 
+
+
 // 🧠 Group exercises by category for dropdown UI
 Map<String, List<String>> groupExercisesByCategory(List<Map<String, String>> allExercises) {
   const desiredOrder = [
@@ -118,6 +120,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   List<Map<String, String>> allExercisesFromFirestore = []; // 🔥 Full list
   List<String> plannedExercises = []; // 💡 Selected in BlockPlanner
   List<int> weekIndices = [];
+  Map<int, List<ExerciseRow>> latestEditedWeekdayTemplates = {};
+// Key = weekday index (0=Mon...6=Sun), Value = latest edited structure
   VoidCallback? _lastUndoAction;
 
 
@@ -582,6 +586,49 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     });
   }
 
+  void _onExerciseChanged(int weekIndex, int dayIndex) {
+    final weekday = DateTime.now().add(Duration(days: dayIndex)).weekday % 7; // Sunday = 0
+    latestEditedWeekdayTemplates[weekday] = List<ExerciseRow>.from(
+      exerciseRows[weekIndex][dayIndex].map((row) => ExerciseRow(
+        exercise: row.exercise,
+        circuitIndex: row.circuitIndex,
+      )),
+    );
+  }
+  void updateFutureDaysWithEditedDay(int sourceWeekIndex, int sourceDayIndex) {
+    if (sourceWeekIndex >= exerciseRows.length) return;
+
+    final sourceRows = exerciseRows[sourceWeekIndex][sourceDayIndex];
+
+    for (int week = sourceWeekIndex + 1; week < exerciseRows.length; week++) {
+      final targetRows = exerciseRows[week][sourceDayIndex];
+
+      // Match circuit structure from source
+      targetRows.clear();
+      for (final srcRow in sourceRows) {
+        final clonedRow = ExerciseRow(
+          circuitIndex: srcRow.circuitIndex,
+          exercise: srcRow.exercise,
+        );
+        clonedRow.exerciseController.text = srcRow.exercise ?? '';
+        targetRows.add(clonedRow);
+      }
+
+      // Rebuild circuitStartIndices
+      final starts = <int>{};
+      for (int i = 0; i < targetRows.length; i++) {
+        if (i == 0 || targetRows[i].circuitIndex != targetRows[i - 1].circuitIndex) {
+          starts.add(i);
+        }
+      }
+
+      _ensureCircuitStartIndicesInitialized(week, sourceDayIndex);
+      circuitStartIndices[week][sourceDayIndex] = starts.toList()..sort();
+    }
+
+    setState(() {}); // Rebuild UI
+  }
+
 
 
   Future<void> saveDayToFirestore(int weekIndex, int dayIndex) async {
@@ -649,9 +696,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     circuitStartIndices[weekIndex][dayIndex] = starts.toSet().toList()..sort();
   }
 
-
-
-
   Future<void> deleteAllBlockAndWorkoutData() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -706,41 +750,26 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   }
 
   void clearDay(int weekIndex, int dayIndex) {
-    final backup = List.generate(
-      exercisesPerDay,
-          (i) => {
-        'name': exerciseRows[weekIndex][dayIndex][i].exercise,
-        'nameCtrl': exerciseRows[weekIndex][dayIndex][i].exerciseController.text,
-        'weightCtrl': exerciseRows[weekIndex][dayIndex][i].weightController.text,
-        'repsCtrl': exerciseRows[weekIndex][dayIndex][i].repsController.text,
-        'rirCtrl': exerciseRows[weekIndex][dayIndex][i].rirController.text,
-      },
-    );
+    final backup = List<ExerciseRow>.from(exerciseRows[weekIndex][dayIndex]);
 
     setState(() {
-      for (int i = 0; i < exercisesPerDay; i++) {
-        exerciseRows[weekIndex][dayIndex][i].exercise = null;
-        exerciseRows[weekIndex][dayIndex][i].exerciseController.clear();
-        exerciseRows[weekIndex][dayIndex][i].weightController.clear();
-        exerciseRows[weekIndex][dayIndex][i].repsController.clear();
-        exerciseRows[weekIndex][dayIndex][i].rirController.clear();
-      }
+      // 🧹 Clear the entire list of rows
+      exerciseRows[weekIndex][dayIndex].clear();
     });
 
+    // 🛟 Allow Undo
     _lastUndoAction = () {
       setState(() {
-        for (int i = 0; i < backup.length; i++) {
-          exerciseRows[weekIndex][dayIndex][i].exercise = backup[i]['name'] as String?;
-          exerciseRows[weekIndex][dayIndex][i].exerciseController.text = backup[i]['nameCtrl']!;
-          exerciseRows[weekIndex][dayIndex][i].weightController.text = backup[i]['weightCtrl']!;
-          exerciseRows[weekIndex][dayIndex][i].repsController.text = backup[i]['repsCtrl']!;
-          exerciseRows[weekIndex][dayIndex][i].rirController.text = backup[i]['rirCtrl']!;
-        }
+        exerciseRows[weekIndex][dayIndex] = List<ExerciseRow>.from(backup);
       });
     };
 
+    // ✅ Reset circuitStartIndices for that day
+    circuitStartIndices[weekIndex][dayIndex] = [0];
+
     saveDayToFirestore(weekIndex, dayIndex);
   }
+
 
 
 
@@ -766,9 +795,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
     return count;
   }
-
-
-
 
   //Horizontal scroll to current week
   void scrollToCurrentWeek() {
@@ -1337,8 +1363,10 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                               setState(() {
                                 selectedTemplateIds[weekIndex][dayIndex] = selectedTemplate.id;
                                 _populateExercisesFromTemplate(weekIndex, dayIndex, selectedTemplate.id);
+                                updateFutureDaysWithEditedDay(weekIndex, dayIndex); // ✅ Mirror into future weeks
                               });
                             }
+
                           },
 
 
@@ -1554,12 +1582,32 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                   onReorder: (oldIndex, newIndex) {
                     setState(() {
                       if (newIndex > oldIndex) newIndex -= 1;
+
                       final movedRow = exerciseRows[weekIndex][dayIndex].removeAt(oldIndex);
                       exerciseRows[weekIndex][dayIndex].insert(newIndex, movedRow);
 
-                      // Optional: Update circuitStartIndices if you rely on circuit logic
+                      // ✅ Update circuitIndex to match destination context
+                      if (newIndex > 0) {
+                        movedRow.circuitIndex = exerciseRows[weekIndex][dayIndex][newIndex - 1].circuitIndex;
+                      } else {
+                        movedRow.circuitIndex = 0;
+                      }
+
+                      // ✅ Rebuild circuitStartIndices
+                      final starts = <int>{};
+                      for (int i = 0; i < exerciseRows[weekIndex][dayIndex].length; i++) {
+                        if (i == 0 || exerciseRows[weekIndex][dayIndex][i].circuitIndex != exerciseRows[weekIndex][dayIndex][i - 1].circuitIndex) {
+                          starts.add(i);
+                        }
+                      }
+                      circuitStartIndices[weekIndex][dayIndex] = starts.toList()..sort();
+
+                      // ✅ Mirror changes forward
+                      updateFutureDaysWithEditedDay(weekIndex, dayIndex);
                     });
                   },
+
+
                   proxyDecorator: (child, index, animation) {
                     return Material(
                       elevation: 2,
@@ -1568,75 +1616,116 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                   },
                   buildDefaultDragHandles: false,
                   itemBuilder: (context, rowIndex) {
-                    final row = exerciseRows[weekIndex][dayIndex][rowIndex];
-                    final isOriginalRow = rowIndex < exercisesPerDay;
+                    final rows = exerciseRows[weekIndex][dayIndex];
+                    final row = rows[rowIndex];
+                    final isFirstInCircuit = rowIndex == 0 || row.circuitIndex != rows[rowIndex - 1].circuitIndex;
+                    final currentCircuit = row.circuitIndex;
 
-                    return Dismissible(
-                      key: ValueKey(row.id),
-                      direction: DismissDirection.endToStart,
-                      background: Container(
-                        color: Colors.red,
-                        alignment: Alignment.centerRight,
-                        padding: const EdgeInsets.only(right: 16),
-                        child: const Icon(Icons.delete, color: Colors.white),
-                      ),
-                      confirmDismiss: (_) async {
-                        if (isOriginalRow) {
-                          setState(() {
-                            row.exercise = null;
-                            row.exerciseController.clear();
-                            row.weightController.clear();
-                            row.repsController.clear();
-                            row.rirController.clear();
-                          });
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Row cleared.')),
-                          );
-                          return false;
-                        }
-                        return true;
-                      },
-                      onDismissed: (_) {
-                        final removedRow = row;
-                        setState(() {
-                          exerciseRows[weekIndex][dayIndex].removeAt(rowIndex);
-                          final starts = circuitStartIndices[weekIndex][dayIndex];
-                          starts.removeWhere((start) => start >= exerciseRows[weekIndex][dayIndex].length);
-                          if (starts.isEmpty || starts.first != 0) {
-                            starts.insert(0, 0);
-                          }
-                          circuitStartIndices[weekIndex][dayIndex] = starts.toSet().toList()..sort();
-                        });
-
-                        _lastUndoAction = () {
-                          setState(() {
-                            exerciseRows[weekIndex][dayIndex].insert(rowIndex, removedRow);
-                          });
-                        };
-
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text('Deleted "${removedRow.exercise ?? 'Unnamed'}"'),
-                            action: SnackBarAction(
-                              label: 'Undo',
-                              textColor: Colors.black,
-                              onPressed: () {
-                                _lastUndoAction?.call();
-                                _lastUndoAction = null;
-                              },
+                    // ✅ Detect if this is the last row of its circuit
+                    final isLastInCircuit = rowIndex == rows.lastIndexWhere(
+                          (r) => r.circuitIndex == currentCircuit,
+                    );
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      key: ValueKey('row_wrapper_${row.id}'),
+                      children: [
+                        if (isFirstInCircuit)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 8, bottom:1, top: 6), // ⬅ reduced top padding
+                            child: Text(
+                              'Circuit ${row.circuitIndex + 1}',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.lightBlueAccent,
+                              ),
                             ),
                           ),
-                        );
-                      },
-                      child: Row(
-                        children: [
-                          const Padding(
-                            padding: EdgeInsets.only(left: 6, right: 4),
+                        Dismissible(
+                          key: ValueKey(row.id),
+                          direction: DismissDirection.endToStart,
+                          background: Container(
+                            color: Colors.red,
+                            alignment: Alignment.centerRight,
+                            padding: const EdgeInsets.only(right: 16),
+                            child: const Icon(Icons.delete, color: Colors.white),
                           ),
-                          Expanded(child: _buildExerciseRow(weekIndex, dayIndex, rowIndex)),
-                        ],
-                      ),
+                          confirmDismiss: (_) async => true,
+
+                          onDismissed: (_) {
+                            final removedRow = row;
+                            setState(() {
+                              exerciseRows[weekIndex][dayIndex].removeAt(rowIndex);
+                              final starts = circuitStartIndices[weekIndex][dayIndex];
+                              starts.removeWhere((start) => start >= rows.length);
+                              if (starts.isEmpty || starts.first != 0) {
+                                starts.insert(0, 0);
+                              }
+                              circuitStartIndices[weekIndex][dayIndex] = starts.toSet().toList()..sort();
+                            });
+
+                            _lastUndoAction = () {
+                              setState(() {
+                                exerciseRows[weekIndex][dayIndex].insert(rowIndex, removedRow);
+                              });
+                            };
+
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Deleted "${removedRow.exercise ?? 'Unnamed'}"'),
+                                action: SnackBarAction(
+                                  label: 'Undo',
+                                  textColor: Colors.black,
+                                  onPressed: () {
+                                    _lastUndoAction?.call();
+                                    _lastUndoAction = null;
+                                  },
+                                ),
+                              ),
+                            );
+                          },
+                          child: Row(
+                            children: [
+                              const Padding(
+                                padding: EdgeInsets.only(left: 6, right: 4),
+                              ),
+                              Expanded(child: _buildExerciseRow(weekIndex, dayIndex, rowIndex)),
+                            ],
+                          ),
+                        ),
+                        if (isLastInCircuit)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4, right: 8), // tighter vertical space
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.end, // ⬅️ Align to the right
+                              children: [
+                                TextButton.icon(
+                                  onPressed: () {
+                                    setState(() {
+                                      exerciseRows[weekIndex][dayIndex].insert(
+                                        rowIndex + 1,
+                                        ExerciseRow(circuitIndex: currentCircuit),
+                                      );
+                                    });
+                                    updateFutureDaysWithEditedDay(weekIndex, dayIndex);
+                                  },
+
+                                  icon: const Icon(Icons.add, size: 16),
+                                  label: const Text('Add Exercise', style: TextStyle(fontSize: 12)),
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: Colors.lightBlueAccent,
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                                    minimumSize: Size.zero,
+                                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                    visualDensity: VisualDensity.compact,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
                     );
+
                   },
                 ),
               ),

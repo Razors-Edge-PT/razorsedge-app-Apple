@@ -1,11 +1,11 @@
 import 'package:uuid/uuid.dart';
 
-class exerciseRow {
-  final String id; // unique identifier
+class ExerciseRow {
+  final String id;
   String name;
   int circuitIndex;
 
-  exerciseRow({
+  ExerciseRow({
     required this.name,
     required this.circuitIndex,
     String? id,
