@@ -19,18 +19,23 @@ class Block_Planner extends StatefulWidget {
 class _BlockPlannerState extends State<Block_Planner> {
   // Example list of tracked exercises
   List<String> exercises = [];
-
+  Map<String, String> _exerciseIdToName = {}; // id ➔ name
   DateTime? _blockStartDate;
   DateTime? _blockEndDate;
 
   @override
+  @override
   void initState() {
     super.initState();
-    loadExercisesFromFirestore();
-    _loadBlockDatesFromFirestore(); // 🔥 new
-    _loadPlannedExercises();
-
+    _initData();
   }
+
+  Future<void> _initData() async {
+    await loadExercisesFromFirestore(); // 🧠 make sure this finishes first
+    await _loadBlockDatesFromFirestore();
+    await _loadPlannedExercises();
+  }
+
 
   Future<void> _loadBlockDatesFromFirestore() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -62,10 +67,24 @@ class _BlockPlannerState extends State<Block_Planner> {
 
   Future<void> loadExercisesFromFirestore() async {
     final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
-    final exercises = snapshot.docs.map((doc) => {
-      'name': doc['name'] as String,
-      'category': doc['category'] as String,
-      'bodyPart': doc['bodyPart'] as String,
+
+// Clear previous
+    _exerciseIdToName.clear();
+
+    final exercises = snapshot.docs.map((doc) {
+      final id = doc.id; // 👈 New
+      final name = doc['name'] as String;
+      final category = doc['category'] as String;
+      final bodyPart = doc['bodyPart'] as String;
+
+      _exerciseIdToName[id] = name; // 👈 New: map id ➔ name
+
+      return {
+        'id': id, // 👈 Add id here too if needed later
+        'name': name,
+        'category': category,
+        'bodyPart': bodyPart,
+      };
     }).toList();
 
     setState(() {
@@ -135,9 +154,10 @@ class _BlockPlannerState extends State<Block_Planner> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    // 🔥 Fetch exercises from Firestore
+    // 🔥 Fetch exercises from Firestore (including ID)
     final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
     final exercisesFromFirestore = snapshot.docs.map((doc) => {
+      'id': doc.id,
       'name': doc['name'] as String,
       'category': doc['category'] as String,
     }).toList();
@@ -161,20 +181,19 @@ class _BlockPlannerState extends State<Block_Planner> {
     ];
 
     // 🧩 Group exercises by category
-    final Map<String, List<String>> grouped = {};
+    final Map<String, List<Map<String, String>>> grouped = {};
     for (final exercise in exercisesFromFirestore) {
       final category = exercise['category'] ?? 'Other';
-      final name = exercise['name'] ?? 'Unnamed';
-      grouped.putIfAbsent(category, () => []).add(name);
+      grouped.putIfAbsent(category, () => []).add(exercise);
     }
 
     // 🔠 Sort names within each group
     for (final group in grouped.values) {
-      group.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+      group.sort((a, b) => a['name']!.toLowerCase().compareTo(b['name']!.toLowerCase()));
     }
 
     // 🧱 Ordered + any extras
-    final Map<String, List<String>> orderedGrouped = {};
+    final Map<String, List<Map<String, String>>> orderedGrouped = {};
     for (final cat in categoryOrder) {
       if (grouped.containsKey(cat)) {
         orderedGrouped[cat] = grouped[cat]!;
@@ -194,7 +213,7 @@ class _BlockPlannerState extends State<Block_Planner> {
     final List<String> selected = await showDialog<List<String>>(
       context: context,
       builder: (ctx) {
-        List<String> tempSelected = [...exercises]; // Copy of selected exercises
+        List<String> tempSelected = [...exercises]; // exercises = selected IDs now
 
         return StatefulBuilder(builder: (context, setLocalState) {
           return AlertDialog(
@@ -231,8 +250,10 @@ class _BlockPlannerState extends State<Block_Planner> {
                         },
                       ),
                       if (isExpanded)
-                        ...exercises.map((name) {
-                          final isChecked = tempSelected.contains(name);
+                        ...exercises.map((exercise) {
+                          final id = exercise['id']!;
+                          final name = exercise['name']!;
+                          final isChecked = tempSelected.contains(id);
                           return CheckboxListTile(
                             value: isChecked,
                             title: Text(name, style: const TextStyle(color: Colors.white)),
@@ -242,9 +263,9 @@ class _BlockPlannerState extends State<Block_Planner> {
                             onChanged: (checked) {
                               setLocalState(() {
                                 if (checked == true) {
-                                  tempSelected.add(name);
+                                  tempSelected.add(id);
                                 } else {
-                                  tempSelected.remove(name);
+                                  tempSelected.remove(id);
                                 }
                               });
                             },
@@ -272,9 +293,10 @@ class _BlockPlannerState extends State<Block_Planner> {
     ) ?? [];
 
     setState(() {
-      exercises = selected;
+      exercises = selected; // 🧠 Now saving IDs
     });
   }
+
 
   Future<void> _savePlannedExercises() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -418,7 +440,7 @@ class _BlockPlannerState extends State<Block_Planner> {
 
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
-                          content: Text('Removed "${removedExercise}"'),
+                          content: Text('Removed "${_exerciseIdToName[removedExercise] ?? 'Unknown Exercise'}"'),
                           action: SnackBarAction(
                             label: 'Undo',
                             textColor: Colors.amberAccent,
@@ -436,13 +458,15 @@ class _BlockPlannerState extends State<Block_Planner> {
                       );
                     },
 
+
                     background: Container(
                       color: Colors.red,
                       padding: const EdgeInsets.only(left: 16),
                       alignment: Alignment.centerLeft,
                       child: const Icon(Icons.delete, color: Colors.white),
                     ),
-                    child: _buildExerciseCard(exercise),
+                    child: _buildExerciseCard(_exerciseIdToName[exercise] ?? 'Unknown Exercise'),
+
                   );
                 },
               ),
@@ -572,8 +596,6 @@ class _BlockPlannerState extends State<Block_Planner> {
     return _ExerciseCard(exerciseName: exerciseName);
   }
 
-
-
   Widget _smallInput(String label, {bool multiline = false}) {
     return SizedBox(
       width: 140,
@@ -623,27 +645,32 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                RichText(
-                  text: TextSpan(
-                    children: [
-                      TextSpan(
-                        text: isExpanded ? "▼  " : "➤  ",
-                        style: const TextStyle(
-                          color: Colors.white, // 👈 More subtle than white
-                          fontSize: 12,
+                Expanded(
+                  child: RichText(
+                    overflow: isExpanded ? TextOverflow.visible : TextOverflow.ellipsis, // ✅ Dynamic
+                    maxLines: isExpanded ? null : 1, // ✅ Allow full multi-line when expanded
+                    text: TextSpan(
+                      children: [
+                        TextSpan(
+                          text: isExpanded ? "▼  " : "➤  ",
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                          ),
                         ),
-                      ),
-                      TextSpan(
-                        text: widget.exerciseName,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold,
+                        TextSpan(
+                          text: widget.exerciseName,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
+
 
                 const Text(
                   "Avg E1RM: 180",

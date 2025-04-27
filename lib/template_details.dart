@@ -60,12 +60,26 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return null;
 
-    final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
-
-    final allExercises = snapshot.docs.map((doc) => {
+    // Fetch all exercises
+    final allSnapshot = await FirebaseFirestore.instance.collection('exercises').get();
+    final allExercises = allSnapshot.docs.map((doc) => {
       'name': doc['name'] as String,
       'category': doc['category'] as String,
     }).toList();
+
+    // Fetch planned exercises (optional list)
+    final blockPlannerDoc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('block_planner')
+        .doc('current_block')
+        .get();
+
+    final List<String> plannedExercises = (blockPlannerDoc.data()?['plannedExercises'] as List<dynamic>?)
+        ?.map((e) => e.toString())
+        .toList() ?? [];
+
+    bool showPlannedOnly = false;
 
     final Map<String, List<String>> grouped = {};
     for (final exercise in allExercises) {
@@ -105,35 +119,62 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setState) {
+            final filteredGrouped = <String, List<String>>{};
+            orderedGrouped.forEach((category, exercises) {
+              final filtered = showPlannedOnly
+                  ? exercises.where((name) => plannedExercises.contains(name)).toList()
+                  : exercises;
+              if (filtered.isNotEmpty) {
+                filteredGrouped[category] = filtered;
+              }
+            });
+
             return AlertDialog(
               backgroundColor: Colors.blueGrey.shade900,
-              title: const Text("Select Exercise", style: TextStyle(color: Colors.white)),
+              title: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Select Exercise', style: TextStyle(color: Colors.white, fontSize: 14)),
+                  Row(
+                    children: [
+                      const Text("Planned Only", style: TextStyle(color: Colors.white70, fontSize: 12)),
+                      Switch(
+                        value: showPlannedOnly,
+                        onChanged: (value) => setState(() => showPlannedOnly = value),
+                        activeColor: Colors.lightBlueAccent,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
               content: SizedBox(
                 width: double.maxFinite,
-                height: 400,
+                height: 500,
                 child: ListView(
-                  children: orderedGrouped.entries.map((entry) {
+                  children: filteredGrouped.entries.map((entry) {
                     final category = entry.key;
                     final exercises = entry.value;
-                    final isExpanded = expandedGroups[category] ?? false;
 
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         ListTile(
                           tileColor: Colors.blueGrey.shade800,
-                          title: Text(category, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                          title: Text(
+                            category,
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                          ),
                           trailing: Icon(
-                            isExpanded ? Icons.expand_less : Icons.expand_more,
+                            expandedGroups[category]! ? Icons.expand_less : Icons.expand_more,
                             color: Colors.white70,
                           ),
                           onTap: () {
                             setState(() {
-                              expandedGroups[category] = !isExpanded;
+                              expandedGroups[category] = !(expandedGroups[category] ?? false);
                             });
                           },
                         ),
-                        if (isExpanded)
+                        if (expandedGroups[category] ?? false)
                           ...exercises.map((name) => ListTile(
                             title: Text(name, style: const TextStyle(color: Colors.white)),
                             onTap: () => Navigator.pop(context, name),
@@ -144,12 +185,19 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
                   }).toList(),
                 ),
               ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel', style: TextStyle(color: Colors.white70)),
+                ),
+              ],
             );
           },
         );
       },
     );
   }
+
   Future<void> _loadTemplateFromFirestore() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;

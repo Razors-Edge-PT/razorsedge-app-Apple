@@ -27,6 +27,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   final String _templateName = '';
   final String _templateDay = '';
   final List<String> _selectedExercises = []; // List of selected exercise IDs
+  Template? _lastDeletedTemplate;
+
 
   @override
   void initState() {
@@ -80,16 +82,36 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     }
   }
 
+  Future<void> _undoDeleteTemplate() async {
+    if (_lastDeletedTemplate == null) return;
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
+      await userDoc.collection('templates').doc(_lastDeletedTemplate!.id).set({
+        'name': _lastDeletedTemplate!.name,
+        'exercises': _lastDeletedTemplate!.exercises,
+        if (_lastDeletedTemplate!.day != null) 'day': _lastDeletedTemplate!.day,
+      });
+    }
+
+    setState(() {
+      templates.add(_lastDeletedTemplate!);
+      _lastDeletedTemplate = null;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('✅ Template restored')),
+    );
+  }
 
 
-  Future<bool> _confirmDeleteTemplate(
-      BuildContext context, String templateId) async {
+  Future<bool> _confirmDeleteTemplate(BuildContext context, String templateId) async {
     final shouldDelete = await showDialog(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Confirm Delete'),
-        content: Text(
-            'Are you sure you want to delete the template "${findTemplateName(templateId)}"?'),
+        content: Text('Are you sure you want to delete the template "${findTemplateName(templateId)}"?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -102,15 +124,17 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         ],
       ),
     );
-    if (shouldDelete) {
+    if (shouldDelete == true) {
+      final deletedTemplate = templates.firstWhere((t) => t.id == templateId);
+      _lastDeletedTemplate = deletedTemplate; // ✅ Save for undo
       await _deleteTemplateFromFirestore(templateId);
       setState(() {
         templates.removeWhere((t) => t.id == templateId);
       });
-      // Show success message (optional)
     }
     return shouldDelete ?? false;
   }
+
 
   String findTemplateName(String templateId) {
     // Find the template document using the doc ID from Firestore
@@ -140,17 +164,23 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+
         title: const Text('Workout Planner'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.undo),
+            tooltip: 'Undo Delete',
+            onPressed: _lastDeletedTemplate != null ? _undoDeleteTemplate : null,
+          ),
+          IconButton(
             icon: const Icon(Icons.add),
+            tooltip: 'Create Template',
             onPressed: () {
               Navigator.push(
                 context,
                 MaterialPageRoute(
                   builder: (context) => CreateTemplateScreen(
-                    onTemplateCreated: () =>
-                        _fetchTemplates(), // Wrap _fetchTemplates in a function
+                    onTemplateCreated: _fetchTemplates,
                   ),
                 ),
               );
@@ -158,27 +188,38 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
           ),
         ],
       ),
+
       body: ListView.builder(
-        itemCount: templates.length, // Check if snapshot is not null
+        itemCount: templates.length,
         itemBuilder: (context, index) {
-          final doc = templateSnapshot!
-              .docs[index]; // Use the snapshot to access documents
           final template = templates[index];
           print('Building list item: ${template.name}');
           return Dismissible(
-            // Enable swipe deletion
-            key: Key(doc.id), // Use the document ID as the key
+            key: Key(template.id),
+            direction: DismissDirection.endToStart,
             confirmDismiss: (DismissDirection direction) async {
-              return await _confirmDeleteTemplate(context, doc.id);
+              return await _confirmDeleteTemplate(context, template.id);
             },
             child: ListTile(
-              title: Text(template.name),
-              subtitle: Text('Day: ${template.day}'),
+              title: Text(
+                template.name,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              subtitle: template.day != null
+                  ? Text('Day: ${template.day}', style: const TextStyle(fontSize: 12))
+                  : null,
               onTap: () => _navigateToTemplateDetails(context, template),
+              trailing: IconButton(
+                icon: const Icon(Icons.delete_outline, color: Colors.white),
+                tooltip: 'Delete Template',
+                onPressed: () => _confirmDeleteTemplate(context, template.id),
+              ),
             ),
           );
         },
       ),
+
     );
   }
 
