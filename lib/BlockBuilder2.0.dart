@@ -118,6 +118,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   late DateTime blockStartDate;
   int? _draggedRowIndex;
   List<Map<String, String>> allExercisesFromFirestore = []; // 🔥 Full list
+  Map<String, String> _exerciseIdToName = {}; // 🧠 New: exerciseID ➔ exerciseName lookup
+  Map<String, String> nameToIdMap = {}; // 🧠 Exercise name ➔ ID lookup
   List<String> plannedExercises = []; // 💡 Selected in BlockPlanner
   List<int> weekIndices = [];
   Map<int, List<ExerciseRow>> latestEditedWeekdayTemplates = {};
@@ -242,17 +244,34 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
   Future<void> loadExercisesFromFirestore() async {
     final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
-    final exercises = snapshot.docs.map((doc) => {
-      'name': doc['name'] as String,
-      'category': doc['category'] as String,
-      'bodyPart': doc['bodyPart'] as String,
-    }).toList();
 
-    allExercisesFromFirestore = exercises; // 🔐 Save the full list
+    // Clear both lists/maps before refilling
+    allExercisesFromFirestore.clear();
+    _exerciseIdToName.clear();
+
+    for (final doc in snapshot.docs) {
+      final id = doc.id;
+      final name = doc['name'] as String;
+      final category = doc['category'] as String;
+      final bodyPart = doc['bodyPart'] as String;
+
+      allExercisesFromFirestore.add({
+        'id': id,
+        'name': name,
+        'category': category,
+        'bodyPart': bodyPart,
+      });
+
+      _exerciseIdToName[id] = name; // 🧠 Store ID ➔ name lookup
+      nameToIdMap[name] = id; // 🧠 Also store name ➔ ID lookup
+
+    }
+
     setState(() {
-      groupedExercises = groupExercisesByCategory(exercises);
+      groupedExercises = groupExercisesByCategory(allExercisesFromFirestore);
     });
   }
+
 
   Future<void> loadPlannedExercisesFromFirestore() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -865,8 +884,9 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             final filteredGrouped = <String, List<String>>{};
             allGroupedExercises.forEach((category, exercises) {
               final filtered = showPlannedOnly
-                  ? exercises.where((e) => plannedExercises.contains(e)).toList()
+                  ? exercises.where((e) => plannedExercises.contains(nameToIdMap[e])).toList()
                   : exercises;
+
               if (filtered.isNotEmpty) {
                 filteredGrouped[category] = filtered;
               }
@@ -1261,7 +1281,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                               color: Colors.lightGreenAccent,
                             ),
 
-                          const SizedBox(width: 6),
+                          const SizedBox(width: 2),
 
                           IconButton(
                             icon: const Icon(Icons.delete_sweep_outlined),
@@ -1308,7 +1328,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
 
 
-                  const Spacer(),
+
 
                   // 🟡 Buttons
                   Row(
@@ -1384,7 +1404,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                               }
 
                               final id = selectedTemplateIds[weekIndex][dayIndex];
-                              if (id == null || id.isEmpty) return "Template";
+                              if (id == null || id.isEmpty) return "Choose Workout";
 
                               final match = templates.firstWhere(
                                     (t) => t.id == id,
@@ -1405,22 +1425,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
 
                       ),
-                      // Notes
-                      Padding(
-                        padding: const EdgeInsets.only(right: 2),
-                        child: TextButton(
-                          style: TextButton.styleFrom(
-                            foregroundColor: Colors.white,
-                            // 👈 Makes text white
-                            padding: const EdgeInsets.symmetric(horizontal: 4),
-                            minimumSize: const Size(0, 30),
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          ),
-                          onPressed: () {},
-                          child: const Text("Notes", style: TextStyle(
-                              fontSize: 11)),
-                        ),
-                      ),
+                      const SizedBox(height: 1, width: 14),
+
                       // 🟡 Workout Button – formatted like your sketch
                       Padding(
                         padding: const EdgeInsets.only(right: 0),
@@ -1654,25 +1660,79 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
                           onDismissed: (_) {
                             final removedRow = row;
+                            final removedExerciseName = removedRow.exercise?.trim() ?? '';
+
+                            final List<Map<String, dynamic>> futureRemovedRows = [];
+
                             setState(() {
+                              // 🛠️ 1. Remove from current day
                               exerciseRows[weekIndex][dayIndex].removeAt(rowIndex);
+
+                              // 🛠️ 2. Update circuits
                               final starts = circuitStartIndices[weekIndex][dayIndex];
                               starts.removeWhere((start) => start >= rows.length);
                               if (starts.isEmpty || starts.first != 0) {
                                 starts.insert(0, 0);
                               }
                               circuitStartIndices[weekIndex][dayIndex] = starts.toSet().toList()..sort();
+
+                              // 🛠️ 3. Find and remove in future weeks
+                              for (int futureWeek = weekIndex + 1; futureWeek < exerciseRows.length; futureWeek++) {
+                                if (dayIndex >= exerciseRows[futureWeek].length) continue;
+
+                                final futureRows = exerciseRows[futureWeek][dayIndex];
+                                for (int i = futureRows.length - 1; i >= 0; i--) {
+                                  if ((futureRows[i].exercise ?? '').trim() == removedExerciseName) {
+                                    futureRemovedRows.add({
+                                      'weekIndex': futureWeek,
+                                      'dayIndex': dayIndex,
+                                      'row': futureRows[i],
+                                      'rowIndex': i,
+                                    });
+                                    futureRows.removeAt(i);
+                                  }
+                                }
+
+                                // Update circuits for that day
+                                final futureStarts = <int>{};
+                                for (int i = 0; i < futureRows.length; i++) {
+                                  if (i == 0 || futureRows[i].circuitIndex != futureRows[i - 1].circuitIndex) {
+                                    futureStarts.add(i);
+                                  }
+                                }
+                                circuitStartIndices[futureWeek][dayIndex] = futureStarts.toList()..sort();
+                              }
                             });
 
                             _lastUndoAction = () {
                               setState(() {
+                                // Restore current day
                                 exerciseRows[weekIndex][dayIndex].insert(rowIndex, removedRow);
+
+                                // Restore all future rows
+                                for (final info in futureRemovedRows) {
+                                  final w = info['weekIndex'] as int;
+                                  final d = info['dayIndex'] as int;
+                                  final ExerciseRow r = info['row'] as ExerciseRow;
+                                  final int insertAt = info['rowIndex'] as int;
+
+                                  exerciseRows[w][d].insert(insertAt, r);
+
+                                  // Fix circuits after restoring
+                                  final futureStarts = <int>{};
+                                  for (int i = 0; i < exerciseRows[w][d].length; i++) {
+                                    if (i == 0 || exerciseRows[w][d][i].circuitIndex != exerciseRows[w][d][i - 1].circuitIndex) {
+                                      futureStarts.add(i);
+                                    }
+                                  }
+                                  circuitStartIndices[w][d] = futureStarts.toList()..sort();
+                                }
                               });
                             };
 
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
-                                content: Text('Deleted "${removedRow.exercise ?? 'Unnamed'}"'),
+                                content: Text('Deleted "${removedRow.exercise ?? 'Unnamed'}" across future weeks'),
                                 action: SnackBarAction(
                                   label: 'Undo',
                                   textColor: Colors.black,
@@ -1684,6 +1744,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                               ),
                             );
                           },
+
+
                           child: Row(
                             children: [
                               const Padding(

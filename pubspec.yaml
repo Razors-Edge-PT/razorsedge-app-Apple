@@ -37,6 +37,8 @@ dependencies:
   google_sign_in: ^6.1.4
   uuid: ^4.2.2
   shared_preferences: ^2.2.2
+  collection: ^1.17.1
+  string_similarity: ^2.0.0
 
   flutter:
     sdk: flutter

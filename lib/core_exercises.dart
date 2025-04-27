@@ -9,6 +9,36 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Chest, Triceps, Anterior Delts',
   },
   {
+    'name': 'Bench Press, Narrow Grip',
+    'category': 'Horizontal Press',
+    'bodyPart': 'Chest, Triceps, Anterior Delts',
+  },
+  {
+    'name': 'Bench Press, Larsen Press',
+    'category': 'Horizontal Press',
+    'bodyPart': 'Chest, Triceps, Anterior Delts',
+  },
+  {
+    'name': 'Bench Press, Long Pause',
+    'category': 'Horizontal Press',
+    'bodyPart': 'Chest, Triceps, Anterior Delts',
+  },
+  {
+    'name': 'Bench Press, Banded',
+    'category': 'Horizontal Press',
+    'bodyPart': 'Chest, Triceps, Anterior Delts',
+  },
+  {
+    'name': 'Bench Press, Pin Press',
+    'category': 'Horizontal Press',
+    'bodyPart': 'Chest, Triceps, Anterior Delts',
+  },
+  {
+    'name': 'Bench Press, Touch n Go',
+    'category': 'Horizontal Press',
+    'bodyPart': 'Chest, Triceps, Anterior Delts',
+  },
+  {
     'name': 'Incline Press, Barbell',
     'category': 'Horizontal Press',
     'bodyPart': 'Chest, Triceps, Anterior Delts',
@@ -19,7 +49,7 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Chest, Triceps, Anterior Delts',
   },
   {
-    'name': 'Incline Dumbbell Press',
+    'name': 'Incline Bench Dumbbell Press',
     'category': 'Horizontal Press',
     'bodyPart': 'Chest, Triceps, Anterior Delts',
   },
@@ -35,22 +65,22 @@ final List<Map<String, String>> coreExercises = [
   },
 
   {
-    'name': 'Suspended Push Up',
+    'name': 'Push Up, Suspended ',
     'category': 'Horizontal Press',
     'bodyPart': 'Chest, Triceps, Anterior Delts',
   },
   {
-    'name': 'Suspended, Banded Push Up',
+    'name': 'Banded Push Up, Suspended',
     'category': 'Horizontal Press',
     'bodyPart': 'Chest, Triceps, Anterior Delts',
   },
   {
-    'name': 'Deficit Push Up',
+    'name': 'Push Up, Deficit',
     'category': 'Horizontal Press',
     'bodyPart': 'Chest, Triceps, Anterior Delts',
   },
   {
-    'name': 'Decline Push Up',
+    'name': 'Push Up, Decline',
     'category': 'Horizontal Press',
     'bodyPart': 'Chest, Triceps, Anterior Delts',
   },
@@ -60,17 +90,17 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Chest, Triceps, Anterior Delts',
   },
   {
-    'name': 'Banded Push Up',
+    'name': 'Push Up, Banded',
     'category': 'Horizontal Press',
     'bodyPart': 'Chest, Triceps, Anterior Delts',
   },
   {
-    'name': 'Weighted Push Up',
+    'name': 'Push Up, Weighted',
     'category': 'Horizontal Press',
     'bodyPart': 'Chest, Triceps, Anterior Delts',
   },
   {
-    'name': 'Weighted Deficit Push Up',
+    'name': 'Weighted Push Up, Deficit ',
     'category': 'Horizontal Press',
     'bodyPart': 'Chest, Triceps, Anterior Delts',
   },
@@ -93,7 +123,7 @@ final List<Map<String, String>> coreExercises = [
 
   //Horizontal Pull
   {
-    'name': 'Suspended High Row',
+    'name': 'High Row, Suspended',
     'category': 'Horizontal Pull',
     'bodyPart': 'Rear Delts, Mid Traps, Biceps',
   },
@@ -103,7 +133,7 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Rear Delts, Mid Traps, Biceps',
   },
   {
-    'name': 'Unilateral Cable High Row',
+    'name': 'Cable High Row, Unilateral',
     'category': 'Horizontal Pull',
     'bodyPart': 'Rear Delts, Mid Traps, Biceps',
   },
@@ -123,22 +153,22 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Rear Delts, Mid Traps',
   },
   {
-    'name': 'One Arm Row',
+    'name': 'One Arm Row, Dumbbell',
     'category': 'Horizontal Pull',
     'bodyPart': 'Lats, Biceps, Rhomboids',
   },
   {
-    'name': 'Seated Row',
+    'name': 'Seated Row, Cable',
     'category': 'Horizontal Pull',
     'bodyPart': 'Lats, Rhomboids, Biceps',
   },
   {
-    'name': 'Bent Over Row',
+    'name': 'Bent Over Row, Barbell',
     'category': 'Horizontal Pull',
     'bodyPart': 'Lats, Rhomboids, Biceps',
   },
   {
-    'name': 'Cable Low Row',
+    'name': 'Cable Low Row, Unilateral',
     'category': 'Horizontal Pull',
     'bodyPart': 'Lats, Rhomboids, Biceps',
   },
@@ -150,7 +180,7 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Shoulders, Triceps',
   },
   {
-    'name': 'Unilateral Overhead Dumbbell Press',
+    'name': 'Overhead Dumbbell Press, Unilateral',
     'category': 'Vertical Press',
     'bodyPart': 'Shoulders, Triceps',
   },
@@ -160,17 +190,17 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Shoulders, Triceps',
   },
   {
-    'name': 'Hand Stand Press',
+    'name': 'Hand Stand Press Up',
     'category': 'Vertical Press',
     'bodyPart': 'Shoulders, Triceps',
   },
   {
-    'name': 'Deficit Hand Stand Press',
+    'name': 'Deficit Hand Stand Press Up',
     'category': 'Vertical Press',
     'bodyPart': 'Shoulders, Triceps',
   },
   {
-    'name': 'Circus Press',
+    'name': 'Circus Dumbbell Press',
     'category': 'Vertical Press',
     'bodyPart': 'Shoulders, Triceps',
   },
@@ -180,7 +210,7 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Shoulders, Triceps',
   },
   {
-    'name': 'Triceps Dips',
+    'name': 'Triceps Dip',
     'category': 'Arm Extension',
     'bodyPart': 'Triceps, Shoulders',
   },
@@ -190,17 +220,17 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Shoulders, Triceps',
   },
   {
-    'name': 'Plate Loaded Machine Press',
+    'name': 'Machine Chest Press, Plate Loaded',
     'category': 'Vertical Press',
     'bodyPart': 'Shoulders, Triceps',
   },
   {
-    'name': 'Pin Loaded Machine Press',
+    'name': 'Machine Chest Press, Pin Loaded',
     'category': 'Vertical Press',
     'bodyPart': 'Shoulders, Triceps',
   },
   {
-    'name': 'Smith Machine Press',
+    'name': 'Chest Press, Smith Machine',
     'category': 'Vertical Press',
     'bodyPart': 'Shoulders, Triceps',
   },
@@ -218,22 +248,22 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Lats, Biceps',
   },
   {
-    'name': 'Wide Arm Lat Pull Down',
+    'name': 'Lat Pull Down, Wide Arm ',
     'category': 'Vertical Pull',
     'bodyPart': 'Lats, Biceps',
   },
   {
-    'name': 'Supinated Lat Pull Down',
+    'name': 'Lat Pull Down, Supinated',
     'category': 'Vertical Pull',
     'bodyPart': 'Lats, Biceps',
   },
   {
-    'name': 'Unilateral Lat Pull Down',
+    'name': 'Lat Pull Down, Unilateral ',
     'category': 'Vertical Pull',
     'bodyPart': 'Lats, Biceps',
   },
   {
-    'name': 'Straight Arm Lat Pull Down',
+    'name': 'Lat Pull Down, Straight Arm',
     'category': 'Vertical Pull',
     'bodyPart': 'Lats, Triceps',
   },
@@ -243,7 +273,7 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Lats, Triceps',
   },
   {
-    'name': 'Bench Cable Straight Arm Lat Pull',
+    'name': 'Bench Lat Pull Down, Straight Arm',
     'category': 'Vertical Pull',
     'bodyPart': 'Lats, Triceps',
   },
@@ -284,12 +314,12 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Triceps',
   },
   {
-    'name': 'Unilateral Triceps Push down',
+    'name': 'Triceps Push down, Unilateral',
     'category': 'Arm Extension',
     'bodyPart': 'Triceps',
   },
   {
-    'name': 'Unilateral Overhead Cable Triceps Extension',
+    'name': 'Overhead Cable Triceps Extension, Unilateral',
     'category': 'Arm Extension',
     'bodyPart': 'Triceps',
   },
@@ -304,12 +334,12 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Triceps',
   },
   {
-    'name': 'Unilateral Suspended Triceps Extension',
+    'name': 'Suspended Triceps Extension, Unilateral',
     'category': 'Arm Extension',
     'bodyPart': 'Triceps',
   },
   {
-    'name': 'Skull Crusher',
+    'name': 'Skull Crusher, Barbell',
     'category': 'Arm Extension',
     'bodyPart': 'Triceps',
   },
@@ -337,7 +367,7 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Biceps',
   },
   {
-    'name': 'Unilateral Cable Biceps Curl',
+    'name': 'Cable Biceps Curl, Unilateral',
     'category': 'Arm Curl',
     'bodyPart': 'Biceps',
   },
@@ -379,7 +409,7 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Hamstrings, Glutes, Lower Back',
   },
   {
-    'name': 'Unilateral Romanian Deadlift',
+    'name': 'Romanian Deadlift, Unilateral',
     'category': 'Hip Hinge',
     'bodyPart': 'Hamstrings, Glutes, Lower Back',
   },
@@ -399,7 +429,7 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Hamstrings, Glutes',
   },
   {
-    'name': 'Unilateral Hip Thrust, Barbell',
+    'name': 'Hip Thrust, Barbell, Unilateral',
     'category': 'Hip Hinge',
     'bodyPart': 'Hamstrings, Glutes',
   },
@@ -417,6 +447,26 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Quads, Glutes',
   },
   {
+    'name': 'Back Squat, Low bar',
+    'category': 'Squat Pattern',
+    'bodyPart': 'Quads, Glutes',
+  },
+  {
+    'name': 'Back Squat, Pin Squat',
+    'category': 'Squat Pattern',
+    'bodyPart': 'Quads, Glutes',
+  },
+  {
+    'name': 'Back Squat, Paused Squat',
+    'category': 'Squat Pattern',
+    'bodyPart': 'Quads, Glutes',
+  },
+  {
+    'name': 'Back Squat, Banded',
+    'category': 'Squat Pattern',
+    'bodyPart': 'Quads, Glutes',
+  },
+  {
     'name': 'Bulgarian Split Squat',
     'category': 'Squat Pattern',
     'bodyPart': 'Quads, Glutes',
@@ -427,7 +477,7 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Quads, Glutes',
   },
   {
-    'name': 'Regular Split Squat',
+    'name': 'Split Squat, Standard',
     'category': 'Squat Pattern',
     'bodyPart': 'Quads, Glutes',
   },
@@ -453,7 +503,7 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Quads, Glutes',
   },
   {
-    'name': 'Unilateral Leg Press',
+    'name': 'Leg Press, Unilateral',
     'category': 'Squat Pattern',
     'bodyPart': 'Quads, Glutes',
   },
@@ -463,7 +513,7 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Quads, Glutes',
   },
   {
-    'name': 'Unilateral Hack Squat',
+    'name': 'Hack Squat, Unilateral',
     'category': 'Squat Pattern',
     'bodyPart': 'Quads, Glutes',
   },
@@ -475,7 +525,7 @@ final List<Map<String, String>> coreExercises = [
 
   //Leg Extension
   {
-    'name': 'Unilateral Leg Extension',
+    'name': 'Leg Extension, Unilateral',
     'category': 'Leg Extension',
     'bodyPart': 'Quads',
   },
@@ -487,7 +537,7 @@ final List<Map<String, String>> coreExercises = [
   //Leg Curl
 
   {
-    'name': 'Unilateral Lying Leg Curl',
+    'name': 'Lying Leg Curl, Unilateral',
     'category': 'Leg Curl',
     'bodyPart': 'Hamstrings',
   },
@@ -498,7 +548,7 @@ final List<Map<String, String>> coreExercises = [
   },
 
   {
-    'name': 'Unilateral Seated Leg Curl',
+    'name': 'Seated Leg Curl, Unilateral',
     'category': 'Leg Curl',
     'bodyPart': 'Hamstrings',
   },
@@ -515,7 +565,7 @@ final List<Map<String, String>> coreExercises = [
   },
 
   {
-    'name': 'Unilateral Suspended Leg Curl',
+    'name': 'Suspended Leg Curl, Unilateral',
     'category': 'Leg Curl',
     'bodyPart': 'Hamstrings, Calves',
   },
@@ -534,12 +584,12 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Calves',
   },
   {
-    'name': 'Unilateral Standing Calf Raise',
+    'name': 'Standing Calf Raise, Unilateral',
     'category': 'Calf Raise',
     'bodyPart': 'Calves',
   },
   {
-    'name': 'Unilateral Leg Press Calf Raise',
+    'name': 'Leg Press Calf Raise, Unilateral',
     'category': 'Calf Raise',
     'bodyPart': 'Calves',
   },
@@ -549,7 +599,7 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Calves',
   },
   {
-    'name': 'Unilateral Seated Calf Raise',
+    'name': 'Seated Calf Raise, Unilateral',
     'category': 'Calf Raise',
     'bodyPart': 'Calves',
   },
@@ -592,6 +642,11 @@ final List<Map<String, String>> coreExercises = [
   },
   {
     'name': 'Hanging Leg Raise',
+    'category': 'Core',
+    'bodyPart': 'Core',
+  },
+  {
+    'name': 'Hanging Knee Raise',
     'category': 'Core',
     'bodyPart': 'Core',
   },

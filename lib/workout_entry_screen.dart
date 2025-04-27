@@ -70,6 +70,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
   late DateTime _selectedDate; // move this to the top of the State class
   final List<Map<String, dynamic>> _selectedExercisesWithCircuits = [];
   List<String> plannedExercises = [];
+  Map<String, String> nameToIdMap = {}; // 🧠 Exercise name ➔ ID
   final List<List<SetDetails>> _workoutSets = [];
   final List<List<TextEditingController>> _repsControllers = [];
   final List<List<TextEditingController>> _weightControllers = [];
@@ -105,7 +106,15 @@ class _WorkoutPageState extends State<WorkoutPage> {
         setState(() {
           plannedExercises = List<String>.from(data['plannedExercises']);
         });
+      } else {
+        setState(() {
+          plannedExercises = []; // ✅ If null, safely empty list
+        });
       }
+    } else {
+      setState(() {
+        plannedExercises = []; // ✅ If doc doesn't exist, safely empty list
+      });
     }
   }
 
@@ -588,6 +597,10 @@ class _WorkoutPageState extends State<WorkoutPage> {
     return (suggestedWeight / 2.5).round() * 2.5;
   }
 
+  Future<void> _loadInitialData() async {
+    await loadPlannedExercisesFromFirestore();
+    await loadPreviousWorkoutData(); // if you want to wait for top sets too
+  }
 
 
   @override
@@ -596,7 +609,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
     _selectedDate = widget.initialDate ?? DateTime.now();
     late final Debouncer _autoSaveDebouncer;
-
+    _loadInitialData(); // ✅ New function that awaits loading
     // ✅ Set the workout name first, before any template/workout logic can override it
     if (widget.initialWorkoutName != null) {
       _workoutNameController.text = widget.initialWorkoutName!;
@@ -713,13 +726,22 @@ class _WorkoutPageState extends State<WorkoutPage> {
   void _showExercisePickerForRow(int index) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
+    if (plannedExercises.isEmpty) {
+      await loadPlannedExercisesFromFirestore();
+    }
 
+    bool plannedModeAvailable = plannedExercises.isNotEmpty;
     final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
 
     final allExercises = snapshot.docs.map((doc) => {
+      'id': doc.id,
       'name': doc['name'] as String,
       'category': doc['category'] as String,
     }).toList();
+
+    final Map<String, String> nameToIdMap = {
+      for (final ex in allExercises) ex['name']!: ex['id']!,
+    };
 
     bool showPlannedOnly = true;
     final Map<String, bool> expandedGroups = {};
@@ -728,8 +750,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
       context: context,
       builder: (ctx) {
         return StatefulBuilder(builder: (context, setLocalState) {
-          final filteredExercises = showPlannedOnly
-              ? allExercises.where((ex) => plannedExercises.contains(ex['name'])).toList()
+          final filteredExercises = (showPlannedOnly && plannedModeAvailable)
+              ? allExercises.where((ex) => plannedExercises.contains(ex['id'])).toList()
               : allExercises;
 
           final Map<String, List<String>> grouped = {};
@@ -782,16 +804,20 @@ class _WorkoutPageState extends State<WorkoutPage> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 const Text("Select Exercise", style: TextStyle(fontSize: 13, color: Colors.white)),
-                Row(
-                  children: [
-                    const Text("Planned Only", style: TextStyle(fontSize: 12, color: Colors.white70)),
-                    Switch(
-                      value: showPlannedOnly,
-                      onChanged: (value) => setLocalState(() => showPlannedOnly = value),
-                      activeColor: Colors.lightBlueAccent,
-                    ),
-                  ],
-                ),
+                if (plannedModeAvailable)
+                  Row(
+                    children: [
+                      const Text("Planned Only", style: TextStyle(fontSize: 12, color: Colors.white70)),
+                      Switch(
+                        value: showPlannedOnly,
+                        onChanged: (value) => setLocalState(() => showPlannedOnly = value),
+                        activeColor: Colors.lightBlueAccent,
+                      ),
+                    ],
+                  )
+                else
+                  const SizedBox(),
+
               ],
             ),
             content: SizedBox(
@@ -927,29 +953,46 @@ class _WorkoutPageState extends State<WorkoutPage> {
   void _showExercisePickerDialog() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
+    if (plannedExercises.isEmpty) {
+      await loadPlannedExercisesFromFirestore();
+    }
+
+// 🧠 Double guard: If it's still empty after loading, just skip the planned-only filter.
+    bool plannedModeAvailable = plannedExercises.isNotEmpty;
 
     final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
 
     final allExercises = snapshot.docs.map((doc) => {
+      'id': doc.id,
       'name': doc['name'] as String,
       'category': doc['category'] as String,
     }).toList();
 
+    // 🔥 Build Name ➔ ID map
+    final Map<String, String> nameToIdMap = {
+      for (final ex in allExercises) ex['name']!: ex['id']!,
+    };
+
     bool showPlannedOnly = true;
-    final Map<String, bool> expandedGroups = {}; // ✅ Moved outside StatefulBuilder
+    final Map<String, bool> expandedGroups = {};
 
     final List<String> selected = await showDialog<List<String>>(
       context: context,
       builder: (ctx) {
         List<String> tempSelected = _selectedExercisesWithCircuits.map((e) => e['name'] as String).toList();
 
-
         return StatefulBuilder(builder: (context, setLocalState) {
-          final filteredExercises = showPlannedOnly
-              ? allExercises.where((ex) => plannedExercises.contains(ex['name'])).toList()
+          final filteredExercises = (showPlannedOnly && plannedModeAvailable)
+              ? allExercises.where((ex) => plannedExercises.contains(ex['id'])).toList()
               : allExercises;
 
+
+          print('Planned Exercise IDs: $plannedExercises');
+          print('Loaded Exercises (id, name): ${allExercises.map((e) => '${e['id']} (${e['name']})').toList()}');
+          print('Filtered Exercises (${showPlannedOnly ? "Planned Only" : "All"}): ${filteredExercises.map((e) => e['name']).toList()}');
+
           final Map<String, List<String>> grouped = {};
+
           for (final exercise in filteredExercises) {
             final category = exercise['category'] ?? 'Other';
             final name = exercise['name'] ?? 'Unnamed';
@@ -989,7 +1032,6 @@ class _WorkoutPageState extends State<WorkoutPage> {
             }
           }
 
-          // ✅ Only initialize new entries without overwriting toggled states
           for (final category in orderedGrouped.keys) {
             expandedGroups.putIfAbsent(category, () => false);
           }
@@ -1000,16 +1042,20 @@ class _WorkoutPageState extends State<WorkoutPage> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 const Text("Select Exercises", style: TextStyle(fontSize: 13, color: Colors.white)),
-                Row(
-                  children: [
-                    const Text("Planned Only", style: TextStyle(fontSize: 12, color: Colors.white70)),
-                    Switch(
-                      value: showPlannedOnly,
-                      onChanged: (value) => setLocalState(() => showPlannedOnly = value),
-                      activeColor: Colors.lightBlueAccent,
-                    ),
-                  ],
-                ),
+                if (plannedModeAvailable)
+                  Row(
+                    children: [
+                      const Text("Planned Only", style: TextStyle(fontSize: 12, color: Colors.white70)),
+                      Switch(
+                        value: showPlannedOnly,
+                        onChanged: (value) => setLocalState(() => showPlannedOnly = value),
+                        activeColor: Colors.lightBlueAccent,
+                      ),
+                    ],
+                  )
+                else
+                  const SizedBox(),
+
               ],
             ),
             content: SizedBox(
@@ -1082,7 +1128,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
       _selectedExercisesWithCircuits.addAll(
         selected.map((name) => {
           'name': name,
-          'circuitIndex': 0, // Default circuit index
+          'circuitIndex': 0,
         }),
       );
 
@@ -1096,8 +1142,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
       _initializeControllers();
     });
-
   }
+
 
 
   void _onReorderExercises(int oldIndex, int newIndex) {
