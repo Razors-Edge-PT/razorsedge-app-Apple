@@ -602,6 +602,19 @@ class _WorkoutPageState extends State<WorkoutPage> {
     await loadPreviousWorkoutData(); // if you want to wait for top sets too
   }
 
+  void _navigateToTemplateSelection() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const TemplatesScreen(fromWorkoutPage: true),
+      ),
+    ).then((selectedTemplate) {
+      if (selectedTemplate != null && selectedTemplate is Template) {
+        _loadTemplate(selectedTemplate);
+      }
+    });
+  }
+
 
   @override
   void initState() {
@@ -700,6 +713,57 @@ class _WorkoutPageState extends State<WorkoutPage> {
       _initializeControllers();
     });
   }
+
+  void _showTemplateSelectionDialog() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final snapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('templates')
+        .get();
+
+    final templates = snapshot.docs.map((doc) => Template.fromFirestore(doc.data(), doc.id)).toList();
+
+
+    final selectedTemplate = await showDialog<Template>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: Colors.blueGrey.shade800,
+          title: const Text('Select Template', style: TextStyle(color: Colors.white)),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: templates.isEmpty
+                ? const Center(
+              child: Text(
+                'No templates available.',
+                style: TextStyle(color: Colors.white70),
+              ),
+            )
+                : ListView.builder(
+              shrinkWrap: true,
+              itemCount: templates.length,
+              itemBuilder: (context, index) {
+                final template = templates[index];
+                return ListTile(
+                  title: Text(template.name, style: const TextStyle(color: Colors.white)),
+                  onTap: () => Navigator.pop(context, template),
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+
+    if (selectedTemplate != null) {
+      _loadTemplate(selectedTemplate);
+    }
+  }
+
+
 
 
   void _addNewCircuitExercise() {
@@ -937,18 +1001,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
   }
 
 
-  void _navigateToTemplateSelection() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => const TemplatesScreen(fromWorkoutPage: true),
-      ),
-    ).then((selectedTemplate) {
-      if (selectedTemplate != null && selectedTemplate is Template) {
-        _loadTemplate(selectedTemplate);
-      }
-    });
-  }
+
 
   void _showExercisePickerDialog() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -1514,12 +1567,26 @@ class _WorkoutPageState extends State<WorkoutPage> {
       firstDate: DateTime(2000),
       lastDate: DateTime(2101),
     );
+
     if (pickedDate != null && pickedDate != _selectedDate) {
       setState(() {
         _selectedDate = pickedDate;
+        _workoutNameController.text = _formatWorkoutDate(_selectedDate);
       });
     }
   }
+
+  String _formatWorkoutDate(DateTime date) {
+    final dayOfWeek = DateFormat('EEEE').format(date); // e.g., Tuesday
+    final day = date.day; // 29
+    final month = DateFormat('MMMM').format(date); // April
+    final year = date.year; // 2025
+
+    return '$dayOfWeek $day $month $year';
+  }
+
+
+
 
   void _navigateToExerciseDetails(String exerciseName) async {
     List<Workout> recentWorkouts = await getRecentWorkoutsForExercise(exerciseName, _selectedDate);
@@ -1704,9 +1771,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             TextField(
-              controller: _workoutNameController,
+              controller: _workoutNameController, style: TextStyle(fontSize: 16,),
               decoration: InputDecoration( // ✅ remove `const`
-                labelText: 'Workout Name',
                 labelStyle: const TextStyle(color: Colors.white),
                 filled: true,
                 fillColor: Colors.blueGrey.shade900, // ✅ works now
@@ -1715,45 +1781,62 @@ class _WorkoutPageState extends State<WorkoutPage> {
             ),
 
 
-            const SizedBox(height: 10.0),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                ElevatedButton.icon(
-                  icon: const Icon(Icons.add, size: 16),
-                  label: const Text("Add Exercises"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blueGrey.shade700,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  ),
-                  onPressed: _showExercisePickerDialog,
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blueGrey,
-                  ),
-                  onPressed: () => _selectDate(context),
-                  child: const Text('Select Date', style: TextStyle(fontFamily: 'Verdana', color: Colors.black)),
-                ),
-              ],
-            ),
             const SizedBox(height: 0.0),
+            Padding(
+              padding: const EdgeInsets.only(left: 5, top: 0, right:5, bottom: 0), // 🔥 Added cleaner side spacing
+              child: Row(
+                children: [
+                  Flexible(
+                    flex: 4,
+                    child: ElevatedButton.icon(
+                      icon: const Icon(Icons.add, size: 16),
+                      label: const Text("Add Exercises", style: TextStyle(fontSize: 14)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blueGrey.shade700,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 8),
+                      ),
+                      onPressed: _showExercisePickerDialog,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    flex: 3,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blueGrey,
+                        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
+                      ),
+                      onPressed: _showTemplateSelectionDialog,
+                      child: const Text('Load Template', style: TextStyle(fontSize: 13, fontFamily: 'Verdana', color: Colors.white)),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    flex: 3,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blueGrey,
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 8),
+                      ),
+                      onPressed: () => _selectDate(context),
+                      child: const Text('Select Date', style: TextStyle(fontFamily: 'Verdana', color: Colors.white)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+
+
+
+            const SizedBox(height: 4.0),
             if (_selectedExercisesWithCircuits.isEmpty)
               Column(
                 children: [
                   const Text(
-                      'No exercises selected yet. Add some to get started.', style: TextStyle(fontFamily: 'Verdana', color: Colors.white),),
-                  const SizedBox(height: 10.0),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      ElevatedButton(
-                        onPressed: _navigateToTemplateSelection,
-                        child: const Text('Load Template', style: TextStyle(fontFamily: 'Verdana', color: Colors.black),),
-                      ),
-                    ],
-                  ),
+                      'No exercises selected yet. Add some to get started.', style: TextStyle(fontFamily: 'Verdana', color: Colors.white, fontSize: 14),),
+                  const SizedBox(height: 6.0),
                 ],
               ),
 
