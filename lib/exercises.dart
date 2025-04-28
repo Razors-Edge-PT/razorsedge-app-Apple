@@ -136,24 +136,129 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // ➡️ Group exercises by category
+    final Map<String, List<Map<String, dynamic>>> groupedExercises = {};
+    for (var exercise in exercises) {
+      final category = exercise['category'] ?? 'Other';
+      if (!groupedExercises.containsKey(category)) {
+        groupedExercises[category] = [];
+      }
+      groupedExercises[category]!.add(exercise);
+    }
+
+    const categoryOrder = [
+      'Horizontal Press',
+      'Horizontal Pull',
+      'Vertical Press',
+      'Vertical Pull',
+      'Lateral Raise',
+      'Arm Extension',
+      'Arm Curl',
+      'Squat Pattern',
+      'Hip Hinge',
+      'Leg Extension',
+      'Leg Curl',
+      'Hip Abduction/adduction',
+      'Calf Raise',
+      'Core',
+    ];
+
     return Scaffold(
+      backgroundColor: Colors.blueGrey.shade900,
       appBar: AppBar(
         title: const Text('Exercises'),
+        backgroundColor: Colors.blueGrey.shade800,
+        centerTitle: true,
       ),
-      body: ListView.builder(
-        itemCount: exercises.length,
-        itemBuilder: (context, index) {
-          final exercise = exercises[index];
-          return ListTile(
-            title: Text(exercise['name']),
-            subtitle: Text('${exercise['bodyPart']} - ${exercise['category']}'),
-          );
-        },
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 8),
+            // ➡️ Category groups
+            ...categoryOrder
+                .where((cat) => groupedExercises.containsKey(cat))
+                .map((category) => _buildCategoryTile(category, groupedExercises[category]!)),
+
+            // ➡️ Other categories
+            ...groupedExercises.entries
+                .where((entry) => !categoryOrder.contains(entry.key))
+                .map((entry) => _buildCategoryTile(entry.key, entry.value)),
+          ],
+        ),
       ),
       floatingActionButton: FloatingActionButton(
+        backgroundColor: Colors.blueGrey.shade700,
+        child: const Icon(Icons.add),
         onPressed: _showAddExerciseDialog,
-        child: const Icon(Icons.add), // Add icon for the button
       ),
     );
   }
+
+// ➡️ Helper method to build a category card
+  Widget _buildCategoryTile(String category, List<Map<String, dynamic>> exercises) {
+    return Card(
+      color: Colors.blueGrey.shade800,
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: ExpansionTile(
+        backgroundColor: Colors.blueGrey.shade800, // ✅ Keep category background
+        collapsedBackgroundColor: Colors.blueGrey.shade800, // ✅ Collapsed too
+        title: Text(
+          category,
+          style: const TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+            color: Colors.white,
+          ),
+        ),
+        children: [
+          Container(
+            color: Colors.blueGrey.shade700, // ✅ Lighter background inside!
+            child: Column(
+              children: exercises.map((exercise) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        exercise['name'] ?? 'Unnamed Exercise',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        exercise['bodyPart'] ?? 'Unknown Body Part',
+                        style: TextStyle(
+                          color: Colors.grey.shade300,
+                          fontSize: 12,
+                        ),
+                      ),
+                      const Divider(
+                        height: 16,
+                        thickness: 0.5,
+                        color: Colors.white24,
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+
+
+
+
 }
