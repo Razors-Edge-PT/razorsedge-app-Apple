@@ -157,7 +157,7 @@ class _HomeScreenState extends State<HomeScreen> {
               },
             ),
             ListTile(
-              title: const Text('Templates'),
+              title: const Text('Workout Planner'),
               onTap: () {
                 Navigator.pop(context);
                 Navigator.pushNamed(context, '/templates');
@@ -172,15 +172,15 @@ class _HomeScreenState extends State<HomeScreen> {
               },
             ),
 
+            //ListTile(
+             // title: const Text('Block Builder'),
+             // onTap: () {
+              //  Navigator.pop(context);
+              //  Navigator.pushNamed(context, '/block_builder');
+              //},
+           // ),
             ListTile(
-              title: const Text('Block Builder'),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.pushNamed(context, '/block_builder');
-              },
-            ),
-            ListTile(
-              title: const Text('Block Builder 2.0 🚀'),
+              title: const Text('Week Planner 🚀'),
               onTap: () {
                 Navigator.pop(context);
                 Navigator.pushNamed(context, '/block_builder_2'); // 👈 Match the route

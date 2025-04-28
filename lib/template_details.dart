@@ -45,9 +45,22 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
   @override
   void initState() {
     super.initState();
-    _nameController = TextEditingController(); // Empty for now
-    _loadTemplateFromFirestore(); // Will set name when data loads
+    _nameController = TextEditingController(text: widget.template.name);
+
+    if (widget.template.exercises.isNotEmpty) {
+      // 🧠 New Template with passed-in exercises ➔ load directly
+      allRows = widget.template.exercises.map((e) {
+        return ExerciseRow(
+          name: e is String ? e : (e['name'] ?? ''),
+          circuitIndex: e is Map<String, dynamic> && e.containsKey('circuitIndex') ? e['circuitIndex'] ?? 0 : 0,
+        );
+      }).toList();
+    } else {
+      // 🔄 Otherwise (old templates) ➔ load from Firestore
+      _loadTemplateFromFirestore();
+    }
   }
+
 
   @override
   void dispose() {
