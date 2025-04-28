@@ -2,7 +2,7 @@ import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-
+import 'template_details.dart'; // 👈 Add this if not already imported
 import 'exercise_model.dart';
 import 'template_model.dart'; // Assuming your template model is in this file
 import 'template_utils.dart'; // Import the shared methods
@@ -246,10 +246,30 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
           const SnackBar(content: Text('Template created successfully')),
         );
         widget.onTemplateCreated();
-        Navigator.pop(context);
+
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => TemplateDetailsScreen(
+              template: Template( // 👈 build Template object
+                id: generatedId,
+                name: _name,
+                exercises: _selectedExercises.map((id) {
+                  final name = _exerciseNameMap[id]!;
+                  return {
+                    'name': name,
+                    'circuitIndex': 0,
+                  };
+                }).toList(),
+              ),
+            ),
+          ),
+        );
       }).catchError((error) {
         // Handle errors
       });
+
+
     }
   }
 

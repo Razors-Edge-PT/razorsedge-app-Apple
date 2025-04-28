@@ -1837,24 +1837,24 @@ class _WorkoutPageState extends State<WorkoutPage> {
     color: Colors.blueGrey.shade700,
     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(3)),
     margin: const EdgeInsets.only(left: 0, top: 2, right: 0, bottom: 0),
-    child: ExpansionTile(
-    // 🧠 Everything you already had inside the card
-      title: (_selectedExercisesWithCircuits[i]['name'] ?? '').isEmpty
-          ? TextButton(
-        onPressed: () => _showExercisePickerForRow(i),
-        child: const Text(
-          'Select Exercise',
-          style: TextStyle(color: Colors.white70),
-        ),
-      )
-          : Text(
-        _selectedExercisesWithCircuits[i]['name'],
-        style: TextStyle(
-          color: Colors.grey.shade300,
-          fontWeight: FontWeight.bold,
-          fontSize: 14,
-        ),
-      ),
+          child: ExpansionTile(
+            tilePadding: const EdgeInsets.symmetric(horizontal: 8), // ✅ Shrink horizontal padding
+            title: (_selectedExercisesWithCircuits[i]['name'] ?? '').isEmpty
+                ? TextButton(
+              onPressed: () => _showExercisePickerForRow(i),
+              child: const Text(
+                'Select Exercise',
+                style: TextStyle(color: Colors.white70),
+              ),
+            )
+                : Text(
+              _selectedExercisesWithCircuits[i]['name'],
+              style: TextStyle(
+                color: Colors.grey.shade300,
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
+              ),
+            ),
 
       trailing: Row(
     mainAxisSize: MainAxisSize.min,
@@ -1888,19 +1888,11 @@ class _WorkoutPageState extends State<WorkoutPage> {
     children: [
                     // New row between selected exercise and workout sets:
       Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6.0, vertical: 2.0),
+        padding: const EdgeInsets.symmetric(horizontal: 6.0, vertical: 0),
         child: Row(
 
           mainAxisAlignment: MainAxisAlignment.end, // 👈 Pushes to the right
           children: [
-            Text(
-              'Avg E1RM: ${getAverageE1RM(_selectedExercisesWithCircuits[i]['name'] ?? '').toStringAsFixed(1)} kg',
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: Colors.blueGrey,
-              ),
-            ),
           ],
         ),
       ),
@@ -1915,109 +1907,142 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
 
 
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Row(
+                            if (j == 0) ...[
+                              const SizedBox(height: 4),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 6),
+                                child: Row(
                                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  crossAxisAlignment: CrossAxisAlignment.center, // ✅ Center vertically
                                   children: [
-                                    Row(
+                                    // ➡️ Previous Rep Targets + Available Rep Targets (on the LEFT)
+                                    Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
-                                        const SizedBox(width: 6),
-                                        Row(
-                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                          children: [
-                                            Row(
-                                              children: [
-                                                Text(
-                                                  'Set ${j + 1}',
-                                                  style: const TextStyle(
-                                                    fontWeight: FontWeight.bold,
-                                                    fontSize: 12.0,
-                                                    color: Colors.black,
-                                                  ),
-                                                ),
-                                                const SizedBox(width: 16),
-
-                                                if (j == 0)
-                                                  Column(
-                                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                                    children: [
-                                                      Text(
-                                                            () {
-                                                              final reps = exercisePreviousTopSetReps[_selectedExercisesWithCircuits[i]['name'] ?? ''] ?? [];
-
-                                                              final recent = reps.take(7).join(", ");
-                                                          return 'Previous Rep Targets: ${recent.isEmpty ? "None" : recent}';
-                                                        }(),
-                                                        style: const TextStyle(
-                                                          fontSize: 10.0,
-                                                          fontWeight: FontWeight.bold,
-                                                          color: Colors.white24
-                                                        ),
-                                                      ),
-                                                      Builder(
-                                                        builder: (context) {
-                                                          final reps = _getAvailableRepTargets(i, j);
-                                                          final displayText = reps.length >= 11 ? 'All (1–12)' : reps.join(", ");
-                                                          return Text(
-                                                            'Available Rep Targets: $displayText',
-                                                            style: const TextStyle(
-                                                              fontSize: 10.0,
-                                                              fontWeight: FontWeight.bold,
-                                                              color: Colors.white54,
-                                                            ),
-                                                          );
-                                                        },
-                                                      ),
-                                                    ],
-                                                  ),
-
-
-                                              ],
-                                            ),
-                                          ],
+                                        Text(
+                                              () {
+                                            final reps = exercisePreviousTopSetReps[_selectedExercisesWithCircuits[i]['name'] ?? ''] ?? [];
+                                            final recent = reps.take(7).join(", ");
+                                            return 'Previous Rep Targets: ${recent.isEmpty ? "None" : recent}';
+                                          }(),
+                                          style: const TextStyle(
+                                            fontSize: 10.0,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.white24,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Builder(
+                                          builder: (context) {
+                                            final reps = _getAvailableRepTargets(i, j);
+                                            final displayText = reps.length >= 11 ? 'All (1–12)' : reps.join(", ");
+                                            return Text(
+                                              'Available Rep Targets: $displayText',
+                                              style: const TextStyle(
+                                                fontSize: 10.0,
+                                                fontWeight: FontWeight.bold,
+                                                color: Colors.white54,
+                                              ),
+                                            );
+                                          },
                                         ),
                                       ],
                                     ),
+
+                                    // ➡️ Spacer to push Avg E1RM to the right
+                                    const Spacer(),
+
+                                    // ➡️ Avg E1RM (on the RIGHT)
+                                    Text(
+                                      'Avg E1RM: ${getAverageE1RM(_selectedExercisesWithCircuits[i]['name'] ?? '').toStringAsFixed(1)} kg',
+                                      style: const TextStyle(
+                                        fontSize: 12.0,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.blueGrey,
+                                      ),
+                                    ),
                                   ],
                                 ),
+                              ),
+                              const SizedBox(height: 1),
+                            ],
 
-                                IconButton(
-                                  icon: const Icon(Icons.remove),
-                                  onPressed: () => removeSet(i, j),
-                                ),
-                              ],
+
+                            SizedBox(
+                              height: 24, // or 26, or 28 (experiment to see what feels tight but readable)
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Padding(
+                                    padding: const EdgeInsets.only(left: 6, top: 3),
+                                    child: Text(
+                                      'Set ${j + 1}',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 12.0,
+                                        color: Colors.white70,
+                                      ),
+                                    ),
+                                  ),
+                                  Container(
+                                    padding: const EdgeInsets.only(top: 2),
+                                    child: IconButton(
+                                      icon: const Icon(Icons.remove),
+                                      iconSize: 18,
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(),
+                                      onPressed: () => removeSet(i, j),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
-                            const SizedBox(height: 0.0),
+
+
 
                             // ✅ Header Row with aligned labels
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Expanded(
-                                    child: Text('Weight',
-                                        textAlign: TextAlign.left,
-                                        style: TextStyle(fontSize: 10.0, color: Colors.black, fontWeight: FontWeight.bold))),
-                                const SizedBox(width: 4.0), // Reduce spacing for more room
-                                const Expanded(
-                                    child: Text('Reps',
-                                        textAlign: TextAlign.left,
-                                        style: TextStyle(fontSize: 10.0,  color: Colors.black, fontWeight: FontWeight.bold))),
-                                const SizedBox(width: 4.0), // Reduce spacing for more room
-                                const Expanded(
-                                    child: Text('RIR',
-                                        textAlign: TextAlign.left,
-                                        style: TextStyle(fontSize: 10.0,  color: Colors.black, fontWeight: FontWeight.bold))),
-                                const SizedBox(width: 4.0), // Reduce spacing for more room
-
-                                // ✅ E1RM label (same level as the other headers)
-                                const Expanded(
-                                    child: Text('E1RM',
-                                        textAlign: TextAlign.left,
-                                        style: TextStyle(fontSize: 10.0, color: Colors.black, fontWeight: FontWeight.bold))),
-                              ],
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0), // ✅ Align horizontally cleanly
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.start,
+                                crossAxisAlignment: CrossAxisAlignment.start, // ✅ Center vertically
+                                children: [
+                                  const Expanded(
+                                    child: Text(
+                                      'Weight',
+                                      textAlign: TextAlign.left,
+                                      style: TextStyle(fontSize: 10.0, color: Colors.white70, fontWeight: FontWeight.bold),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4.0),
+                                  const Expanded(
+                                    child: Text(
+                                      'Reps',
+                                      textAlign: TextAlign.left,
+                                      style: TextStyle(fontSize: 10.0, color: Colors.white70, fontWeight: FontWeight.bold),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4.0),
+                                  const Expanded(
+                                    child: Text(
+                                      'RIR',
+                                      textAlign: TextAlign.left,
+                                      style: TextStyle(fontSize: 10.0, color: Colors.white70, fontWeight: FontWeight.bold),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4.0),
+                                  const Expanded(
+                                    child: Text(
+                                      'E1RM',
+                                      textAlign: TextAlign.left,
+                                      style: TextStyle(fontSize: 10.0, color: Colors.white70, fontWeight: FontWeight.bold),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
+
                             const SizedBox(height: 0.0),
 
                             // ✅ Input Row with aligned values
@@ -2028,22 +2053,24 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                 // ✅ Weight Input Field with Suggested Weight for Each Set
                                 Expanded(
                                   child: TextField(
-
                                     controller: _weightControllers[i][j],
                                     keyboardType: TextInputType.number,
                                     decoration: InputDecoration(
-                                      hintText: (j == 0) ? set1SuggestedWeight(i).toStringAsFixed(1)
-                                          : (j == 1) ? set2SuggestedWeight(i).toStringAsFixed(1)
-                                          : (j == 2) ? set3SuggestedWeight(i).toStringAsFixed(1)
+                                      hintText: (j == 0)
+                                          ? set1SuggestedWeight(i).toStringAsFixed(1)
+                                          : (j == 1)
+                                          ? set2SuggestedWeight(i).toStringAsFixed(1)
+                                          : (j == 2)
+                                          ? set3SuggestedWeight(i).toStringAsFixed(1)
                                           : '20',
                                       hintStyle: const TextStyle(
                                         color: Colors.grey,
                                         fontStyle: FontStyle.italic,
                                         fontSize: 12,
                                       ),
+                                      contentPadding: EdgeInsets.only(left: 8), // ✅ Add slight left padding inside field
                                     ),
                                     onChanged: (value) {
-
                                       setState(() {});
                                     },
                                     style: TextStyle(
@@ -2051,6 +2078,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                                     ),
                                   ),
                                 ),
+
 
                                 const SizedBox(width: 4.0),
 
