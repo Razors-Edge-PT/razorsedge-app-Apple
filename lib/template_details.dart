@@ -39,6 +39,8 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
   ExerciseRow? _lastRemovedRow;
   int? _lastRemovedIndex;
   late TextEditingController _nameController;
+  List<String> plannedExercises = [];
+
 
 
 
@@ -59,6 +61,8 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
       // 🔄 Otherwise (old templates) ➔ load from Firestore
       _loadTemplateFromFirestore();
     }
+    _loadPlannedExercises();
+
   }
 
 
@@ -69,18 +73,10 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
   }
 
 
-  Future<String?> _showExercisePickerDialog(BuildContext context) async {
+  Future<void> _loadPlannedExercises() async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return null;
+    if (user == null) return;
 
-    // Fetch all exercises
-    final allSnapshot = await FirebaseFirestore.instance.collection('exercises').get();
-    final allExercises = allSnapshot.docs.map((doc) => {
-      'name': doc['name'] as String,
-      'category': doc['category'] as String,
-    }).toList();
-
-    // Fetch planned exercises (optional list)
     final blockPlannerDoc = await FirebaseFirestore.instance
         .collection('users')
         .doc(user.uid)
@@ -88,30 +84,51 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
         .doc('current_block')
         .get();
 
-    final List<String> plannedExercises = (blockPlannerDoc.data()?['plannedExercises'] as List<dynamic>?)
-        ?.map((e) => e.toString())
-        .toList() ?? [];
+    setState(() {
+      plannedExercises = (blockPlannerDoc.data()?['plannedExercises'] as List<dynamic>?)
+          ?.map((e) => e.toString())
+          .toList() ?? [];
+    });
+  }
+
+  Future<String?> _showExercisePickerDialog(BuildContext context) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return null;
+
+    // ✅ Make sure planned exercises are loaded first
+    await _loadPlannedExercises();
+
+    // Fetch all exercises
+    final allSnapshot = await FirebaseFirestore.instance.collection('exercises').get();
+    final allExercises = allSnapshot.docs.map((doc) => {
+      'id': doc.id, // ✅ important
+      'name': doc['name'] as String,
+      'category': doc['category'] as String,
+    }).toList();
+
 
     bool showPlannedOnly = false;
 
-    final Map<String, List<String>> grouped = {};
+    // Group exercises by category
+    final Map<String, List<Map<String, dynamic>>> grouped = {};
     for (final exercise in allExercises) {
       final category = exercise['category'] ?? 'Other';
-      final name = exercise['name'] ?? 'Unnamed';
-      grouped.putIfAbsent(category, () => []).add(name);
+      grouped.putIfAbsent(category, () => []).add(exercise);
     }
 
+    // Sort exercises alphabetically within each group
     for (final group in grouped.values) {
-      group.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+      group.sort((a, b) => a['name'].toLowerCase().compareTo(b['name'].toLowerCase()));
     }
 
+    // Order categories in your custom order
     const categoryOrder = [
       'Horizontal Press', 'Horizontal Pull', 'Vertical Press', 'Vertical Pull',
       'Lateral Raise', 'Arm Extension', 'Arm Curl', 'Squat Pattern', 'Hip Hinge',
       'Leg Extension', 'Leg Curl', 'Hip Abduction/adduction', 'Calf Raise', 'Core',
     ];
 
-    final Map<String, List<String>> orderedGrouped = {};
+    final Map<String, List<Map<String, dynamic>>> orderedGrouped = {};
     for (final cat in categoryOrder) {
       if (grouped.containsKey(cat)) {
         orderedGrouped[cat] = grouped[cat]!;
@@ -131,11 +148,11 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
       context: context,
       builder: (context) {
         return StatefulBuilder(
-          builder: (context, setState) {
-            final filteredGrouped = <String, List<String>>{};
+          builder: (context, setLocalState) {
+            final filteredGrouped = <String, List<Map<String, dynamic>>>{};
             orderedGrouped.forEach((category, exercises) {
               final filtered = showPlannedOnly
-                  ? exercises.where((name) => plannedExercises.contains(name)).toList()
+                  ? exercises.where((exercise) => plannedExercises.contains(exercise['id'])).toList()
                   : exercises;
               if (filtered.isNotEmpty) {
                 filteredGrouped[category] = filtered;
@@ -150,14 +167,17 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
                   const Text('Select Exercise', style: TextStyle(color: Colors.white, fontSize: 14)),
                   Row(
                     children: [
-                      const Text("Planned Only", style: TextStyle(color: Colors.white70, fontSize: 12)),
+                      Text(
+                        showPlannedOnly ? "Planned Only" : "All Exercises",
+                        style: const TextStyle(color: Colors.white70, fontSize: 12),
+                      ),
                       Switch(
                         value: showPlannedOnly,
-                        onChanged: (value) => setState(() => showPlannedOnly = value),
+                        onChanged: (value) => setLocalState(() => showPlannedOnly = value),
                         activeColor: Colors.lightBlueAccent,
                       ),
                     ],
-                  ),
+                  )
                 ],
               ),
               content: SizedBox(
@@ -182,15 +202,15 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
                             color: Colors.white70,
                           ),
                           onTap: () {
-                            setState(() {
+                            setLocalState(() {
                               expandedGroups[category] = !(expandedGroups[category] ?? false);
                             });
                           },
                         ),
                         if (expandedGroups[category] ?? false)
-                          ...exercises.map((name) => ListTile(
-                            title: Text(name, style: const TextStyle(color: Colors.white)),
-                            onTap: () => Navigator.pop(context, name),
+                          ...exercises.map((exercise) => ListTile(
+                            title: Text(exercise['name'], style: const TextStyle(color: Colors.white)),
+                            onTap: () => Navigator.pop(context, exercise['name']),
                           )),
                         const Divider(height: 10, color: Colors.grey),
                       ],
@@ -210,6 +230,7 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
       },
     );
   }
+
 
   Future<void> _loadTemplateFromFirestore() async {
     final user = FirebaseAuth.instance.currentUser;

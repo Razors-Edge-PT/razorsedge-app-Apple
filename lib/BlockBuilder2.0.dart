@@ -899,13 +899,17 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                   const Text('Select Exercise', style: TextStyle(fontSize: 12)),
                   Row(
                     children: [
-                      const Text("Planned Only", style: TextStyle(fontSize: 12)),
+                      Text(
+                        showPlannedOnly ? "Planned Only" : "All Exercises",
+                        style: const TextStyle(fontSize: 12),
+                      ),
                       Switch(
                         value: showPlannedOnly,
                         onChanged: (value) => setState(() => showPlannedOnly = value),
                       ),
                     ],
                   ),
+
                 ],
               ),
               content: SizedBox(

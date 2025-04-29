@@ -787,152 +787,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
     });
   }
 
-  void _showExercisePickerForRow(int index) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-    if (plannedExercises.isEmpty) {
-      await loadPlannedExercisesFromFirestore();
-    }
 
-    bool plannedModeAvailable = plannedExercises.isNotEmpty;
-    final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
-
-    final allExercises = snapshot.docs.map((doc) => {
-      'id': doc.id,
-      'name': doc['name'] as String,
-      'category': doc['category'] as String,
-    }).toList();
-
-    final Map<String, String> nameToIdMap = {
-      for (final ex in allExercises) ex['name']!: ex['id']!,
-    };
-
-    bool showPlannedOnly = true;
-    final Map<String, bool> expandedGroups = {};
-
-    final selected = await showDialog<String>(
-      context: context,
-      builder: (ctx) {
-        return StatefulBuilder(builder: (context, setLocalState) {
-          final filteredExercises = (showPlannedOnly && plannedModeAvailable)
-              ? allExercises.where((ex) => plannedExercises.contains(ex['id'])).toList()
-              : allExercises;
-
-          final Map<String, List<String>> grouped = {};
-          for (final exercise in filteredExercises) {
-            final category = exercise['category'] ?? 'Other';
-            final name = exercise['name'] ?? 'Unnamed';
-            grouped.putIfAbsent(category, () => []).add(name);
-          }
-
-          for (final group in grouped.values) {
-            group.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-          }
-
-          const categoryOrder = [
-            'Horizontal Press',
-            'Horizontal Pull',
-            'Vertical Press',
-            'Vertical Pull',
-            'Lateral Raise',
-            'Arm Extension',
-            'Arm Curl',
-            'Squat Pattern',
-            'Hip Hinge',
-            'Leg Extension',
-            'Leg Curl',
-            'Hip Abduction/adduction',
-            'Calf Raise',
-            'Core',
-          ];
-
-          final Map<String, List<String>> orderedGrouped = {};
-          for (final cat in categoryOrder) {
-            if (grouped.containsKey(cat)) {
-              orderedGrouped[cat] = grouped[cat]!;
-            }
-          }
-          for (final entry in grouped.entries) {
-            if (!orderedGrouped.containsKey(entry.key)) {
-              orderedGrouped[entry.key] = entry.value;
-            }
-          }
-
-          for (final category in orderedGrouped.keys) {
-            expandedGroups.putIfAbsent(category, () => false);
-          }
-
-          return AlertDialog(
-            backgroundColor: Colors.blueGrey.shade900,
-            title: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text("Select Exercise", style: TextStyle(fontSize: 13, color: Colors.white)),
-                if (plannedModeAvailable)
-                  Row(
-                    children: [
-                      const Text("Planned Only", style: TextStyle(fontSize: 12, color: Colors.white70)),
-                      Switch(
-                        value: showPlannedOnly,
-                        onChanged: (value) => setLocalState(() => showPlannedOnly = value),
-                        activeColor: Colors.lightBlueAccent,
-                      ),
-                    ],
-                  )
-                else
-                  const SizedBox(),
-
-              ],
-            ),
-            content: SizedBox(
-              width: double.maxFinite,
-              height: 400,
-              child: ListView(
-                children: orderedGrouped.entries.map((entry) {
-                  final category = entry.key;
-                  final exercises = entry.value;
-                  final isExpanded = expandedGroups[category] ?? false;
-
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      ListTile(
-                        tileColor: Colors.blueGrey.shade800,
-                        title: Text(category, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                        trailing: Icon(
-                          isExpanded ? Icons.expand_less : Icons.expand_more,
-                          color: Colors.white70,
-                        ),
-                        onTap: () {
-                          setLocalState(() {
-                            expandedGroups[category] = !isExpanded;
-                          });
-                        },
-                      ),
-                      if (isExpanded)
-                        ...exercises.map((name) {
-                          return ListTile(
-                            title: Text(name, style: const TextStyle(color: Colors.white70)),
-                            onTap: () => Navigator.pop(ctx, name),
-                          );
-                        }),
-                      const Divider(height: 10, color: Colors.grey),
-                    ],
-                  );
-                }).toList(),
-              ),
-            ),
-          );
-        });
-      },
-    );
-
-    if (selected != null && selected.isNotEmpty) {
-      setState(() {
-        _selectedExercisesWithCircuits[index]['name'] = selected;
-      });
-    }
-  }
 
 
 
@@ -1098,7 +953,10 @@ class _WorkoutPageState extends State<WorkoutPage> {
                 if (plannedModeAvailable)
                   Row(
                     children: [
-                      const Text("Planned Only", style: TextStyle(fontSize: 12, color: Colors.white70)),
+                      Text(
+                        showPlannedOnly ? "Planned Only" : "All Exercises",
+                        style: const TextStyle(fontSize: 12, color: Colors.white70),
+                      ),
                       Switch(
                         value: showPlannedOnly,
                         onChanged: (value) => setLocalState(() => showPlannedOnly = value),
@@ -1197,7 +1055,155 @@ class _WorkoutPageState extends State<WorkoutPage> {
     });
   }
 
+  void _showExercisePickerForRow(int index) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    if (plannedExercises.isEmpty) {
+      await loadPlannedExercisesFromFirestore();
+    }
 
+    bool plannedModeAvailable = plannedExercises.isNotEmpty;
+    final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
+
+    final allExercises = snapshot.docs.map((doc) => {
+      'id': doc.id,
+      'name': doc['name'] as String,
+      'category': doc['category'] as String,
+    }).toList();
+
+    final Map<String, String> nameToIdMap = {
+      for (final ex in allExercises) ex['name']!: ex['id']!,
+    };
+
+    bool showPlannedOnly = true;
+    final Map<String, bool> expandedGroups = {};
+
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(builder: (context, setLocalState) {
+          final filteredExercises = (showPlannedOnly && plannedModeAvailable)
+              ? allExercises.where((ex) => plannedExercises.contains(ex['id'])).toList()
+              : allExercises;
+
+          final Map<String, List<String>> grouped = {};
+          for (final exercise in filteredExercises) {
+            final category = exercise['category'] ?? 'Other';
+            final name = exercise['name'] ?? 'Unnamed';
+            grouped.putIfAbsent(category, () => []).add(name);
+          }
+
+          for (final group in grouped.values) {
+            group.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+          }
+
+          const categoryOrder = [
+            'Horizontal Press',
+            'Horizontal Pull',
+            'Vertical Press',
+            'Vertical Pull',
+            'Lateral Raise',
+            'Arm Extension',
+            'Arm Curl',
+            'Squat Pattern',
+            'Hip Hinge',
+            'Leg Extension',
+            'Leg Curl',
+            'Hip Abduction/adduction',
+            'Calf Raise',
+            'Core',
+          ];
+
+          final Map<String, List<String>> orderedGrouped = {};
+          for (final cat in categoryOrder) {
+            if (grouped.containsKey(cat)) {
+              orderedGrouped[cat] = grouped[cat]!;
+            }
+          }
+          for (final entry in grouped.entries) {
+            if (!orderedGrouped.containsKey(entry.key)) {
+              orderedGrouped[entry.key] = entry.value;
+            }
+          }
+
+          for (final category in orderedGrouped.keys) {
+            expandedGroups.putIfAbsent(category, () => false);
+          }
+
+          return AlertDialog(
+            backgroundColor: Colors.blueGrey.shade900,
+            title: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text("Select Exercise", style: TextStyle(fontSize: 13, color: Colors.white)),
+                if (plannedModeAvailable)
+                  Row(
+                    children: [
+                      Text(
+                        showPlannedOnly ? "Planned Only" : "All Exercises",
+                        style: const TextStyle(fontSize: 12, color: Colors.white70),
+                      ),
+                      Switch(
+                        value: showPlannedOnly,
+                        onChanged: (value) => setLocalState(() => showPlannedOnly = value),
+                        activeColor: Colors.lightBlueAccent,
+                      ),
+                    ],
+                  )
+                else
+                  const SizedBox(),
+
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              height: 400,
+              child: ListView(
+                children: orderedGrouped.entries.map((entry) {
+                  final category = entry.key;
+                  final exercises = entry.value;
+                  final isExpanded = expandedGroups[category] ?? false;
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ListTile(
+                        tileColor: Colors.blueGrey.shade800,
+                        title: Text(category, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                        trailing: Icon(
+                          isExpanded ? Icons.expand_less : Icons.expand_more,
+                          color: Colors.white70,
+                        ),
+                        onTap: () {
+                          setLocalState(() {
+                            expandedGroups[category] = !isExpanded;
+                          });
+                        },
+                      ),
+                      if (isExpanded)
+                        ...exercises.map((name) {
+                          return ListTile(
+                            title: Text(name, style: const TextStyle(color: Colors.white70)),
+                            onTap: () => Navigator.pop(ctx, name),
+                          );
+                        }),
+                      const Divider(height: 10, color: Colors.grey),
+                    ],
+                  );
+                }).toList(),
+              ),
+            ),
+          );
+        });
+      },
+    );
+
+    if (selected != null && selected.isNotEmpty) {
+      setState(() {
+        _selectedExercisesWithCircuits[index]['name'] = selected;
+      });
+    }
+  }
 
   void _onReorderExercises(int oldIndex, int newIndex) {
     setState(() {
@@ -2287,7 +2293,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
             Padding(
               padding: const EdgeInsets.only(top: 12.0),
               child: Align(
-                alignment: Alignment.center,
+                alignment: Alignment.centerRight,
                 child: ElevatedButton.icon(
                   onPressed: _addNewCircuitExercise,
                   icon: const Icon(Icons.add),
