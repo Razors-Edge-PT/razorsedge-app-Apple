@@ -135,6 +135,57 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     return shouldDelete ?? false;
   }
 
+  Future<void> _confirmAndDeleteAllTemplates() async {
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete All Templates?'),
+        content: const Text('This will permanently remove all saved templates. This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete All', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldDelete == true) {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        final batch = FirebaseFirestore.instance.batch();
+        final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
+        final templatesRef = userDoc.collection('templates');
+
+        final snapshot = await templatesRef.get();
+        for (var doc in snapshot.docs) {
+          batch.delete(doc.reference);
+        }
+
+        await batch.commit();
+
+        setState(() {
+          templates.clear();
+          _lastDeletedTemplate = null;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('All templates deleted.'),
+            backgroundColor: Colors.red.shade400,
+            behavior: SnackBarBehavior.floating,
+            margin: const EdgeInsets.all(16),
+          ),
+        );
+      }
+    }
+  }
+
+
 
   String findTemplateName(String templateId) {
     // Find the template document using the doc ID from Firestore
@@ -173,6 +224,11 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
             onPressed: _lastDeletedTemplate != null ? _undoDeleteTemplate : null,
           ),
           IconButton(
+            icon: const Icon(Icons.delete_forever),
+            tooltip: 'Delete All Templates',
+            onPressed: _confirmAndDeleteAllTemplates,
+          ),
+          IconButton(
             icon: const Icon(Icons.add),
             tooltip: 'Create Template',
             onPressed: () {
@@ -189,36 +245,91 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         ],
       ),
 
-      body: ListView.builder(
-        itemCount: templates.length,
-        itemBuilder: (context, index) {
-          final template = templates[index];
-          print('Building list item: ${template.name}');
-          return Dismissible(
-            key: Key(template.id),
-            direction: DismissDirection.endToStart,
-            confirmDismiss: (DismissDirection direction) async {
-              return await _confirmDeleteTemplate(context, template.id);
-            },
-            child: ListTile(
-              title: Text(
-                template.name,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.bold),
+      body: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: ReorderableListView.builder(
+          itemCount: templates.length,
+          onReorder: (oldIndex, newIndex) {
+            setState(() {
+              if (newIndex > oldIndex) newIndex--;
+              final moved = templates.removeAt(oldIndex);
+              templates.insert(newIndex, moved);
+            });
+          },
+          buildDefaultDragHandles: false,
+          itemBuilder: (context, index) {
+            final template = templates[index];
+            final first3Exercises = template.exercises
+                .take(3)
+                .map((e) => e['name'] ?? '')
+                .where((name) => name.isNotEmpty)
+                .join(', ');
+
+            return ReorderableDelayedDragStartListener(
+              index: index,
+              key: ValueKey(template.id), // ✅ must match
+              child: Dismissible(
+                key: ValueKey(template.id),
+                direction: DismissDirection.endToStart,
+                confirmDismiss: (DismissDirection direction) async {
+                  return await _confirmDeleteTemplate(context, template.id);
+                },
+                background: Container(
+                  alignment: Alignment.centerLeft,
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  color: Colors.red,
+                  child: const Icon(Icons.delete, color: Colors.white),
+                ),
+                child: Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: Colors.blueGrey.shade700,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                    title: Text(
+                      template.name,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (template.day != null)
+                          Text(
+                            template.day!,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                          ),
+                        const SizedBox(height: 2),
+                        Text(
+                          template.exercises.take(2).map((e) => e['name']).join(', '),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.white60,
+                          ),
+                        ),
+                      ],
+                    ),
+                    trailing: const Icon(Icons.chevron_right, size: 18, color: Colors.white54),
+                    onTap: () => _navigateToTemplateDetails(context, template),
+                  ),
+                ),
               ),
-              subtitle: template.day != null
-                  ? Text('Day: ${template.day}', style: const TextStyle(fontSize: 12))
-                  : null,
-              onTap: () => _navigateToTemplateDetails(context, template),
-              trailing: IconButton(
-                icon: const Icon(Icons.delete_outline, color: Colors.white),
-                tooltip: 'Delete Template',
-                onPressed: () => _confirmDeleteTemplate(context, template.id),
-              ),
-            ),
-          );
-        },
+            );
+
+
+          },
+        ),
       ),
+
 
     );
   }
