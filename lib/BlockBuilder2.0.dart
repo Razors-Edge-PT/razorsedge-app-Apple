@@ -681,13 +681,19 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
     await weekDocRef.set({'exists': true}, SetOptions(merge: true));
 
+    final date = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
+    final workoutName = "${DateFormat('EEE d MMM').format(date)} - Week ${weekIndex + 1}";
+
     await weekDocRef
         .collection('days')
         .doc('day_$dayIndex')
         .set({
       'exercises': exercises,
       'circuitStartIndices': circuitStartIndices[weekIndex]?[dayIndex] ?? [0],
+      'date': Timestamp.fromDate(date), // ✅ Add this line
+      'workoutName': workoutName,       // ✅ Optional: nice label
     });
+
 
     print("✅ Saved day: week $weekIndex, day $dayIndex");
   }
