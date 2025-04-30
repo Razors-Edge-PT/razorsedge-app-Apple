@@ -10,6 +10,7 @@ import 'workout_model.dart'; // Import Workout model
 import 'block_planner.dart'; // 👈 Add this line
 import 'WorkoutSummaryScreen.dart';
 import'update_exercises.dart';
+import 'SavedWorkoutsScreen.dart';
 
 
 class HomeScreen extends StatefulWidget {
@@ -200,21 +201,18 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
 
             ListTile(
-              title: const Text('Workout Summary 📋'),
+              title: const Text('Saved Workouts 📓'),
               onTap: () {
-                Navigator.pop(context);
+                Navigator.pop(context); // ✅ Close the drawer
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (context) => WorkoutSummaryScreen(
-                      date: DateTime.now(), // Replace with actual date if needed
-                      workoutName: "Today's Summary", // Or pull a name dynamically
-                      exercises: [], // 👈 Replace with a real list of exercises if available
-                    ),
+                    builder: (context) => const SavedWorkoutsScreen(), // ✅ Your new screen
                   ),
                 );
               },
             ),
+
 
             ListTile(
               title: const Text('Logout'),
