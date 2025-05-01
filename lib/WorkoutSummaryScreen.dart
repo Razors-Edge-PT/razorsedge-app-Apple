@@ -247,9 +247,39 @@ class _WorkoutSummaryScreenState extends State<WorkoutSummaryScreen> {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          SizedBox(width: 60, child: TextField(controller: weightCtrl, enabled: isEditable)),
-                          SizedBox(width: 40, child: TextField(controller: repsCtrl, enabled: isEditable)),
-                          SizedBox(width: 40, child: TextField(controller: rirCtrl, enabled: isEditable)),
+                          SizedBox(
+                            width: 60,
+                            child: TextField(
+                              controller: weightCtrl,
+                              enabled: isEditable,
+                              style: const TextStyle(color: Colors.white),
+                              decoration: const InputDecoration(
+                                hintText: '0',
+                                hintStyle: TextStyle(color: Colors.white70),
+                              ),
+                            ),
+                          ),
+                          SizedBox(
+                            width: 40,
+                            child: TextField(
+                              controller: repsCtrl,
+                              enabled: isEditable,
+                              style: const TextStyle(color: Colors.white),
+                              decoration: const InputDecoration(
+                                hintText: '0',
+                                hintStyle: TextStyle(color: Colors.white70),
+                              ),
+                            ),
+                          ),
+
+                          SizedBox(width: 40, child: TextField(controller: rirCtrl, enabled: isEditable,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: const InputDecoration(
+                              hintText: '0',
+                              hintStyle: TextStyle(color: Colors.white70),
+                            ),
+                          ),
+                          ),
                           Text(e1rm.toStringAsFixed(1)),
                         ],
                       ),
