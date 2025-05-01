@@ -115,13 +115,23 @@ class _SavedWorkoutsScreenState extends State<SavedWorkoutsScreen> {
             child: ListTile(
               title: Text(
                 '${DateFormat('EEE d MMM').format(date)} - Week ${_getWeekNumber(date)}',
-
                 style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
               ),
+
               subtitle: Text(
-                DateFormat('dd-MM-yyyy').format(date),
+                    () {
+                  final templateNames = workoutsForDay
+                      .map((w) => w.name.trim())
+                      .where((name) => name.isNotEmpty && name != 'Unnamed Workout')
+                      .toSet()
+                      .join(', ');
+                  return templateNames.isNotEmpty
+                      ? templateNames
+                      : DateFormat('dd-MM-yyyy').format(date);
+                }(),
                 style: const TextStyle(color: Colors.white70),
               ),
+
               trailing: const Icon(Icons.chevron_right, color: Colors.white54),
               onTap: () {
                 final allExercises = workoutsForDay

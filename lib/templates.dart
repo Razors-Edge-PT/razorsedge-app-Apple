@@ -245,20 +245,54 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         ],
       ),
 
-      body: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: ReorderableListView.builder(
-          itemCount: templates.length,
-          onReorder: (oldIndex, newIndex) {
-            setState(() {
-              if (newIndex > oldIndex) newIndex--;
-              final moved = templates.removeAt(oldIndex);
-              templates.insert(newIndex, moved);
-            });
-          },
-          buildDefaultDragHandles: false,
-          itemBuilder: (context, index) {
-            final template = templates[index];
+      body: Column(
+        children: [
+          const SizedBox(height: 8),
+          Center(
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.add),
+              label: const Text("Create New Workout"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blueGrey.shade700,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              onPressed: _createTemplate,
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          if (templates.isEmpty)
+            const Text(
+              'No workouts created yet,\ntap Create New Workout to get started',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 18,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+
+          if (templates.isNotEmpty)
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: ReorderableListView.builder(
+
+                itemCount: templates.length,
+    onReorder: (oldIndex, newIndex) {
+    setState(() {
+    if (newIndex > oldIndex) newIndex--;
+    final moved = templates.removeAt(oldIndex);
+    templates.insert(newIndex, moved);
+    });
+    },
+    buildDefaultDragHandles: false,
+    itemBuilder: (context, index) {
+    final template = templates[index];
             final first3Exercises = template.exercises
                 .take(3)
                 .map((e) => e['name'] ?? '')
@@ -330,7 +364,9 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         ),
       ),
 
-
+    ),
+    ],
+    ),
     );
   }
 

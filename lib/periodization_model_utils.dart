@@ -9,9 +9,22 @@ import 'templates.dart';
 import 'exercise_details_screen.dart'; // Import your exercise details screen
 import 'top_sets_screen.dart';
 
+enum PeriodizationModelType {
+  dupSignature,
+  dupCustom,
+  linear,
+}
+
+
 class PeriodizationModelUtils {
   static final Map<String, List<double>> exercisePreviousE1RMs = {}; // ✅ E1RM history per exercise
   static final Map<String, List<int>> exercisePreviousTopSetReps = {}; // ✅ Tracks reps per exercise
+
+  static Map<String, PeriodizationModelType> exercisePeriodizationModels = {
+    'Bench Press, Barbell': PeriodizationModelType.dupSignature,
+    'Deadlift, Conventional': PeriodizationModelType.linear,
+    // Add more as needed — later load this from Firestore
+  };
 
 
   // ✅ Global function to calculate E1RM based on weight, reps, and RIR
@@ -28,6 +41,285 @@ class PeriodizationModelUtils {
     }
   }
 
+  static int getSuggestedRepTargetByModel({
+    required String exerciseName,
+    required int plannedIndex,
+    String? weightText,
+    String? rirText,
+  }) {
+    final model = exercisePeriodizationModels[exerciseName] ?? PeriodizationModelType.dupSignature;
+
+    switch (model) {
+      case PeriodizationModelType.dupSignature:
+        return getSuggestedRepTarget(
+          exerciseName,
+          weightText: weightText,
+          rirText: rirText,
+          plannedIndex: plannedIndex,
+        );
+      case PeriodizationModelType.linear:
+        return getLinearRepTarget(exerciseName, plannedIndex);
+      case PeriodizationModelType.dupCustom:
+        return getDupCustomRepTarget(exerciseName, plannedIndex);
+    }
+  }
+
+  static double getDupSignatureSet2SuggestedReps({
+    required double set2E1RM,
+    required double? set1Reps,
+    required String weightText,
+    required String rirText,
+  }) {
+    final hasWeight = weightText.isNotEmpty;
+    final weight = double.tryParse(weightText) ?? 0.0;
+    final rir = double.tryParse(rirText) ?? 1.5; // Default for Set 2
+
+    if (!hasWeight) {
+      return ((set1Reps ?? 6) - 1).clamp(1, 200).toDouble(); // fallback
+    }
+
+    if (weight <= 0 || set2E1RM <= weight) {
+      return 1.0;
+    }
+
+    final rawReps = (weight / set2E1RM < 0.85)
+        ? ((set2E1RM / weight) - 1) / 0.0333
+        : (37 - ((weight * 36) / set2E1RM));
+
+    double finalReps = rawReps - rir;
+    final decimalPart = finalReps - finalReps.floor();
+
+    finalReps = (decimalPart >= 0.652)
+        ? finalReps.ceil().toDouble()
+        : finalReps.floor().toDouble();
+
+    return finalReps.clamp(1.0, 200.0);
+  }
+
+  static double getSuggestedSet2RepsByModel({
+    required String exerciseName,
+    required double set2E1RM,
+    required double? set1Reps,
+    required String weightText,
+    required String rirText,
+  }) {
+    final model = exercisePeriodizationModels[exerciseName] ?? PeriodizationModelType.dupSignature;
+
+    switch (model) {
+      case PeriodizationModelType.dupSignature:
+        return getDupSignatureSet2SuggestedReps(
+          set2E1RM: set2E1RM,
+          set1Reps: set1Reps,
+          weightText: weightText,
+          rirText: rirText,
+        );
+      case PeriodizationModelType.linear:
+        return 8.0;
+      case PeriodizationModelType.dupCustom:
+        return 6.0;
+    }
+  }
+
+  static double getDupSignatureSet3SuggestedReps({
+    required double set3E1RM,
+    required double? set2Reps,
+    required String weightText,
+    required String rirText,
+  }) {
+    final hasWeight = weightText.isNotEmpty;
+    final weight = double.tryParse(weightText) ?? 0.0;
+    final rir = double.tryParse(rirText) ?? 2.5; // Default for Set 3
+
+    if (!hasWeight) {
+      return ((set2Reps ?? 6) - 1).clamp(1, 200).toDouble(); // fallback
+    }
+
+    if (weight <= 0 || set3E1RM <= weight) {
+      return 1.0;
+    }
+
+    final rawReps = (weight / set3E1RM < 0.85)
+        ? ((set3E1RM / weight) - 1) / 0.0333
+        : (37 - ((weight * 36) / set3E1RM));
+
+    double finalReps = rawReps - rir;
+    final decimalPart = finalReps - finalReps.floor();
+
+    finalReps = (decimalPart >= 0.652)
+        ? finalReps.ceil().toDouble()
+        : finalReps.floor().toDouble();
+
+    return finalReps.clamp(1.0, 200.0);
+  }
+
+  static double getSuggestedSet3RepsByModel({
+    required String exerciseName,
+    required double set3E1RM,
+    required double? set2Reps,
+    required String weightText,
+    required String rirText,
+  }) {
+    final model = exercisePeriodizationModels[exerciseName] ?? PeriodizationModelType.dupSignature;
+
+    switch (model) {
+      case PeriodizationModelType.dupSignature:
+        return getDupSignatureSet3SuggestedReps(
+          set3E1RM: set3E1RM,
+          set2Reps: set2Reps,
+          weightText: weightText,
+          rirText: rirText,
+        );
+      case PeriodizationModelType.linear:
+        return 6.0;
+      case PeriodizationModelType.dupCustom:
+        return 5.0;
+    }
+  }
+
+  static double getDupSignatureSet1SuggestedWeight({
+    required String exerciseName,
+    required double reps,
+    required double rir,
+  }) {
+    final e1rms = exercisePreviousE1RMs[exerciseName];
+    if (e1rms == null || e1rms.isEmpty) return 20.0;
+
+    final avgE1RM = getAverageE1RM(exerciseName);
+    final effectiveReps = reps + rir;
+
+    double suggestedWeight;
+
+    if (effectiveReps <= 6) {
+      suggestedWeight = avgE1RM * (37 - effectiveReps) / 36;
+    } else {
+      suggestedWeight = avgE1RM / (1 + 0.0333 * effectiveReps);
+    }
+
+    suggestedWeight = suggestedWeight.clamp(2.5, double.infinity);
+    return (suggestedWeight / 2.5).round() * 2.5;
+  }
+
+
+  static double getSuggestedSet1WeightByModel({
+    required String exerciseName,
+    required double reps,
+    required double rir,
+  }) {
+    final model = exercisePeriodizationModels[exerciseName] ?? PeriodizationModelType.dupSignature;
+
+    switch (model) {
+      case PeriodizationModelType.dupSignature:
+        return getDupSignatureSet1SuggestedWeight(
+          exerciseName: exerciseName,
+          reps: reps,
+          rir: rir,
+        );
+      case PeriodizationModelType.linear:
+        return 50.0;
+      case PeriodizationModelType.dupCustom:
+        return 45.0;
+    }
+  }
+
+
+  static double getDupSignatureSet2SuggestedWeight({
+    required double set2E1RM,
+    required double reps,
+    required double rir,
+  }) {
+    double effectiveReps = reps + rir;
+
+    double suggestedWeight;
+
+    if (effectiveReps <= 6) {
+      suggestedWeight = set2E1RM * (37 - effectiveReps) / 36;
+    } else {
+      suggestedWeight = set2E1RM / (1 + (0.0333 * effectiveReps));
+    }
+
+    suggestedWeight = suggestedWeight.clamp(2.5, double.infinity);
+    return (suggestedWeight / 2.5).round() * 2.5;
+  }
+
+
+  static double getSuggestedSet2WeightByModel({
+    required String exerciseName,
+    required double set2E1RM,
+    required double reps,
+    required double rir,
+  }) {
+    final model = exercisePeriodizationModels[exerciseName] ?? PeriodizationModelType.dupSignature;
+
+    switch (model) {
+      case PeriodizationModelType.dupSignature:
+        return getDupSignatureSet2SuggestedWeight(
+          set2E1RM: set2E1RM,
+          reps: reps,
+          rir: rir,
+        );
+      case PeriodizationModelType.linear:
+        return 55.0;
+      case PeriodizationModelType.dupCustom:
+        return 42.5;
+    }
+  }
+
+
+  static double getDupSignatureSet3SuggestedWeight({
+    required double set3E1RM,
+    required double reps,
+    required double rir,
+  }) {
+    double effectiveReps = reps + rir;
+
+    double suggestedWeight;
+
+    if (effectiveReps <= 6) {
+      // ✅ Brzycki formula
+      suggestedWeight = set3E1RM * (37 - effectiveReps) / 36;
+    } else {
+      // ✅ Epley formula
+      suggestedWeight = set3E1RM / (1 + (0.0333 * effectiveReps));
+    }
+
+    suggestedWeight = suggestedWeight.clamp(2.5, double.infinity);
+    return (suggestedWeight / 2.5).round() * 2.5;
+  }
+
+  static double getSuggestedSet3WeightByModel({
+    required String exerciseName,
+    required double set3E1RM,
+    required double reps,
+    required double rir,
+  }) {
+    final model = exercisePeriodizationModels[exerciseName] ?? PeriodizationModelType.dupSignature;
+
+    switch (model) {
+      case PeriodizationModelType.dupSignature:
+        return getDupSignatureSet3SuggestedWeight(
+          set3E1RM: set3E1RM,
+          reps: reps,
+          rir: rir,
+        );
+      case PeriodizationModelType.linear:
+        return 50.0;
+      case PeriodizationModelType.dupCustom:
+        return 45.0;
+    }
+  }
+
+
+
+
+  static int getLinearRepTarget(String exerciseName, int plannedIndex) {
+    // TODO: Add real logic
+    return 8; // example default
+  }
+
+  static int getDupCustomRepTarget(String exerciseName, int plannedIndex) {
+    // TODO: Add real logic
+    return 6; // example default
+  }
 
 
   static double getAverageE1RM(String exerciseName) {
