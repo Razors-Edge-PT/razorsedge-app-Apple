@@ -625,6 +625,71 @@ class _ExerciseCard extends StatefulWidget {
 
 class _ExerciseCardState extends State<_ExerciseCard> {
   bool isExpanded = false;
+  String _selectedModel = 'DUP, Signature'; // default or load from Firestore
+
+  Map<String, List<int>> repTargetsByExercise = {}; // optional central storage
+
+  void _showRepTargetDialog(String exerciseName) {
+    List<int> reps = repTargetsByExercise[exerciseName] ?? List.filled(12, 6); // default 6 reps per week
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        List<TextEditingController> controllers = List.generate(
+          reps.length,
+              (i) => TextEditingController(text: reps[i].toString()),
+        );
+
+        return AlertDialog(
+          backgroundColor: Colors.blueGrey.shade900,
+          title: const Text("Rep Targets by Week", style: TextStyle(color: Colors.white)),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: 12,
+              itemBuilder: (context, i) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: TextField(
+                    controller: controllers[i],
+                    keyboardType: TextInputType.number,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      labelText: "Week ${i + 1}",
+                      labelStyle: const TextStyle(color: Colors.white70),
+                      filled: true,
+                      fillColor: Colors.blueGrey.shade800,
+                      border: OutlineInputBorder(),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text("Cancel", style: TextStyle(color: Colors.white)),
+            ),
+            TextButton(
+              onPressed: () {
+                final updatedReps = controllers.map((c) => int.tryParse(c.text) ?? 6).toList();
+                setState(() {
+                  repTargetsByExercise[exerciseName] = updatedReps;
+                });
+                Navigator.pop(ctx);
+              },
+              child: const Text("Save", style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+
 
   @override
   Widget build(BuildContext context) {
@@ -686,10 +751,57 @@ class _ExerciseCardState extends State<_ExerciseCard> {
               spacing: 5,
               runSpacing: 4,
               children: [
-                _smallInput("Periodization Model", width: 158),
+                SizedBox(
+                  width: 158,
+                  child: DropdownButtonFormField<String>(
+                    value: _selectedModel,
+                    items: [
+                      'DUP, Signature',
+                      'DUP, Custom',
+                      'Linear, Classic',
+                      'Linear, by Exposure',
+                    ].map((label) {
+                      return DropdownMenuItem<String>(
+                        value: label,
+                        child: Text(label, style: const TextStyle(color: Colors.white, fontSize: 12)),
+                      );
+                    }).toList(),
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedModel = value!;
+                        // Optional: update Firestore or notify parent
+                      });
+                    },
+                    dropdownColor: Colors.blueGrey.shade800,
+                    decoration: InputDecoration(
+                      labelText: "Periodization Model",
+                      labelStyle: const TextStyle(color: Colors.white),
+                      filled: true,
+                      fillColor: Colors.blueGrey.shade700,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                    ),
+                  ),
+                ),
+
                 _smallInput("Weekly Frequency", width: 158),
                 _smallInput("Progression Model", width: 158),
-                _smallInput("Rep Targets", width: 158),
+                SizedBox(
+                  width: 158,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blueGrey.shade700,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                    ),
+                    onPressed: () => _showRepTargetDialog(widget.exerciseName),
+                    child: const Text(
+                      "Rep Targets",
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ),
+
                 _smallInput("Max Weight X Reps", width: 158),
                 _smallInput("Notes", width: 158),
               ],

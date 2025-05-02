@@ -8,23 +8,23 @@ import 'template_model.dart';
 import 'templates.dart';
 import 'exercise_details_screen.dart'; // Import your exercise details screen
 import 'top_sets_screen.dart';
+import 'Block_Planner.dart';
 
 enum PeriodizationModelType {
   dupSignature,
   dupCustom,
-  linear,
+  linearClassic,
+  linearExposure,
 }
+
 
 
 class PeriodizationModelUtils {
   static final Map<String, List<double>> exercisePreviousE1RMs = {}; // ✅ E1RM history per exercise
   static final Map<String, List<int>> exercisePreviousTopSetReps = {}; // ✅ Tracks reps per exercise
 
-  static Map<String, PeriodizationModelType> exercisePeriodizationModels = {
-    'Bench Press, Barbell': PeriodizationModelType.dupSignature,
-    'Deadlift, Conventional': PeriodizationModelType.linear,
-    // Add more as needed — later load this from Firestore
-  };
+  static Map<String, PeriodizationModelType> exercisePeriodizationModels = {};
+
 
 
   // ✅ Global function to calculate E1RM based on weight, reps, and RIR
@@ -40,6 +40,65 @@ class PeriodizationModelUtils {
       return w * (1 + (0.0333 * totalReps)); // ✅ Epley Formula
     }
   }
+
+  static Future<void> loadPeriodizationModelsFromFirestore() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final snapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('block_planner')
+        .doc('current_block')
+        .get();
+
+    final data = snapshot.data();
+    if (data == null || !data.containsKey('plannedExercises')) return;
+
+    final List<dynamic> plannedExercises = data['plannedExercises'];
+
+    exercisePeriodizationModels.clear();
+
+    for (var item in plannedExercises) {
+      final name = item['name'] as String?;
+      final modelStr = item['periodizationModel'] as String?;
+
+      if (name != null && modelStr != null) {
+        final model = _parseModelFromString(modelStr);
+        exercisePeriodizationModels[name] = model;
+      }
+    }
+  }
+
+  static PeriodizationModelType _parseModelFromString(String model) {
+    switch (model) {
+      case 'dupSignature':
+        return PeriodizationModelType.dupSignature;
+      case 'dupCustom':
+        return PeriodizationModelType.dupCustom;
+      case 'linearClassic':
+        return PeriodizationModelType.linearClassic;
+      case 'linearExposure':
+        return PeriodizationModelType.linearExposure;
+      default:
+        return PeriodizationModelType.dupSignature; // fallback
+    }
+  }
+
+
+
+  static int getLinearClassicRepTarget(String exerciseName, int plannedIndex) {
+    // Example: week-based linear periodization
+    List<int> sequence = [10, 8, 6, 5, 3, 2];
+    return sequence[plannedIndex.clamp(0, sequence.length - 1)];
+  }
+
+  static int getLinearExposureRepTarget(String exerciseName, int exposureIndex) {
+    // Example: exposure-based logic, per appearance of the same lift
+    List<int> sequence = [8, 6, 5, 4, 2];
+    return sequence[exposureIndex.clamp(0, sequence.length - 1)];
+  }
+
 
   static int getSuggestedRepTargetByModel({
     required String exerciseName,
@@ -57,8 +116,12 @@ class PeriodizationModelUtils {
           rirText: rirText,
           plannedIndex: plannedIndex,
         );
-      case PeriodizationModelType.linear:
-        return getLinearRepTarget(exerciseName, plannedIndex);
+      case PeriodizationModelType.linearClassic:
+        return getLinearClassicRepTarget(exerciseName, plannedIndex);
+
+      case PeriodizationModelType.linearExposure:
+        return getLinearExposureRepTarget(exerciseName, plannedIndex);
+
       case PeriodizationModelType.dupCustom:
         return getDupCustomRepTarget(exerciseName, plannedIndex);
     }
@@ -113,8 +176,11 @@ class PeriodizationModelUtils {
           weightText: weightText,
           rirText: rirText,
         );
-      case PeriodizationModelType.linear:
-        return 8.0;
+      case PeriodizationModelType.linearClassic:
+        return 8.0; // or use a logic function like getLinearClassicRepTarget()
+      case PeriodizationModelType.linearExposure:
+        return 6.0; // or use a logic function like getLinearExposureRepTarget()
+
       case PeriodizationModelType.dupCustom:
         return 6.0;
     }
@@ -169,8 +235,11 @@ class PeriodizationModelUtils {
           weightText: weightText,
           rirText: rirText,
         );
-      case PeriodizationModelType.linear:
-        return 6.0;
+      case PeriodizationModelType.linearClassic:
+        return 8.0; // or use a logic function like getLinearClassicRepTarget()
+      case PeriodizationModelType.linearExposure:
+        return 6.0; // or use a logic function like getLinearExposureRepTarget()
+
       case PeriodizationModelType.dupCustom:
         return 5.0;
     }
@@ -214,8 +283,12 @@ class PeriodizationModelUtils {
           reps: reps,
           rir: rir,
         );
-      case PeriodizationModelType.linear:
-        return 50.0;
+      case PeriodizationModelType.linearClassic:
+        return getSuggestedWeightFromRep(exerciseName, reps.toInt(), rir);
+
+      case PeriodizationModelType.linearExposure:
+        return getSuggestedWeightFromRep(exerciseName, reps.toInt(), rir);
+
       case PeriodizationModelType.dupCustom:
         return 45.0;
     }
@@ -257,8 +330,12 @@ class PeriodizationModelUtils {
           reps: reps,
           rir: rir,
         );
-      case PeriodizationModelType.linear:
-        return 55.0;
+      case PeriodizationModelType.linearClassic:
+        return getSuggestedWeightFromRep(exerciseName, reps.toInt(), rir);
+
+      case PeriodizationModelType.linearExposure:
+        return getSuggestedWeightFromRep(exerciseName, reps.toInt(), rir);
+
       case PeriodizationModelType.dupCustom:
         return 42.5;
     }
@@ -301,20 +378,18 @@ class PeriodizationModelUtils {
           reps: reps,
           rir: rir,
         );
-      case PeriodizationModelType.linear:
-        return 50.0;
+      case PeriodizationModelType.linearClassic:
+        return getSuggestedWeightFromRep(exerciseName, reps.toInt(), rir);
+
+      case PeriodizationModelType.linearExposure:
+        return getSuggestedWeightFromRep(exerciseName, reps.toInt(), rir);
+
       case PeriodizationModelType.dupCustom:
         return 45.0;
     }
   }
 
 
-
-
-  static int getLinearRepTarget(String exerciseName, int plannedIndex) {
-    // TODO: Add real logic
-    return 8; // example default
-  }
 
   static int getDupCustomRepTarget(String exerciseName, int plannedIndex) {
     // TODO: Add real logic
