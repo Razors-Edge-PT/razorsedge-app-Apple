@@ -22,6 +22,8 @@ class _BlockPlannerState extends State<Block_Planner> {
   Map<String, String> _exerciseIdToName = {}; // id ➔ name
   DateTime? _blockStartDate;
   DateTime? _blockEndDate;
+  Map<String, dynamic> exerciseRepTargets = {};
+
 
   @override
   @override
@@ -62,6 +64,102 @@ class _BlockPlannerState extends State<Block_Planner> {
       }
     }
   }
+
+  void _showDupSignatureRepTargetDialog(String exerciseName) async {
+    int min = 6;
+    int max = 10;
+
+    // Load existing values if they exist
+    if (exerciseRepTargets[exerciseName] != null) {
+      min = exerciseRepTargets[exerciseName]['min'] ?? min;
+      max = exerciseRepTargets[exerciseName]['max'] ?? max;
+    }
+
+    await showDialog(
+      context: context,
+      builder: (ctx) {
+        int tempMin = min;
+        int tempMax = max;
+
+        return AlertDialog(
+          backgroundColor: Colors.blueGrey.shade900,
+          title: Text("Set Rep Range for $exerciseName", style: const TextStyle(color: Colors.white)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  const Text("Min Reps:", style: TextStyle(color: Colors.white)),
+                  const SizedBox(width: 10),
+                  DropdownButton<int>(
+                    value: tempMin,
+                    dropdownColor: Colors.blueGrey.shade800,
+                    items: List.generate(12, (i) => i + 1).map((rep) {
+                      return DropdownMenuItem(
+                        value: rep,
+                        child: Text("$rep", style: const TextStyle(color: Colors.white)),
+                      );
+                    }).toList(),
+                    onChanged: (val) => val != null ? setState(() => tempMin = val) : null,
+                  ),
+                ],
+              ),
+              Row(
+                children: [
+                  const Text("Max Reps:", style: TextStyle(color: Colors.white)),
+                  const SizedBox(width: 10),
+                  DropdownButton<int>(
+                    value: tempMax,
+                    dropdownColor: Colors.blueGrey.shade800,
+                    items: List.generate(20, (i) => i + 1).map((rep) {
+                      return DropdownMenuItem(
+                        value: rep,
+                        child: Text("$rep", style: const TextStyle(color: Colors.white)),
+                      );
+                    }).toList(),
+                    onChanged: (val) => val != null ? setState(() => tempMax = val) : null,
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text("Cancel"),
+            ),
+            TextButton(
+              onPressed: () {
+                setState(() {
+                  exerciseRepTargets[exerciseName] = {'min': tempMin, 'max': tempMax};
+                });
+                Navigator.pop(ctx);
+              },
+              child: const Text("Save"),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  PeriodizationModelType _mapLabelToModelType(String label) {
+    switch (label) {
+      case 'DUP, Signature':
+        return PeriodizationModelType.dupSignature;
+      case 'DUP, Custom':
+        return PeriodizationModelType.dupCustom;
+      case 'Linear, Classic':
+        return PeriodizationModelType.linearClassic;
+      case 'Linear, by Exposure':
+        return PeriodizationModelType.linearExposure;
+      default:
+        return PeriodizationModelType.dupSignature;
+    }
+  }
+
+
+
 
   Map<String, List<String>> groupedExercises = {};
 
@@ -593,8 +691,12 @@ class _BlockPlannerState extends State<Block_Planner> {
   }
 
   Widget _buildExerciseCard(String exerciseName) {
-    return _ExerciseCard(exerciseName: exerciseName);
+    return _ExerciseCard(
+      exerciseName: exerciseName,
+      onShowDupSignatureDialog: () => _showDupSignatureRepTargetDialog(exerciseName),
+    );
   }
+
 
   Widget _smallInput(String label, {bool multiline = false}) {
     return SizedBox(
@@ -616,8 +718,13 @@ class _BlockPlannerState extends State<Block_Planner> {
 }
 class _ExerciseCard extends StatefulWidget {
   final String exerciseName;
+  final VoidCallback onShowDupSignatureDialog;
 
-  const _ExerciseCard({required this.exerciseName});
+  const _ExerciseCard({
+    required this.exerciseName,
+    required this.onShowDupSignatureDialog,
+  });
+
 
   @override
   State<_ExerciseCard> createState() => _ExerciseCardState();
@@ -628,6 +735,82 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   String _selectedModel = 'DUP, Signature'; // default or load from Firestore
 
   Map<String, List<int>> repTargetsByExercise = {}; // optional central storage
+  PeriodizationModelType _mapLabelToModelType(String label) {
+    switch (label) {
+      case 'DUP, Signature':
+        return PeriodizationModelType.dupSignature;
+      case 'DUP, Custom':
+        return PeriodizationModelType.dupCustom;
+      case 'Linear, Classic':
+        return PeriodizationModelType.linearClassic;
+      case 'Linear, by Exposure':
+        return PeriodizationModelType.linearExposure;
+      default:
+        return PeriodizationModelType.dupSignature;
+    }
+  }
+
+  void _showLinearClassicRepTargetDialog(String exerciseName) {
+    final blockLength = 12; // TODO: Replace with actual block length from parent later
+    List<int> reps = repTargetsByExercise[exerciseName] ?? List.filled(blockLength, 6);
+
+    List<TextEditingController> controllers = List.generate(
+      reps.length,
+          (i) => TextEditingController(text: reps[i].toString()),
+    );
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: Colors.blueGrey.shade900,
+          title: const Text("Rep Targets by Week", style: TextStyle(color: Colors.white)),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: blockLength,
+              itemBuilder: (context, i) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: TextField(
+                    controller: controllers[i],
+                    keyboardType: TextInputType.number,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      labelText: "Week ${i + 1}",
+                      labelStyle: const TextStyle(color: Colors.white70),
+                      filled: true,
+                      fillColor: Colors.blueGrey.shade800,
+                      border: OutlineInputBorder(),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text("Cancel", style: TextStyle(color: Colors.white)),
+            ),
+            TextButton(
+              onPressed: () {
+                final updatedReps = controllers.map((c) => int.tryParse(c.text) ?? 6).toList();
+                setState(() {
+                  repTargetsByExercise[exerciseName] = updatedReps;
+                });
+                Navigator.pop(ctx);
+              },
+              child: const Text("Save", style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
 
   void _showRepTargetDialog(String exerciseName) {
     List<int> reps = repTargetsByExercise[exerciseName] ?? List.filled(12, 6); // default 6 reps per week
@@ -794,7 +977,24 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
                     ),
-                    onPressed: () => _showRepTargetDialog(widget.exerciseName),
+                    onPressed: () {
+                      final model = _mapLabelToModelType(_selectedModel);
+                      switch (model) {
+                        case PeriodizationModelType.dupSignature:
+                          widget.onShowDupSignatureDialog();
+                          break;
+                        case PeriodizationModelType.linearClassic:
+                          _showLinearClassicRepTargetDialog(widget.exerciseName);
+                          break;
+                      // Add other cases if needed
+                        default:
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Model "$_selectedModel" not supported yet')),
+                          );
+                      }
+                    },
+
+
                     child: const Text(
                       "Rep Targets",
                       style: TextStyle(fontSize: 12),
