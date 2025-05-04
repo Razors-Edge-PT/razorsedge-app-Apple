@@ -25,10 +25,12 @@ class _BlockPlannerState extends State<Block_Planner> {
   Map<String, dynamic> exerciseRepTargets = {};
 
 
+
   @override
   @override
   void initState() {
     super.initState();
+
     _initData();
   }
 
@@ -37,6 +39,7 @@ class _BlockPlannerState extends State<Block_Planner> {
     await _loadBlockDatesFromFirestore();
     await _loadPlannedExercises();
   }
+
 
 
   Future<void> _loadBlockDatesFromFirestore() async {
@@ -563,7 +566,12 @@ class _BlockPlannerState extends State<Block_Planner> {
                       alignment: Alignment.centerLeft,
                       child: const Icon(Icons.delete, color: Colors.white),
                     ),
-                    child: _buildExerciseCard(_exerciseIdToName[exercise] ?? 'Unknown Exercise'),
+                    child: _ExerciseCard(
+                      exerciseName: _exerciseIdToName[exercise] ?? 'Unknown Exercise',
+                      onShowDupSignatureDialog: () => _showDupSignatureRepTargetDialog(exercise),
+                      repTargetsByExercise: exerciseRepTargets, // 👈 pass shared map
+                    ),
+
 
                   );
                 },
@@ -690,12 +698,7 @@ class _BlockPlannerState extends State<Block_Planner> {
     );
   }
 
-  Widget _buildExerciseCard(String exerciseName) {
-    return _ExerciseCard(
-      exerciseName: exerciseName,
-      onShowDupSignatureDialog: () => _showDupSignatureRepTargetDialog(exerciseName),
-    );
-  }
+
 
 
   Widget _smallInput(String label, {bool multiline = false}) {
@@ -716,14 +719,20 @@ class _BlockPlannerState extends State<Block_Planner> {
     );
   }
 }
+
+
 class _ExerciseCard extends StatefulWidget {
   final String exerciseName;
   final VoidCallback onShowDupSignatureDialog;
+  final Map<String, dynamic> repTargetsByExercise;
+
 
   const _ExerciseCard({
     required this.exerciseName,
     required this.onShowDupSignatureDialog,
+    required this.repTargetsByExercise, // 👈 Add this here too
   });
+
 
 
   @override
@@ -732,9 +741,13 @@ class _ExerciseCard extends StatefulWidget {
 
 class _ExerciseCardState extends State<_ExerciseCard> {
   bool isExpanded = false;
+  final TextEditingController _weeklyFrequencyController = TextEditingController(text: "7");
+  final TextEditingController _repTargetsDisplayController = TextEditingController();
+  final List<int> dupCustomDefaultReps = [10, 5, 12, 8, 3, 7, 1];
   String _selectedModel = 'DUP, Signature'; // default or load from Firestore
 
-  Map<String, List<int>> repTargetsByExercise = {}; // optional central storage
+
+
   PeriodizationModelType _mapLabelToModelType(String label) {
     switch (label) {
       case 'DUP, Signature':
@@ -750,13 +763,53 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     }
   }
 
-  void _showLinearClassicRepTargetDialog(String exerciseName) {
-    final blockLength = 12; // TODO: Replace with actual block length from parent later
-    List<int> reps = repTargetsByExercise[exerciseName] ?? List.filled(blockLength, 6);
+  @override
+  void initState() {
+    super.initState();
 
-    List<TextEditingController> controllers = List.generate(
+    final existingReps = widget.repTargetsByExercise[widget.exerciseName];
+
+    if (existingReps != null) {
+      if (existingReps is List<String>) {
+        _repTargetsDisplayController.text = existingReps.join(', ');
+      } else if (existingReps is List<int>) {
+        _repTargetsDisplayController.text = existingReps.join(', ');
+      } else {
+        _repTargetsDisplayController.text = '';
+      }
+    }
+
+  }
+
+
+
+  void _showLinearClassicRepTargetDialog(String exerciseName) {
+    final blockLength = 12;
+    final weeklyFreq = int.tryParse(_weeklyFrequencyController.text) ?? 3;
+
+    // Get existing or create default structured reps: [["12 x 3", "10 x 4", "8 x 3"], ...]
+    List<List<String>> reps;
+
+    final existing = widget.repTargetsByExercise[exerciseName];
+    if (existing is List && existing.isNotEmpty && existing.first is List) {
+      reps = List<List<String>>.from(existing.map((e) => List<String>.from(e)));
+    } else {
+      reps = List.generate(blockLength, (week) {
+        return List.generate(weeklyFreq, (i) {
+          final r = (12 - week - i).clamp(3, 15);
+          final s = i % 2 == 0 ? 3 : 4;
+          return "$r x $s";
+        });
+      });
+    }
+
+    // Create controllers: List of List of TextEditingController
+    List<List<TextEditingController>> controllers = List.generate(
       reps.length,
-          (i) => TextEditingController(text: reps[i].toString()),
+          (week) => List.generate(
+        reps[week].length,
+            (slot) => TextEditingController(text: reps[week][slot]),
+      ),
     );
 
     showDialog(
@@ -770,21 +823,37 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             child: ListView.builder(
               shrinkWrap: true,
               itemCount: blockLength,
-              itemBuilder: (context, i) {
+              itemBuilder: (context, week) {
                 return Padding(
                   padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: TextField(
-                    controller: controllers[i],
-                    keyboardType: TextInputType.number,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      labelText: "Week ${i + 1}",
-                      labelStyle: const TextStyle(color: Colors.white70),
-                      filled: true,
-                      fillColor: Colors.blueGrey.shade800,
-                      border: OutlineInputBorder(),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text("Week ${week + 1}", style: const TextStyle(color: Colors.white70)),
+                      const SizedBox(height: 4),
+                      Wrap(
+                        spacing: 8,
+                        children: List.generate(
+                          weeklyFreq,
+                              (i) => SizedBox(
+                            width: 100,
+                            child: TextField(
+                              controller: controllers[week][i],
+                              keyboardType: TextInputType.text,
+                              style: const TextStyle(color: Colors.white, fontSize: 12),
+                              decoration: InputDecoration(
+                                hintText: "e.g. 10 x 3",
+                                hintStyle: const TextStyle(color: Colors.white38),
+                                filled: true,
+                                fillColor: Colors.blueGrey.shade800,
+                                border: const OutlineInputBorder(),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 );
               },
@@ -797,9 +866,150 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             ),
             TextButton(
               onPressed: () {
-                final updatedReps = controllers.map((c) => int.tryParse(c.text) ?? 6).toList();
+                final updated = controllers.map(
+                      (weekControllers) => weekControllers.map((c) => c.text.trim()).toList(),
+                ).toList();
+
                 setState(() {
-                  repTargetsByExercise[exerciseName] = updatedReps;
+                  widget.repTargetsByExercise[exerciseName] = updated;
+                  // Flatten and preview for now
+                  _repTargetsDisplayController.text = updated.expand((x) => x).join(', ');
+                });
+
+                Navigator.pop(ctx);
+              },
+              child: const Text("Save", style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+
+
+
+  void _showLinearExposureRepTargetDialog(String exerciseName) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final snapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('block_planner')
+        .doc('current_block')
+        .get();
+
+    final data = snapshot.data();
+    if (data == null) return;
+
+    final blockStart = DateTime.parse(data['blockStartDate']);
+    final blockEnd = DateTime.parse(data['blockEndDate']);
+    final weeklyFreq = int.tryParse(_weeklyFrequencyController.text) ?? 2;
+
+    final totalWeeks = blockEnd.difference(blockStart).inDays ~/ 7;
+    final exposureCount = totalWeeks * weeklyFreq;
+    final roundedCount = exposureCount.clamp(1, 36); // reasonable upper limit
+
+    // Load saved or generate default reps x sets (e.g. ["12 x 3", "10 x 4", ...])
+    List<String> repsList;
+    final existing = widget.repTargetsByExercise[exerciseName];
+
+    if (existing is List && existing.isNotEmpty && existing.first is String) {
+      repsList = List<String>.from(existing);
+    } else {
+      repsList = List.generate(roundedCount, (i) {
+        final reps = (12 - (i * 7 / roundedCount).round()).clamp(5, 15);
+        final sets = (i % 2 == 0) ? 3 : 4;
+        return "$reps x $sets";
+      });
+    }
+
+
+    final controllers = repsList
+        .map((value) => TextEditingController(text: value))
+        .toList();
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: Colors.blueGrey.shade900,
+          title: const Text("Rep Targets by Exposure", style: TextStyle(color: Colors.white)),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: (roundedCount / 2).ceil(),
+              itemBuilder: (context, i) {
+                final index1 = i * 2;
+                final index2 = index1 + 1;
+
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text("Exposure ${index1 + 1}", style: const TextStyle(color: Colors.white70)),
+                          const SizedBox(width: 24),
+                          if (index2 < roundedCount)
+                            Text("Exposure ${index2 + 1}", style: const TextStyle(color: Colors.white70)),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: controllers[index1],
+                              style: const TextStyle(color: Colors.white),
+                              decoration: InputDecoration(
+                                hintText: "e.g. 10 x 3",
+                                hintStyle: const TextStyle(color: Colors.white38),
+                                filled: true,
+                                fillColor: Colors.blueGrey.shade800,
+                                border: const OutlineInputBorder(),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          if (index2 < roundedCount)
+                            Expanded(
+                              child: TextField(
+                                controller: controllers[index2],
+                                style: const TextStyle(color: Colors.white),
+                                decoration: InputDecoration(
+                                  hintText: "e.g. 8 x 4",
+                                  hintStyle: const TextStyle(color: Colors.white38),
+                                  filled: true,
+                                  fillColor: Colors.blueGrey.shade800,
+                                  border: const OutlineInputBorder(),
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text("Cancel", style: TextStyle(color: Colors.white)),
+            ),
+            TextButton(
+              onPressed: () {
+                final updated = controllers.map((c) => c.text.trim()).toList();
+                setState(() {
+                  widget.repTargetsByExercise[exerciseName] = updated;
+                  _repTargetsDisplayController.text = updated.join(', ');
                 });
                 Navigator.pop(ctx);
               },
@@ -812,8 +1022,125 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   }
 
 
+
+  void _showDupCustomRepTargetDialog(String exerciseName) {
+    final frequency = int.tryParse(_weeklyFrequencyController.text) ?? 3;
+    final blockLength = 12;
+
+    final cycle = [
+      [10, 5, 8, 3, 12, 1, 6],
+      [9, 4, 7, 11, 2, 5, 8],
+      [12, 3, 6, 1, 9, 4, 7],
+    ];
+
+    // Try to load saved values
+    List<List<String>> repsByWeek;
+    final existing = widget.repTargetsByExercise[exerciseName];
+    print("📍 [DUP Custom] Raw data: $existing");
+    if (existing is List &&
+        existing.isNotEmpty &&
+        existing.first is List &&
+        (existing.first as List).first.toString().contains('x'))
+    {
+      repsByWeek = List<List<String>>.from(
+          existing.map((e) => List<String>.from(e)));
+    } else {
+      repsByWeek = List.generate(blockLength, (week) {
+        final pattern = cycle[week % cycle.length];
+        return List.generate(frequency, (i) {
+          final reps = pattern[i];
+          final sets = reps < 5 ? 4 : 3;
+          return "$reps x $sets";
+        });
+      });
+    }
+
+    final controllers = List.generate(
+      repsByWeek.length,
+          (week) => List.generate(
+        repsByWeek[week].length,
+            (i) => TextEditingController(text: repsByWeek[week][i]),
+      ),
+    );
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: Colors.blueGrey.shade900,
+          title: const Text("Rep Targets by Week", style: TextStyle(color: Colors.white)),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: blockLength,
+              itemBuilder: (context, week) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text("Week ${week + 1}", style: const TextStyle(color: Colors.white70)),
+                      const SizedBox(height: 4),
+                      Wrap(
+                        spacing: 8,
+                        children: List.generate(
+                          frequency,
+                              (i) => SizedBox(
+                            width: 100,
+                            child: TextField(
+                              controller: controllers[week][i],
+                              style: const TextStyle(color: Colors.white, fontSize: 12),
+                              decoration: InputDecoration(
+                                hintText: "e.g. 10 x 3",
+                                hintStyle: const TextStyle(color: Colors.white38),
+                                filled: true,
+                                fillColor: Colors.blueGrey.shade800,
+                                border: const OutlineInputBorder(),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text("Cancel", style: TextStyle(color: Colors.white)),
+            ),
+            TextButton(
+              onPressed: () {
+                final updated = controllers
+                    .map((weekList) => weekList.map((c) => c.text.trim()).toList())
+                    .toList();
+
+                setState(() {
+                  widget.repTargetsByExercise[exerciseName] = updated;
+                  _repTargetsDisplayController.text =
+                      updated.map((weekList) => weekList.join(' | ')).join(' || ');
+
+                });
+                Navigator.pop(ctx);
+              },
+              child: const Text("Save", style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+
+
+
   void _showRepTargetDialog(String exerciseName) {
-    List<int> reps = repTargetsByExercise[exerciseName] ?? List.filled(12, 6); // default 6 reps per week
+    List<int> reps = widget.repTargetsByExercise[exerciseName] ?? List.filled(12, 6); // default 6 reps per week
 
     showDialog(
       context: context,
@@ -860,7 +1187,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
               onPressed: () {
                 final updatedReps = controllers.map((c) => int.tryParse(c.text) ?? 6).toList();
                 setState(() {
-                  repTargetsByExercise[exerciseName] = updatedReps;
+                  widget.repTargetsByExercise[exerciseName] = updatedReps;
                 });
                 Navigator.pop(ctx);
               },
@@ -967,40 +1294,56 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   ),
                 ),
 
-                _smallInput("Weekly Frequency", width: 158),
+                _smallInput("Weekly Frequency", controller: _weeklyFrequencyController, width: 158),
+
                 _smallInput("Progression Model", width: 158),
                 SizedBox(
                   width: 158,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blueGrey.shade700,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-                    ),
-                    onPressed: () {
+                  child: GestureDetector(
+                    onTap: () {
                       final model = _mapLabelToModelType(_selectedModel);
                       switch (model) {
                         case PeriodizationModelType.dupSignature:
                           widget.onShowDupSignatureDialog();
                           break;
                         case PeriodizationModelType.linearClassic:
+                          print("➡ Opening Linear Classic rep dialog"); // 👈 Debug
                           _showLinearClassicRepTargetDialog(widget.exerciseName);
                           break;
-                      // Add other cases if needed
+                        case PeriodizationModelType.linearExposure:
+                          print("➡ Opening Linear Exposure rep dialog"); // ✅ ADD THIS
+                          _showLinearExposureRepTargetDialog(widget.exerciseName);
+                          break;
+
+                        case PeriodizationModelType.dupCustom:
+                          _showDupCustomRepTargetDialog(widget.exerciseName);
+                          break;
                         default:
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(content: Text('Model "$_selectedModel" not supported yet')),
                           );
                       }
                     },
-
-
-                    child: const Text(
-                      "Rep Targets",
-                      style: TextStyle(fontSize: 12),
+                    child: AbsorbPointer(
+                      child: TextFormField(
+                        controller: _repTargetsDisplayController,
+                        readOnly: true,
+                        style: const TextStyle(color: Colors.white, fontSize: 12),
+                        decoration: InputDecoration(
+                          labelText: 'Rep Targets X sets',
+                          labelStyle: const TextStyle(color: Colors.white),
+                          floatingLabelBehavior: FloatingLabelBehavior.always,
+                          filled: true,
+                          fillColor: Colors.blueGrey.shade700,
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                        ),
+                      ),
                     ),
                   ),
                 ),
+
 
                 _smallInput("Max Weight X Reps", width: 158),
                 _smallInput("Notes", width: 158),
@@ -1013,10 +1356,17 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     );
   }
 
-  Widget _smallInput(String label, {bool multiline = false, double width = 150, double verticalPadding = 10}) {
+  Widget _smallInput(
+      String label, {
+        TextEditingController? controller, // ✅ Controller passed in
+        bool multiline = false,
+        double width = 150,
+        double verticalPadding = 10,
+      }) {
     return SizedBox(
       width: width,
       child: TextField(
+        controller: controller, // ✅ <-- Add this line to wire it in
         minLines: multiline ? 3 : 1,
         maxLines: multiline ? 5 : 1,
         style: const TextStyle(fontSize: 12, color: Colors.white),
@@ -1032,6 +1382,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       ),
     );
   }
+
 
 
 }

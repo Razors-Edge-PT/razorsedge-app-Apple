@@ -567,7 +567,41 @@ class PeriodizationModelUtils {
     return availableReps;
   }
 
-  static int getSuggestedRepTarget(
+  static Future<int> getExposureCountForExercise({
+    required String exerciseName,
+    required DateTime blockStart,
+    required DateTime blockEnd,
+  }) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return 0;
+
+    final snapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('workouts')
+        .where('date', isGreaterThanOrEqualTo: blockStart.toIso8601String())
+        .where('date', isLessThanOrEqualTo: blockEnd.toIso8601String())
+        .get();
+
+    int count = 0;
+
+    for (final doc in snapshot.docs) {
+      final data = doc.data();
+      final exercises = List<Map<String, dynamic>>.from(data['exercises'] ?? []);
+
+      for (final ex in exercises) {
+        if (ex['name'] == exerciseName) {
+          count++;
+          break; // Only count once per workout
+        }
+      }
+    }
+
+    return count;
+  }
+
+
+  static int getSuggestedRepTarget( //DUP signature
       String exerciseName, {
         String? weightText,
         String? rirText,
