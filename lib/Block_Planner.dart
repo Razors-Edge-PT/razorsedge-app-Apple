@@ -782,7 +782,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   }
 
 
-
   void _showLinearClassicRepTargetDialog(String exerciseName) {
     final blockLength = 12;
     final weeklyFreq = int.tryParse(_weeklyFrequencyController.text) ?? 3;
@@ -791,14 +790,19 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     List<List<String>> reps;
 
     final existing = widget.repTargetsByExercise[exerciseName];
-    if (existing is List && existing.isNotEmpty && existing.first is List) {
+    final isLinearClassic = existing is List &&
+        existing.isNotEmpty &&
+        existing.first is String &&
+        (existing as List).first.toString().contains('x');
+
+    if (isLinearClassic) {
       reps = List<List<String>>.from(existing.map((e) => List<String>.from(e)));
     } else {
       reps = List.generate(blockLength, (week) {
         return List.generate(weeklyFreq, (i) {
-          final r = (12 - week - i).clamp(3, 15);
-          final s = i % 2 == 0 ? 3 : 4;
-          return "$r x $s";
+          final repsVal = (12 - week - i).clamp(3, 15);
+          final sets = repsVal < 5 ? 4 : 3;
+          return "$repsVal x $sets";
         });
       });
     }
@@ -829,7 +833,13 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text("Week ${week + 1}", style: const TextStyle(color: Colors.white70)),
+                      Row(
+                        children: [
+                          Text("Week ${week + 1}", style: const TextStyle(color: Colors.white70)),
+                          const SizedBox(width: 12),
+                          const Text("(Linear Classic)", style: TextStyle(color: Colors.white38, fontSize: 11)),
+                        ],
+                      ),
                       const SizedBox(height: 4),
                       Wrap(
                         spacing: 8,

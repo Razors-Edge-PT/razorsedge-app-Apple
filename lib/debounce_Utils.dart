@@ -27,5 +27,6 @@ class Debouncer {
 Future<void> clearWorkoutDraftCache() async {
   final prefs = await SharedPreferences.getInstance();
   await prefs.remove('workout_draft');
+  await prefs.remove('workout_draft_date');
+  print('✅ Draft cache cleared.');
 }
-
