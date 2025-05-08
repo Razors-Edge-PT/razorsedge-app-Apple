@@ -63,7 +63,8 @@ class WorkoutPage extends StatefulWidget {
   _WorkoutPageState createState() => _WorkoutPageState();
 }
 
-class _WorkoutPageState extends State<WorkoutPage> {
+class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
+
 
   List<String> exercises = []; // Use this to store selected exercises from the dialog
   final TextEditingController _workoutNameController = TextEditingController();
@@ -444,15 +445,81 @@ class _WorkoutPageState extends State<WorkoutPage> {
   @override
   void initState() {
     super.initState();
-
+    WidgetsBinding.instance.addObserver(this);
     _selectedDate = widget.initialDate ?? DateTime.now();
-
     _setInitialWorkoutName();
-    _loadInitialData(); // 🔄 Async loader handles everything
-
+    _loadInitialData();
     _fetchLastWorkoutTopSetReps();
   }
 
+
+
+  Future<void> _loadInitialData() async {
+    await loadPlannedExercisesFromFirestore();
+    await loadPreviousWorkoutData();
+
+    final draftLoaded = await _loadWorkoutDraftFromCache();
+    print('[WES] Checking data sources for $_selectedDate...');
+    print('→ hasDraft: $draftLoaded');
+    print('→ hasPrefilled: ${widget.prefilledExercisesWithCircuits != null && widget.prefilledExercisesWithCircuits!.isNotEmpty}');
+    if (draftLoaded) {
+      // ✅ Priority 1: Use saved draft
+      await Future.delayed(const Duration(milliseconds: 400));
+      await _mergeNewBB2ExercisesIntoDraft();
+    } else if (widget.prefilledExercisesWithCircuits != null &&
+        widget.prefilledExercisesWithCircuits!.isNotEmpty) {
+      print('[WES] Received prefilledExercisesWithCircuits:');
+      for (final ex in widget.prefilledExercisesWithCircuits!) {
+        print('• ${ex['name']} (circuitIndex: ${ex['circuitIndex']})');
+      }
+
+      // ✅ Priority 2: Use freshly passed BB2 data
+      _selectedExercisesWithCircuits.clear();
+      _selectedExercisesWithCircuits.addAll(
+          List<Map<String, dynamic>>.from(widget.prefilledExercisesWithCircuits!)
+      );
+
+      _workoutSets.clear();
+      _repsControllers.clear();
+      _weightControllers.clear();
+      _rirControllers.clear();
+
+      for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+        _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
+        _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+        _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+        _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+      }
+
+      await _saveWorkoutDraftToCache();
+    } else {
+      // ✅ Priority 3: Load saved BB2 plan from Firestore
+      await _loadPlannedBlockBuilderExercisesIfAny();
+
+      if (_selectedExercisesWithCircuits.isNotEmpty) {
+        _workoutSets.clear();
+        _repsControllers.clear();
+        _weightControllers.clear();
+        _rirControllers.clear();
+
+        for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+          _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
+          _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+          _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+          _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+        }
+
+        await _saveWorkoutDraftToCache();
+      }
+    }
+
+    if (_selectedExercisesWithCircuits.isNotEmpty) {
+      _initializeControllers();
+    }
+
+    setState(() {});
+
+  }
 
   void _setInitialWorkoutName() {
     if (widget.initialTemplate != null && widget.initialTemplate!.name.isNotEmpty) {
@@ -464,33 +531,22 @@ class _WorkoutPageState extends State<WorkoutPage> {
     }
   }
 
-  Future<void> _loadInitialData() async {
-    await loadPlannedExercisesFromFirestore();
-    await loadPreviousWorkoutData();
 
-    final draftLoaded = await _loadWorkoutDraftFromCache(); // <- returns true if loaded
-
-    if (!draftLoaded) {
-      await _loadPlannedBlockBuilderExercisesIfAny(); // only if no draft
-
-      // ✅ save initial BB2 plan to cache so it's editable going forward
-      if (_selectedExercisesWithCircuits.isNotEmpty) {
-        await _saveWorkoutDraftToCache();
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) async {
+    if (state == AppLifecycleState.resumed) {
+      final prefs = await SharedPreferences.getInstance();
+      final dateKey = '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
+      final timestampStr = prefs.getString('draft_last_saved_$dateKey');
+      if (timestampStr != null) {
+        final savedAt = DateTime.tryParse(timestampStr);
+        final now = DateTime.now();
+        if (savedAt != null && now.difference(savedAt).inHours < 2) {
+          print('[WES] App resumed — refreshing draft with BB2 merge');
+          await _mergeNewBB2ExercisesIntoDraft();
+          setState(() {}); // Refresh UI if merged
+        }
       }
-    } else {
-      // 🧠 Optional: merge in any NEW BB2 exercises (not already in draft)
-      await _mergeNewBB2ExercisesIntoDraft(); // you’ll define this
-    }
-
-    if (_selectedExercisesWithCircuits.isNotEmpty) {
-      for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
-        _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
-        _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-        _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-        _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-      }
-
-      _initializeControllers();
     }
   }
 
@@ -648,6 +704,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
         controller.dispose();
       }
     }
+
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
 
 
@@ -1128,6 +1186,73 @@ class _WorkoutPageState extends State<WorkoutPage> {
       );
       return;
     }
+    final prefs = await SharedPreferences.getInstance();
+    final dateKey = '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
+    final draftKey = 'workout_draft_$dateKey';
+    final timestampKey = 'draft_last_saved_$dateKey';
+
+    final draftJson = prefs.getString(draftKey);
+    final timestampStr = prefs.getString(timestampKey);
+
+    if (draftJson != null && timestampStr != null) {
+      final savedTime = DateTime.tryParse(timestampStr);
+      final now = DateTime.now();
+
+      if (savedTime != null && now.difference(savedTime).inMinutes >= 120) {
+        try {
+          final parsed = jsonDecode(draftJson);
+          final exercises = List<Map<String, dynamic>>.from(parsed['exercises'] ?? []);
+          final sets = List<List>.from(parsed['sets'] ?? []);
+
+          final filtered = <Map<String, dynamic>>[];
+
+          for (int i = 0; i < exercises.length; i++) {
+            final exercise = exercises[i];
+            final setList = List<Map<String, dynamic>>.from(sets[i]);
+
+            final hasData = setList.any((s) => (s['weight'] ?? 0) > 0 || (s['reps'] ?? 0) > 0);
+            if (hasData) {
+              filtered.add({
+                'name': exercise['name'],
+                'circuitIndex': exercise['circuitIndex'],
+                'sets': setList
+              });
+            }
+          }
+
+          if (filtered.isNotEmpty) {
+            print("[WES] Injecting expired draft data before save");
+
+            _selectedExercisesWithCircuits.clear();
+            _workoutSets.clear();
+
+            for (final ex in filtered) {
+              _selectedExercisesWithCircuits.add({
+                'name': ex['name'],
+                'circuitIndex': ex['circuitIndex'],
+              });
+
+              final setList = List<Map<String, dynamic>>.from(ex['sets']);
+              final sets = setList.map((s) => SetDetails(
+                reps: s['reps'],
+                weight: (s['weight'] as num?)?.toDouble(),
+                rir: (s['rir'] as num?)?.toDouble(),
+              )).toList();
+
+              _workoutSets.add(sets);
+            }
+
+            _initializeControllers();
+          }
+
+          await prefs.remove(draftKey);
+          await prefs.remove(timestampKey);
+        } catch (e) {
+          debugPrint('[WES] Failed to inject expired draft: $e');
+        }
+      }
+    }
+
 
     // ✅ Sync TextField input into _workoutSets
     for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
@@ -1220,7 +1345,15 @@ class _WorkoutPageState extends State<WorkoutPage> {
             final circuitIndex = _selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0;
             final sets = _workoutSets[i];
 
-            final bestSet = sets.where((s) => s.weight != null && s.reps != null).fold<SetDetails?>(null, (prev, curr) {
+            final validSets = sets.where((s) =>
+            (s.weight ?? 0) > 0 ||
+                (s.reps ?? 0) > 0 ||
+                (s.rir ?? 0) > 0
+            ).toList();
+
+            if (validSets.isEmpty) continue;
+
+            final bestSet = validSets.fold<SetDetails?>(null, (prev, curr) {
               if (prev == null) return curr;
               final prevE1RM = calculateE1RM(prev.weight, prev.reps?.toDouble(), prev.rir);
               final currE1RM = calculateE1RM(curr.weight, curr.reps?.toDouble(), curr.rir);
@@ -1237,6 +1370,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
               });
             }
           }
+
 
 
           // Fetch current day data
@@ -1284,6 +1418,43 @@ class _WorkoutPageState extends State<WorkoutPage> {
       await clearWorkoutDraftCache(); // ✅ Clear saved draft once workout is committed
       print('Draft cache cleared after workout save.');
 
+// 🧠 Save savedFields to SharedPreferences for BB2 to pick up
+      final prefs = await SharedPreferences.getInstance();
+      final List<String> savedFieldKeys = [];
+
+      for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+        final name = _selectedExercisesWithCircuits[i]['name'];
+        final circuitIndex = _selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0;
+        final set = _workoutSets[i].isNotEmpty ? _workoutSets[i][0] : null;
+        if (set == null) continue;
+
+        final blockDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .collection('block_planner')
+            .doc('current_block')
+            .get();
+        final blockStartStr = blockDoc.data()?['blockStartDate'];
+        final blockStart = DateTime.parse(blockStartStr);
+        final daysSinceStart = _selectedDate.difference(blockStart).inDays;
+        final weekIndex = (daysSinceStart / 7).floor();
+        final dayIndex = daysSinceStart % 7;
+
+        if ((set.weight ?? 0) > 0) {
+          savedFieldKeys.add('w${weekIndex}_d${dayIndex}_r${i}_weight');
+        }
+        if ((set.reps ?? 0) > 0) {
+          savedFieldKeys.add('w${weekIndex}_d${dayIndex}_r${i}_reps');
+        }
+        if ((set.rir ?? 0) > 0) {
+          savedFieldKeys.add('w${weekIndex}_d${dayIndex}_r${i}_rir');
+        }
+      }
+
+      await prefs.setStringList(
+        'savedFields_${_selectedDate.toIso8601String().substring(0, 10)}',
+        savedFieldKeys,
+      );
 
 
     } catch (error) {
@@ -1346,8 +1517,9 @@ class _WorkoutPageState extends State<WorkoutPage> {
 
   Future<void> _saveWorkoutDraftToCache() async {
     final prefs = await SharedPreferences.getInstance();
-    final key = 'workout_draft_${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
-
+    final dateKey = '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
+    final draftKey = 'workout_draft_$dateKey';
+    final timestampKey = 'draft_last_saved_$dateKey';
 
     final workoutDraft = {
       'name': _workoutNameController.text,
@@ -1362,52 +1534,114 @@ class _WorkoutPageState extends State<WorkoutPage> {
       }).toList(),
     };
 
-    await prefs.setString(key, jsonEncode(workoutDraft));
-    print("[WES] Draft saved for $_selectedDate under key: $key");
+    await prefs.setString(draftKey, jsonEncode(workoutDraft)); // ✅ actually save the draft
+    await prefs.setString(timestampKey, DateTime.now().toIso8601String()); // ✅ save timestamp
+
+    print("[WES] Draft saved for $_selectedDate under key: $draftKey");
   }
+
 
 
   Future<bool> _loadWorkoutDraftFromCache() async {
     final prefs = await SharedPreferences.getInstance();
-    final key = 'workout_draft_${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}'; // ✅ Stable daily key
+    final dateKey = '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
+    final draftKey = 'workout_draft_$dateKey';
+    final timestampKey = 'draft_last_saved_$dateKey';
 
-    final draftJson = prefs.getString(key);
+    final draftJson = prefs.getString(draftKey);
+    final savedAtString = prefs.getString(timestampKey);
 
-    if (draftJson == null) return false;
+    if (draftJson == null || savedAtString == null) {
+      print('[WES] No draft found for $dateKey.');
+      return false;
+    }
 
     try {
+      final savedAt = DateTime.parse(savedAtString);
+      final now = DateTime.now();
       final draft = jsonDecode(draftJson);
 
+      final exercises = List<Map<String, dynamic>>.from(draft['exercises'] ?? []);
+      final sets = List<List>.from(draft['sets'] ?? []);
+
+      final filteredExercises = <Map<String, dynamic>>[];
+      final filteredSets = <List<Map<String, dynamic>>>[];
+
+      for (int i = 0; i < exercises.length; i++) {
+        final setList = List<Map<String, dynamic>>.from(sets[i]);
+        final hasRealData = setList.any((s) =>
+        (s['weight'] ?? 0) > 0 ||
+            (s['reps'] ?? 0) > 0 ||
+            (s['rir'] ?? 0) > 0);
+        if (hasRealData) {
+          filteredExercises.add(exercises[i]);
+          filteredSets.add(setList);
+        }
+      }
+
+      final isExpired = now.difference(savedAt) > const Duration(hours: 2);
+
+      if (isExpired) {
+        await prefs.remove(draftKey);
+        await prefs.remove(timestampKey);
+
+        if (filteredExercises.isEmpty) {
+          print('[WES] Draft expired and had no usable data — discarded.');
+          return false;
+        } else {
+          print('[WES] Draft expired, but kept ${filteredExercises.length} non-empty exercises.');
+        }
+      } else {
+        // 🧠 Draft is still fresh, so keep everything
+        filteredExercises.clear();
+        filteredExercises.addAll(exercises);
+        filteredSets.clear();
+        filteredSets.addAll(sets.map((s) => List<Map<String, dynamic>>.from(s)));
+        print('[WES] Draft is fresh — all exercises kept.');
+      }
+
+
       _selectedExercisesWithCircuits.clear();
-      _selectedExercisesWithCircuits.addAll(List<Map<String, dynamic>>.from(draft['exercises'] ?? []));
+      _selectedExercisesWithCircuits.addAll(filteredExercises);
 
-      setState(() {
-        _workoutSets.clear();
-        _workoutSets.addAll((draft['sets'] as List).map((exerciseSets) {
-          return (exerciseSets as List).map((set) => SetDetails(
-            reps: set['reps'],
-            weight: (set['weight'] as num?)?.toDouble(),
-            rir: (set['rir'] as num?)?.toDouble(),
-          )).toList();
-        }));
+      _workoutSets.clear();
+      _repsControllers.clear();
+      _weightControllers.clear();
+      _rirControllers.clear();
 
-        _initializeControllers(); // 🔥 Must match _workoutSets length exactly
+      for (int i = 0; i < filteredExercises.length; i++) {
+        final setList = filteredSets[i];
 
-        _workoutNameController.text = draft['name'] ?? '';
-      });
+        _workoutSets.add(setList.map((s) => SetDetails(
+          reps: s['reps'],
+          weight: (s['weight'] as num?)?.toDouble(),
+          rir: (s['rir'] as num?)?.toDouble(),
+        )).toList());
 
-      print("[WES] Loaded draft from cache for $_selectedDate");
+        _repsControllers.add(List.generate(setList.length, (_) => TextEditingController()));
+        _weightControllers.add(List.generate(setList.length, (_) => TextEditingController()));
+        _rirControllers.add(List.generate(setList.length, (_) => TextEditingController()));
+      }
+
+      _initializeControllers();
+      _workoutNameController.text = draft['name'] ?? '';
+
+      print('[WES] Loaded draft (expired=$isExpired, kept=${filteredExercises.length})');
+
       return true;
-
     } catch (e) {
-      debugPrint('Failed to load workout draft: $e');
+      debugPrint('[WES] Failed to load workout draft for $dateKey: $e');
       return false;
     }
   }
 
 
 
+
+
   Future<void> _mergeNewBB2ExercisesIntoDraft() async {
+    print('[WES] Attempting to merge BB2 exercises into draft for $_selectedDate');
+
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
@@ -1450,7 +1684,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
       );
 
       _workoutSets.addAll(List.generate(newOnes.length, (_) => List.generate(_defaultSets, (_) => SetDetails())));
-
+      print('[WES] _mergeNewBB2ExercisesIntoDraft() called');
       print("[WES] Merged ${newOnes.length} new BB2 exercises into draft");
       await _saveWorkoutDraftToCache();
     }
@@ -1524,12 +1758,76 @@ class _WorkoutPageState extends State<WorkoutPage> {
     );
 
     if (pickedDate != null && pickedDate != _selectedDate) {
+      // Step 1: Save current date's draft
+      await _saveWorkoutDraftToCache();
+
+      // Step 2: Switch date and reset workout name
       setState(() {
         _selectedDate = pickedDate;
         _workoutNameController.text = _formatWorkoutDate(_selectedDate);
       });
+
+      // Step 3: Try load draft for new date
+      final draftLoaded = await _loadWorkoutDraftFromCache();
+
+      // Step 4: If no draft, fall back to BB2
+      if (!draftLoaded) {
+        await _loadPlannedBlockBuilderExercisesIfAny();
+      } else {
+        // If draft was loaded, merge in any new exercises from BB2
+        final user = FirebaseAuth.instance.currentUser;
+        if (user != null) {
+          final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
+          final blockDoc = await userDoc.collection('block_planner').doc('current_block').get();
+          final blockStartStr = blockDoc.data()?['blockStartDate'];
+          if (blockStartStr != null) {
+            final blockStart = DateTime.parse(blockStartStr);
+            final daysSinceStart = _selectedDate.difference(blockStart).inDays;
+            if (daysSinceStart >= 0) {
+              final weekIndex = (daysSinceStart / 7).floor();
+              final dayIndex = daysSinceStart % 7;
+
+              final dayDoc = await userDoc
+                  .collection('block_data')
+                  .doc('current_block')
+                  .collection('weeks')
+                  .doc('week_$weekIndex')
+                  .collection('days')
+                  .doc('day_$dayIndex')
+                  .get();
+
+              if (dayDoc.exists) {
+                final bb2Exercises = List<Map<String, dynamic>>.from(dayDoc.data()?['exercises'] ?? []);
+
+                // Filter for only new ones not in draft
+                final existingNames = _selectedExercisesWithCircuits.map((e) => e['name']).toSet();
+                final newExercises = bb2Exercises.where((e) => !existingNames.contains(e['name'])).toList();
+
+                if (newExercises.isNotEmpty) {
+                  setState(() {
+                    _selectedExercisesWithCircuits.addAll(
+                      newExercises.map((e) => {
+                        'name': e['name'] ?? '',
+                        'circuitIndex': e['circuitIndex'] ?? 0,
+                      }),
+                    );
+                    for (int i = 0; i < newExercises.length; i++) {
+                      _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
+                      _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+                      _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+                      _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+                    }
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
+
+
 
   String _formatWorkoutDate(DateTime date) {
     final dayOfWeek = DateFormat('EEEE').format(date); // e.g., Tuesday
