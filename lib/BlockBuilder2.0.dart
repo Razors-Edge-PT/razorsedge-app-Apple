@@ -10,6 +10,8 @@ import 'package:uuid/uuid.dart';
 import 'template_details.dart'; // if you're navigating directly to TemplateDetailsScreen
 import 'templates.dart'; // ✅ this is the one that defines TemplatesScreen
 import 'WorkoutSummaryScreen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 
 
 
@@ -108,6 +110,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   //List<List<List<TextEditingController>>> weightControllers = [];
   //List<List<List<TextEditingController>>> repsControllers = [];
   //List<List<List<TextEditingController>>> rirControllers = [];
+  final Map<String, bool> _savedFields = {}; // key = 'w0_d1_r2_weight'
+
   List<List<List<TextEditingController>>> e1rmControllers = [];
   List<List<List<int>>> circuitStartIndices = [];
   final ScrollController _horizontalScrollController = ScrollController();
@@ -158,7 +162,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
     selectedTemplateIds = List.generate(totalWeeks, (_) => List.generate(7, (_) => null));
     //exerciseSelection = List.generate(totalWeeks, (_) => List.generate(7, (_) => List.filled(exercisesPerDay, null, growable: true)));
-
+    await _loadPersistedSavedFields();
     await loadBlockDataFromFirestore();
   }
 
@@ -307,7 +311,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   void initState() {
     super.initState();
 
-
     _horizontalScrollController.addListener(() {
       final maxScroll = _horizontalScrollController.position.maxScrollExtent;
       final currentScroll = _horizontalScrollController.position.pixels;
@@ -318,8 +321,21 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       }
     });
 
+    // Main data loading
     _initialLoad = loadAllData();
+
+    // 🔁 Microtask to check WES flag and repaint
+    Future.microtask(() async {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool('wasSavedFromWES') == true) {
+        prefs.remove('wasSavedFromWES');
+        setState(() {
+          print("🟣 Triggered UI update due to save from WES");
+        });
+      }
+    });
   }
+
 
 
   @override
@@ -392,48 +408,10 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   }
 
 
-
-
-  TextEditingController _getController(
-      List<List<List<TextEditingController>>> controllerList,
-      int weekIndex,
-      int dayIndex,
-      int rowIndex,
-      ) {
-    // Ensure outer week list is big enough
-    while (controllerList.length <= weekIndex) {
-      controllerList.add([]);
-    }
-
-    // Ensure day list is big enough
-    while (controllerList[weekIndex].length <= dayIndex) {
-      controllerList[weekIndex].add([]);
-    }
-
-    // Ensure row list is big enough
-    while (controllerList[weekIndex][dayIndex].length <= rowIndex) {
-      controllerList[weekIndex][dayIndex].add(TextEditingController());
-    }
-
-    return controllerList[weekIndex][dayIndex][rowIndex];
-  }
-
   DateTime _getMostRecentMonday([DateTime? reference]) {
     DateTime now = reference ?? DateTime.now();
     int diff = now.weekday - DateTime.monday;
     return now.subtract(Duration(days: diff < 0 ? 7 + diff : diff));
-  }
-
-
-  void _addWeek() {
-    setState(() {
-      weekIndices.add(weekIndices.length);
-    });
-  }
-
-  String _getDayLabel(int weekIndex, int dayOffset) {
-    DateTime date = blockStartDate.add(Duration(days: weekIndex * 7 + dayOffset));
-    return DateFormat('EEE d MMM yyyy').format(date);
   }
 
   List<int> _getCircuitStartIndices(int weekIndex, int dayIndex) {
@@ -479,12 +457,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     }
   }
 
-
-  void _reorderRow(int weekIndex, int dayIndex, int from, int to) {
-    final list = exerciseRows[weekIndex][dayIndex];
-    final row = list.removeAt(from);
-    list.insert(to, row);
-  }
 
 
 
@@ -533,6 +505,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           row.rirController.text = (ex['rir'] != null && ex['rir'] != 0) ? ex['rir'].toString() : '';
 
           loadedRows.add(row);
+          print("Loaded: ${row.exercise}, ${row.weightController.text}, ${row.repsController.text}, ${row.rirController.text}");
+
         }
 
         // ✅ Assign the loaded list
@@ -605,15 +579,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     });
   }
 
-  void _onExerciseChanged(int weekIndex, int dayIndex) {
-    final weekday = DateTime.now().add(Duration(days: dayIndex)).weekday % 7; // Sunday = 0
-    latestEditedWeekdayTemplates[weekday] = List<ExerciseRow>.from(
-      exerciseRows[weekIndex][dayIndex].map((row) => ExerciseRow(
-        exercise: row.exercise,
-        circuitIndex: row.circuitIndex,
-      )),
-    );
-  }
+
   void updateFutureDaysWithEditedDay(int sourceWeekIndex, int sourceDayIndex) {
     if (sourceWeekIndex >= exerciseRows.length) return;
 
@@ -648,6 +614,43 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     setState(() {}); // Rebuild UI
   }
 
+  void _markSavedFields(int week, int day, List<ExerciseRow> rows) {
+    for (int rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+      final row = rows[rowIndex];
+
+      if (row.weightController.text.isNotEmpty) {
+        _savedFields['w${week}_d${day}_r${rowIndex}_weight'] = true;
+      }
+      if (row.repsController.text.isNotEmpty) {
+        _savedFields['w${week}_d${day}_r${rowIndex}_reps'] = true;
+      }
+      if (row.rirController.text.isNotEmpty) {
+        _savedFields['w${week}_d${day}_r${rowIndex}_rir'] = true;
+      }
+    }
+  }
+
+  Future<void> _persistSavedFieldKeysForDay(int week, int day) async {
+    final prefs = await SharedPreferences.getInstance();
+    final keysForDay = _savedFields.entries
+        .where((e) => e.key.startsWith('w${week}_d${day}_') && e.value == true)
+        .map((e) => e.key)
+        .toList();
+
+    await prefs.setStringList('savedFields_w${week}_d${day}', keysForDay);
+  }
+  Future<void> _loadPersistedSavedFields() async {
+    final prefs = await SharedPreferences.getInstance();
+    final allKeys = prefs.getKeys().where((k) => k.startsWith('savedFields_'));
+
+    for (final key in allKeys) {
+      final fieldKeys = prefs.getStringList(key) ?? [];
+      for (final fk in fieldKeys) {
+        _savedFields[fk] = true;
+      }
+    }
+  }
+
 
 
   Future<void> saveDayToFirestore(int weekIndex, int dayIndex) async {
@@ -668,7 +671,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         'rir': double.tryParse(row.rirController.text) ?? 0.0,
         'circuitIndex': row.circuitIndex, // ✅ NEW
       });
-
     }
 
     final weekDocRef = FirebaseFirestore.instance
@@ -681,6 +683,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
     await weekDocRef.set({'exists': true}, SetOptions(merge: true));
 
+
     final date = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
     final workoutName = "${DateFormat('EEE d MMM').format(date)} - Week ${weekIndex + 1}";
 
@@ -690,13 +693,19 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         .set({
       'exercises': exercises,
       'circuitStartIndices': circuitStartIndices[weekIndex]?[dayIndex] ?? [0],
-      'date': Timestamp.fromDate(date), // ✅ Add this line
-      'workoutName': workoutName,       // ✅ Optional: nice label
+      'date': Timestamp.fromDate(date),
+      'workoutName': workoutName,
     });
 
+    // ✅ Mark individual fields as saved
+    _markSavedFields(weekIndex, dayIndex, rows);
+    await _persistSavedFieldKeysForDay(weekIndex, dayIndex);
+
+    setState(() {}); // Re-render field colors
 
     print("✅ Saved day: week $weekIndex, day $dayIndex");
   }
+
 
 
 
@@ -853,23 +862,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   }
 
 
-  Widget _buildExerciseDragPreview(String? name) {
-    return Container(
-      width: 120,
-      padding: const EdgeInsets.all(6),
-      decoration: BoxDecoration(
-        color: Colors.blueGrey.shade800,
-        border: Border.all(color: Colors.white24),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Text(
-        name ?? 'Exercise',
-        style: const TextStyle(fontSize: 11, color: Colors.white),
-        overflow: TextOverflow.ellipsis,
-      ),
-    );
-  }
-
   Future<void> showCollapsibleExercisePicker({
     required BuildContext context,
     required Map<String, List<String>> allGroupedExercises,
@@ -960,98 +952,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           },
         );
       },
-    );
-  }
-
-
-  Widget _buildExerciseField(int weekIndex, int dayIndex, int rowIndex) {
-    final row = exerciseRows[weekIndex][dayIndex][rowIndex];
-
-    return GestureDetector(
-      onTap: () async {
-        await showCollapsibleExercisePicker(
-          context: context,
-          allGroupedExercises: groupExercisesByCategory(allExercisesFromFirestore),
-          plannedExercises: plannedExercises,
-          onSelected: (selectedExercise) {
-            setState(() {
-              row.exercise = selectedExercise;
-              row.exerciseController.text = selectedExercise;
-
-              // Clear related inputs
-              row.weightController.clear();
-              row.repsController.clear();
-              row.rirController.clear();
-            });
-          },
-        );
-      },
-      child: Container(
-        width: 114,
-        height: 30,
-        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 1),
-        decoration: BoxDecoration(
-          color: getRowColor(weekIndex, dayIndex, rowIndex),
-          border: Border.all(color: Colors.grey),
-          borderRadius: BorderRadius.circular(4.0),
-        ),
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: Text(
-            row.exercise ?? 'Select Exercise',
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 11, color: Colors.white),
-          ),
-        ),
-      ),
-    );
-  }
-
-
-  Widget _inputBox({required String hint, int flex = 1}) {
-    return Expanded(
-      flex: flex,
-      child: Container(
-        margin: const EdgeInsets.all(2),
-        height: 36,
-        child: TextField(
-          textAlign: TextAlign.center,
-          decoration: InputDecoration(
-            hintText: hint,
-            border: OutlineInputBorder(),
-            isDense: true,
-            contentPadding: const EdgeInsets.symmetric(vertical: 6),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _textBox(String text, {int flex = 1, bool readOnly = false}) {
-    return Expanded(
-      flex: flex,
-      child: Container(
-        margin: const EdgeInsets.all(2),
-        height: 36,
-        decoration: BoxDecoration(
-          border: Border.all(color: Colors.grey),
-        ),
-        alignment: Alignment.center,
-        child: Text(text, style: const TextStyle(fontSize: 12)),
-      ),
-    );
-  }
-
-  Widget _smallHeaderButton(String label) {
-    return TextButton(
-      style: TextButton.styleFrom(
-        foregroundColor: Colors.white,
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-        minimumSize: const Size(0, 30),
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      ),
-      onPressed: () {},
-      child: Text(label, style: const TextStyle(fontSize: 11)),
     );
   }
 
@@ -1200,6 +1100,18 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
   }
 
+  Color _getFieldColor(String state) {
+    switch (state) {
+      case 'hint':
+        return Colors.black;
+      case 'user':
+        return Colors.orange;
+      case 'saved':
+      default:
+        return Colors.pink;
+    }
+  }
+
 
   Widget _buildFieldBox(
       TextEditingController controller,
@@ -1208,6 +1120,24 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       String fieldKey,
       void Function(void Function()) localSetState,
       ) {
+
+
+    final isSaved = _savedFields['w${week}_d${day}_r${row}_$fieldKey'] == true;
+
+
+    String state;
+    if (controller.text.isEmpty) {
+      state = 'hint';
+    } else if (isSaved) {
+      state = 'saved';
+    } else {
+      state = 'user';
+    }
+
+
+    Color color = _getFieldColor(state);
+    print('[BB2 UI] w$week d$day r$row [$fieldKey] -> $state');
+
     return Expanded(
       flex: fieldKey == "weight" ? 2 : 1,
       child: TextField(
@@ -1215,19 +1145,23 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         focusNode: _getFocusNode('w${week}_d${day}_r${row}_$fieldKey'),
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
         textAlign: TextAlign.center,
-        style: const TextStyle(color: Colors.white, fontSize: 12),
+        style: TextStyle(color: color, fontSize: 12),
         decoration: InputDecoration(
           isDense: true,
           contentPadding: const EdgeInsets.symmetric(vertical: 8),
           hintText: controller.text.isEmpty ? hint : null,
-          hintStyle: const TextStyle(color: Colors.grey),
+          hintStyle: TextStyle(color: color.withOpacity(0.6)), // or just `color` if no opacity
+
           border: InputBorder.none,
         ),
         onChanged: (_) => localSetState(() {}),
-        onEditingComplete: () => _getFocusNode('w${week}_d${day}_r${row}_$fieldKey').unfocus(),
+        onEditingComplete: () =>
+            _getFocusNode('w${week}_d${day}_r${row}_$fieldKey').unfocus(),
       ),
     );
   }
+
+
 
 
 
@@ -1452,7 +1386,9 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                             final rows = exerciseRows[weekIndex][dayIndex];
                             final List<Map<String, dynamic>> prefilled = [];
 
+                            print('[BB2] exerciseRows for week $weekIndex, day $dayIndex:');
                             for (final row in rows) {
+                              print('• ${row.exercise} | weight: ${row.weightController.text} | reps: ${row.repsController.text}');
                               final name = row.exerciseController.text.trim();
                               if (name.isNotEmpty) {
                                 prefilled.add({
@@ -1465,62 +1401,80 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                             final DateTime workoutDate = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
                             final String formattedWorkoutName = "${DateFormat('EEE d MMM').format(workoutDate)} - Week ${weekIndex + 1}";
 
-                            final user = FirebaseAuth.instance.currentUser;
-                            final userDoc = FirebaseFirestore.instance.collection('users').doc(user!.uid);
-                            final weekDoc = userDoc
-                                .collection('block_data')
-                                .doc('current_block')
-                                .collection('weeks')
-                                .doc('week_$weekIndex');
-
-                            final dayDoc = await weekDoc.collection('days').doc('day_$dayIndex').get();
-                            final savedExercises = dayDoc.data()?['exercises'] ?? [];
+                            // ✅ Ensure BB2 data is persisted for WES to access
+                            await saveDayToFirestore(weekIndex, dayIndex);
 
                             final now = DateTime.now();
                             final today = DateTime(now.year, now.month, now.day);
                             final yesterday = today.subtract(const Duration(days: 1));
                             final bool isOlderThanYesterday = workoutDate.isBefore(yesterday);
-                            final bool hasSavedExercises = savedExercises.isNotEmpty;
 
-                            if (isOlderThanYesterday && hasSavedExercises) {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => WorkoutSummaryScreen(
-                                    date: workoutDate,
-                                    workoutName: formattedWorkoutName,
-                                    exercises: List<Map<String, dynamic>>.from(savedExercises),
-                                  ),
-                                ),
-                              );
-                            } else {
-                              final result = await Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => WorkoutPage(
-                                    prefilledExercisesWithCircuits: prefilled,
-                                    isNewWorkout: true,
-                                    initialDate: workoutDate,
-                                    initialWorkoutName: formattedWorkoutName,
-                                  ),
-                                ),
-                              );
+                            if (isOlderThanYesterday) {
+                              final user = FirebaseAuth.instance.currentUser;
+                              final userDoc = FirebaseFirestore.instance.collection('users').doc(user!.uid);
+                              final dayDoc = await userDoc
+                                  .collection('block_data')
+                                  .doc('current_block')
+                                  .collection('weeks')
+                                  .doc('week_$weekIndex')
+                                  .collection('days')
+                                  .doc('day_$dayIndex')
+                                  .get();
 
-                              if (result != null && result['topSets'] != null) {
-                                final List<dynamic> topSets = result['topSets'];
-                                for (int i = 0; i < topSets.length; i++) {
-                                  final entry = topSets[i];
-                                  final row = exerciseRows[weekIndex][dayIndex][i];
-                                  row.exerciseController.text = entry['exercise'] ?? '';
-                                  row.weightController.text = entry['weight']?.toString() ?? '';
-                                  row.repsController.text = entry['reps']?.toString() ?? '';
-                                  row.rirController.text = entry['rir']?.toString() ?? '';
-                                }
-                                await saveDayToFirestore(weekIndex, dayIndex);
-                                setState(() {});
+                              final savedExercises = dayDoc.data()?['exercises'] ?? [];
+                              if (savedExercises.isNotEmpty) {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => WorkoutSummaryScreen(
+                                      date: workoutDate,
+                                      workoutName: formattedWorkoutName,
+                                      exercises: List<Map<String, dynamic>>.from(savedExercises),
+                                    ),
+                                  ),
+                                );
+                                return;
                               }
                             }
+
+                            // 🚀 Open WES normally
+                            final result = await Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => WorkoutPage(
+                                  prefilledExercisesWithCircuits: prefilled,
+                                  isNewWorkout: true,
+                                  initialDate: workoutDate,
+                                  initialWorkoutName: formattedWorkoutName,
+                                ),
+                              ),
+                            );
+
+                            // ✅ Pull back updated top sets from WES if available
+                            if (result != null && result['topSets'] != null) {
+                              final List<dynamic> topSets = result['topSets'];
+                              for (int i = 0; i < topSets.length; i++) {
+                                final entry = topSets[i];
+                                final row = exerciseRows[weekIndex][dayIndex][i];
+                                row.exerciseController.text = entry['exercise'] ?? '';
+                                row.weightController.text = entry['weight']?.toString() ?? '';
+                                row.repsController.text = entry['reps']?.toString() ?? '';
+                                row.rirController.text = entry['rir']?.toString() ?? '';
+                              }
+                              await saveDayToFirestore(weekIndex, dayIndex);
+                              setState(() {});
+                            }
+                            print('[BB2] Passing to WES:');
+                            for (var ex in prefilled) {
+                              print('→ ${ex['name']} (circuit: ${ex['circuitIndex']})');
+                            }
+
+                            print('[BB2 → WES] Prefilled from BB2:');
+                            for (final ex in prefilled) {
+                              print('• ${ex['name']} (circuitIndex: ${ex['circuitIndex']})');
+                            }
                           },
+
 
 
 
