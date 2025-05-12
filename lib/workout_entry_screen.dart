@@ -1345,11 +1345,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
             final circuitIndex = _selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0;
             final sets = _workoutSets[i];
 
-            final validSets = sets.where((s) =>
-            (s.weight ?? 0) > 0 ||
-                (s.reps ?? 0) > 0 ||
-                (s.rir ?? 0) > 0
-            ).toList();
+            final validSets = sets.where((s) {
+              final reps = s.reps ?? 0;
+              final weight = s.weight ?? 0.0;
+              return reps >= 1 || weight > 1;
+            }).toList();
+
 
             if (validSets.isEmpty) continue;
 
@@ -1405,15 +1406,32 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       Navigator.pop(context, {
         'date': _selectedDate,
         'topSets': List.generate(_selectedExercisesWithCircuits.length, (i) {
-          if (_workoutSets[i].isEmpty) return null;
-          final topSet = _workoutSets[i][0]; // Customize later
+          final sets = _workoutSets[i];
+          final validSets = sets.where((s) {
+            final reps = s.reps ?? 0;
+            final weight = s.weight ?? 0.0;
+            return reps >= 1 || weight > 1;
+          }).toList();
+
+          if (validSets.isEmpty) return null;
+
+          final bestSet = validSets.fold<SetDetails?>(null, (prev, curr) {
+            if (prev == null) return curr;
+            final prevE1RM = calculateE1RM(prev.weight, prev.reps?.toDouble(), prev.rir);
+            final currE1RM = calculateE1RM(curr.weight, curr.reps?.toDouble(), curr.rir);
+            return (currE1RM > prevE1RM) ? curr : prev;
+          });
+
+          if (bestSet == null) return null;
+
           return {
             'exercise': _selectedExercisesWithCircuits[i],
-            'weight': topSet.weight,
-            'reps': topSet.reps,
-            'rir': topSet.rir,
+            'weight': bestSet.weight,
+            'reps': bestSet.reps,
+            'rir': bestSet.rir,
           };
         }).where((e) => e != null).toList(),
+
       });
       await clearWorkoutDraftCache(); // ✅ Clear saved draft once workout is committed
       print('Draft cache cleared after workout save.');
@@ -1462,6 +1480,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         SnackBar(content: Text('Failed to save workout: $error')),
       );
     }
+
+
+
   }
 
   Future<void> _loadPlannedBlockBuilderExercisesIfAny() async {

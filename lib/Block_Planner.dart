@@ -6,6 +6,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'workout_entry_screen.dart';
 import 'periodization_model_utils.dart';
 import 'core_exercises.dart';
+import 'dart:convert';
+import 'package:flutter/services.dart';
+import 'periodization_model_utils.dart';
+
+
 
 class Block_Planner extends StatefulWidget {
   const Block_Planner({super.key});
@@ -23,10 +28,10 @@ class _BlockPlannerState extends State<Block_Planner> {
   DateTime? _blockStartDate;
   DateTime? _blockEndDate;
   Map<String, dynamic> exerciseRepTargets = {};
+  Map<String, dynamic> plannedExerciseDetails = {};
 
+  Map<String, Map<String, dynamic>> exerciseSettings = {};
 
-
-  @override
   @override
   void initState() {
     super.initState();
@@ -34,11 +39,23 @@ class _BlockPlannerState extends State<Block_Planner> {
     _initData();
   }
 
+  @override
+  void dispose() {
+    // 🧠 Wait until after final frame callbacks
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _savePlannedExercises();
+    });
+    super.dispose();
+  }
+
+
   Future<void> _initData() async {
     await loadExercisesFromFirestore(); // 🧠 make sure this finishes first
     await _loadBlockDatesFromFirestore();
     await _loadPlannedExercises();
+    await initializePlannedExerciseDetails(exercises);
   }
+
 
 
 
@@ -193,11 +210,7 @@ class _BlockPlannerState extends State<Block_Planner> {
     });
   }
 
-  @override
-  void dispose() {
-    _savePlannedExercises();
-    super.dispose();
-  }
+
 
   // 🧠 Group exercises by category for dropdown UI
   Map<String, List<String>> groupExercisesByCategory(List<Map<String, String>> allExercises) {
@@ -403,23 +416,57 @@ class _BlockPlannerState extends State<Block_Planner> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    await FirebaseFirestore.instance
+    final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(user.uid)
         .collection('block_planner')
-        .doc('current_block')
-        .set({
+        .doc('current_block');
+
+    final snapshot = await docRef.get();
+    final data = snapshot.data() ?? {};
+
+    final existingDetails = Map<String, dynamic>.from(
+      data['plannedExerciseDetails'] ?? {},
+    );
+
+    for (final exercise in exercises) {
+      final entry = exerciseSettings[exercise] ?? {};
+
+      existingDetails[exercise] = {
+        'periodizationModel': entry['periodizationModel'] ?? 'Linear Exposure',
+        'repTargets': entry['repTargets'] ?? [10, 8, 6],
+        'progressionModel': entry['progressionModel'] ?? 'linear',
+        'increments': entry['increments'] ?? {'week': 2.5, 'block': 5.0},
+        'weeklyFrequency': entry['weeklyFrequency'] ?? 3, // ✅ must be here
+        'maxWeightXReps': entry['maxWeightXReps'] ?? '',
+        'notes': entry['notes'] ?? '', // ✅ Ensure this is here
+      };
+
+    }
+    print("📤 Saving plannedExerciseDetails:\n${jsonEncode(existingDetails)}");
+
+
+    await docRef.set({
       'plannedExercises': exercises,
+      'plannedExerciseDetails': existingDetails,
     }, SetOptions(merge: true));
 
-    print("✅ Planned exercises saved.");
+    print("✅ Planned exercises and details saved safely.");
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('✅ Planned exercises saved.')),
+        const SnackBar(content: Text('✅ Planned exercises updated.')),
       );
     }
+
+    print("📦 Final saved frequencies:");
+    for (final ex in exercises) {
+      print("• $ex: ${exerciseSettings[ex]?['weeklyFrequency']}");
+    }
+
   }
+
+
 
   Future<void> _loadPlannedExercises() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -434,15 +481,82 @@ class _BlockPlannerState extends State<Block_Planner> {
 
     if (snapshot.exists) {
       final data = snapshot.data();
-      if (data != null && data.containsKey('plannedExercises')) {
-        final List<dynamic> loaded = data['plannedExercises'];
-        setState(() {
-          exercises = List<String>.from(loaded);
-        });
-        print("📦 Loaded ${exercises.length} planned exercises");
+      if (data != null) {
+        // ✅ Restore planned exercise IDs
+        if (data.containsKey('plannedExercises')) {
+          setState(() {
+            exercises = List<String>.from(data['plannedExercises']);
+          });
+        }
+
+        // ✅ Restore detailed settings
+        if (data.containsKey('plannedExerciseDetails')) {
+          final raw = Map<String, dynamic>.from(data['plannedExerciseDetails']);
+          final Map<String, Map<String, dynamic>> converted = {};
+
+          raw.forEach((exerciseId, value) {
+            converted[exerciseId] = Map<String, dynamic>.from(value as Map);
+          });
+
+          setState(() {
+            exerciseSettings = converted;
+          });
+
+          print("📋 Loaded plannedExerciseDetails for ${converted.length} exercises");
+        }
       }
     }
   }
+
+
+
+  Future<void> initializePlannedExerciseDetails(List<String> plannedExercises) async {
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final docRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('block_planner')
+        .doc('current_block');
+
+    final snapshot = await docRef.get();
+    final data = snapshot.data() ?? {};
+
+    // ✅ This matches what's saved in _savePlannedExercises()
+    final existingDetails = Map<String, dynamic>.from(
+      data['plannedExerciseDetails'] ?? {},
+    );
+
+
+    // Update or insert entries for each planned exercise
+    for (final exercise in plannedExercises) {
+      final existingEntry = existingDetails[exercise] as Map<String, dynamic>?;
+
+      final reps = exerciseRepTargets[exercise] ?? [10, 8, 6];
+
+      final entry = {
+        'periodizationModel': existingEntry?['periodizationModel'] ?? 'Linear Exposure',
+        'repTargets': reps,
+        'progressionModel': existingEntry?['progressionModel'] ?? 'linear',
+        'increments': existingEntry?['increments'] ?? {'week': 2.5, 'block': 5.0},
+        'weeklyFrequency': existingEntry?['weeklyFrequency'] ?? 3,
+        'maxWeightXReps': existingEntry?['maxWeightXReps'] ?? '',
+        'notes': existingEntry?['notes'] ?? '',
+      };
+
+      existingDetails[exercise] = entry;
+      exerciseSettings[exercise] = entry;
+    }
+
+
+    await docRef.set({
+      'plannedExerciseDetails': existingDetails,
+
+    }, SetOptions(merge: true));
+  }
+
 
 
   @override
@@ -567,10 +681,19 @@ class _BlockPlannerState extends State<Block_Planner> {
                       child: const Icon(Icons.delete, color: Colors.white),
                     ),
                     child: _ExerciseCard(
+                      exerciseId: exercise,
                       exerciseName: _exerciseIdToName[exercise] ?? 'Unknown Exercise',
                       onShowDupSignatureDialog: () => _showDupSignatureRepTargetDialog(exercise),
-                      repTargetsByExercise: exerciseRepTargets, // 👈 pass shared map
-                    ),
+                      exerciseSettings: exerciseSettings,
+                      onUpdateSetting: (exerciseId, key, value) {
+                        setState(() {
+                          exerciseSettings[exerciseId] ??= {};
+                          exerciseSettings[exerciseId]![key] = value;
+                        });
+                      },
+                    )
+
+
 
 
                   );
@@ -723,15 +846,22 @@ class _BlockPlannerState extends State<Block_Planner> {
 
 class _ExerciseCard extends StatefulWidget {
   final String exerciseName;
+  final String exerciseId;
   final VoidCallback onShowDupSignatureDialog;
-  final Map<String, dynamic> repTargetsByExercise;
+  final Map<String, Map<String, dynamic>> exerciseSettings;
+  final void Function(String exerciseName, String key, dynamic value) onUpdateSetting;
+
 
 
   const _ExerciseCard({
+    required this.exerciseId,
     required this.exerciseName,
     required this.onShowDupSignatureDialog,
-    required this.repTargetsByExercise, // 👈 Add this here too
+    required this.exerciseSettings,
+    required this.onUpdateSetting,
   });
+
+
 
 
 
@@ -741,9 +871,19 @@ class _ExerciseCard extends StatefulWidget {
 
 class _ExerciseCardState extends State<_ExerciseCard> {
   bool isExpanded = false;
+  final FocusNode _incrementsFocusNode = FocusNode();
   final TextEditingController _weeklyFrequencyController = TextEditingController(text: "7");
   final TextEditingController _repTargetsDisplayController = TextEditingController();
   final List<int> dupCustomDefaultReps = [10, 5, 12, 8, 3, 7, 1];
+  final TextEditingController _notesController = TextEditingController();
+  final TextEditingController _incrementsController = TextEditingController();
+  final TextEditingController _maxWeightController = TextEditingController();
+  final TextEditingController _maxRepsController = TextEditingController();
+  double _currentE1RM = 0.0;
+
+
+
+
   String _selectedModel = 'DUP, Signature'; // default or load from Firestore
 
 
@@ -763,23 +903,187 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     }
   }
 
+
   @override
   void initState() {
     super.initState();
 
-    final existingReps = widget.repTargetsByExercise[widget.exerciseName];
+    _incrementsFocusNode.addListener(() {
+      if (!_incrementsFocusNode.hasFocus) {
+        final cleaned = _incrementsController.text
+            .split(',')
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .map((e) => double.tryParse(e))
+            .whereType<double>()
+            .where((v) => v > 0) // ✅ Remove 0.0
+            .map((v) => v.toString())
+            .join(', ');
 
-    if (existingReps != null) {
-      if (existingReps is List<String>) {
-        _repTargetsDisplayController.text = existingReps.join(', ');
-      } else if (existingReps is List<int>) {
-        _repTargetsDisplayController.text = existingReps.join(', ');
-      } else {
-        _repTargetsDisplayController.text = '';
+        _incrementsController.text = cleaned;
+      }
+    });
+
+
+    print("🛠️ [_ExerciseCard] INIT for: ${widget.exerciseName}");
+    final settings = widget.exerciseSettings[widget.exerciseId];
+    print("📦 Settings: $settings");
+
+    if (settings != null) {
+      final reps = settings['repTargets'];
+      final frequency = settings['weeklyFrequency'];
+      final model = settings['periodizationModel'];
+      final notes = settings['notes'];
+      final increments = settings['increments'];
+      if (increments is Map) {
+        final values = ['primary', 'secondary', 'tertiary', 'quaternary']
+            .map((key) => increments[key])
+            .whereType<num>()
+            .where((v) => v > 0) // ✅ Ignore 0.0
+            .map((v) => v.toString())
+            .toList();
+
+        _incrementsController.text = values.join(', ');
+      }
+
+
+
+
+      if (notes != null) {
+        _notesController.text = notes.toString();
+      }
+      final maxCombo = settings['maxWeightXReps'];
+      if (maxCombo != null && maxCombo is String && maxCombo.contains('x')) {
+        final parts = maxCombo.split('x');
+        if (parts.length == 2) {
+          _maxWeightController.text = parts[0].trim();
+          _maxRepsController.text = parts[1].trim();
+        }
+      }
+
+      print("🧠 [INIT] ${widget.exerciseName} weeklyFrequency: $frequency");
+      print("🧠 [INIT] ${widget.exerciseName} periodizationModel: $model");
+
+      if (reps is List) {
+        _repTargetsDisplayController.text =
+            reps.expand((e) => e is List ? e : [e]).join(', ');
+      }
+
+      if (frequency != null) {
+        _weeklyFrequencyController.text = frequency.toString();
+      }
+
+      if (model != null &&
+          ['DUP, Signature', 'DUP, Custom', 'Linear, Classic', 'Linear, by Exposure']
+              .contains(model)) {
+        _selectedModel = model;
       }
     }
 
+    // ✅ Add this listener for live updates
+    _weeklyFrequencyController.addListener(() {
+      final value = int.tryParse(_weeklyFrequencyController.text.trim());
+      if (value != null) {
+        widget.onUpdateSetting(widget.exerciseId, 'weeklyFrequency', value);
+      }
+    });
+
+
   }
+
+
+
+  @override
+  void dispose() {
+    _maxWeightController.removeListener(_updateE1RM);
+    _maxRepsController.removeListener(_updateE1RM);
+    final value = int.tryParse(_weeklyFrequencyController.text.trim());
+    if (value != null) {
+      widget.onUpdateSetting(widget.exerciseId, 'weeklyFrequency', value);
+      print("💾 [DISPOSE] Saved weeklyFrequency for ${widget.exerciseName}: $value");
+    }
+
+    final model = _selectedModel;
+    if (model.isNotEmpty) {
+      widget.onUpdateSetting(widget.exerciseId, 'periodizationModel', model);
+      print("💾 [DISPOSE] Saved periodizationModel for ${widget.exerciseName}: $model");
+    }
+
+    // Clean and normalize input first
+    final cleaned = _incrementsController.text
+        .split(',')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .join(', ');
+
+// Update UI text with cleaned version (optional but nice)
+    _incrementsController.text = cleaned;
+
+// Parse cleaned string into a map, skipping zeroes
+    final List<double> parsedIncrements = cleaned
+        .split(',')
+        .map((s) => double.tryParse(s.trim()))
+        .whereType<double>()
+        .where((v) => v > 0) // ✅ Skip 0 or negative
+        .toList();
+
+    if (parsedIncrements.isNotEmpty) {
+      final Map<String, double> incrementsMap = {};
+      if (parsedIncrements.length > 0) incrementsMap['primary'] = parsedIncrements[0];
+      if (parsedIncrements.length > 1) incrementsMap['secondary'] = parsedIncrements[1];
+      if (parsedIncrements.length > 2) incrementsMap['tertiary'] = parsedIncrements[2];
+      if (parsedIncrements.length > 3) incrementsMap['quaternary'] = parsedIncrements[3];
+
+      widget.onUpdateSetting(widget.exerciseId, 'increments', incrementsMap);
+      print("💾 [DISPOSE] Saved increments for ${widget.exerciseName}: $incrementsMap");
+    }
+
+
+    final notes = _notesController.text.trim();
+    widget.onUpdateSetting(widget.exerciseId, 'notes', notes); // ✅ not exerciseName
+
+    print("💾 [DISPOSE] Saved notes for ${widget.exerciseName}: $notes");
+
+    final kg = _maxWeightController.text.trim();
+    final reps = _maxRepsController.text.trim();
+
+    print("🧠 [DISPOSE] Entered max weight: $kg");
+    print("🧠 [DISPOSE] Entered max reps: $reps");
+
+    final kgDouble = double.tryParse(kg);
+    final repsDouble = double.tryParse(reps);
+
+    if (kgDouble != null && repsDouble != null) {
+      final combined = '${kgDouble.toStringAsFixed(1)} x ${repsDouble.toStringAsFixed(0)}';
+      widget.onUpdateSetting(widget.exerciseId, 'maxWeightXReps', combined);
+      print("💾 [DISPOSE] Saved maxWeightXReps for ${widget.exerciseName}: $combined");
+    } else {
+      print("⚠️ [DISPOSE] Skipped saving maxWeightXReps due to invalid input.");
+    }
+
+    _weeklyFrequencyController.dispose();
+    _repTargetsDisplayController.dispose();
+    _incrementsController.dispose();
+    _notesController.dispose();
+    _maxWeightController.dispose();
+    _maxRepsController.dispose();
+
+    super.dispose();
+  }
+
+
+
+  void _updateE1RM() {
+    final weight = double.tryParse(_maxWeightController.text);
+    final reps = double.tryParse(_maxRepsController.text);
+
+    if (weight != null && reps != null) {
+      setState(() {
+        _currentE1RM = PeriodizationModelUtils.calculateE1RM(weight, reps, 0.5);
+      });
+    }
+  }
+
 
 
   void _showLinearClassicRepTargetDialog(String exerciseName) {
@@ -789,7 +1093,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     // Get existing or create default structured reps: [["12 x 3", "10 x 4", "8 x 3"], ...]
     List<List<String>> reps;
 
-    final existing = widget.repTargetsByExercise[exerciseName];
+    final existing = widget.exerciseSettings[exerciseName]?['repTargets'];
+
     final isLinearClassic = existing is List &&
         existing.isNotEmpty &&
         existing.first is String &&
@@ -881,7 +1186,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                 ).toList();
 
                 setState(() {
-                  widget.repTargetsByExercise[exerciseName] = updated;
+                  widget.onUpdateSetting(exerciseName, 'repTargets', updated);
+
                   // Flatten and preview for now
                   _repTargetsDisplayController.text = updated.expand((x) => x).join(', ');
                 });
@@ -918,23 +1224,27 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     final weeklyFreq = int.tryParse(_weeklyFrequencyController.text) ?? 2;
 
     final totalWeeks = blockEnd.difference(blockStart).inDays ~/ 7;
-    final exposureCount = totalWeeks * weeklyFreq;
-    final roundedCount = exposureCount.clamp(1, 36); // reasonable upper limit
+    final exposureCount = (totalWeeks * weeklyFreq).clamp(1, 36);
 
-    // Load saved or generate default reps x sets (e.g. ["12 x 3", "10 x 4", ...])
     List<String> repsList;
-    final existing = widget.repTargetsByExercise[exerciseName];
+    final existing = widget.exerciseSettings[exerciseName]?['repTargets'];
 
     if (existing is List && existing.isNotEmpty && existing.first is String) {
+      // Pad or trim the saved list
       repsList = List<String>.from(existing);
+      if (repsList.length < exposureCount) {
+        final last = repsList.last;
+        repsList.addAll(List.filled(exposureCount - repsList.length, last));
+      } else if (repsList.length > exposureCount) {
+        repsList = repsList.sublist(0, exposureCount);
+      }
     } else {
-      repsList = List.generate(roundedCount, (i) {
-        final reps = (12 - (i * 7 / roundedCount).round()).clamp(5, 15);
+      repsList = List.generate(exposureCount, (i) {
+        final reps = (12 - (i * 7 / exposureCount).round()).clamp(5, 15);
         final sets = (i % 2 == 0) ? 3 : 4;
         return "$reps x $sets";
       });
     }
-
 
     final controllers = repsList
         .map((value) => TextEditingController(text: value))
@@ -950,7 +1260,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             width: double.maxFinite,
             child: ListView.builder(
               shrinkWrap: true,
-              itemCount: (roundedCount / 2).ceil(),
+              itemCount: (exposureCount / 2).ceil(),
               itemBuilder: (context, i) {
                 final index1 = i * 2;
                 final index2 = index1 + 1;
@@ -964,7 +1274,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         children: [
                           Text("Exposure ${index1 + 1}", style: const TextStyle(color: Colors.white70)),
                           const SizedBox(width: 24),
-                          if (index2 < roundedCount)
+                          if (index2 < exposureCount)
                             Text("Exposure ${index2 + 1}", style: const TextStyle(color: Colors.white70)),
                         ],
                       ),
@@ -986,7 +1296,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                             ),
                           ),
                           const SizedBox(width: 12),
-                          if (index2 < roundedCount)
+                          if (index2 < exposureCount)
                             Expanded(
                               child: TextField(
                                 controller: controllers[index2],
@@ -1018,7 +1328,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
               onPressed: () {
                 final updated = controllers.map((c) => c.text.trim()).toList();
                 setState(() {
-                  widget.repTargetsByExercise[exerciseName] = updated;
+                  widget.onUpdateSetting(exerciseName, 'repTargets', updated);
                   _repTargetsDisplayController.text = updated.join(', ');
                 });
                 Navigator.pop(ctx);
@@ -1033,30 +1343,59 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
 
 
+
   void _showDupCustomRepTargetDialog(String exerciseName) {
     final frequency = int.tryParse(_weeklyFrequencyController.text) ?? 3;
     final blockLength = 12;
 
-    final cycle = [
+    final baseCycle = [
       [10, 5, 8, 3, 12, 1, 6],
       [9, 4, 7, 11, 2, 5, 8],
       [12, 3, 6, 1, 9, 4, 7],
     ];
 
+    // Dynamically extend each week's pattern to match frequency
+    List<List<int>> extendedCycle = baseCycle.map((weekPattern) {
+      if (weekPattern.length >= frequency) return weekPattern.sublist(0, frequency);
+      final extended = [...weekPattern];
+      int i = 0;
+      while (extended.length < frequency) {
+        extended.add(weekPattern[i % weekPattern.length]);
+        i++;
+      }
+      return extended;
+    }).toList();
+
     // Try to load saved values
     List<List<String>> repsByWeek;
-    final existing = widget.repTargetsByExercise[exerciseName];
+    final existing = widget.exerciseSettings[widget.exerciseName]?['repTargets'];
     print("📍 [DUP Custom] Raw data: $existing");
     if (existing is List &&
         existing.isNotEmpty &&
         existing.first is List &&
-        (existing.first as List).first.toString().contains('x'))
-    {
-      repsByWeek = List<List<String>>.from(
+        (existing.first as List).first.toString().contains('x')) {
+
+      final List<List<String>> raw = List<List<String>>.from(
           existing.map((e) => List<String>.from(e)));
-    } else {
+
+      // 🛡 Extend inner weeks to match current frequency
+      repsByWeek = raw.map((weekList) {
+        if (weekList.length >= frequency) {
+          return weekList.sublist(0, frequency);
+        } else {
+          final extended = [...weekList];
+          int i = 0;
+          while (extended.length < frequency) {
+            extended.add(weekList[i % weekList.length]);
+            i++;
+          }
+          return extended;
+        }
+      }).toList();
+    }
+    else {
       repsByWeek = List.generate(blockLength, (week) {
-        final pattern = cycle[week % cycle.length];
+        final pattern = extendedCycle[week % extendedCycle.length];
         return List.generate(frequency, (i) {
           final reps = pattern[i];
           final sets = reps < 5 ? 4 : 3;
@@ -1131,10 +1470,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                     .toList();
 
                 setState(() {
-                  widget.repTargetsByExercise[exerciseName] = updated;
+                  widget.onUpdateSetting(exerciseName, 'repTargets', updated);
                   _repTargetsDisplayController.text =
                       updated.map((weekList) => weekList.join(' | ')).join(' || ');
-
                 });
                 Navigator.pop(ctx);
               },
@@ -1149,8 +1487,10 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
 
 
+
   void _showRepTargetDialog(String exerciseName) {
-    List<int> reps = widget.repTargetsByExercise[exerciseName] ?? List.filled(12, 6); // default 6 reps per week
+    List<int> reps = List<int>.from(widget.exerciseSettings[widget.exerciseName]?['repTargets'] ?? List.filled(12, 6));
+
 
     showDialog(
       context: context,
@@ -1197,7 +1537,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
               onPressed: () {
                 final updatedReps = controllers.map((c) => int.tryParse(c.text) ?? 6).toList();
                 setState(() {
-                  widget.repTargetsByExercise[exerciseName] = updatedReps;
+                  widget.exerciseSettings[widget.exerciseName]?['repTargets'] = updatedReps;
+
                 });
                 Navigator.pop(ctx);
               },
@@ -1257,10 +1598,27 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                 ),
 
 
-                const Text(
-                  "Avg E1RM: 180",
-                  style: TextStyle(color: Colors.white70, fontSize: 11),
-                ),
+                Builder(
+                  builder: (_) {
+                    final double? weight = double.tryParse(_maxWeightController.text);
+                    final double? reps = double.tryParse(_maxRepsController.text);
+
+                    String displayText;
+                    if (weight != null && reps != null) {
+                      final e1rm = PeriodizationModelUtils.calculateE1RM(weight, reps, 0.5);
+                      displayText = "Avg E1RM: ${e1rm.toStringAsFixed(1)} kg";
+                    } else {
+                      displayText = "Avg E1RM: –";
+                    }
+
+                    return Text(
+                      displayText,
+                      style: const TextStyle(color: Colors.white70, fontSize: 11),
+                    );
+                  },
+                )
+
+
               ],
             ),
           ),
@@ -1287,11 +1645,13 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                       );
                     }).toList(),
                     onChanged: (value) {
+                      if (value == null) return;
                       setState(() {
-                        _selectedModel = value!;
-                        // Optional: update Firestore or notify parent
+                        _selectedModel = value;
                       });
+                      widget.onUpdateSetting(widget.exerciseId, 'periodizationModel', value);
                     },
+
                     dropdownColor: Colors.blueGrey.shade800,
                     decoration: InputDecoration(
                       labelText: "Periodization Model",
@@ -1304,7 +1664,23 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   ),
                 ),
 
-                _smallInput("Weekly Frequency", controller: _weeklyFrequencyController, width: 158),
+                _smallInput(
+                  "Weekly Frequency",
+                  controller: _weeklyFrequencyController,
+                  width: 158,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    FilteringTextInputFormatter.allow(RegExp(r'^[0-9]{0,2}$')),
+                    TextInputFormatter.withFunction((oldValue, newValue) {
+                      final intVal = int.tryParse(newValue.text);
+                      if (intVal != null && intVal > 14) {
+                        return oldValue;
+                      }
+                      return newValue;
+                    }),
+                  ],
+                ),
+
 
                 _smallInput("Progression Model", width: 158),
                 SizedBox(
@@ -1354,9 +1730,125 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   ),
                 ),
 
+                const SizedBox(height: 6, width:400), // Adjust to 10 or 12 if you want more breathing room
+                SizedBox(
+                  width: 158,
+                  child: TextFormField(
+                    controller: _incrementsController,
+                    focusNode: _incrementsFocusNode,
+                    keyboardType: TextInputType.text,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9., ]'))
 
-                _smallInput("Max Weight X Reps", width: 158),
-                _smallInput("Notes", width: 158),
+                      // ❌ Removed auto-formatting to preserve cursor position
+                    ],
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                    decoration: InputDecoration(
+                      labelText: 'Increments (kg)',
+                      hintText: '2.5, 1, 0.5, …',
+                      labelStyle: const TextStyle(color: Colors.white),
+                      hintStyle: const TextStyle(color: Colors.white38),
+                      floatingLabelBehavior: FloatingLabelBehavior.always,
+                      filled: true,
+                      fillColor: Colors.blueGrey.shade700,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                    ),
+                  ),
+                ),
+
+
+
+                const SizedBox(height: 6, width:400), // Adjust to 10 or 12 if you want more breathing room
+
+
+                SizedBox(
+                  width: 158,
+                  height: 48, // Match Notes height
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.blueGrey.shade800,
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: Colors.white38),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Flexible(
+                                child: TextField(
+                                  controller: _maxWeightController,
+                                  keyboardType: TextInputType.number,
+                                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                                  style: const TextStyle(color: Colors.white, fontSize: 18),
+                                  decoration: const InputDecoration(
+                                    hintText: 'kg',
+                                    hintStyle: TextStyle(color: Colors.white38),
+                                    border: InputBorder.none,
+                                    contentPadding: EdgeInsets.zero,
+                                  ),
+                                ),
+                              ),
+                              const Padding(
+                                padding: EdgeInsets.symmetric(horizontal: 13, vertical: 10),
+                                child: Text('×', style: TextStyle(color: Colors.white70, fontSize: 20)),
+                              ),
+                              Flexible(
+                                child: TextField(
+                                  controller: _maxRepsController,
+                                  keyboardType: TextInputType.number,
+                                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                                  style: const TextStyle(color: Colors.white, fontSize: 18),
+                                  decoration: const InputDecoration(
+                                    hintText: 'reps',
+                                    hintStyle: TextStyle(color: Colors.white38),
+                                    border: InputBorder.none,
+                                    contentPadding: EdgeInsets.zero,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                       Positioned(
+                        left: 8,
+                        top: -4,
+                        child: Text(
+                          'Max Weight × Reps',
+                          style: TextStyle(fontSize: 12, color: Colors.white, backgroundColor: Colors.blueGrey.shade800
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+
+
+                SizedBox(
+                  width: 158,
+                  height:48,
+                  child: TextField(
+                    controller: _notesController,
+                    maxLines: null,
+                    minLines: 1,
+                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                    decoration: InputDecoration(
+                      labelText: 'Notes',
+                      labelStyle: const TextStyle(color: Colors.white),
+                      filled: true,
+                      fillColor: Colors.blueGrey.shade800,
+                      border: const OutlineInputBorder(),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                    ),
+                  ),
+                ),
+
               ],
             )
 
@@ -1368,15 +1860,19 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
   Widget _smallInput(
       String label, {
-        TextEditingController? controller, // ✅ Controller passed in
+        TextEditingController? controller,
         bool multiline = false,
         double width = 150,
         double verticalPadding = 10,
+        TextInputType? keyboardType, // 👈 Add this
+        List<TextInputFormatter>? inputFormatters, // 👈 And this
       }) {
     return SizedBox(
       width: width,
       child: TextField(
-        controller: controller, // ✅ <-- Add this line to wire it in
+        controller: controller,
+        keyboardType: keyboardType, // 👈 Apply here
+        inputFormatters: inputFormatters, // 👈 And here
         minLines: multiline ? 3 : 1,
         maxLines: multiline ? 5 : 1,
         style: const TextStyle(fontSize: 12, color: Colors.white),
@@ -1392,6 +1888,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       ),
     );
   }
+
 
 
 

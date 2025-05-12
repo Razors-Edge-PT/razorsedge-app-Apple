@@ -116,8 +116,13 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   List<List<List<int>>> circuitStartIndices = [];
   final ScrollController _horizontalScrollController = ScrollController();
   final ScrollController _verticalScrollController = ScrollController();
+  Map<String, dynamic> repTargetsByExercise = {};
+  Map<String, dynamic> plannedExerciseDetails = {};
+
   Map<String, List<int>> scheduledRepTargets = {}; // 🆕
   Map<String, List<Map<String, dynamic>>> topSetsByExercise = {};
+  Map<String, List<Map<String, dynamic>>> completedWesRows = {};
+
   late DateTime selectedWeekMonday;
   late DateTime blockStartDate;
   int? _draggedRowIndex;
@@ -153,18 +158,25 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
   Future<void> loadAllData() async {
     await loadBlockDateRange();
+
     await Future.wait([
       _fetchTemplates(),
       loadExercisesFromFirestore(),
       loadTopSetsFromWorkouts(),
       loadPlannedExercisesFromFirestore(),
+      _loadRepTargets(), // ✅ Now also loads plannedExerciseDetails
+      PeriodizationModelUtils.loadPeriodizationModelsFromFirestore(), // ✅ Model types (Linear, DUP, etc.)
     ]);
 
     selectedTemplateIds = List.generate(totalWeeks, (_) => List.generate(7, (_) => null));
-    //exerciseSelection = List.generate(totalWeeks, (_) => List.generate(7, (_) => List.filled(exercisesPerDay, null, growable: true)));
     await _loadPersistedSavedFields();
     await loadBlockDataFromFirestore();
+
+    print("✅ All data loaded for BB2.");
   }
+
+
+
 
 
 
@@ -275,6 +287,89 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       groupedExercises = groupExercisesByCategory(allExercisesFromFirestore);
     });
   }
+
+  String? getRepTargetForExercise(String exerciseName, int week, int day, int row) {
+    final exerciseId = nameToIdMap[exerciseName];
+    if (exerciseId == null) return null;
+
+    final details = plannedExerciseDetails[exerciseId];
+    if (details == null) return null;
+
+    final modelType = (details['periodizationModel'] ?? 'Linear Exposure').toString().toLowerCase();
+    final repTargets = details['repTargets'];
+    if (repTargets == null) return null;
+
+    if (modelType.contains('exposure')) {
+      final totalCount = getExercisePlannedCountBefore(exerciseName, week, day, row);
+      if (repTargets is List && totalCount < repTargets.length) {
+        final raw = repTargets[totalCount]?.toString() ?? '';
+        final match = RegExp(r'^(\d+)').firstMatch(raw);
+        return match?.group(1); // ✅ Just reps
+      }
+    } else {
+      if (repTargets is List && week < repTargets.length) {
+        final weekList = repTargets[week];
+        if (weekList is List) {
+          final countInWeek = getExerciseCountInWeek(exerciseName, week, day, row);
+          if (countInWeek < weekList.length) {
+            final raw = weekList[countInWeek]?.toString() ?? '';
+            final match = RegExp(r'^(\d+)').firstMatch(raw);
+            return match?.group(1); // ✅ Just reps
+          }
+        }
+      }
+    }
+    print('! No matching rep target found for "$exerciseName" (model: $modelType)');
+    return null;
+  }
+
+
+
+
+  int getExerciseCountInWeek(String exerciseName, int week, int day, int row) {
+    int count = 0;
+    for (int d = 0; d <= day; d++) {
+      final rows = exerciseRows[week][d];
+      final lastRow = (d == day) ? row : rows.length;
+      for (int r = 0; r < lastRow; r++) {
+        if ((rows[r].exercise ?? '').trim() == exerciseName) {
+          count++;
+        }
+      }
+    }
+    return count;
+  }
+
+
+
+  Future<void> _loadRepTargets() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final doc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('block_planner')
+        .doc('current_block')
+        .get();
+
+    final data = doc.data();
+    if (data == null) return;
+
+    setState(() {
+      if (data.containsKey('repTargetsByExercise')) {
+        repTargetsByExercise = Map<String, dynamic>.from(data['repTargetsByExercise']);
+      }
+
+      if (data.containsKey('plannedExerciseDetails')) {
+        plannedExerciseDetails = Map<String, dynamic>.from(data['plannedExerciseDetails']);
+      }
+    });
+
+    print("✅ Rep targets loaded: ${repTargetsByExercise.length}");
+    print("✅ Planned exercise details loaded: ${plannedExerciseDetails.length}");
+  }
+
 
 
   Future<void> loadPlannedExercisesFromFirestore() async {
@@ -488,31 +583,67 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         for (int i = 0; i < exercises.length; i++) {
           final ex = exercises[i];
           final name = (ex['name'] ?? '').toString().trim();
-
-          if (name.isEmpty) continue; // 🧹 Skip blanks
+          if (name.isEmpty) continue;
 
           final row = ExerciseRow(
             id: const Uuid().v4(),
             exercise: name,
             circuitIndex: ex.containsKey('circuitIndex')
                 ? ex['circuitIndex']
-                : _getCircuitIndexForRow(i, savedCircuitIndices), // ✅ fallback
+                : _getCircuitIndexForRow(i, savedCircuitIndices),
           );
 
           row.exerciseController.text = name;
-          row.weightController.text = (ex['weight'] != null && ex['weight'] != 0) ? ex['weight'].toString() : '';
-          row.repsController.text = (ex['reps'] != null && ex['reps'] != 0) ? ex['reps'].toString() : '';
-          row.rirController.text = (ex['rir'] != null && ex['rir'] != 0) ? ex['rir'].toString() : '';
+          final dynamic rawWeight = ex['weight'];
+          final dynamic rawReps = ex['reps'];
+          final dynamic rawRIR = ex['rir'];
+
+          final double? weightVal = rawWeight != null ? double.tryParse(rawWeight.toString()) : null;
+          final int? repsVal = rawReps != null ? int.tryParse(rawReps.toString()) : null;
+          final double? rirVal = rawRIR != null ? double.tryParse(rawRIR.toString()) : null;
+
+// ✅ Only populate if user likely typed something in (i.e., not default 0)
+          if (weightVal != null && weightVal != 0.0) {
+            row.weightController.text = weightVal.toString();
+          }
+          if (repsVal != null && repsVal != 0) {
+            row.repsController.text = repsVal.toString();
+          }
+          if (rirVal != null && rirVal != 0.0) {
+            row.rirController.text = rirVal.toString();
+          }
+
+
+          final rowIndex = loadedRows.length;
+          final baseKey = 'w${weekIndex}_d${dayIndex}_r$rowIndex';
+
+          if (row.weightController.text.trim().isNotEmpty &&
+              double.tryParse(row.weightController.text.trim()) != null &&
+              double.tryParse(row.weightController.text.trim()) != 0.0) {
+            _savedFields['${baseKey}_weight'] = true;
+          }
+
+          if (row.repsController.text.trim().isNotEmpty &&
+              int.tryParse(row.repsController.text.trim()) != null &&
+              int.tryParse(row.repsController.text.trim()) != 0) {
+            _savedFields['${baseKey}_reps'] = true;
+          }
+
+          if (row.rirController.text.trim().isNotEmpty &&
+              double.tryParse(row.rirController.text.trim()) != null) {
+            _savedFields['${baseKey}_rir'] = true;
+          }
 
           loadedRows.add(row);
-          print("Loaded: ${row.exercise}, ${row.weightController.text}, ${row.repsController.text}, ${row.rirController.text}");
 
+          print("Loaded: ${row.exercise}, "
+              "${row.weightController.text}, "
+              "${row.repsController.text}, "
+              "${row.rirController.text}");
         }
 
-        // ✅ Assign the loaded list
         exerciseRows[weekIndex][dayIndex] = loadedRows;
 
-        // ✅ Rebuild circuitStartIndices based on circuitIndex values
         final List<int> newStarts = [];
         int? lastCircuit;
         for (int i = 0; i < loadedRows.length; i++) {
@@ -525,13 +656,76 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
         _ensureCircuitStartIndicesInitialized(weekIndex, dayIndex);
         circuitStartIndices[weekIndex][dayIndex] = newStarts;
+
+        // 🔁 Inject saved WES workout override logic
+        final DateTime date = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
+        final String dateKey = DateFormat('yyyy-MM-dd').format(date);
+
+        print('[WES Check] Checking for saved workout on $dateKey...');
+        print('[WES OVERRIDE] blockStartDate = $blockStartDate');
+        print('[WES OVERRIDE] dateKey = $dateKey');
+
+
+        final workoutDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .collection('workouts')
+            .doc(dateKey)
+            .get();
+
+        if (!workoutDoc.exists) {
+          print('[WES Check] No saved workout for $dateKey.');
+        } else {
+          print('[WES Check] Found saved WES workout. Attempting to override...');
+        }
+
+
+        if (workoutDoc.exists) {
+          final workoutData = workoutDoc.data();
+          final savedExercises = List<Map<String, dynamic>>.from(workoutData?['exercises'] ?? []);
+
+          for (int i = 0; i < savedExercises.length; i++) {
+            final ex = savedExercises[i];
+            final name = ex['name'] ?? '';
+            final circuit = ex['circuitIndex'] ?? 0;
+            final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? []);
+
+            ExerciseRow? matchingRow;
+            try {
+              matchingRow = loadedRows.firstWhere(
+                    (r) => r.exercise == name && r.circuitIndex == circuit,
+              );
+            } catch (_) {
+              matchingRow = null;
+            }
+
+
+            if (matchingRow == null || sets.isEmpty) continue;
+
+            final rowIndex = loadedRows.indexOf(matchingRow);
+            final baseKey = 'w${weekIndex}_d${dayIndex}_r$rowIndex';
+
+            matchingRow.weightController.text = sets[0]['weight']?.toString() ?? '';
+            matchingRow.repsController.text = sets[0]['reps']?.toString() ?? '';
+            matchingRow.rirController.text = sets[0]['rir']?.toString() ?? '';
+
+            _savedFields['${baseKey}_weight'] = true;
+            _savedFields['${baseKey}_reps'] = true;
+            _savedFields['${baseKey}_rir'] = true;
+
+            print("Overrode with WES: ${matchingRow.exercise}, "
+                "${matchingRow.weightController.text}, "
+                "${matchingRow.repsController.text}, "
+                "${matchingRow.rirController.text}");
+            print('[Override Attempt] Exercise: $name, Circuit: $circuit, Sets: $sets');
+
+          }
+        }
       }
     }
 
     setState(() {});
   }
-
-
 
   int _getCircuitIndexForRow(int rowIndex, List<int> circuitStartIndices) {
     int index = 0;
@@ -544,6 +738,49 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     }
     return index;
   }
+  Future<void> loadCompletedWorkoutsForDay(DateTime date) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final String dateKey = DateFormat('yyyy-MM-dd').format(date);
+    if (completedWesRows.containsKey(dateKey)) return; // already loaded
+
+    final snapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('workouts')
+        .where('date', isGreaterThanOrEqualTo: date.toIso8601String())
+        .where('date', isLessThan: date.add(const Duration(days: 1)).toIso8601String())
+        .get();
+
+    final Map<String, Map<String, dynamic>> exerciseMap = {};
+
+    for (final doc in snapshot.docs) {
+      final List<dynamic> exercises = doc['exercises'] ?? [];
+      for (final e in exercises) {
+        final name = e['name'] ?? 'Unnamed';
+        final circuitIndex = e['circuitIndex'] ?? 0;
+        final sets = List<Map<String, dynamic>>.from(e['sets'] ?? []);
+
+        if (!exerciseMap.containsKey(name)) {
+          exerciseMap[name] = {
+            'name': name,
+            'circuitIndex': circuitIndex,
+            'sets': sets,
+          };
+        } else {
+          exerciseMap[name]!['sets'].addAll(sets);
+        }
+      }
+    }
+
+    if (exerciseMap.isNotEmpty) {
+      setState(() {
+        completedWesRows[dateKey] = exerciseMap.values.toList();
+      });
+    }
+  }
+
 
   Future<void> loadTopSetsFromWorkouts() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -804,10 +1041,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     saveDayToFirestore(weekIndex, dayIndex);
   }
 
-
-
-
-
   int getExercisePlannedCountBefore(String exerciseName, int targetWeek, int targetDay, int targetRow) {
     int count = 0;
 
@@ -956,11 +1189,11 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   }
 
 
-  Widget _buildExerciseRow(int weekIndex, int dayIndex, int rowIndex) {
+  Widget _buildExerciseRow(int weekIndex, int dayIndex, int rowIndex, Map<String, dynamic> repTargetsByExercise) {
     if (weekIndex >= exerciseRows.length ||
         dayIndex >= exerciseRows[weekIndex].length ||
         rowIndex >= exerciseRows[weekIndex][dayIndex].length) {
-      return const SizedBox.shrink();
+      return const SizedBox.shrink(); // ✅ Defensive: avoid RangeError
     }
 
     final row = exerciseRows[weekIndex][dayIndex][rowIndex];
@@ -972,44 +1205,36 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     return StatefulBuilder(
       builder: (context, localSetState) {
         final exerciseName = exerciseController.text;
+        print('🧠 Building row for exercise: "$exerciseName" (w$weekIndex d$dayIndex r$rowIndex)');
+        final String? plannedRep = getRepTargetForExercise(
+
+          exerciseName,
+          weekIndex,
+          dayIndex,
+          rowIndex,
+        );
+
+        print('🔢 plannedRep returned: $plannedRep');
+
 
         final double? weight = double.tryParse(weightController.text);
         final int? reps = int.tryParse(repsController.text);
         final double? rir = double.tryParse(rirController.text);
 
-        int hintReps = 0;
-        if (repsController.text.isEmpty && exerciseName.isNotEmpty) {
-          final plannedIndex = getExercisePlannedCountBefore(exerciseName, weekIndex, dayIndex, rowIndex);
-          if (weightController.text.isNotEmpty) {
-            hintReps = PeriodizationModelUtils.updateRepTarget(
-              exerciseName,
-              weightController.text,
-              rirController.text,
-              plannedIndex,
-            );
-          } else {
-            hintReps = PeriodizationModelUtils.upcomingRepTargetSequence(
-              exerciseName,
-              plannedIndex + 1,
-            ).last;
-          }
-        }
+        final bool isExerciseNamed = exerciseName.isNotEmpty;
+        final String hintWeight = (weightController.text.isEmpty && isExerciseNamed) ? '25.0' : '';
+        final String hintReps = (repsController.text.isEmpty && isExerciseNamed && plannedRep != null)
+            ? plannedRep
+            : '';
 
-        final plannedIndex = getExercisePlannedCountBefore(exerciseName, weekIndex, dayIndex, rowIndex);
-
-        final double hintWeight = (weightController.text.isEmpty && exerciseName.isNotEmpty)
-            ? PeriodizationModelUtils.getSuggestedWeight(
-          exerciseName,
-          repsController,
-          rirController,
-          plannedIndex,
-          topSetsByExercise,
-        )
-            : 0.0;
 
         final double? e1rm = PeriodizationModelUtils.calculateE1RM(
-          weight ?? (weightController.text.isEmpty ? hintWeight : null),
-          reps?.toDouble() ?? (repsController.text.isEmpty ? hintReps.toDouble() : null),
+          weight ?? (weightController.text.isEmpty ? 25.0 : null),
+          reps?.toDouble() ??
+              (repsController.text.isEmpty
+                  ? double.tryParse(plannedRep?.split('x').first.trim() ?? '') ?? 10.0
+                  : null),
+
           rir ?? (rirController.text.isEmpty ? 0.5 : null),
         );
 
@@ -1025,7 +1250,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // 🟡 Drag handle only in exercise name
               Expanded(
                 flex: 4,
                 child: ReorderableDelayedDragStartListener(
@@ -1070,16 +1294,13 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
               ),
 
               // Weight
-              _buildFieldBox(weightController, hintWeight > 0 ? hintWeight.toStringAsFixed(1) : null,
-                  weekIndex, dayIndex, rowIndex, "weight", localSetState),
+              _buildFieldBox(weightController, hintWeight, weekIndex, dayIndex, rowIndex, "weight", localSetState),
 
               // Reps
-              _buildFieldBox(repsController, hintReps > 0 ? hintReps.toString() : null,
-                  weekIndex, dayIndex, rowIndex, "reps", localSetState),
+              _buildFieldBox(repsController, hintReps, weekIndex, dayIndex, rowIndex, "reps", localSetState),
 
               // RIR
-              _buildFieldBox(rirController, "0.5",
-                  weekIndex, dayIndex, rowIndex, "rir", localSetState),
+              _buildFieldBox(rirController, "0.5", weekIndex, dayIndex, rowIndex, "rir", localSetState),
 
               // E1RM
               Expanded(
@@ -1097,8 +1318,11 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         );
       },
     );
-
   }
+
+
+
+
 
   Color _getFieldColor(String state) {
     switch (state) {
@@ -1106,57 +1330,47 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         return Colors.black;
       case 'user':
         return Colors.orange;
-      case 'saved':
       default:
-        return Colors.pink;
+        return Colors.black;
     }
   }
-
 
   Widget _buildFieldBox(
       TextEditingController controller,
       String? hint,
-      int week, int day, int row,
+      int week,
+      int day,
+      int row,
       String fieldKey,
       void Function(void Function()) localSetState,
       ) {
+    final String key = 'w${week}_d${day}_r${row}_$fieldKey';
+    final String value = controller.text.trim();
 
+    // Determine whether user typed something
+    final bool wasManuallyEntered = value.isNotEmpty;
+    final String state = wasManuallyEntered ? 'user' : 'hint';
+    final color = _getFieldColor(state);
 
-    final isSaved = _savedFields['w${week}_d${day}_r${row}_$fieldKey'] == true;
-
-
-    String state;
-    if (controller.text.isEmpty) {
-      state = 'hint';
-    } else if (isSaved) {
-      state = 'saved';
-    } else {
-      state = 'user';
-    }
-
-
-    Color color = _getFieldColor(state);
-    print('[BB2 UI] w$week d$day r$row [$fieldKey] -> $state');
+    print('📝 hint="$hint" | controller="${controller.text}" for field: $fieldKey');
 
     return Expanded(
       flex: fieldKey == "weight" ? 2 : 1,
       child: TextField(
         controller: controller,
-        focusNode: _getFocusNode('w${week}_d${day}_r${row}_$fieldKey'),
+        focusNode: _getFocusNode(key),
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
         textAlign: TextAlign.center,
         style: TextStyle(color: color, fontSize: 12),
         decoration: InputDecoration(
           isDense: true,
           contentPadding: const EdgeInsets.symmetric(vertical: 8),
-          hintText: controller.text.isEmpty ? hint : null,
-          hintStyle: TextStyle(color: color.withOpacity(0.6)), // or just `color` if no opacity
-
+          hintText: value.isEmpty ? hint : null,
+          hintStyle: TextStyle(color: color.withOpacity(0.6)),
           border: InputBorder.none,
         ),
         onChanged: (_) => localSetState(() {}),
-        onEditingComplete: () =>
-            _getFocusNode('w${week}_d${day}_r${row}_$fieldKey').unfocus(),
+        onEditingComplete: () => _getFocusNode(key).unfocus(),
       ),
     );
   }
@@ -1165,8 +1379,104 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
 
 
-  Widget _buildDay(int weekIndex, int dayIndex) {
+  Widget _buildReadOnlyRow(Map<String, dynamic> savedExercise, {Key? key}) {
+
+    final name = savedExercise['name'] ?? 'Unnamed';
+    final circuitIndex = savedExercise['circuitIndex'] ?? 0;
+    final sets = List<Map<String, dynamic>>.from(savedExercise['sets'] ?? []);
+
+    final topSet = sets.isNotEmpty
+        ? sets.reduce((a, b) {
+      final e1A = PeriodizationModelUtils.calculateE1RM(
+        (a['weight'] ?? 0).toDouble(),
+        (a['reps'] ?? 0).toDouble(),
+        (a['rir'] ?? 0).toDouble(),
+      );
+      final e1B = PeriodizationModelUtils.calculateE1RM(
+        (b['weight'] ?? 0).toDouble(),
+        (b['reps'] ?? 0).toDouble(),
+        (b['rir'] ?? 0).toDouble(),
+      );
+      return e1A >= e1B ? a : b;
+    })
+        : null;
+
+
+    final weight = (topSet?['weight'] ?? 0).toDouble();
+    final reps = (topSet?['reps'] ?? 0).toDouble();
+    final rir = (topSet?['rir'] ?? 0).toDouble();
+    final e1rm = PeriodizationModelUtils.calculateE1RM(weight, reps, rir);
+
+    return Container(
+      key: key, // ✅ attach the key here
+      height: exerciseRowHeight,
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      decoration: BoxDecoration(
+        color: Colors.pink.withOpacity(0.15),
+        border: Border(bottom: BorderSide(color: Colors.pink.shade200, width: 0.5)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            flex: 4,
+            child: Container(
+              alignment: Alignment.centerLeft,
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              child: Text(name,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.pinkAccent, fontSize: 11, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(weight.toStringAsFixed(1),
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 12, color: Colors.white)),
+          ),
+          Expanded(
+            flex: 1,
+            child: Text(reps.toStringAsFixed(0),
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 12, color: Colors.white)),
+          ),
+          Expanded(
+            flex: 1,
+            child: Text(rir.toStringAsFixed(1),
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 12, color: Colors.white)),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(e1rm.toStringAsFixed(1),
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 12, color: Colors.white70)),
+          ),
+        ],
+      ),
+    );
+  }
+
+
+
+
+  Widget _buildDayView(int weekIndex, int dayIndex, Map<String, dynamic> repTargetsByExercise) {
+
     final date = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
+    final dateKey = DateFormat('yyyy-MM-dd').format(date);
+
+// ✅ Lazy-load completed WES data for this specific day
+    if (!completedWesRows.containsKey(dateKey)) {
+      loadCompletedWorkoutsForDay(date);
+    }
+
+    final savedWesExercises = completedWesRows[dateKey] ?? [];
+
+
+    // continue with the rest of your UI rendering
+
+
     final dayLabel = DateFormat('E d MMM y').format(date); // e.g., "Mon 17 Mar 2025"
 
     return StatefulBuilder(
@@ -1548,22 +1858,20 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
               SizedBox(
                 height: 255,
                 child: ReorderableListView.builder(
-                  itemCount: exerciseRows[weekIndex][dayIndex].length,
+                  itemCount: savedWesExercises.length + exerciseRows[weekIndex][dayIndex].length,
                   onReorder: (oldIndex, newIndex) {
+                    // Prevent reordering of read-only rows
+                    if (oldIndex < savedWesExercises.length || newIndex < savedWesExercises.length) return;
+
                     setState(() {
-                      if (newIndex > oldIndex) newIndex -= 1;
+                      final adjustedOld = oldIndex - savedWesExercises.length;
+                      var adjustedNew = newIndex - savedWesExercises.length;
+                      if (adjustedNew > adjustedOld) adjustedNew -= 1;
 
-                      final movedRow = exerciseRows[weekIndex][dayIndex].removeAt(oldIndex);
-                      exerciseRows[weekIndex][dayIndex].insert(newIndex, movedRow);
+                      final movedRow = exerciseRows[weekIndex][dayIndex].removeAt(adjustedOld);
+                      exerciseRows[weekIndex][dayIndex].insert(adjustedNew, movedRow);
 
-                      // ✅ Update circuitIndex to match destination context
-                      if (newIndex > 0) {
-                        movedRow.circuitIndex = exerciseRows[weekIndex][dayIndex][newIndex - 1].circuitIndex;
-                      } else {
-                        movedRow.circuitIndex = 0;
-                      }
-
-                      // ✅ Rebuild circuitStartIndices
+                      // ✅ Rebuild circuit structure and propagate
                       final starts = <int>{};
                       for (int i = 0; i < exerciseRows[weekIndex][dayIndex].length; i++) {
                         if (i == 0 || exerciseRows[weekIndex][dayIndex][i].circuitIndex != exerciseRows[weekIndex][dayIndex][i - 1].circuitIndex) {
@@ -1572,36 +1880,35 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                       }
                       circuitStartIndices[weekIndex][dayIndex] = starts.toList()..sort();
 
-                      // ✅ Mirror changes forward
                       updateFutureDaysWithEditedDay(weekIndex, dayIndex);
                     });
                   },
-
-
-                  proxyDecorator: (child, index, animation) {
-                    return Material(
-                      elevation: 2,
-                      child: child,
-                    );
-                  },
                   buildDefaultDragHandles: false,
-                  itemBuilder: (context, rowIndex) {
+                  proxyDecorator: (child, index, animation) => Material(elevation: 2, child: child),
+                  itemBuilder: (context, index) {
+                    if (index < savedWesExercises.length) {
+                      final exercise = savedWesExercises[index];
+                      return _buildReadOnlyRow(
+                        exercise,
+                        key: ValueKey('readonly_row_${exercise['name']}_${exercise['circuitIndex']}'),
+                      );
+
+                    }
+
+                    final rowIndex = index - savedWesExercises.length;
                     final rows = exerciseRows[weekIndex][dayIndex];
                     final row = rows[rowIndex];
                     final isFirstInCircuit = rowIndex == 0 || row.circuitIndex != rows[rowIndex - 1].circuitIndex;
                     final currentCircuit = row.circuitIndex;
+                    final isLastInCircuit = rowIndex == rows.lastIndexWhere((r) => r.circuitIndex == currentCircuit);
 
-                    // ✅ Detect if this is the last row of its circuit
-                    final isLastInCircuit = rowIndex == rows.lastIndexWhere(
-                          (r) => r.circuitIndex == currentCircuit,
-                    );
                     return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
                       key: ValueKey('row_wrapper_${row.id}'),
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         if (isFirstInCircuit)
                           Padding(
-                            padding: const EdgeInsets.only(left: 8, bottom:1, top: 6), // ⬅ reduced top padding
+                            padding: const EdgeInsets.only(left: 8, bottom: 1, top: 6),
                             child: Text(
                               'Circuit ${row.circuitIndex + 1}',
                               style: const TextStyle(
@@ -1621,82 +1928,70 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                             child: const Icon(Icons.delete, color: Colors.white),
                           ),
                           confirmDismiss: (_) async => true,
-
                           onDismissed: (_) {
                             final removedRow = row;
                             final removedExerciseName = removedRow.exercise?.trim() ?? '';
-
                             final List<Map<String, dynamic>> futureRemovedRows = [];
 
-                            setState(() {
-                              // 🛠️ 1. Remove from current day
-                              exerciseRows[weekIndex][dayIndex].removeAt(rowIndex);
-
-                              // 🛠️ 2. Update circuits
-                              final starts = circuitStartIndices[weekIndex][dayIndex];
-                              starts.removeWhere((start) => start >= rows.length);
-                              if (starts.isEmpty || starts.first != 0) {
-                                starts.insert(0, 0);
-                              }
-                              circuitStartIndices[weekIndex][dayIndex] = starts.toSet().toList()..sort();
-
-                              // 🛠️ 3. Find and remove in future weeks
-                              for (int futureWeek = weekIndex + 1; futureWeek < exerciseRows.length; futureWeek++) {
-                                if (dayIndex >= exerciseRows[futureWeek].length) continue;
-
-                                final futureRows = exerciseRows[futureWeek][dayIndex];
-                                for (int i = futureRows.length - 1; i >= 0; i--) {
-                                  if ((futureRows[i].exercise ?? '').trim() == removedExerciseName) {
-                                    futureRemovedRows.add({
-                                      'weekIndex': futureWeek,
-                                      'dayIndex': dayIndex,
-                                      'row': futureRows[i],
-                                      'rowIndex': i,
-                                    });
-                                    futureRows.removeAt(i);
-                                  }
-                                }
-
-                                // Update circuits for that day
-                                final futureStarts = <int>{};
-                                for (int i = 0; i < futureRows.length; i++) {
-                                  if (i == 0 || futureRows[i].circuitIndex != futureRows[i - 1].circuitIndex) {
-                                    futureStarts.add(i);
-                                  }
-                                }
-                                circuitStartIndices[futureWeek][dayIndex] = futureStarts.toList()..sort();
-                              }
-                            });
-
-                            _lastUndoAction = () {
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
                               setState(() {
-                                // Restore current day
-                                exerciseRows[weekIndex][dayIndex].insert(rowIndex, removedRow);
+                                exerciseRows[weekIndex][dayIndex].removeAt(rowIndex);
 
-                                // Restore all future rows
-                                for (final info in futureRemovedRows) {
-                                  final w = info['weekIndex'] as int;
-                                  final d = info['dayIndex'] as int;
-                                  final ExerciseRow r = info['row'] as ExerciseRow;
-                                  final int insertAt = info['rowIndex'] as int;
+                                final starts = circuitStartIndices[weekIndex][dayIndex];
+                                starts.removeWhere((start) => start >= exerciseRows[weekIndex][dayIndex].length);
+                                if (starts.isEmpty || starts.first != 0) starts.insert(0, 0);
+                                circuitStartIndices[weekIndex][dayIndex] = starts.toSet().toList()..sort();
 
-                                  exerciseRows[w][d].insert(insertAt, r);
+                                for (int futureWeek = weekIndex + 1; futureWeek < exerciseRows.length; futureWeek++) {
+                                  if (dayIndex >= exerciseRows[futureWeek].length) continue;
+                                  final futureRows = exerciseRows[futureWeek][dayIndex];
+                                  for (int i = futureRows.length - 1; i >= 0; i--) {
+                                    if ((futureRows[i].exercise ?? '').trim() == removedExerciseName) {
+                                      futureRemovedRows.add({
+                                        'weekIndex': futureWeek,
+                                        'dayIndex': dayIndex,
+                                        'row': futureRows[i],
+                                        'rowIndex': i,
+                                      });
+                                      futureRows.removeAt(i);
+                                    }
+                                  }
 
-                                  // Fix circuits after restoring
                                   final futureStarts = <int>{};
-                                  for (int i = 0; i < exerciseRows[w][d].length; i++) {
-                                    if (i == 0 || exerciseRows[w][d][i].circuitIndex != exerciseRows[w][d][i - 1].circuitIndex) {
+                                  for (int i = 0; i < futureRows.length; i++) {
+                                    if (i == 0 || futureRows[i].circuitIndex != futureRows[i - 1].circuitIndex) {
                                       futureStarts.add(i);
                                     }
                                   }
-                                  circuitStartIndices[w][d] = futureStarts.toList()..sort();
+                                  circuitStartIndices[futureWeek][dayIndex] = futureStarts.toList()..sort();
                                 }
+
+                                _lastUndoAction = () {
+                                  setState(() {
+                                    exerciseRows[weekIndex][dayIndex].insert(rowIndex, removedRow);
+                                    for (final info in futureRemovedRows) {
+                                      final w = info['weekIndex'] as int;
+                                      final d = info['dayIndex'] as int;
+                                      final ExerciseRow r = info['row'] as ExerciseRow;
+                                      final int insertAt = info['rowIndex'] as int;
+                                      exerciseRows[w][d].insert(insertAt, r);
+
+                                      final futureStarts = <int>{};
+                                      for (int i = 0; i < exerciseRows[w][d].length; i++) {
+                                        if (i == 0 || exerciseRows[w][d][i].circuitIndex != exerciseRows[w][d][i - 1].circuitIndex) {
+                                          futureStarts.add(i);
+                                        }
+                                      }
+                                      circuitStartIndices[w][d] = futureStarts.toList()..sort();
+                                    }
+                                  });
+                                };
                               });
-                            };
+                            });
 
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
-                                content: Text('Deleted "${removedRow.exercise ?? 'Unnamed'}" across future weeks'),
+                                content: Text('Deleted "${row.exercise ?? 'Unnamed'}" across future weeks'),
                                 action: SnackBarAction(
                                   label: 'Undo',
                                   textColor: Colors.black,
@@ -1708,22 +2003,19 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                               ),
                             );
                           },
-
-
                           child: Row(
                             children: [
-                              const Padding(
-                                padding: EdgeInsets.only(left: 6, right: 4),
-                              ),
-                              Expanded(child: _buildExerciseRow(weekIndex, dayIndex, rowIndex)),
+                              const Padding(padding: EdgeInsets.only(left: 6, right: 4)),
+                              Expanded(child: _buildExerciseRow(weekIndex, dayIndex, rowIndex, repTargetsByExercise)),
+
                             ],
                           ),
                         ),
                         if (isLastInCircuit)
                           Padding(
-                            padding: const EdgeInsets.only(top: 4, right: 8), // tighter vertical space
+                            padding: const EdgeInsets.only(top: 4, right: 8),
                             child: Row(
-                              mainAxisAlignment: MainAxisAlignment.end, // ⬅️ Align to the right
+                              mainAxisAlignment: MainAxisAlignment.end,
                               children: [
                                 TextButton.icon(
                                   onPressed: () {
@@ -1735,12 +2027,11 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                                     });
                                     updateFutureDaysWithEditedDay(weekIndex, dayIndex);
                                   },
-
                                   icon: const Icon(Icons.add, size: 16),
                                   label: const Text('Add Exercise', style: TextStyle(fontSize: 12)),
                                   style: TextButton.styleFrom(
                                     foregroundColor: Colors.lightBlueAccent,
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                                    padding: const EdgeInsets.symmetric(horizontal: 8),
                                     minimumSize: Size.zero,
                                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                                     visualDensity: VisualDensity.compact,
@@ -1755,7 +2046,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                   },
                 ),
               ),
-
 
 
               const SizedBox(height: 8),
@@ -1792,8 +2082,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
               ),
 
 
-
-
             ],
           ),
         ),
@@ -1805,15 +2093,20 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
 
 
-  Widget _buildWeek(int weekIndex) {
+  Widget _buildWeek(int weekIndex, Map<String, dynamic> repTargetsByExercise) {
     return SizedBox(
       width: MediaQuery.of(context).size.width * 0.95,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: List.generate(7, (dayIndex) => _buildDay(weekIndex, dayIndex)),
+        children: List.generate(
+          7,
+                (dayIndex) => _buildDayView(weekIndex, dayIndex, repTargetsByExercise)
+
+        ),
       ),
     );
   }
+
 
 
 
@@ -1892,25 +2185,26 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         ],
       ),
 
-    body: GestureDetector(
-    onTap: () => FocusScope.of(context).unfocus(), // ✅ Dismiss keyboard
-    child: SingleChildScrollView(
-    controller: _verticalScrollController,
-    scrollDirection: Axis.vertical,
-    keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-        child: SingleChildScrollView(
-          controller: _horizontalScrollController,
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: weekIndices
-                .take(visibleWeekCount) // 👈 Only load X weeks
-                .map((i) => _buildWeek(i))
-                .toList(),
+        body: GestureDetector(
+          onTap: () => FocusScope.of(context).unfocus(), // ✅ Dismiss keyboard
+          child: SingleChildScrollView(
+            controller: _verticalScrollController,
+            scrollDirection: Axis.vertical,
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            child: SingleChildScrollView(
+              controller: _horizontalScrollController,
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: weekIndices
+                    .take(visibleWeekCount) // 👈 Only load X weeks
+                    .map((i) => _buildWeek(i, repTargetsByExercise))
+                    .toList(),
+              ),
+            ),
           ),
         ),
-    ),
-    ),
+
       );
         },
     );
