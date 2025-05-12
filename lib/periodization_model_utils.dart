@@ -11,6 +11,7 @@ import 'top_sets_screen.dart';
 import 'Block_Planner.dart';
 
 enum PeriodizationModelType {
+  dailyUndulating, // <-- add this
   dupSignature,
   dupCustom,
   linearClassic,
@@ -20,24 +21,24 @@ enum PeriodizationModelType {
 
 
 class PeriodizationModelUtils {
-  static final Map<String, List<double>> exercisePreviousE1RMs = {}; // ✅ E1RM history per exercise
-  static final Map<String, List<int>> exercisePreviousTopSetReps = {}; // ✅ Tracks reps per exercise
-
+  static final Map<String, List<double>> exercisePreviousE1RMs = {};
+  static final Map<String, List<int>> exercisePreviousTopSetReps = {};
   static Map<String, PeriodizationModelType> exercisePeriodizationModels = {};
 
+  static final List<int> linearClassicDefaults = [10, 8, 6];
+  static final List<int> linearExposureDefaults = [12, 10, 8, 6, 4, 2];
+  static final List<int> dupSignatureDefaults = [6, 10];
 
-
-  // ✅ Global function to calculate E1RM based on weight, reps, and RIR
   static double calculateE1RM(double? weight, double? reps, double? rir) {
     double w = weight ?? 0.0;
     double r = reps ?? 0.0;
-    double rValue = rir ?? 0.5; // ✅ Default RIR if missing
+    double rValue = rir ?? 0.5;
     double totalReps = r + rValue;
 
     if (totalReps <= 6) {
-      return w * (36 / (37 - totalReps)); // ✅ Brzycki Formula
+      return w * (36 / (37 - totalReps));
     } else {
-      return w * (1 + (0.0333 * totalReps)); // ✅ Epley Formula
+      return w * (1 + (0.0333 * totalReps));
     }
   }
 
@@ -53,50 +54,72 @@ class PeriodizationModelUtils {
         .get();
 
     final data = snapshot.data();
-    if (data == null || !data.containsKey('plannedExercises')) return;
+    if (data == null || !data.containsKey('plannedExerciseDetails')) return;
 
-    final List<dynamic> plannedExercises = data['plannedExercises'];
-
+    final Map<String, dynamic> details = Map<String, dynamic>.from(data['plannedExerciseDetails']);
     exercisePeriodizationModels.clear();
 
-    for (var item in plannedExercises) {
-      final name = item['name'] as String?;
-      final modelStr = item['periodizationModel'] as String?;
-
-      if (name != null && modelStr != null) {
+    details.forEach((id, entry) {
+      final modelStr = entry['periodizationModel'] as String?;
+      if (modelStr != null) {
         final model = _parseModelFromString(modelStr);
-        exercisePeriodizationModels[name] = model;
+        exercisePeriodizationModels[id] = model;
       }
-    }
+    });
   }
 
   static PeriodizationModelType _parseModelFromString(String model) {
     switch (model) {
-      case 'dupSignature':
+      case 'DUP, Signature':
         return PeriodizationModelType.dupSignature;
-      case 'dupCustom':
-        return PeriodizationModelType.dupCustom;
-      case 'linearClassic':
+      case 'DUP, Custom':
+        return PeriodizationModelType.dupCustom; // ✅ Check spelling
+      case 'Linear, Classic':
         return PeriodizationModelType.linearClassic;
-      case 'linearExposure':
+      case 'Linear, by Exposure':
         return PeriodizationModelType.linearExposure;
+      case 'Daily Undulating Periodization':
+        return PeriodizationModelType.dailyUndulating;
       default:
-        return PeriodizationModelType.dupSignature; // fallback
+        return PeriodizationModelType.dupSignature;
     }
   }
 
 
 
+  static List<String> getDefaultReps(PeriodizationModelType model, int frequency) {
+    switch (model) {
+      case PeriodizationModelType.dailyUndulating:
+        const pattern = [10, 5, 8, 1, 12, 4, 6];
+        final reps = List.generate(frequency, (i) => pattern[i % pattern.length]);
+        return reps.map((r) => "$r x 3").toList();
+
+      case PeriodizationModelType.linearClassic:
+        return linearClassicDefaults.take(frequency).map((r) => '$r x 3').toList();
+
+      case PeriodizationModelType.linearExposure:
+        return linearExposureDefaults.take(frequency).map((r) => '$r x 3').toList();
+
+      case PeriodizationModelType.dupSignature:
+        final min = dupSignatureDefaults[0];
+        final max = dupSignatureDefaults[1];
+        return List.generate(frequency, (i) => '${min + i % (max - min + 1)} x 3');
+
+      case PeriodizationModelType.dupCustom:
+        return List.generate(frequency, (i) => '10 x 3'); // Placeholder if needed
+
+      default:
+        return List.generate(frequency, (i) => '10 x 3');
+    }
+  }
+
+
   static int getLinearClassicRepTarget(String exerciseName, int plannedIndex) {
-    // Example: week-based linear periodization
-    List<int> sequence = [10, 8, 6, 5, 3, 2];
-    return sequence[plannedIndex.clamp(0, sequence.length - 1)];
+    return linearClassicDefaults[plannedIndex.clamp(0, linearClassicDefaults.length - 1)];
   }
 
   static int getLinearExposureRepTarget(String exerciseName, int exposureIndex) {
-    // Example: exposure-based logic, per appearance of the same lift
-    List<int> sequence = [8, 6, 5, 4, 2];
-    return sequence[exposureIndex.clamp(0, sequence.length - 1)];
+    return linearExposureDefaults[exposureIndex.clamp(0, linearExposureDefaults.length - 1)];
   }
 
 
@@ -109,28 +132,73 @@ class PeriodizationModelUtils {
     Map<String, dynamic>? repTargetsByExercise,
   }) {
     final model = exercisePeriodizationModels[exerciseName] ?? PeriodizationModelType.dupSignature;
+    print('🧠 getSuggestedRepTargetByModel → $exerciseName using model: $model (plannedIndex: $plannedIndex)');
 
-    switch (model) {
-      case PeriodizationModelType.dupSignature:
-        return getSuggestedRepTarget(
-          exerciseName,
-          weightText: weightText,
-          rirText: rirText,
-          plannedIndex: plannedIndex,
-        );
-      case PeriodizationModelType.linearClassic:
-        return getLinearClassicRepTarget(exerciseName, plannedIndex);
-      case PeriodizationModelType.linearExposure:
-        return getLinearExposureRepTarget(exerciseName, plannedIndex);
-      case PeriodizationModelType.dupCustom:
-        return getDupCustomRepTargetFromPlanner(
-          exerciseName: exerciseName,
-          weekIndex: weekIndex ?? 0,
-          plannedIndexForWeek: plannedIndex,
-          repTargetsByExercise: repTargetsByExercise ?? {},
-        );
+    try {
+      switch (model) {
+        case PeriodizationModelType.dailyUndulating:
+          final rawFreq = repTargetsByExercise?[exerciseName]?['weeklyFrequency'] ?? 3;
+          final weeklyFrequency = rawFreq is int
+              ? rawFreq
+              : int.tryParse(rawFreq.toString()) ?? 3;
+
+          final reps = getDailyUndulatingRepTarget(
+            exerciseName: exerciseName,
+            plannedIndex: plannedIndex,
+            weeklyFrequency: weeklyFrequency,
+          );
+          print('🔁 DailyUndulating → $reps reps (weeklyFreq: $weeklyFrequency)');
+          return reps;
+
+        case PeriodizationModelType.dupSignature:
+          final reps = getSuggestedRepTarget(
+            exerciseName,
+            weightText: weightText,
+            rirText: rirText,
+            plannedIndex: plannedIndex,
+          );
+          print('🔁 DUP Signature → $reps reps');
+          return reps;
+
+        case PeriodizationModelType.linearClassic:
+          final reps = getLinearClassicRepTarget(exerciseName, plannedIndex);
+          print('📈 LinearClassic → $reps reps');
+          return reps;
+
+        case PeriodizationModelType.linearExposure:
+          final reps = getLinearExposureRepTarget(exerciseName, plannedIndex);
+          print('📊 LinearExposure → $reps reps');
+          return reps;
+
+        case PeriodizationModelType.dupCustom:
+          final reps = getDupCustomRepTargetFromPlanner(
+            exerciseName: exerciseName,
+            weekIndex: weekIndex ?? 0,
+            plannedIndexForWeek: plannedIndex,
+            repTargetsByExercise: repTargetsByExercise ?? {},
+          );
+          print('🧡 DUP Custom → $reps reps (week: ${weekIndex ?? 0})');
+          return reps;
+      }
+    } catch (e) {
+      print('⚠️ Error in getSuggestedRepTargetByModel for $exerciseName: $e');
+      return 10; // fallback
     }
   }
+
+  static int getDailyUndulatingRepTarget({
+    required String exerciseName,
+    required int plannedIndex,
+    required int weeklyFrequency,
+  }) {
+    const pattern = [10, 5, 8, 1, 12, 4, 6]; // rotating pattern
+    final repsList = List.generate(weeklyFrequency, (i) => pattern[i % pattern.length]);
+    final reps = repsList[plannedIndex % repsList.length];
+    print('🔄 getDailyUndulatingRepTarget → $reps reps for $exerciseName (index $plannedIndex of $weeklyFrequency freq)');
+    return reps;
+  }
+
+
 
 
 
@@ -176,6 +244,9 @@ class PeriodizationModelUtils {
     final model = exercisePeriodizationModels[exerciseName] ?? PeriodizationModelType.dupSignature;
 
     switch (model) {
+      case PeriodizationModelType.dailyUndulating:
+        return 6.0;
+
       case PeriodizationModelType.dupSignature:
         return getDupSignatureSet2SuggestedReps(
           set2E1RM: set2E1RM,
@@ -235,6 +306,9 @@ class PeriodizationModelUtils {
     final model = exercisePeriodizationModels[exerciseName] ?? PeriodizationModelType.dupSignature;
 
     switch (model) {
+      case PeriodizationModelType.dailyUndulating:
+        return 6.0;
+
       case PeriodizationModelType.dupSignature:
         return getDupSignatureSet3SuggestedReps(
           set3E1RM: set3E1RM,
@@ -284,6 +358,10 @@ class PeriodizationModelUtils {
     final model = exercisePeriodizationModels[exerciseName] ?? PeriodizationModelType.dupSignature;
 
     switch (model) {
+      case PeriodizationModelType.dailyUndulating:
+        return getSuggestedWeightFromRep(exerciseName, reps.toInt(), rir);
+
+
       case PeriodizationModelType.dupSignature:
         return getDupSignatureSet1SuggestedWeight(
           exerciseName: exerciseName,
@@ -331,6 +409,10 @@ class PeriodizationModelUtils {
     final model = exercisePeriodizationModels[exerciseName] ?? PeriodizationModelType.dupSignature;
 
     switch (model) {
+      case PeriodizationModelType.dailyUndulating:
+        return getSuggestedWeightFromRep(exerciseName, reps.toInt(), rir);
+
+
       case PeriodizationModelType.dupSignature:
         return getDupSignatureSet2SuggestedWeight(
           set2E1RM: set2E1RM,
@@ -379,6 +461,10 @@ class PeriodizationModelUtils {
     final model = exercisePeriodizationModels[exerciseName] ?? PeriodizationModelType.dupSignature;
 
     switch (model) {
+      case PeriodizationModelType.dailyUndulating:
+        return getSuggestedWeightFromRep(exerciseName, reps.toInt(), rir);
+
+
       case PeriodizationModelType.dupSignature:
         return getDupSignatureSet3SuggestedWeight(
           set3E1RM: set3E1RM,

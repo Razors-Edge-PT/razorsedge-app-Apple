@@ -85,86 +85,13 @@ class _BlockPlannerState extends State<Block_Planner> {
     }
   }
 
-  void _showDupSignatureRepTargetDialog(String exerciseName) async {
-    int min = 6;
-    int max = 10;
 
-    // Load existing values if they exist
-    if (exerciseRepTargets[exerciseName] != null) {
-      min = exerciseRepTargets[exerciseName]['min'] ?? min;
-      max = exerciseRepTargets[exerciseName]['max'] ?? max;
-    }
 
-    await showDialog(
-      context: context,
-      builder: (ctx) {
-        int tempMin = min;
-        int tempMax = max;
-
-        return AlertDialog(
-          backgroundColor: Colors.blueGrey.shade900,
-          title: Text("Set Rep Range for $exerciseName", style: const TextStyle(color: Colors.white)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  const Text("Min Reps:", style: TextStyle(color: Colors.white)),
-                  const SizedBox(width: 10),
-                  DropdownButton<int>(
-                    value: tempMin,
-                    dropdownColor: Colors.blueGrey.shade800,
-                    items: List.generate(12, (i) => i + 1).map((rep) {
-                      return DropdownMenuItem(
-                        value: rep,
-                        child: Text("$rep", style: const TextStyle(color: Colors.white)),
-                      );
-                    }).toList(),
-                    onChanged: (val) => val != null ? setState(() => tempMin = val) : null,
-                  ),
-                ],
-              ),
-              Row(
-                children: [
-                  const Text("Max Reps:", style: TextStyle(color: Colors.white)),
-                  const SizedBox(width: 10),
-                  DropdownButton<int>(
-                    value: tempMax,
-                    dropdownColor: Colors.blueGrey.shade800,
-                    items: List.generate(20, (i) => i + 1).map((rep) {
-                      return DropdownMenuItem(
-                        value: rep,
-                        child: Text("$rep", style: const TextStyle(color: Colors.white)),
-                      );
-                    }).toList(),
-                    onChanged: (val) => val != null ? setState(() => tempMax = val) : null,
-                  ),
-                ],
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text("Cancel"),
-            ),
-            TextButton(
-              onPressed: () {
-                setState(() {
-                  exerciseRepTargets[exerciseName] = {'min': tempMin, 'max': tempMax};
-                });
-                Navigator.pop(ctx);
-              },
-              child: const Text("Save"),
-            ),
-          ],
-        );
-      },
-    );
-  }
 
   PeriodizationModelType _mapLabelToModelType(String label) {
     switch (label) {
+      case 'Daily Undulating Periodization':
+        return PeriodizationModelType.dailyUndulating;
       case 'DUP, Signature':
         return PeriodizationModelType.dupSignature;
       case 'DUP, Custom':
@@ -177,6 +104,8 @@ class _BlockPlannerState extends State<Block_Planner> {
         return PeriodizationModelType.dupSignature;
     }
   }
+
+
 
 
 
@@ -559,6 +488,7 @@ class _BlockPlannerState extends State<Block_Planner> {
 
 
 
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -683,7 +613,6 @@ class _BlockPlannerState extends State<Block_Planner> {
                     child: _ExerciseCard(
                       exerciseId: exercise,
                       exerciseName: _exerciseIdToName[exercise] ?? 'Unknown Exercise',
-                      onShowDupSignatureDialog: () => _showDupSignatureRepTargetDialog(exercise),
                       exerciseSettings: exerciseSettings,
                       onUpdateSetting: (exerciseId, key, value) {
                         setState(() {
@@ -691,7 +620,10 @@ class _BlockPlannerState extends State<Block_Planner> {
                           exerciseSettings[exerciseId]![key] = value;
                         });
                       },
-                    )
+                    ),
+
+
+
 
 
 
@@ -847,7 +779,6 @@ class _BlockPlannerState extends State<Block_Planner> {
 class _ExerciseCard extends StatefulWidget {
   final String exerciseName;
   final String exerciseId;
-  final VoidCallback onShowDupSignatureDialog;
   final Map<String, Map<String, dynamic>> exerciseSettings;
   final void Function(String exerciseName, String key, dynamic value) onUpdateSetting;
 
@@ -856,7 +787,6 @@ class _ExerciseCard extends StatefulWidget {
   const _ExerciseCard({
     required this.exerciseId,
     required this.exerciseName,
-    required this.onShowDupSignatureDialog,
     required this.exerciseSettings,
     required this.onUpdateSetting,
   });
@@ -890,6 +820,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
   PeriodizationModelType _mapLabelToModelType(String label) {
     switch (label) {
+      case 'Daily Undulating Periodization':
+        return PeriodizationModelType.dailyUndulating;
       case 'DUP, Signature':
         return PeriodizationModelType.dupSignature;
       case 'DUP, Custom':
@@ -902,6 +834,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         return PeriodizationModelType.dupSignature;
     }
   }
+
 
 
   @override
@@ -931,6 +864,18 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
     if (settings != null) {
       final reps = settings['repTargets'];
+      if (reps != null) {
+        if (reps is List && reps.isNotEmpty) {
+          if (reps.first is List) {
+            // Multi-week structure (DUP Custom, Linear Classic, etc)
+            _repTargetsDisplayController.text =
+                reps.map((week) => week.join(' | ')).join(' || ');
+          } else {
+            // Flat list (Linear Exposure, DUP Signature, etc)
+            _repTargetsDisplayController.text = reps.join(', ');
+          }
+        }
+      }
       final frequency = settings['weeklyFrequency'];
       final model = settings['periodizationModel'];
       final notes = settings['notes'];
@@ -945,9 +890,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
         _incrementsController.text = values.join(', ');
       }
-
-
-
 
       if (notes != null) {
         _notesController.text = notes.toString();
@@ -965,16 +907,28 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       print("🧠 [INIT] ${widget.exerciseName} periodizationModel: $model");
 
       if (reps is List) {
-        _repTargetsDisplayController.text =
-            reps.expand((e) => e is List ? e : [e]).join(', ');
+        // Handle both flat List<String> and nested List<List<String>>
+        if (reps.isNotEmpty && reps.first is List) {
+          _repTargetsDisplayController.text =
+              reps.map((weekList) => (weekList as List).join(' | ')).join(' || ');
+        } else {
+          _repTargetsDisplayController.text = reps.join(', ');
+        }
       }
+
 
       if (frequency != null) {
         _weeklyFrequencyController.text = frequency.toString();
       }
 
       if (model != null &&
-          ['DUP, Signature', 'DUP, Custom', 'Linear, Classic', 'Linear, by Exposure']
+          [
+            'Daily Undulating Periodization', // new one at top
+            'DUP, Signature',
+            'DUP, Custom',
+            'Linear, Classic',
+            'Linear, by Exposure',
+          ]
               .contains(model)) {
         _selectedModel = model;
       }
@@ -994,9 +948,11 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
 
   @override
+  @override
   void dispose() {
     _maxWeightController.removeListener(_updateE1RM);
     _maxRepsController.removeListener(_updateE1RM);
+
     final value = int.tryParse(_weeklyFrequencyController.text.trim());
     if (value != null) {
       widget.onUpdateSetting(widget.exerciseId, 'weeklyFrequency', value);
@@ -1009,22 +965,46 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       print("💾 [DISPOSE] Saved periodizationModel for ${widget.exerciseName}: $model");
     }
 
-    // Clean and normalize input first
+    // ✅ Save repTargets from display text if not empty
+    final repText = _repTargetsDisplayController.text.trim();
+    if (repText.isNotEmpty) {
+      if (repText.contains('||')) {
+        // likely List<List<String>>
+        final parsed = repText
+            .split('||')
+            .map((week) => week
+            .split('|')
+            .map((s) => s.trim())
+            .where((s) => s.isNotEmpty)
+            .toList())
+            .toList();
+        widget.onUpdateSetting(widget.exerciseId, 'repTargets', parsed);
+        print("💾 [DISPOSE] Saved repTargets for ${widget.exerciseName}: $parsed");
+      } else {
+        // likely List<String>
+        final parsed = repText
+            .split(',')
+            .map((s) => s.trim())
+            .where((s) => s.isNotEmpty)
+            .toList();
+        widget.onUpdateSetting(widget.exerciseId, 'repTargets', parsed);
+        print("💾 [DISPOSE] Saved repTargets for ${widget.exerciseName}: $parsed");
+      }
+    }
+
+    // Clean and normalize increments
     final cleaned = _incrementsController.text
         .split(',')
         .map((e) => e.trim())
         .where((e) => e.isNotEmpty)
         .join(', ');
-
-// Update UI text with cleaned version (optional but nice)
     _incrementsController.text = cleaned;
 
-// Parse cleaned string into a map, skipping zeroes
     final List<double> parsedIncrements = cleaned
         .split(',')
         .map((s) => double.tryParse(s.trim()))
         .whereType<double>()
-        .where((v) => v > 0) // ✅ Skip 0 or negative
+        .where((v) => v > 0)
         .toList();
 
     if (parsedIncrements.isNotEmpty) {
@@ -1038,21 +1018,17 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       print("💾 [DISPOSE] Saved increments for ${widget.exerciseName}: $incrementsMap");
     }
 
-
     final notes = _notesController.text.trim();
-    widget.onUpdateSetting(widget.exerciseId, 'notes', notes); // ✅ not exerciseName
-
+    widget.onUpdateSetting(widget.exerciseId, 'notes', notes);
     print("💾 [DISPOSE] Saved notes for ${widget.exerciseName}: $notes");
 
     final kg = _maxWeightController.text.trim();
     final reps = _maxRepsController.text.trim();
-
     print("🧠 [DISPOSE] Entered max weight: $kg");
     print("🧠 [DISPOSE] Entered max reps: $reps");
 
     final kgDouble = double.tryParse(kg);
     final repsDouble = double.tryParse(reps);
-
     if (kgDouble != null && repsDouble != null) {
       final combined = '${kgDouble.toStringAsFixed(1)} x ${repsDouble.toStringAsFixed(0)}';
       widget.onUpdateSetting(widget.exerciseId, 'maxWeightXReps', combined);
@@ -1073,6 +1049,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
 
 
+
   void _updateE1RM() {
     final weight = double.tryParse(_maxWeightController.text);
     final reps = double.tryParse(_maxRepsController.text);
@@ -1081,6 +1058,60 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       setState(() {
         _currentE1RM = PeriodizationModelUtils.calculateE1RM(weight, reps, 0.5);
       });
+    }
+  }
+
+  List<String> getDefaultReps(String model, int frequency) {
+    switch (model) {
+      case 'Daily Undulating Periodization':
+        const dupMap = {
+          1: [10],
+          2: [10, 5],
+          3: [10, 5, 8],
+          4: [10, 5, 8, 1],
+          5: [12, 4, 8, 1, 6],
+          6: [10, 3, 6, 1, 9, 5],
+          7: [10, 4, 8, 2, 12, 5, 1],
+        };
+        final reps = dupMap[frequency] ??
+            List.generate(frequency, (i) => [10, 5, 8, 1, 12, 4, 6][i % 7]);
+        return reps.map((r) => '$r x 3').toList();
+
+      case 'Linear, Classic':
+        const linearClassicDefaults = [10, 8, 6];
+        return linearClassicDefaults
+            .take(frequency)
+            .map((r) => '$r x 3')
+            .toList();
+
+      case 'Linear, by Exposure':
+        const linearExposureDefaults = [12, 10, 8, 6, 4, 2];
+        return linearExposureDefaults
+            .take(frequency)
+            .map((r) => '$r x 3')
+            .toList();
+
+      case 'DUP, Signature':
+        const dupMin = 6;
+        const dupMax = 10;
+        return List.generate(
+          frequency,
+              (i) => '${dupMin + (i % (dupMax - dupMin + 1))} x 3',
+        );
+
+      case 'DUP, Custom':
+        const baseCycle = [
+          [10, 5, 8, 3, 12, 1, 6],
+          [9, 4, 7, 11, 2, 5, 8],
+          [12, 3, 6, 1, 9, 4, 7],
+        ];
+        return baseCycle[0]
+            .take(frequency)
+            .map((r) => '$r x ${r < 5 ? 4 : 3}')
+            .toList();
+
+      default:
+        return List.generate(frequency, (i) => '10 x 3');
     }
   }
 
@@ -1188,8 +1219,84 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                 setState(() {
                   widget.onUpdateSetting(exerciseName, 'repTargets', updated);
 
-                  // Flatten and preview for now
-                  _repTargetsDisplayController.text = updated.expand((x) => x).join(', ');
+                  // Flatten and preview in display field
+                  _repTargetsDisplayController.text =
+                      updated.expand((week) => week).join(', ');
+                });
+
+                Navigator.pop(ctx);
+              },
+
+
+              child: const Text("Save", style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showDailyUndulatingRepTargetDialog(String exerciseName) {
+    final frequency = int.tryParse(_weeklyFrequencyController.text) ?? 3;
+
+    // Load existing reps or default pattern
+    final existing = widget.exerciseSettings[exerciseName]?['repTargets'];
+    List<String> reps = (existing is List<String> && existing.isNotEmpty)
+        ? existing
+        : PeriodizationModelUtils.getDefaultReps(
+        PeriodizationModelType.dailyUndulating, frequency);
+
+    final List<TextEditingController> controllers =
+    reps.map((r) => TextEditingController(text: r)).toList();
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: Colors.blueGrey.shade900,
+          title: const Text(
+            "Edit Daily Undulating Reps (1 Week)",
+            style: TextStyle(color: Colors.white),
+          ),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: controllers.length,
+              itemBuilder: (context, i) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: TextField(
+                    controller: controllers[i],
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      labelText: "Day ${i + 1}",
+                      labelStyle: const TextStyle(color: Colors.white70),
+                      filled: true,
+                      fillColor: Colors.blueGrey.shade800,
+                      border: const OutlineInputBorder(),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text("Cancel", style: TextStyle(color: Colors.white)),
+            ),
+            TextButton(
+              onPressed: () {
+                final updated = controllers
+                    .map((c) => c.text.trim())
+                    .where((s) => s.isNotEmpty)
+                    .toList();
+
+                setState(() {
+                  widget.onUpdateSetting(exerciseName, 'repTargets', updated);
+                  _repTargetsDisplayController.text = updated.join(', ');
                 });
 
                 Navigator.pop(ctx);
@@ -1203,6 +1310,86 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   }
 
 
+  void _showDupSignatureRepTargetDialog(String exerciseName) async {
+    int min = 6;
+    int max = 10;
+
+    // Load existing values if they exist
+    final existing = widget.exerciseSettings[exerciseName]?['repTargets'];
+    if (existing is Map<String, dynamic>) {
+      min = existing['min'] ?? min;
+      max = existing['max'] ?? max;
+    }
+
+    await showDialog(
+      context: context,
+      builder: (ctx) {
+        int tempMin = min;
+        int tempMax = max;
+
+        return AlertDialog(
+          backgroundColor: Colors.blueGrey.shade900,
+          title: Text("Set Rep Range for $exerciseName", style: const TextStyle(color: Colors.white)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  const Text("Min Reps:", style: TextStyle(color: Colors.white)),
+                  const SizedBox(width: 10),
+                  DropdownButton<int>(
+                    value: tempMin,
+                    dropdownColor: Colors.blueGrey.shade800,
+                    items: List.generate(12, (i) => i + 1).map((rep) {
+                      return DropdownMenuItem(
+                        value: rep,
+                        child: Text("$rep", style: const TextStyle(color: Colors.white)),
+                      );
+                    }).toList(),
+                    onChanged: (val) => val != null ? setState(() => tempMin = val) : null,
+                  ),
+                ],
+              ),
+              Row(
+                children: [
+                  const Text("Max Reps:", style: TextStyle(color: Colors.white)),
+                  const SizedBox(width: 10),
+                  DropdownButton<int>(
+                    value: tempMax,
+                    dropdownColor: Colors.blueGrey.shade800,
+                    items: List.generate(20, (i) => i + 1).map((rep) {
+                      return DropdownMenuItem(
+                        value: rep,
+                        child: Text("$rep", style: const TextStyle(color: Colors.white)),
+                      );
+                    }).toList(),
+                    onChanged: (val) => val != null ? setState(() => tempMax = val) : null,
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text("Cancel"),
+            ),
+            TextButton(
+              onPressed: () {
+                setState(() {
+                  final range = {'min': tempMin, 'max': tempMax};
+                  widget.onUpdateSetting(exerciseName, 'repTargets', range);
+                  _repTargetsDisplayController.text = "$tempMin – $tempMax reps";
+                });
+                Navigator.pop(ctx);
+              },
+              child: const Text("Save"),
+            ),
+          ],
+        );
+      },
+    );
+  }
 
 
   void _showLinearExposureRepTargetDialog(String exerciseName) async {
@@ -1326,13 +1513,21 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             ),
             TextButton(
               onPressed: () {
-                final updated = controllers.map((c) => c.text.trim()).toList();
+                final updated = controllers
+                    .map((c) => [c.text.trim()]) // 👈 Wrap each value in its own list
+                    .toList();
+
                 setState(() {
                   widget.onUpdateSetting(exerciseName, 'repTargets', updated);
-                  _repTargetsDisplayController.text = updated.join(', ');
+
+                  // Flatten for display preview
+                  _repTargetsDisplayController.text = updated.expand((x) => x).join(', ');
                 });
+
                 Navigator.pop(ctx);
               },
+
+
               child: const Text("Save", style: TextStyle(color: Colors.white)),
             ),
           ],
@@ -1466,14 +1661,15 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             TextButton(
               onPressed: () {
                 final updated = controllers
-                    .map((weekList) => weekList.map((c) => c.text.trim()).toList())
+                    .expand((weekList) => weekList.map((c) => c.text.trim()))
+                    .where((text) => text.isNotEmpty)
                     .toList();
 
                 setState(() {
                   widget.onUpdateSetting(exerciseName, 'repTargets', updated);
-                  _repTargetsDisplayController.text =
-                      updated.map((weekList) => weekList.join(' | ')).join(' || ');
+                  _repTargetsDisplayController.text = updated.join(', ');
                 });
+
                 Navigator.pop(ctx);
               },
               child: const Text("Save", style: TextStyle(color: Colors.white)),
@@ -1633,7 +1829,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   width: 158,
                   child: DropdownButtonFormField<String>(
                     value: _selectedModel,
+                    isExpanded: true,
                     items: [
+                      'Daily Undulating Periodization',
                       'DUP, Signature',
                       'DUP, Custom',
                       'Linear, Classic',
@@ -1641,16 +1839,36 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                     ].map((label) {
                       return DropdownMenuItem<String>(
                         value: label,
-                        child: Text(label, style: const TextStyle(color: Colors.white, fontSize: 12)),
+                        child: Text(
+                          label,
+                          style: const TextStyle(color: Colors.white, fontSize: 12),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
                       );
                     }).toList(),
                     onChanged: (value) {
                       if (value == null) return;
+
+                      final modelType = _mapLabelToModelType(value);
+                      final frequency = int.tryParse(_weeklyFrequencyController.text) ?? 3;
+                      final defaultReps = PeriodizationModelUtils.getDefaultReps(modelType, frequency);
+
+                      print("🧠 Model selected: $value → mapped to $modelType");
+                      print("🎯 Default reps generated for $modelType: $defaultReps");
+
+                      // ✅ Force UI sync
+                      FocusScope.of(context).unfocus();
+
                       setState(() {
                         _selectedModel = value;
+                        _repTargetsDisplayController.text = defaultReps.join(', ');
+                        widget.onUpdateSetting(widget.exerciseId, 'repTargets', defaultReps);
+                        widget.onUpdateSetting(widget.exerciseId, 'periodizationModel', value);
                       });
-                      widget.onUpdateSetting(widget.exerciseId, 'periodizationModel', value);
                     },
+
+
 
                     dropdownColor: Colors.blueGrey.shade800,
                     decoration: InputDecoration(
@@ -1661,6 +1879,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
                       contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                     ),
+
                   ),
                 ),
 
@@ -1689,9 +1908,14 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                     onTap: () {
                       final model = _mapLabelToModelType(_selectedModel);
                       switch (model) {
-                        case PeriodizationModelType.dupSignature:
-                          widget.onShowDupSignatureDialog();
+                        case PeriodizationModelType.dailyUndulating:
+                          _showDailyUndulatingRepTargetDialog(widget.exerciseName);
                           break;
+
+                        case PeriodizationModelType.dupSignature:
+                          _showDupSignatureRepTargetDialog(widget.exerciseName);
+                          break;
+
                         case PeriodizationModelType.linearClassic:
                           print("➡ Opening Linear Classic rep dialog"); // 👈 Debug
                           _showLinearClassicRepTargetDialog(widget.exerciseName);
