@@ -295,33 +295,60 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     final details = plannedExerciseDetails[exerciseId];
     if (details == null) return null;
 
-    final modelType = (details['periodizationModel'] ?? 'Linear Exposure').toString().toLowerCase();
     final repTargets = details['repTargets'];
     if (repTargets == null) return null;
 
-    if (modelType.contains('exposure')) {
-      final totalCount = getExercisePlannedCountBefore(exerciseName, week, day, row);
-      if (repTargets is List && totalCount < repTargets.length) {
-        final raw = repTargets[totalCount]?.toString() ?? '';
-        final match = RegExp(r'^(\d+)').firstMatch(raw);
-        return match?.group(1); // ✅ Just reps
-      }
-    } else {
-      if (repTargets is List && week < repTargets.length) {
-        final weekList = repTargets[week];
-        if (weekList is List) {
-          final countInWeek = getExerciseCountInWeek(exerciseName, week, day, row);
-          if (countInWeek < weekList.length) {
-            final raw = weekList[countInWeek]?.toString() ?? '';
+    final model = PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
+    final plannedIndex = getExercisePlannedCountBefore(exerciseName, week, day, row);
+
+    try {
+      switch (model) {
+        case PeriodizationModelType.linearExposure:
+          if (repTargets is List && plannedIndex < repTargets.length) {
+            final raw = repTargets[plannedIndex]?.toString() ?? '';
             final match = RegExp(r'^(\d+)').firstMatch(raw);
-            return match?.group(1); // ✅ Just reps
+            print('🔢 linearExposure: $raw → ${match?.group(1)}');
+            return match?.group(1);
           }
-        }
+          break;
+
+        case PeriodizationModelType.linearClassic:
+        case PeriodizationModelType.dupCustom:
+          final countInWeek = getExerciseCountInWeek(exerciseName, week, day, row);
+          if (repTargets is List &&
+              week < repTargets.length &&
+              repTargets[week] is List &&
+              countInWeek < (repTargets[week] as List).length) {
+            final raw = repTargets[week][countInWeek]?.toString() ?? '';
+            final match = RegExp(r'^(\d+)').firstMatch(raw);
+            print('🔢 ${model.toString()}: $raw → ${match?.group(1)}');
+            return match?.group(1);
+          }
+          break;
+
+        case PeriodizationModelType.dupSignature:
+        case PeriodizationModelType.dailyUndulating:
+          final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
+            exerciseName: exerciseId, // ✅ use ID for all PMU lookups
+            plannedIndex: plannedIndex,
+            repTargetsByExercise: repTargetsByExercise,
+          );
+          print('🔁 Model-based rep: $rep for $exerciseId using $model');
+          return rep.toString();
+
+        default:
+          print('❌ Unknown model type for $exerciseId: $model');
+          return null;
       }
+    } catch (e) {
+      print('⚠️ Error getting rep target for $exerciseName [$exerciseId]: $e');
     }
-    print('! No matching rep target found for "$exerciseName" (model: $modelType)');
+
+    print('! No matching rep target found for "$exerciseName" (model: $model)');
     return null;
   }
+
+
 
 
 
@@ -1260,16 +1287,34 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                         context: context,
                         allGroupedExercises: groupExercisesByCategory(allExercisesFromFirestore),
                         plannedExercises: plannedExercises,
-                        onSelected: (selectedExercise) {
+                        onSelected: (selectedExerciseName) {
+                          final exerciseId = nameToIdMap[selectedExerciseName];
+                          final isPlanned = exerciseId != null && plannedExercises.contains(exerciseId);
+
                           setState(() {
-                            row.exercise = selectedExercise;
-                            exerciseController.text = selectedExercise;
+                            row.exercise = selectedExerciseName;
+                            exerciseController.text = selectedExerciseName;
                             weightController.clear();
                             repsController.clear();
                             rirController.clear();
+
+                            if (isPlanned) {
+                              final repTarget = PeriodizationModelUtils.getSuggestedRepTargetByModel(
+                                exerciseName: exerciseId!, // 🧠 Must match how your map is keyed
+                                plannedIndex: getExerciseCountInWeek(selectedExerciseName, weekIndex, dayIndex, rowIndex),
+                                weekIndex: weekIndex,
+                                repTargetsByExercise: repTargetsByExercise,
+                              );
+
+                              // Do not set repsController.text — just clear it
+                              repsController.clear();
+
+                            }
                           });
                         },
                       );
+
+
                     },
                     child: Container(
                       width: 114,
