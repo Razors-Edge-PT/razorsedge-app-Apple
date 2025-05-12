@@ -105,6 +105,8 @@ class PeriodizationModelUtils {
     required int plannedIndex,
     String? weightText,
     String? rirText,
+    int? weekIndex,
+    Map<String, dynamic>? repTargetsByExercise,
   }) {
     final model = exercisePeriodizationModels[exerciseName] ?? PeriodizationModelType.dupSignature;
 
@@ -118,14 +120,19 @@ class PeriodizationModelUtils {
         );
       case PeriodizationModelType.linearClassic:
         return getLinearClassicRepTarget(exerciseName, plannedIndex);
-
       case PeriodizationModelType.linearExposure:
         return getLinearExposureRepTarget(exerciseName, plannedIndex);
-
       case PeriodizationModelType.dupCustom:
-        return getDupCustomRepTarget(exerciseName, plannedIndex);
+        return getDupCustomRepTargetFromPlanner(
+          exerciseName: exerciseName,
+          weekIndex: weekIndex ?? 0,
+          plannedIndexForWeek: plannedIndex,
+          repTargetsByExercise: repTargetsByExercise ?? {},
+        );
     }
   }
+
+
 
   static double getDupSignatureSet2SuggestedReps({
     required double set2E1RM,
@@ -391,10 +398,30 @@ class PeriodizationModelUtils {
 
 
 
-  static int getDupCustomRepTarget(String exerciseName, int plannedIndex) {
-    // TODO: Add real logic
-    return 6; // example default
+  static int getDupCustomRepTargetFromPlanner({
+    required String exerciseName,
+    required int weekIndex,
+    required int plannedIndexForWeek,
+    required Map<String, dynamic> repTargetsByExercise,
+  }) {
+    try {
+      final allWeeks = repTargetsByExercise[exerciseName];
+      if (allWeeks == null || allWeeks.isEmpty) return 6;
+
+      final List weekData = allWeeks[weekIndex.clamp(0, allWeeks.length - 1)];
+      if (plannedIndexForWeek >= weekData.length) {
+        return int.tryParse(weekData.last.toString().split('x')[0].trim()) ?? 6;
+      }
+
+      final repString = weekData[plannedIndexForWeek].toString().toLowerCase();
+      final repValue = repString.split('x')[0].trim();
+      return int.tryParse(repValue) ?? 6;
+    } catch (e) {
+      print('[DUP CUSTOM] Failed to parse rep target for $exerciseName: $e');
+      return 6;
+    }
   }
+
 
 
   static double getAverageE1RM(String exerciseName) {

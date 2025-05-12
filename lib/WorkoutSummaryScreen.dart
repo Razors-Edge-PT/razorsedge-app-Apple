@@ -15,6 +15,7 @@ class WorkoutSummaryScreen extends StatefulWidget {
   final String workoutName;
   final List<Map<String, dynamic>> exercises;
 
+
   const WorkoutSummaryScreen({
     super.key,
     required this.date,
@@ -29,6 +30,7 @@ class WorkoutSummaryScreen extends StatefulWidget {
 class _WorkoutSummaryScreenState extends State<WorkoutSummaryScreen> {
   late List<Map<String, dynamic>> editableExercises;
   bool isEditable = false;
+  Set<int> _expandedCards = {};
 
   @override
   void initState() {
@@ -208,87 +210,88 @@ class _WorkoutSummaryScreenState extends State<WorkoutSummaryScreen> {
           final name = ex['name'] ?? 'Unnamed';
           final circuitIndex = ex['circuitIndex'] ?? 0;
 
+          final isExpanded = _expandedCards.contains(i);
+          final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? []);
+          final topSet = sets.isNotEmpty
+              ? sets.reduce((a, b) {
+            final e1A = PeriodizationModelUtils.calculateE1RM(
+              (a['weight'] ?? 0).toDouble(),
+              (a['reps'] ?? 0).toDouble(),
+              (a['rir'] ?? 0).toDouble(),
+            );
+            final e1B = PeriodizationModelUtils.calculateE1RM(
+              (b['weight'] ?? 0).toDouble(),
+              (b['reps'] ?? 0).toDouble(),
+              (b['rir'] ?? 0).toDouble(),
+            );
+            return e1A >= e1B ? a : b;
+          })
+              : null;
+
+
           return Card(
             margin: const EdgeInsets.all(8),
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Circuit ${circuitIndex + 1}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                  const SizedBox(height: 4),
-                  Text(name, style: const TextStyle(fontSize: 16)),
-                  const SizedBox(height: 10),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: const [
-                      Text('Weight'),
-                      Text('Reps'),
-                      Text('RIR'),
-                      Text('E1RM'),
-                    ],
-                  ),
-                  const Divider(),
-                  ...List.generate(((ex['sets'] ?? []) as List).length, (j) {
-                    final set = (ex['sets'] ?? [])[j];
-                    final weightCtrl = TextEditingController(text: set['weight'].toString());
-                    final repsCtrl = TextEditingController(text: set['reps'].toString());
-                    final rirCtrl = TextEditingController(text: set['rir'].toString());
+            child: InkWell(
+              onTap: () {
+                setState(() {
+                  if (isExpanded) {
+                    _expandedCards.remove(i);
+                  } else {
+                    _expandedCards.add(i);
+                  }
+                });
+              },
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Circuit ${circuitIndex + 1}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                    const SizedBox(height: 4),
+                    Text(name, style: const TextStyle(fontSize: 16)),
+                    const SizedBox(height: 10),
 
+                    if (topSet != null)
+                      Text(
+                        '${topSet['weight']?.toStringAsFixed(1) ?? '0'} kg × ${topSet['reps'] ?? '0'} @ RIR ${topSet['rir'] ?? '0'}',
+                        style: const TextStyle(fontSize: 13, color: Colors.white70),
+                      ),
 
-                    final e1rm = PeriodizationModelUtils.calculateE1RM(
-                      double.tryParse(weightCtrl.text),
-                      double.tryParse(repsCtrl.text),
-                      double.tryParse(rirCtrl.text),
-                    );
-
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      child: Row(
+                    if (isExpanded) ...[
+                      const Divider(),
+                      Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          SizedBox(
-                            width: 60,
-                            child: TextField(
-                              controller: weightCtrl,
-                              enabled: isEditable,
-                              style: const TextStyle(color: Colors.white),
-                              decoration: const InputDecoration(
-                                hintText: '0',
-                                hintStyle: TextStyle(color: Colors.white70),
-                              ),
-                            ),
-                          ),
-                          SizedBox(
-                            width: 40,
-                            child: TextField(
-                              controller: repsCtrl,
-                              enabled: isEditable,
-                              style: const TextStyle(color: Colors.white),
-                              decoration: const InputDecoration(
-                                hintText: '0',
-                                hintStyle: TextStyle(color: Colors.white70),
-                              ),
-                            ),
-                          ),
-
-                          SizedBox(width: 40, child: TextField(controller: rirCtrl, enabled: isEditable,
-                            style: const TextStyle(color: Colors.white),
-                            decoration: const InputDecoration(
-                              hintText: '0',
-                              hintStyle: TextStyle(color: Colors.white70),
-                            ),
-                          ),
-                          ),
-                          Text(e1rm.toStringAsFixed(1)),
+                        children: const [
+                          Text('Weight'), Text('Reps'), Text('RIR'), Text('E1RM'),
                         ],
                       ),
-                    );
-                  }),
-                ],
+                      const SizedBox(height: 4),
+                      ...sets.map((set) {
+                        final weight = (set['weight'] ?? 0).toDouble();
+                        final reps = (set['reps'] ?? 0).toDouble();
+                        final rir = (set['rir'] ?? 0).toDouble();
+                        final e1rm = PeriodizationModelUtils.calculateE1RM(weight, reps, rir);
+
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 2),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text('${weight.toStringAsFixed(1)} kg'),
+                              Text('${reps.toStringAsFixed(0)}'),
+                              Text('${rir.toStringAsFixed(1)}'),
+                              Text(e1rm.toStringAsFixed(1)),
+                            ],
+                          ),
+                        );
+                      }).toList(),
+                    ],
+                  ],
+                ),
               ),
             ),
           );
+
         },
       ),
       floatingActionButton: isEditable
