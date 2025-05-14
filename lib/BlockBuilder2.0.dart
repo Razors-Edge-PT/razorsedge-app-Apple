@@ -11,7 +11,7 @@ import 'template_details.dart'; // if you're navigating directly to TemplateDeta
 import 'templates.dart'; // ✅ this is the one that defines TemplatesScreen
 import 'WorkoutSummaryScreen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
+import 'dart:convert';
 
 
 
@@ -119,6 +119,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   Map<String, dynamic> repTargetsByExercise = {};
   Map<String, dynamic> plannedExerciseDetails = {};
 
+  Map<String, dynamic> _repTargetsByExercise = {};
   Map<String, List<int>> scheduledRepTargets = {}; // 🆕
   Map<String, List<Map<String, dynamic>>> topSetsByExercise = {};
   Map<String, List<Map<String, dynamic>>> completedWesRows = {};
@@ -304,36 +305,54 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     try {
       switch (model) {
         case PeriodizationModelType.linearExposure:
-          if (repTargets is List && plannedIndex < repTargets.length) {
-            final raw = repTargets[plannedIndex]?.toString() ?? '';
-            final match = RegExp(r'^(\d+)').firstMatch(raw);
-            print('🔢 linearExposure: $raw → ${match?.group(1)}');
-            return match?.group(1);
+          if (repTargets is List && repTargets.isNotEmpty) {
+            List<String> flatList;
+
+            // 🔁 Handle nested case (repTargets = [["10 x 3", "8 x 3"]])
+            if (repTargets.first is List) {
+              flatList = List<String>.from(repTargets.expand((e) => List<String>.from(e)));
+            } else {
+              flatList = List<String>.from(repTargets);
+            }
+
+            if (plannedIndex < flatList.length) {
+              final raw = flatList[plannedIndex];
+              final match = RegExp(r'^(\d+)').firstMatch(raw);
+              print('🔢 linearExposure: $raw → ${match?.group(1)}');
+              return match?.group(1);
+            }
           }
           break;
+
 
         case PeriodizationModelType.linearClassic:
         case PeriodizationModelType.dupCustom:
           final countInWeek = getExerciseCountInWeek(exerciseName, week, day, row);
-          if (repTargets is List &&
-              week < repTargets.length &&
-              repTargets[week] is List &&
-              countInWeek < (repTargets[week] as List).length) {
-            final raw = repTargets[week][countInWeek]?.toString() ?? '';
+          final weekKey = 'week${week + 1}';
+
+          if (repTargets is Map &&
+              repTargets.containsKey(weekKey) &&
+              repTargets[weekKey] is List &&
+              countInWeek < (repTargets[weekKey] as List).length) {
+
+            final raw = repTargets[weekKey][countInWeek]?.toString() ?? '';
             final match = RegExp(r'^(\d+)').firstMatch(raw);
-            print('🔢 ${model.toString()}: $raw → ${match?.group(1)}');
+            print('🔢 ${model.toString()} $weekKey [$countInWeek]: $raw → ${match?.group(1)}');
             return match?.group(1);
           }
           break;
 
+
         case PeriodizationModelType.dupSignature:
         case PeriodizationModelType.dailyUndulating:
-          final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
-            exerciseName: exerciseId, // ✅ use ID for all PMU lookups
-            plannedIndex: plannedIndex,
-            repTargetsByExercise: repTargetsByExercise,
-          );
-          print('🔁 Model-based rep: $rep for $exerciseId using $model');
+        final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
+          exerciseName: exerciseId,
+          plannedIndex: plannedIndex,
+          repTargetsByExercise: repTargetsByExercise,
+          plannedExerciseDetails: plannedExerciseDetails,
+        );
+
+        print('🔁 Model-based rep: $rep for $exerciseId using $model');
           return rep.toString();
 
         default:
@@ -349,23 +368,28 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   }
 
 
-
-
-
-
   int getExerciseCountInWeek(String exerciseName, int week, int day, int row) {
     int count = 0;
+
     for (int d = 0; d <= day; d++) {
       final rows = exerciseRows[week][d];
-      final lastRow = (d == day) ? row : rows.length;
+      final lastRow = (d == day) ? row + 1 : rows.length; // ✅ include current row
+
       for (int r = 0; r < lastRow; r++) {
-        if ((rows[r].exercise ?? '').trim() == exerciseName) {
+        final thisName = (rows[r].exercise ?? '').trim();
+        if (thisName == exerciseName.trim()) {
           count++;
+          print('🔎 Match: "$thisName" == "$exerciseName" (week $week, day $d, row $r)');
         }
       }
     }
-    return count;
+
+    final result = count - 1; // ✅ zero-based index
+    print('📊 getExerciseCountInWeek → "$exerciseName" → index $result');
+    return result;
   }
+
+
 
 
 
@@ -385,17 +409,42 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
     setState(() {
       if (data.containsKey('repTargetsByExercise')) {
-        repTargetsByExercise = Map<String, dynamic>.from(data['repTargetsByExercise']);
+        _repTargetsByExercise = Map<String, dynamic>.from(data['repTargetsByExercise']);
+        print('🧾 [BB2] repTargetsByExercise keys: ${_repTargetsByExercise.keys}');
+      } else {
+        print('❌ [BB2] No repTargetsByExercise found.');
       }
 
       if (data.containsKey('plannedExerciseDetails')) {
         plannedExerciseDetails = Map<String, dynamic>.from(data['plannedExerciseDetails']);
+        print('✅ PlannedExerciseDetails loaded: ${plannedExerciseDetails.length} items');
+      } else {
+        print('❌ [BB2] No plannedExerciseDetails found.');
       }
     });
 
-    print("✅ Rep targets loaded: ${repTargetsByExercise.length}");
-    print("✅ Planned exercise details loaded: ${plannedExerciseDetails.length}");
+    print("✅ Rep targets map size: ${_repTargetsByExercise.length}");
+
+    plannedExerciseDetails.forEach((exerciseId, details) {
+      final modelName = details['periodizationModel'];
+      if (modelName != null) {
+        final modelEnum = PeriodizationModelUtils.stringToModel(modelName);
+        PeriodizationModelUtils.exercisePeriodizationModels[exerciseId] = modelEnum;
+      }
+
+      // 🔎 Debugging access to rep targets per exerciseId
+      final repTargetEntry = _repTargetsByExercise[exerciseId];
+      if (repTargetEntry != null) {
+        print('🧠 [BB2] Rep targets found for $exerciseId → $repTargetEntry');
+      } else {
+        print('⚠️ [BB2] repTargets entry missing for $exerciseId');
+      }
+    });
+
+    print("✅ [BB2] exercisePeriodizationModels mapped: ${PeriodizationModelUtils.exercisePeriodizationModels.length}");
   }
+
+
 
 
 
@@ -1233,6 +1282,13 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       builder: (context, localSetState) {
         final exerciseName = exerciseController.text;
         print('🧠 Building row for exercise: "$exerciseName" (w$weekIndex d$dayIndex r$rowIndex)');
+
+        final exerciseId = nameToIdMap[exerciseName];
+        print('🔍 ID for $exerciseName: $exerciseId');
+
+        if (exerciseId != null) {
+          print('🔍 repTargets entry for $exerciseId: ${jsonEncode(repTargetsByExercise[exerciseId])}');
+        }
         final String? plannedRep = getRepTargetForExercise(
 
           exerciseName,
@@ -1251,8 +1307,10 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         final bool isExerciseNamed = exerciseName.isNotEmpty;
         final String hintWeight = (weightController.text.isEmpty && isExerciseNamed) ? '25.0' : '';
         final String hintReps = (repsController.text.isEmpty && isExerciseNamed && plannedRep != null)
-            ? plannedRep
+            ? plannedRep.split('x').first.trim()
             : '';
+
+        print('📋 repsController: "${repsController.text}", plannedRep: "$plannedRep", hintReps: "$hintReps"');
 
 
         final double? e1rm = PeriodizationModelUtils.calculateE1RM(
@@ -1299,17 +1357,37 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                             rirController.clear();
 
                             if (isPlanned) {
+                              print('🧾 [BB2] repTargetsByExercise contains: ${repTargetsByExercise?.keys}');
+                              print('🧾 [BB2] looking for: $exerciseId');
+                              print('🧾 [BB2] entry for $exerciseId: ${repTargetsByExercise?[exerciseId]}');
+
+                              // ✅ Normalize repTargets (flat → nested) for safety
+                              if (repTargetsByExercise?[exerciseId]?['repTargets'] is List) {
+                                final reps = repTargetsByExercise?[exerciseId]?['repTargets'];
+                                if (reps.isNotEmpty && reps.first is String) {
+                                  repTargetsByExercise?[exerciseId]?['repTargets'] = [List<String>.from(reps)];
+                                  print('🔄 [BB2] Normalized flat repTargets → nested for $exerciseId');
+                                }
+                              }
+
                               final repTarget = PeriodizationModelUtils.getSuggestedRepTargetByModel(
-                                exerciseName: exerciseId!, // 🧠 Must match how your map is keyed
-                                plannedIndex: getExerciseCountInWeek(selectedExerciseName, weekIndex, dayIndex, rowIndex),
+                                exerciseName: exerciseId!,
+                                plannedIndex: getExerciseCountInWeek(
+                                  selectedExerciseName,
+                                  weekIndex,
+                                  dayIndex,
+                                  rowIndex,
+                                ),
                                 weekIndex: weekIndex,
                                 repTargetsByExercise: repTargetsByExercise,
+                                plannedExerciseDetails: plannedExerciseDetails, // ✅ Pass it in here
                               );
+
 
                               // Do not set repsController.text — just clear it
                               repsController.clear();
-
                             }
+
                           });
                         },
                       );
