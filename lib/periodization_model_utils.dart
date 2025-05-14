@@ -9,6 +9,8 @@ import 'templates.dart';
 import 'exercise_details_screen.dart'; // Import your exercise details screen
 import 'top_sets_screen.dart';
 import 'Block_Planner.dart';
+import 'dart:convert';
+
 
 enum PeriodizationModelType {
   dailyUndulating, // <-- add this
@@ -113,10 +115,87 @@ class PeriodizationModelUtils {
     }
   }
 
+  static PeriodizationModelType stringToModel(String modelName) {
+    switch (modelName) {
+      case 'Linear Exposure':
+      case 'Linear, by Exposure':
+        return PeriodizationModelType.linearExposure;
 
-  static int getLinearClassicRepTarget(String exerciseName, int plannedIndex) {
-    return linearClassicDefaults[plannedIndex.clamp(0, linearClassicDefaults.length - 1)];
+      case 'Linear, Classic':
+        return PeriodizationModelType.linearClassic;
+
+      case 'DUP, Custom':
+        return PeriodizationModelType.dupCustom;
+
+      case 'DUP, Signature':
+        return PeriodizationModelType.dupSignature;
+
+      case 'Daily Undulating Periodization':
+        return PeriodizationModelType.dailyUndulating;
+
+      default:
+        return PeriodizationModelType.dupSignature; // Fallback to most generic
+    }
   }
+
+
+
+  static int getLinearClassicRepTarget({
+    required String exerciseId,
+    required int weekIndex,
+    required int plannedIndex,
+    required Map<String, dynamic> repTargetsByExercise,
+  }) {
+    print('🧪 [LC] Target for $exerciseId @ week $weekIndex, index $plannedIndex');
+
+    final repsMap = repTargetsByExercise[exerciseId]?['repTargets'];
+    if (repsMap == null || repsMap is! Map<String, dynamic>) {
+      print('⚠️ [LC] No repTargets map found for $exerciseId');
+      return 10;
+    }
+
+    final weekKey = 'week${weekIndex + 1}';
+    final rawWeekList = repsMap[weekKey];
+
+    print('🧪 [LC] Raw weekList for $exerciseId → $rawWeekList');
+    print('🧪 [LC] Type: ${rawWeekList.runtimeType}');
+
+    if (rawWeekList == null) {
+      print('⚠️ [LC] No data for $weekKey');
+      return 10;
+    }
+
+    List<String> normalized = [];
+
+    if (rawWeekList is List && rawWeekList.isNotEmpty) {
+      final first = rawWeekList.first;
+      if (first is String && first.contains(',')) {
+        normalized = first.split(',').map((s) => s.trim()).toList();
+        print('🛠️ [LC] Normalized from single string → $normalized');
+      } else if (first is String) {
+        normalized = List<String>.from(rawWeekList);
+        print('📦 [LC] Already a clean list → $normalized');
+      } else {
+        print('❌ [LC] Unrecognized structure in rep targets');
+        return 10;
+      }
+    } else {
+      print('⚠️ [LC] Empty or invalid weekList');
+      return 10;
+    }
+
+    final index = plannedIndex.clamp(0, normalized.length - 1);
+    final raw = normalized[index];
+    print('✅ [LC] Got rep target: $raw');
+
+    final match = RegExp(r'^(\d+)').firstMatch(raw);
+    return match != null ? int.tryParse(match.group(1)!) ?? 10 : 10;
+
+  }
+
+
+
+
 
   static int getLinearExposureRepTarget(String exerciseName, int exposureIndex) {
     return linearExposureDefaults[exposureIndex.clamp(0, linearExposureDefaults.length - 1)];
@@ -130,7 +209,11 @@ class PeriodizationModelUtils {
     String? rirText,
     int? weekIndex,
     Map<String, dynamic>? repTargetsByExercise,
+    Map<String, dynamic>? plannedExerciseDetails,
   }) {
+    print('🧠 [BB2] Rep target requested for: $exerciseName');
+    print('🧠 Model detected: ${exercisePeriodizationModels[exerciseName]}');
+
     final model = exercisePeriodizationModels[exerciseName] ?? PeriodizationModelType.dupSignature;
     print('🧠 getSuggestedRepTargetByModel → $exerciseName using model: $model (plannedIndex: $plannedIndex)');
 
@@ -161,8 +244,21 @@ class PeriodizationModelUtils {
           return reps;
 
         case PeriodizationModelType.linearClassic:
-          final reps = getLinearClassicRepTarget(exerciseName, plannedIndex);
-          print('📈 LinearClassic → $reps reps');
+        // 🔍 Confirm fallback loading from either source
+          final repTargets = repTargetsByExercise?[exerciseName]?['repTargets'] ??
+              plannedExerciseDetails?[exerciseName]?['repTargets'];
+
+          print('🧾 [BB2] repTargets used for $exerciseName: ${jsonEncode(repTargets)}');
+
+          final reps = getLinearClassicRepTarget(
+            exerciseId: exerciseName,
+            weekIndex: weekIndex ?? 0,
+            plannedIndex: plannedIndex,
+            repTargetsByExercise: {
+              exerciseName: {'repTargets': repTargets},
+            },
+          );
+          print('📈 LinearClassic → $reps reps (week: ${weekIndex ?? 0})');
           return reps;
 
         case PeriodizationModelType.linearExposure:
@@ -182,9 +278,10 @@ class PeriodizationModelUtils {
       }
     } catch (e) {
       print('⚠️ Error in getSuggestedRepTargetByModel for $exerciseName: $e');
-      return 10; // fallback
+      return 10;
     }
   }
+
 
   static int getDailyUndulatingRepTarget({
     required String exerciseName,
@@ -197,7 +294,6 @@ class PeriodizationModelUtils {
     print('🔄 getDailyUndulatingRepTarget → $reps reps for $exerciseName (index $plannedIndex of $weeklyFrequency freq)');
     return reps;
   }
-
 
 
 

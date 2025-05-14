@@ -359,21 +359,46 @@ class _BlockPlannerState extends State<Block_Planner> {
     );
 
     for (final exercise in exercises) {
-      final entry = exerciseSettings[exercise] ?? {};
+      final entry = Map<String, dynamic>.from(exerciseSettings[exercise] ?? {});
 
+      // ✅ Normalize repTargets before saving
+      final repTargets = entry['repTargets'];
+
+// ✅ Normalize: split flat strings and nest based on weeklyFrequency
+      if (repTargets is List && repTargets.isNotEmpty && repTargets.first is String) {
+        final flat = repTargets
+            .expand((e) => e.toString().split(','))
+            .map((s) => s.trim())
+            .where((s) => s.isNotEmpty)
+            .toList();
+
+        final weeklyFreq = int.tryParse(entry['weeklyFrequency'].toString()) ?? 3;
+        final numWeeks = (flat.length / weeklyFreq).ceil();
+
+        final nested = List.generate(numWeeks, (i) {
+          final start = i * weeklyFreq;
+          final end = (start + weeklyFreq).clamp(0, flat.length);
+          return flat.sublist(start, end);
+        });
+
+        entry['repTargets'] = nested;
+        print("🛠️ Normalized repTargets for $exercise: $nested");
+      }
+
+// ✅ Save as map for Firestore
       existingDetails[exercise] = {
         'periodizationModel': entry['periodizationModel'] ?? 'Linear Exposure',
-        'repTargets': entry['repTargets'] ?? [10, 8, 6],
+        'repTargets': _convertToMap(entry['repTargets']),
         'progressionModel': entry['progressionModel'] ?? 'linear',
         'increments': entry['increments'] ?? {'week': 2.5, 'block': 5.0},
-        'weeklyFrequency': entry['weeklyFrequency'] ?? 3, // ✅ must be here
+        'weeklyFrequency': entry['weeklyFrequency'] ?? 3,
         'maxWeightXReps': entry['maxWeightXReps'] ?? '',
-        'notes': entry['notes'] ?? '', // ✅ Ensure this is here
+        'notes': entry['notes'] ?? '',
       };
 
     }
-    print("📤 Saving plannedExerciseDetails:\n${jsonEncode(existingDetails)}");
 
+    print("📤 Saving plannedExerciseDetails:\n${jsonEncode(existingDetails)}");
 
     await docRef.set({
       'plannedExercises': exercises,
@@ -392,8 +417,25 @@ class _BlockPlannerState extends State<Block_Planner> {
     for (final ex in exercises) {
       print("• $ex: ${exerciseSettings[ex]?['weeklyFrequency']}");
     }
-
   }
+
+  Map<String, List<String>> _convertToMap(dynamic data) {
+    if (data is List && data.isNotEmpty) {
+      if (data.first is List) {
+        // ✅ Already nested (List<List<String>>), map to weeks
+        return {
+          for (int i = 0; i < data.length; i++)
+            'week${i + 1}': List<String>.from(data[i] as List)
+        };
+      } else if (data.first is String) {
+        // ✅ Flat list of strings → assign to week1
+        return {'week1': List<String>.from(data)};
+      }
+    }
+    // ❌ Invalid structure
+    return {};
+  }
+
 
 
 
@@ -835,8 +877,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     }
   }
 
-
-
   @override
   void initState() {
     super.initState();
@@ -849,7 +889,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             .where((e) => e.isNotEmpty)
             .map((e) => double.tryParse(e))
             .whereType<double>()
-            .where((v) => v > 0) // ✅ Remove 0.0
+            .where((v) => v > 0)
             .map((v) => v.toString())
             .join(', ');
 
@@ -857,97 +897,88 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       }
     });
 
-
     print("🛠️ [_ExerciseCard] INIT for: ${widget.exerciseName}");
     final settings = widget.exerciseSettings[widget.exerciseId];
     print("📦 Settings: $settings");
 
     if (settings != null) {
       final reps = settings['repTargets'];
-      if (reps != null) {
-        if (reps is List && reps.isNotEmpty) {
-          if (reps.first is List) {
-            // Multi-week structure (DUP Custom, Linear Classic, etc)
-            _repTargetsDisplayController.text =
-                reps.map((week) => week.join(' | ')).join(' || ');
-          } else {
-            // Flat list (Linear Exposure, DUP Signature, etc)
-            _repTargetsDisplayController.text = reps.join(', ');
-          }
+
+      if (reps is Map<String, dynamic>) {
+        // New format: Map<String, List<String>> → Convert to display string
+        final weekKeys = reps.keys.toList()..sort(); // sort to preserve week order
+        final weekStrings = weekKeys.map((k) {
+          final weekReps = List<String>.from(reps[k] ?? []);
+          return weekReps.join(' | ');
+        }).toList();
+
+        _repTargetsDisplayController.text = weekStrings.join(' || ');
+      } else if (reps is List && reps.isNotEmpty) {
+        if (reps.first is List) {
+          // Legacy: List<List<String>>
+          _repTargetsDisplayController.text =
+              (reps as List<List>).map((week) => week.join(' | ')).join(' || ');
+        } else if (reps.first is String) {
+          // Legacy: List<String> (single flat week)
+          _repTargetsDisplayController.text =
+              [reps.join(' | ')].join(' || ');
         }
       }
+
+
+
       final frequency = settings['weeklyFrequency'];
+      if (frequency != null) {
+        _weeklyFrequencyController.text = frequency.toString();
+      }
+
       final model = settings['periodizationModel'];
+      if (model != null &&
+          [
+            'Daily Undulating Periodization',
+            'DUP, Signature',
+            'DUP, Custom',
+            'Linear, Classic',
+            'Linear, by Exposure',
+          ].contains(model)) {
+        _selectedModel = model;
+      }
+
       final notes = settings['notes'];
+      if (notes != null) {
+        _notesController.text = notes.toString();
+      }
+
       final increments = settings['increments'];
       if (increments is Map) {
         final values = ['primary', 'secondary', 'tertiary', 'quaternary']
             .map((key) => increments[key])
             .whereType<num>()
-            .where((v) => v > 0) // ✅ Ignore 0.0
+            .where((v) => v > 0)
             .map((v) => v.toString())
             .toList();
-
         _incrementsController.text = values.join(', ');
       }
 
-      if (notes != null) {
-        _notesController.text = notes.toString();
-      }
       final maxCombo = settings['maxWeightXReps'];
-      if (maxCombo != null && maxCombo is String && maxCombo.contains('x')) {
+      if (maxCombo is String && maxCombo.contains('x')) {
         final parts = maxCombo.split('x');
         if (parts.length == 2) {
           _maxWeightController.text = parts[0].trim();
           _maxRepsController.text = parts[1].trim();
         }
       }
-
-      print("🧠 [INIT] ${widget.exerciseName} weeklyFrequency: $frequency");
-      print("🧠 [INIT] ${widget.exerciseName} periodizationModel: $model");
-
-      if (reps is List) {
-        // Handle both flat List<String> and nested List<List<String>>
-        if (reps.isNotEmpty && reps.first is List) {
-          _repTargetsDisplayController.text =
-              reps.map((weekList) => (weekList as List).join(' | ')).join(' || ');
-        } else {
-          _repTargetsDisplayController.text = reps.join(', ');
-        }
-      }
-
-
-      if (frequency != null) {
-        _weeklyFrequencyController.text = frequency.toString();
-      }
-
-      if (model != null &&
-          [
-            'Daily Undulating Periodization', // new one at top
-            'DUP, Signature',
-            'DUP, Custom',
-            'Linear, Classic',
-            'Linear, by Exposure',
-          ]
-              .contains(model)) {
-        _selectedModel = model;
-      }
     }
 
-    // ✅ Add this listener for live updates
+    // ✅ Live frequency update
     _weeklyFrequencyController.addListener(() {
       final value = int.tryParse(_weeklyFrequencyController.text.trim());
       if (value != null) {
         widget.onUpdateSetting(widget.exerciseId, 'weeklyFrequency', value);
       }
     });
-
-
   }
 
-
-
-  @override
   @override
   void dispose() {
     _maxWeightController.removeListener(_updateE1RM);
@@ -968,29 +999,33 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     // ✅ Save repTargets from display text if not empty
     final repText = _repTargetsDisplayController.text.trim();
     if (repText.isNotEmpty) {
-      if (repText.contains('||')) {
-        // likely List<List<String>>
-        final parsed = repText
-            .split('||')
-            .map((week) => week
+      final parts = repText.split('||');
+      final result = <String, List<String>>{};
+      for (int i = 0; i < parts.length; i++) {
+        final values = parts[i]
             .split('|')
             .map((s) => s.trim())
             .where((s) => s.isNotEmpty)
-            .toList())
             .toList();
-        widget.onUpdateSetting(widget.exerciseId, 'repTargets', parsed);
-        print("💾 [DISPOSE] Saved repTargets for ${widget.exerciseName}: $parsed");
-      } else {
-        // likely List<String>
-        final parsed = repText
-            .split(',')
-            .map((s) => s.trim())
-            .where((s) => s.isNotEmpty)
-            .toList();
-        widget.onUpdateSetting(widget.exerciseId, 'repTargets', parsed);
-        print("💾 [DISPOSE] Saved repTargets for ${widget.exerciseName}: $parsed");
+        result['week${i + 1}'] = values;
       }
+
+      // Convert map of weeks into List<List<String>>
+      final parsed = result.values.toList();
+      widget.onUpdateSetting(widget.exerciseId, 'repTargets', parsed);
+
+      final formatted = parsed
+          .asMap()
+          .entries
+          .map((e) => 'week${e.key + 1}: [${e.value.join(', ')}]')
+          .join(' | ');
+      print("💾 [DISPOSE] Saved repTargets for ${widget.exerciseName}: {$formatted}");
+
+
+
+
     }
+
 
     // Clean and normalize increments
     final cleaned = _incrementsController.text
@@ -1050,6 +1085,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
 
 
+
   void _updateE1RM() {
     final weight = double.tryParse(_maxWeightController.text);
     final reps = double.tryParse(_maxRepsController.text);
@@ -1061,7 +1097,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     }
   }
 
-  List<String> getDefaultReps(String model, int frequency) {
+  List<List<String>> getDefaultReps(String model, int frequency) {
     switch (model) {
       case 'Daily Undulating Periodization':
         const dupMap = {
@@ -1075,29 +1111,30 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         };
         final reps = dupMap[frequency] ??
             List.generate(frequency, (i) => [10, 5, 8, 1, 12, 4, 6][i % 7]);
-        return reps.map((r) => '$r x 3').toList();
+        return [reps.map((r) => '$r x 3').toList()]; // 👈 one week
 
       case 'Linear, Classic':
-        const linearClassicDefaults = [10, 8, 6];
-        return linearClassicDefaults
-            .take(frequency)
-            .map((r) => '$r x 3')
-            .toList();
+        final base = List.generate(12, (week) {
+          return List.generate(frequency, (i) {
+            final reps = (12 - week - i).clamp(3, 15);
+            final sets = reps < 5 ? 4 : 3;
+            return "$reps x $sets";
+          });
+        });
+        return base;
 
       case 'Linear, by Exposure':
-        const linearExposureDefaults = [12, 10, 8, 6, 4, 2];
-        return linearExposureDefaults
-            .take(frequency)
-            .map((r) => '$r x 3')
-            .toList();
+        final reps = [12, 10, 8, 6, 4, 2].take(frequency).map((r) => '$r x 3').toList();
+        return [reps];
 
       case 'DUP, Signature':
         const dupMin = 6;
         const dupMax = 10;
-        return List.generate(
+        final week = List.generate(
           frequency,
               (i) => '${dupMin + (i % (dupMax - dupMin + 1))} x 3',
         );
+        return [week];
 
       case 'DUP, Custom':
         const baseCycle = [
@@ -1105,15 +1142,21 @@ class _ExerciseCardState extends State<_ExerciseCard> {
           [9, 4, 7, 11, 2, 5, 8],
           [12, 3, 6, 1, 9, 4, 7],
         ];
-        return baseCycle[0]
-            .take(frequency)
-            .map((r) => '$r x ${r < 5 ? 4 : 3}')
-            .toList();
+        final block = List.generate(12, (week) {
+          final pattern = baseCycle[week % baseCycle.length];
+          return List.generate(frequency, (i) {
+            final r = pattern[i % pattern.length];
+            final s = r < 5 ? 4 : 3;
+            return '$r x $s';
+          });
+        });
+        return block;
 
       default:
-        return List.generate(frequency, (i) => '10 x 3');
+        return [List.generate(frequency, (i) => '10 x 3')];
     }
   }
+
 
 
 
@@ -1121,17 +1164,16 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     final blockLength = 12;
     final weeklyFreq = int.tryParse(_weeklyFrequencyController.text) ?? 3;
 
-    // Get existing or create default structured reps: [["12 x 3", "10 x 4", "8 x 3"], ...]
+    // Load from exerciseSettings
+    final existing = widget.exerciseSettings[exerciseName]?['repTargets'];
     List<List<String>> reps;
 
-    final existing = widget.exerciseSettings[exerciseName]?['repTargets'];
-
-    final isLinearClassic = existing is List &&
+    // ✅ Normalize: if it's List<String>, wrap into List<List<String>>
+    if (existing is List && existing.isNotEmpty && existing.first is String) {
+      reps = [List<String>.from(existing)];
+    } else if (existing is List &&
         existing.isNotEmpty &&
-        existing.first is String &&
-        (existing as List).first.toString().contains('x');
-
-    if (isLinearClassic) {
+        existing.first is List) {
       reps = List<List<String>>.from(existing.map((e) => List<String>.from(e)));
     } else {
       reps = List.generate(blockLength, (week) {
@@ -1143,12 +1185,12 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       });
     }
 
-    // Create controllers: List of List of TextEditingController
-    List<List<TextEditingController>> controllers = List.generate(
+    // Create text controllers
+    final controllers = List.generate(
       reps.length,
           (week) => List.generate(
         reps[week].length,
-            (slot) => TextEditingController(text: reps[week][slot]),
+            (i) => TextEditingController(text: reps[week][i]),
       ),
     );
 
@@ -1212,22 +1254,27 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             ),
             TextButton(
               onPressed: () {
-                final updated = controllers.map(
-                      (weekControllers) => weekControllers.map((c) => c.text.trim()).toList(),
-                ).toList();
+                final updated = controllers.map((weekList) {
+                  return weekList.expand((controller) {
+                    final input = controller.text.trim();
+                    return input
+                        .split(',')
+                        .map((s) => s.trim())
+                        .where((s) => s.isNotEmpty);
+                  }).toList();
+                }).toList();
+
+
+
 
                 setState(() {
                   widget.onUpdateSetting(exerciseName, 'repTargets', updated);
-
-                  // Flatten and preview in display field
                   _repTargetsDisplayController.text =
-                      updated.expand((week) => week).join(', ');
+                      updated.expand((x) => x).join(', ');
                 });
 
                 Navigator.pop(ctx);
               },
-
-
               child: const Text("Save", style: TextStyle(color: Colors.white)),
             ),
           ],
@@ -1236,18 +1283,32 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     );
   }
 
+
   void _showDailyUndulatingRepTargetDialog(String exerciseName) {
     final frequency = int.tryParse(_weeklyFrequencyController.text) ?? 3;
 
-    // Load existing reps or default pattern
+    // Load and normalize to List<List<String>>
     final existing = widget.exerciseSettings[exerciseName]?['repTargets'];
-    List<String> reps = (existing is List<String> && existing.isNotEmpty)
-        ? existing
-        : PeriodizationModelUtils.getDefaultReps(
-        PeriodizationModelType.dailyUndulating, frequency);
+    List<List<String>> reps;
 
-    final List<TextEditingController> controllers =
-    reps.map((r) => TextEditingController(text: r)).toList();
+    if (existing is List && existing.isNotEmpty && existing.first is String) {
+      reps = [List<String>.from(existing)];
+    } else if (existing is List &&
+        existing.isNotEmpty &&
+        existing.first is List) {
+      reps = List<List<String>>.from(existing.map((e) => List<String>.from(e)));
+    } else {
+      final defaults = PeriodizationModelUtils.getDefaultReps(
+        PeriodizationModelType.dailyUndulating,
+        frequency,
+      );
+      reps = [defaults];
+    }
+
+    final weekReps = reps.first; // Only first week relevant for DUP daily
+    final controllers = weekReps
+        .map((r) => TextEditingController(text: r))
+        .toList();
 
     showDialog(
       context: context,
@@ -1289,14 +1350,14 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             ),
             TextButton(
               onPressed: () {
-                final updated = controllers
+                final updatedWeek = controllers
                     .map((c) => c.text.trim())
                     .where((s) => s.isNotEmpty)
                     .toList();
 
                 setState(() {
-                  widget.onUpdateSetting(exerciseName, 'repTargets', updated);
-                  _repTargetsDisplayController.text = updated.join(', ');
+                  widget.onUpdateSetting(exerciseName, 'repTargets', [updatedWeek]); // ✅ Wrapped in outer list
+                  _repTargetsDisplayController.text = updatedWeek.join(', ');
                 });
 
                 Navigator.pop(ctx);
@@ -1310,13 +1371,28 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   }
 
 
+
   void _showDupSignatureRepTargetDialog(String exerciseName) async {
     int min = 6;
     int max = 10;
 
-    // Load existing values if they exist
+    // Try to extract previous [min, max] from saved values (as legacy Map)
     final existing = widget.exerciseSettings[exerciseName]?['repTargets'];
-    if (existing is Map<String, dynamic>) {
+    if (existing is List &&
+        existing.isNotEmpty &&
+        existing.first is List &&
+        (existing.first as List).first.toString().contains('x')) {
+      // Extract inferred min/max if possible from saved reps like "6 x 3", "7 x 3", ...
+      final repsStrings = List<String>.from(existing.first);
+      final repValues = repsStrings
+          .map((s) => int.tryParse(s.split('x').first.trim()))
+          .whereType<int>()
+          .toList();
+      if (repValues.isNotEmpty) {
+        min = repValues.reduce((a, b) => a < b ? a : b);
+        max = repValues.reduce((a, b) => a > b ? a : b);
+      }
+    } else if (existing is Map<String, dynamic>) {
       min = existing['min'] ?? min;
       max = existing['max'] ?? max;
     }
@@ -1376,10 +1452,12 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             ),
             TextButton(
               onPressed: () {
+                final reps = [
+                  for (int r = tempMin; r <= tempMax; r++) "${r} x 3"
+                ];
                 setState(() {
-                  final range = {'min': tempMin, 'max': tempMax};
-                  widget.onUpdateSetting(exerciseName, 'repTargets', range);
-                  _repTargetsDisplayController.text = "$tempMin – $tempMax reps";
+                  widget.onUpdateSetting(exerciseName, 'repTargets', [reps]); // ✅ wrap as List<List<String>>
+                  _repTargetsDisplayController.text = "${tempMin} – ${tempMax} reps";
                 });
                 Navigator.pop(ctx);
               },
@@ -1390,6 +1468,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       },
     );
   }
+
 
 
   void _showLinearExposureRepTargetDialog(String exerciseName) async {
@@ -1661,14 +1740,17 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             TextButton(
               onPressed: () {
                 final updated = controllers
-                    .expand((weekList) => weekList.map((c) => c.text.trim()))
-                    .where((text) => text.isNotEmpty)
-                    .toList();
+                    .map((weekList) => weekList.map((c) => c.text.trim()).toList())
+                    .toList();  // ✅ List<List<String>>
+
 
                 setState(() {
                   widget.onUpdateSetting(exerciseName, 'repTargets', updated);
-                  _repTargetsDisplayController.text = updated.join(', ');
+
+                  // For preview, flatten to single string
+                  _repTargetsDisplayController.text = updated.expand((x) => x).join(', ');
                 });
+
 
                 Navigator.pop(ctx);
               },
