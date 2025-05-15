@@ -30,6 +30,7 @@ class _BlockPlannerState extends State<Block_Planner> {
   Map<String, dynamic> exerciseRepTargets = {};
   Map<String, dynamic> plannedExerciseDetails = {};
 
+
   Map<String, Map<String, dynamic>> exerciseSettings = {};
 
   @override
@@ -464,10 +465,6 @@ class _BlockPlannerState extends State<Block_Planner> {
     return {};
   }
 
-
-
-
-
   Future<void> _loadPlannedExercises() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -556,9 +553,6 @@ class _BlockPlannerState extends State<Block_Planner> {
 
     }, SetOptions(merge: true));
   }
-
-
-
 
   @override
   Widget build(BuildContext context) {
@@ -693,12 +687,6 @@ class _BlockPlannerState extends State<Block_Planner> {
                       },
                     ),
 
-
-
-
-
-
-
                   );
                 },
               ),
@@ -825,8 +813,6 @@ class _BlockPlannerState extends State<Block_Planner> {
   }
 
 
-
-
   Widget _smallInput(String label, {bool multiline = false}) {
     return SizedBox(
       width: 140,
@@ -846,14 +832,11 @@ class _BlockPlannerState extends State<Block_Planner> {
   }
 }
 
-
 class _ExerciseCard extends StatefulWidget {
   final String exerciseName;
   final String exerciseId;
   final Map<String, Map<String, dynamic>> exerciseSettings;
   final void Function(String exerciseName, String key, dynamic value) onUpdateSetting;
-
-
 
   const _ExerciseCard({
     required this.exerciseId,
@@ -861,10 +844,6 @@ class _ExerciseCard extends StatefulWidget {
     required this.exerciseSettings,
     required this.onUpdateSetting,
   });
-
-
-
-
 
   @override
   State<_ExerciseCard> createState() => _ExerciseCardState();
@@ -880,10 +859,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   final TextEditingController _incrementsController = TextEditingController();
   final TextEditingController _maxWeightController = TextEditingController();
   final TextEditingController _maxRepsController = TextEditingController();
+  Map<String, Map<String, String>>? _cachedRepTargetMap;
   double _currentE1RM = 0.0;
-
-
-
 
   String _selectedModel = 'DUP, Signature'; // default or load from Firestore
 
@@ -937,6 +914,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         // 🧠 New format: Map<week, Map<instance, value>>
         final sortedWeeks = reps.keys.toList()..sort();
         final formatted = <String>[];
+        final safeMap = <String, Map<String, String>>{};
 
         for (final week in sortedWeeks) {
           final instanceMap = reps[week];
@@ -946,12 +924,21 @@ class _ExerciseCardState extends State<_ExerciseCard> {
               final bi = int.tryParse(b.replaceAll('instance', '')) ?? 0;
               return ai.compareTo(bi);
             });
-            final repList = sortedInstances.map((key) => instanceMap[key].toString()).join(' | ');
+
+            final weekSafeMap = <String, String>{};
+            for (final key in sortedInstances) {
+              final val = instanceMap[key].toString();
+              weekSafeMap[key] = val;
+            }
+
+            safeMap[week] = weekSafeMap;
+            final repList = sortedInstances.map((key) => weekSafeMap[key]!).join(' | ');
             formatted.add(repList);
           }
         }
 
         _repTargetsDisplayController.text = formatted.join(' || ');
+        _cachedRepTargetMap = safeMap; // 💾 cache for dialog
       }
 
       final frequency = settings['weeklyFrequency'];
@@ -1105,11 +1092,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     super.dispose();
   }
 
-
-
-
-
-
   void _updateE1RM() {
     final weight = double.tryParse(_maxWeightController.text);
     final reps = double.tryParse(_maxRepsController.text);
@@ -1181,25 +1163,44 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     }
   }
 
-
-
-
   void _showLinearClassicRepTargetDialog(String exerciseName) {
     final blockLength = 12;
     final weeklyFreq = int.tryParse(_weeklyFrequencyController.text) ?? 3;
 
     // Load from exerciseSettings
-    final existing = widget.exerciseSettings[exerciseName]?['repTargets'];
+    final existing = _cachedRepTargetMap ?? widget.exerciseSettings[exerciseName]?['repTargets'];
+    print('🧪 [BP] Opening rep target dialog for $exerciseName');
+    print('🧪 [BP] Found existing rep targets: ${jsonEncode(existing)}');
+
     List<List<String>> reps;
 
-    // ✅ Normalize: if it's List<String>, wrap into List<List<String>>
-    if (existing is List && existing.isNotEmpty && existing.first is String) {
-      reps = [List<String>.from(existing)];
-    } else if (existing is List &&
-        existing.isNotEmpty &&
-        existing.first is List) {
-      reps = List<List<String>>.from(existing.map((e) => List<String>.from(e)));
+    if (existing is Map<String, dynamic>) {
+      print('✅ [BP] Using saved rep targets from Map structure');
+
+      reps = List.generate(blockLength, (weekIndex) {
+        final weekKey = 'week${weekIndex + 1}';
+        final weekMap = existing[weekKey] as Map<String, dynamic>? ?? {};
+        print('📦 [BP] Week $weekKey map: $weekMap');
+
+        return List.generate(weeklyFreq, (i) {
+          final instanceKey = 'instance${i + 1}';
+          final saved = weekMap[instanceKey]?.toString();
+
+          if (saved != null && saved.trim().isNotEmpty) {
+            return saved;
+          } else {
+            // 💡 Use fallback default if nothing saved
+            final defaultReps = (12 - weekIndex - i).clamp(3, 15);
+            final sets = defaultReps < 5 ? 4 : 3;
+            return "$defaultReps x $sets";
+          }
+        });
+
+      });
+
     } else {
+      print('⚠️ [BP] No valid saved repTargets found — falling back to default');
+
       reps = List.generate(blockLength, (week) {
         return List.generate(weeklyFreq, (i) {
           final repsVal = (12 - week - i).clamp(3, 15);
@@ -1208,7 +1209,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         });
       });
     }
-
     // Create text controllers
     final controllers = List.generate(
       reps.length,
@@ -1320,34 +1320,38 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     );
   }
 
-
   void _showDailyUndulatingRepTargetDialog(String exerciseName) {
     final frequency = int.tryParse(_weeklyFrequencyController.text) ?? 3;
 
-    // Load and normalize to List<List<String>>
-    final existing = widget.exerciseSettings[exerciseName]?['repTargets'];
-    List<List<String>> reps;
+    // Load raw saved value
+    final existing = _cachedRepTargetMap ?? widget.exerciseSettings[exerciseName]?['repTargets'];
 
-    if (existing is List && existing.isNotEmpty && existing.first is String) {
-      reps = [List<String>.from(existing)];
-    } else if (existing is List &&
-        existing.isNotEmpty &&
-        existing.first is List) {
-      reps = List<List<String>>.from(existing.map((e) => List<String>.from(e)));
-    } else {
-      final defaults = PeriodizationModelUtils.getDefaultReps(
-        PeriodizationModelType.dailyUndulating,
-        frequency,
-      );
-      reps = [
-        for (final week in defaults.values)
-          week.values.toList()
-      ];
+    print("📍 [DUP Daily] Raw data: $existing");
 
-    }
+    // Get defaults
+    final defaults = PeriodizationModelUtils.getDefaultReps(
+      PeriodizationModelType.dailyUndulating,
+      frequency,
+    );
+    final defaultReps = defaults['week1']?.values.toList() ?? [];
 
-    final weekReps = reps.first; // Only first week relevant for DUP daily
-    final controllers = weekReps
+    // Normalize to saved user reps
+    List<String> repsList = List.generate(frequency, (i) {
+      String? resolved;
+      if (existing is Map<String, dynamic>) {
+        final weekMap = existing['week1'] as Map<String, dynamic>?;
+        resolved = weekMap?['instance${i + 1}']?.toString();
+        print("🔍 [DUP Daily] instance${i + 1} = $resolved");
+        if (resolved != null && resolved.isNotEmpty) return resolved;
+      }
+      // fallback to default
+      final fallback = (i < defaultReps.length) ? defaultReps[i] : '10 x 3';
+      print("📦 [DUP Daily] instance${i + 1} fallback = $fallback");
+      return fallback;
+    });
+
+
+    final controllers = repsList
         .map((r) => TextEditingController(text: r))
         .toList();
 
@@ -1391,30 +1395,31 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             ),
             TextButton(
               onPressed: () {
-                final Map<String, Map<String, String>> result = {};
-
                 final instanceMap = <String, String>{};
+
                 for (int i = 0; i < controllers.length; i++) {
-                  final input = controllers[i].text.trim();
-                  if (input.isNotEmpty) {
-                    instanceMap['instance${i + 1}'] = input;
-                  }
+                  final value = controllers[i].text.trim();
+                  print('✅ Saving instance${i + 1}: "$value"');
+                  instanceMap['instance${i + 1}'] = value;
                 }
 
-                if (instanceMap.isNotEmpty) {
-                  result['week1'] = instanceMap;
-                }
+                final result = {'week1': instanceMap};
+                print('🧠 Final saved map: ${jsonEncode(result)}');
 
                 setState(() {
                   widget.onUpdateSetting(exerciseName, 'repTargets', result);
 
-                  // Optional: display preview
-                  final preview = instanceMap.values.join(', ');
+                  final preview = instanceMap.values
+                      .take(5)
+                      .where((r) => r.isNotEmpty)
+                      .join(' | ') +
+                      (instanceMap.length > 5 ? ' ...' : '');
                   _repTargetsDisplayController.text = preview;
                 });
 
                 Navigator.pop(ctx);
               },
+
 
               child: const Text("Save", style: TextStyle(color: Colors.white)),
             ),
@@ -1426,30 +1431,30 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
 
 
+
   void _showDupSignatureRepTargetDialog(String exerciseName) async {
     int min = 6;
     int max = 10;
 
-    // Try to extract previous [min, max] from saved values (as legacy Map)
-    final existing = widget.exerciseSettings[exerciseName]?['repTargets'];
-    if (existing is List &&
-        existing.isNotEmpty &&
-        existing.first is List &&
-        (existing.first as List).first.toString().contains('x')) {
-      // Extract inferred min/max if possible from saved reps like "6 x 3", "7 x 3", ...
-      final repsStrings = List<String>.from(existing.first);
-      final repValues = repsStrings
-          .map((s) => int.tryParse(s.split('x').first.trim()))
-          .whereType<int>()
-          .toList();
-      if (repValues.isNotEmpty) {
-        min = repValues.reduce((a, b) => a < b ? a : b);
-        max = repValues.reduce((a, b) => a > b ? a : b);
-      }
+    final existing = _cachedRepTargetMap ?? widget.exerciseSettings[exerciseName]?['repTargets'];
+    print("🧪 [DUP Signature] Raw repTargets: $existing");
+
+    if (existing is Map<String, dynamic> && existing.containsKey('repRange')) {
+      final range = existing['repRange'] as Map<String, dynamic>;
+      min = int.tryParse(range['min']?.toString() ?? '') ?? min;
+      max = int.tryParse(range['max']?.toString() ?? '') ?? max;
+      print("🔢 Loaded from repRange → min: $min, max: $max");
     } else if (existing is Map<String, dynamic>) {
-      min = existing['min'] ?? min;
-      max = existing['max'] ?? max;
+      // fallback check (legacy format)
+      final fallback = existing['week1']?['instance1']?.toString();
+      final parts = fallback?.split('–');
+      if (parts != null && parts.length == 2) {
+        min = int.tryParse(parts[0].trim()) ?? min;
+        max = int.tryParse(parts[1].replaceAll('reps', '').trim()) ?? max;
+        print("🔁 Inferred from legacy fallback → min: $min, max: $max");
+      }
     }
+
 
     await showDialog(
       context: context,
@@ -1506,23 +1511,38 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             ),
             TextButton(
               onPressed: () {
-                final reps = [
-                  for (int r = tempMin; r <= tempMax; r++) "${r} x 3"
-                ];
-
-                final instanceMap = <String, String>{
-                  for (int i = 0; i < reps.length; i++) 'instance${i + 1}': reps[i]
+                final firestoreResult = {
+                  'min': tempMin,
+                  'max': tempMax,
+                  'week1': {
+                    'instance1': "$tempMin – $tempMax reps",
+                  },
                 };
 
-                final result = {'week1': instanceMap};
+// ✅ Save to shared in-memory cache with compatible structure
+                final memoryCache = {
+                  'repRange': {
+                    'min': tempMin.toString(),
+                    'max': tempMax.toString(),
+                  }
+                };
+
+                _cachedRepTargetMap = memoryCache;
+
+
+                print("💾 [DUP Signature] Saving min=$tempMin, max=$tempMax");
+
+                // ✅ Update cache used by dialog open
+                _cachedRepTargetMap = memoryCache;
 
                 setState(() {
-                  widget.onUpdateSetting(exerciseName, 'repTargets', result);
-                  _repTargetsDisplayController.text = "${tempMin} – ${tempMax} reps";
+                  widget.onUpdateSetting(exerciseName, 'repTargets', firestoreResult);
+                  _repTargetsDisplayController.text = "$tempMin – $tempMax reps";
                 });
 
                 Navigator.pop(ctx);
-              },
+              }
+              ,
 
               child: const Text("Save"),
             ),
@@ -1555,25 +1575,31 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     final totalWeeks = blockEnd.difference(blockStart).inDays ~/ 7;
     final exposureCount = (totalWeeks * weeklyFreq).clamp(1, 36);
 
-    List<String> repsList;
-    final existing = widget.exerciseSettings[exerciseName]?['repTargets'];
+    final existing = _cachedRepTargetMap ?? widget.exerciseSettings[exerciseName]?['repTargets'];
 
-    if (existing is List && existing.isNotEmpty && existing.first is String) {
-      // Pad or trim the saved list
-      repsList = List<String>.from(existing);
-      if (repsList.length < exposureCount) {
-        final last = repsList.last;
-        repsList.addAll(List.filled(exposureCount - repsList.length, last));
-      } else if (repsList.length > exposureCount) {
-        repsList = repsList.sublist(0, exposureCount);
+    print("📍 [LE] Raw data: $existing");
+    print('🧪 [LinearExposure] Raw existing: ${jsonEncode(existing)}');
+
+    List<String> repsList = List.generate(exposureCount, (i) {
+      final reps = (12 - (i * 7 / exposureCount).round()).clamp(5, 15);
+      final sets = (i % 2 == 0) ? 3 : 4;
+      return "$reps x $sets";
+    });
+
+// 🧠 Overlay saved instance values if present
+    if (existing is Map<String, dynamic>) {
+      final weekMap = existing['week1'];
+      if (weekMap is Map<String, dynamic>) {
+        for (int i = 0; i < exposureCount; i++) {
+          final key = 'instance${i + 1}';
+          final saved = weekMap[key]?.toString();
+          if (saved != null && saved.isNotEmpty) {
+            repsList[i] = saved;
+          }
+        }
       }
-    } else {
-      repsList = List.generate(exposureCount, (i) {
-        final reps = (12 - (i * 7 / exposureCount).round()).clamp(5, 15);
-        final sets = (i % 2 == 0) ? 3 : 4;
-        return "$reps x $sets";
-      });
     }
+
 
     final controllers = repsList
         .map((value) => TextEditingController(text: value))
@@ -1657,25 +1683,30 @@ class _ExerciseCardState extends State<_ExerciseCard> {
               onPressed: () {
                 final updated = controllers
                     .map((c) => c.text.trim())
-                    .where((s) => s.isNotEmpty)
                     .toList();
 
-                // 🔁 Map to instance keys: instance1, instance2, ...
+                // 🧪 DEBUG: Print each field input
+                for (int i = 0; i < updated.length; i++) {
+                  print('✅ Exposure ${i + 1}: ${updated[i]}');
+                }
+
+                // ✅ Create a proper instance map
                 final instanceMap = <String, String>{
                   for (int i = 0; i < updated.length; i++) 'instance${i + 1}': updated[i]
                 };
 
-                final result = {'week1': instanceMap}; // 👈 Exposure-based model: flat week1 instance map
+                final result = {'week1': instanceMap};
 
+                // ✅ Save to state and update display controller
                 setState(() {
                   widget.onUpdateSetting(exerciseName, 'repTargets', result);
-                  _repTargetsDisplayController.text = updated.join(', ');
+                  _repTargetsDisplayController.text = updated.take(5).join(' | ') +
+                      (updated.length > 5 ? ' ...' : '');
+
                 });
 
                 Navigator.pop(ctx);
               },
-
-
 
               child: const Text("Save", style: TextStyle(color: Colors.white)),
             ),
@@ -1684,6 +1715,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       },
     );
   }
+
 
 
 
@@ -1698,7 +1730,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       [12, 3, 6, 1, 9, 4, 7],
     ];
 
-    // Dynamically extend each week's pattern to match frequency
     List<List<int>> extendedCycle = baseCycle.map((weekPattern) {
       if (weekPattern.length >= frequency) return weekPattern.sublist(0, frequency);
       final extended = [...weekPattern];
@@ -1710,43 +1741,29 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       return extended;
     }).toList();
 
-    // Try to load saved values
-    List<List<String>> repsByWeek;
-    final existing = widget.exerciseSettings[widget.exerciseName]?['repTargets'];
-    print("📍 [DUP Custom] Raw data: $existing");
-    if (existing is List &&
-        existing.isNotEmpty &&
-        existing.first is List &&
-        (existing.first as List).first.toString().contains('x')) {
+    // ✅ Safely normalize saved format
+    final raw = _cachedRepTargetMap ?? widget.exerciseSettings[exerciseName]?['repTargets'];
+    print("📍 [DUP Custom] Raw data: $raw");
 
-      final List<List<String>> raw = List<List<String>>.from(
-          existing.map((e) => List<String>.from(e)));
-
-      // 🛡 Extend inner weeks to match current frequency
-      repsByWeek = raw.map((weekList) {
-        if (weekList.length >= frequency) {
-          return weekList.sublist(0, frequency);
-        } else {
-          final extended = [...weekList];
-          int i = 0;
-          while (extended.length < frequency) {
-            extended.add(weekList[i % weekList.length]);
-            i++;
-          }
-          return extended;
-        }
-      }).toList();
+    Map<String, dynamic> saved = {};
+    if (raw is Map<String, dynamic>) {
+      saved = raw;
     }
-    else {
-      repsByWeek = List.generate(blockLength, (week) {
-        final pattern = extendedCycle[week % extendedCycle.length];
-        return List.generate(frequency, (i) {
-          final reps = pattern[i];
-          final sets = reps < 5 ? 4 : 3;
-          return "$reps x $sets";
-        });
+
+    List<List<String>> repsByWeek = List.generate(blockLength, (week) {
+      final weekKey = 'week${week + 1}';
+      final savedWeek = saved[weekKey] as Map<String, dynamic>? ?? {};
+
+      return List.generate(frequency, (i) {
+        final instanceKey = 'instance${i + 1}';
+        final savedVal = savedWeek[instanceKey]?.toString();
+        if (savedVal != null && savedVal.isNotEmpty) return savedVal;
+
+        final fallback = extendedCycle[week % extendedCycle.length][i % extendedCycle[0].length];
+        final sets = fallback < 5 ? 4 : 3;
+        return "$fallback x $sets";
       });
-    }
+    });
 
     final controllers = List.generate(
       repsByWeek.length,
@@ -1810,10 +1827,12 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             TextButton(
               onPressed: () {
                 final updated = controllers.map((weekList) {
-                  return weekList.map((c) => c.text.trim()).where((s) => s.isNotEmpty).toList();
-                }).toList(); // List<List<String>> from input
+                  return weekList.map((c) {
+                    final t = c.text.trim();
+                    return t.isNotEmpty ? t : ""; // Preserve empty slots
+                  }).toList();
+                }).toList();
 
-                // 🔁 Convert to map format: { week1: {instance1: "10 x 3", ...}, ... }
                 final result = <String, Map<String, String>>{};
                 for (int w = 0; w < updated.length; w++) {
                   final weekKey = 'week${w + 1}';
@@ -1826,7 +1845,13 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                 setState(() {
                   widget.onUpdateSetting(exerciseName, 'repTargets', result);
-                  _repTargetsDisplayController.text = updated.expand((x) => x).join(', ');
+
+                  // 🔍 Show preview of first 3 weeks, skip blanks
+                  _repTargetsDisplayController.text = updated
+                      .take(3)
+                      .map((weekList) => weekList.where((r) => r.isNotEmpty).join(' | '))
+                      .join(' || ') +
+                      (updated.length > 3 ? ' ...' : '');
                 });
 
                 Navigator.pop(ctx);
@@ -1839,6 +1864,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       },
     );
   }
+
 
 
 
