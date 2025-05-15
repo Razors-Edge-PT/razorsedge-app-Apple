@@ -305,55 +305,42 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     try {
       switch (model) {
         case PeriodizationModelType.linearExposure:
-          if (repTargets is List && repTargets.isNotEmpty) {
-            List<String> flatList;
-
-            // 🔁 Handle nested case (repTargets = [["10 x 3", "8 x 3"]])
-            if (repTargets.first is List) {
-              flatList = List<String>.from(repTargets.expand((e) => List<String>.from(e)));
-            } else {
-              flatList = List<String>.from(repTargets);
-            }
-
-            if (plannedIndex < flatList.length) {
-              final raw = flatList[plannedIndex];
-              final match = RegExp(r'^(\d+)').firstMatch(raw);
-              print('🔢 linearExposure: $raw → ${match?.group(1)}');
-              return match?.group(1);
-            }
-          }
-          break;
+          print('🧠 [BB2] linearExposure fallback for $exerciseId @ $plannedIndex');
+          final reps = PeriodizationModelUtils.getLinearExposureRepTarget(
+            exerciseId: exerciseId,
+            exposureIndex: plannedIndex,
+            repTargetsByExercise: {}, // not used
+            plannedExerciseDetails: plannedExerciseDetails,
+          );
+          return reps.toString();
 
 
         case PeriodizationModelType.linearClassic:
         case PeriodizationModelType.dupCustom:
-          final countInWeek = getExerciseCountInWeek(exerciseName, week, day, row);
           final weekKey = 'week${week + 1}';
+          final instanceKey = 'instance${plannedIndex + 1}';
 
           if (repTargets is Map &&
-              repTargets.containsKey(weekKey) &&
-              repTargets[weekKey] is List &&
-              countInWeek < (repTargets[weekKey] as List).length) {
-
-            final raw = repTargets[weekKey][countInWeek]?.toString() ?? '';
+              repTargets[weekKey] is Map &&
+              repTargets[weekKey][instanceKey] != null) {
+            final raw = repTargets[weekKey][instanceKey].toString();
             final match = RegExp(r'^(\d+)').firstMatch(raw);
-            print('🔢 ${model.toString()} $weekKey [$countInWeek]: $raw → ${match?.group(1)}');
+            print('🔢 ${model.toString()} $weekKey/$instanceKey → $raw → ${match?.group(1)}');
             return match?.group(1);
           }
           break;
 
-
         case PeriodizationModelType.dupSignature:
         case PeriodizationModelType.dailyUndulating:
-        final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
-          exerciseName: exerciseId,
-          plannedIndex: plannedIndex,
-          repTargetsByExercise: repTargetsByExercise,
-          plannedExerciseDetails: plannedExerciseDetails,
-        );
-
-        print('🔁 Model-based rep: $rep for $exerciseId using $model');
+          final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
+            exerciseName: exerciseId,
+            plannedIndex: plannedIndex,
+            weekIndex: week, // ✅ critical for looking up week1/week2 etc.
+            plannedExerciseDetails: plannedExerciseDetails, // ✅ now the only source needed
+          );
+          print('🔁 Model-based rep: $rep for $exerciseId using $model');
           return rep.toString();
+
 
         default:
           print('❌ Unknown model type for $exerciseId: $model');
@@ -366,6 +353,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     print('! No matching rep target found for "$exerciseName" (model: $model)');
     return null;
   }
+
 
 
   int getExerciseCountInWeek(String exerciseName, int week, int day, int row) {
@@ -434,6 +422,11 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
       // 🔎 Debugging access to rep targets per exerciseId
       final repTargetEntry = _repTargetsByExercise[exerciseId];
+      if (repTargetEntry is Map && repTargetEntry.containsKey('repTargets')) {
+        print('📦 repTargets structure valid for $exerciseId');
+      } else {
+        print('⚠️ Malformed repTargets entry for $exerciseId: $repTargetEntry');
+      }
       if (repTargetEntry != null) {
         print('🧠 [BB2] Rep targets found for $exerciseId → $repTargetEntry');
       } else {
@@ -1307,8 +1300,9 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         final bool isExerciseNamed = exerciseName.isNotEmpty;
         final String hintWeight = (weightController.text.isEmpty && isExerciseNamed) ? '25.0' : '';
         final String hintReps = (repsController.text.isEmpty && isExerciseNamed && plannedRep != null)
-            ? plannedRep.split('x').first.trim()
+            ? RegExp(r'^\d+').firstMatch(plannedRep)?.group(0) ?? ''
             : '';
+
 
         print('📋 repsController: "${repsController.text}", plannedRep: "$plannedRep", hintReps: "$hintReps"');
 
