@@ -389,6 +389,8 @@ class _BlockPlannerState extends State<Block_Planner> {
           ? repTargets
           : _convertToMap(repTargets);
 
+      entry['repTargets'] = savedTargets; // <-- ✅ This was missing before
+
       print("🧪 Saving repTargets for $exercise: ${jsonEncode(savedTargets)}");
       // ✅ Special handling for Daily Undulating Periodization
       final model = entry['periodizationModel'];
@@ -886,6 +888,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   @override
   void initState() {
     super.initState();
+    print("📦 [INIT] Full settings map: ${widget.exerciseSettings}");
 
     _incrementsFocusNode.addListener(() {
       if (!_incrementsFocusNode.hasFocus) {
@@ -910,41 +913,20 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     if (settings != null) {
       final reps = settings['repTargets'];
 
-      if (reps is Map<String, dynamic>) {
-        // 🧠 New format: Map<week, Map<instance, value>>
-        final sortedWeeks = reps.keys.toList()..sort();
-        final formatted = <String>[];
-        final safeMap = <String, Map<String, String>>{};
+      // ✅ Skip DUP Signature (which uses {min, max})
+      final isSignature = reps is Map<String, dynamic> &&
+          reps.containsKey('min') &&
+          reps.containsKey('max');
 
-        for (final week in sortedWeeks) {
-          final instanceMap = reps[week];
-          if (instanceMap is Map<String, dynamic>) {
-            final sortedInstances = instanceMap.keys.toList()..sort((a, b) {
-              final ai = int.tryParse(a.replaceAll('instance', '')) ?? 0;
-              final bi = int.tryParse(b.replaceAll('instance', '')) ?? 0;
-              return ai.compareTo(bi);
-            });
-
-            final weekSafeMap = <String, String>{};
-            for (final key in sortedInstances) {
-              final val = instanceMap[key].toString();
-              weekSafeMap[key] = val;
-            }
-
-            safeMap[week] = weekSafeMap;
-            final repList = sortedInstances.map((key) => weekSafeMap[key]!).join(' | ');
-            formatted.add(repList);
-          }
-        }
-
-        _repTargetsDisplayController.text = formatted.join(' || ');
-        _cachedRepTargetMap = safeMap; // 💾 cache for dialog
+      if (!isSignature) {
+        _syncCachedRepTargets(widget.exerciseId); // 🧠 Apply for all other models
       }
 
       final frequency = settings['weeklyFrequency'];
       if (frequency != null) {
         _weeklyFrequencyController.text = frequency.toString();
       }
+
 
       final model = settings['periodizationModel'];
       if (model != null &&
@@ -1092,6 +1074,49 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     super.dispose();
   }
 
+  void _syncCachedRepTargets(String exerciseName) {
+    final settings = widget.exerciseSettings[exerciseName];
+    final reps = settings?['repTargets'];
+
+    print("🛠️ [_syncCachedRepTargets] for $exerciseName → $reps");
+
+    if (reps is Map<String, dynamic> &&
+        reps.keys.any((k) => k.toString().startsWith('week'))) {
+      final sortedWeeks = reps.keys.toList()..sort();
+      final formatted = <String>[];
+      final safeMap = <String, Map<String, String>>{};
+
+      for (final week in sortedWeeks) {
+        final instanceMap = reps[week];
+        if (instanceMap is Map<String, dynamic>) {
+          final sortedInstances = instanceMap.keys.toList()
+            ..sort((a, b) {
+              final ai = int.tryParse(a.replaceAll('instance', '')) ?? 0;
+              final bi = int.tryParse(b.replaceAll('instance', '')) ?? 0;
+              return ai.compareTo(bi);
+            });
+
+          final weekSafeMap = <String, String>{};
+          for (final key in sortedInstances) {
+            final val = instanceMap[key]?.toString() ?? '';
+            weekSafeMap[key] = val;
+          }
+
+          safeMap[week] = weekSafeMap;
+          formatted.add(sortedInstances.map((k) => weekSafeMap[k]!).join(' | '));
+        }
+      }
+
+      _repTargetsDisplayController.text = formatted.join(' || ');
+      _cachedRepTargetMap = safeMap;
+      print("✅ [_syncCachedRepTargets] Cache updated for $exerciseName");
+    } else {
+      print("! [_syncCachedRepTargets] No valid repTargets found (value: $reps)");
+    }
+  }
+
+
+
   void _updateE1RM() {
     final weight = double.tryParse(_maxWeightController.text);
     final reps = double.tryParse(_maxRepsController.text);
@@ -1164,6 +1189,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   }
 
   void _showLinearClassicRepTargetDialog(String exerciseName) {
+
+    _syncCachedRepTargets(exerciseName); // 🔁 Pull from exerciseSettings if available
+
     final blockLength = 12;
     final weeklyFreq = int.tryParse(_weeklyFrequencyController.text) ?? 3;
 
@@ -1277,42 +1305,46 @@ class _ExerciseCardState extends State<_ExerciseCard> {
               child: const Text("Cancel", style: TextStyle(color: Colors.white)),
             ),
             TextButton(
-              onPressed: () {
-                final result = <String, Map<String, String>>{};
+        onPressed: () {
+        final result = <String, Map<String, String>>{};
 
-                for (int weekIndex = 0; weekIndex < controllers.length; weekIndex++) {
-                  final weekList = controllers[weekIndex];
-                  final weekKey = 'week${weekIndex + 1}';
-                  final instanceMap = <String, String>{};
+        for (int weekIndex = 0; weekIndex < controllers.length; weekIndex++) {
+        final weekList = controllers[weekIndex];
+        final weekKey = 'week${weekIndex + 1}';
+        final instanceMap = <String, String>{};
 
-                  for (int i = 0; i < weekList.length; i++) {
-                    final input = weekList[i].text.trim();
-                    if (input.isNotEmpty) {
-                      instanceMap['instance${i + 1}'] = input;
-                    }
-                  }
+        for (int i = 0; i < weekList.length; i++) {
+        final input = weekList[i].text.trim();
+        print('📝 [SAVE] Week $weekKey, Instance ${i + 1} = "$input"');
 
-                  if (instanceMap.isNotEmpty) {
-                    result[weekKey] = instanceMap;
-                  }
-                }
+        if (input.isNotEmpty) {
+        instanceMap['instance${i + 1}'] = input;
+        }
+        }
 
-                setState(() {
-                  widget.onUpdateSetting(exerciseName, 'repTargets', result);
+        if (instanceMap.isNotEmpty) {
+        result[weekKey] = instanceMap;
+        }
+        }
 
-                  // Optional: update preview controller
-                  final previewText = result.entries.map((e) {
-                    final reps = e.value.values.join(' | ');
-                    return reps;
-                  }).join(' || ');
+        print('💾 [SAVE] Final result to save: ${jsonEncode(result)}');
 
-                  _repTargetsDisplayController.text = previewText;
-                });
+        setState(() {
+        widget.onUpdateSetting(exerciseName, 'repTargets', result);
 
-                Navigator.pop(ctx);
-              },
+        final previewText = result.entries.map((e) {
+        final reps = e.value.values.join(' | ');
+        return reps;
+        }).join(' || ');
 
-              child: const Text("Save", style: TextStyle(color: Colors.white)),
+        _repTargetsDisplayController.text = previewText;
+        });
+
+        Navigator.pop(ctx);
+        },
+
+
+        child: const Text("Save", style: TextStyle(color: Colors.white)),
             ),
           ],
         );
@@ -1321,6 +1353,10 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   }
 
   void _showDailyUndulatingRepTargetDialog(String exerciseName) {
+
+    _syncCachedRepTargets(exerciseName); // 🔁 Pull saved data from settings if available
+
+
     final frequency = int.tryParse(_weeklyFrequencyController.text) ?? 3;
 
     // Load raw saved value
