@@ -46,4 +46,5 @@ dependencies {
     implementation 'com.google.firebase:firebase-firestore'
 }
 
+project.ext.googleServicesJsonFile = file("2google-services.json")
 // ✅ Do NOT include classpath or apply plugin here anymore:

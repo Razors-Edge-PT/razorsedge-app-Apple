@@ -999,29 +999,48 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     // ✅ Save repTargets from display text as week → instance → value
     final repText = _repTargetsDisplayController.text.trim();
     if (repText.isNotEmpty) {
-      final parts = repText.split('||');
-      final result = <String, Map<String, String>>{};
+      final model = PeriodizationModelUtils.exercisePeriodizationModels[widget.exerciseId];
 
-      for (int i = 0; i < parts.length; i++) {
-        final weekKey = 'week${i + 1}';
-        final instanceMap = <String, String>{};
+      final Map<String, Map<String, String>> result = {};
 
-        final values = parts[i]
+      if (model == PeriodizationModelType.linearClassic) {
+        // 🟦 Linear By Week → Parse multiple weeks via ||
+        final parts = repText.split('||');
+        for (int i = 0; i < parts.length; i++) {
+          final weekKey = 'week${i + 1}';
+          final instanceMap = <String, String>{};
+
+          final values = parts[i]
+              .split('|')
+              .map((s) => s.trim())
+              .where((s) => s.isNotEmpty)
+              .toList();
+
+          for (int j = 0; j < values.length; j++) {
+            instanceMap['instance${j + 1}'] = values[j];
+          }
+
+          result[weekKey] = instanceMap;
+        }
+      } else {
+        // ✅ All other models (exposure-based and DUP-week) → Single week1
+        final values = repText
             .split('|')
             .map((s) => s.trim())
             .where((s) => s.isNotEmpty)
             .toList();
 
-        for (int j = 0; j < values.length; j++) {
-          instanceMap['instance${j + 1}'] = values[j];
-        }
+        final instanceMap = <String, String>{
+          for (int i = 0; i < values.length; i++) 'instance${i + 1}': values[i]
+        };
 
-        result[weekKey] = instanceMap;
+        result['week1'] = instanceMap;
       }
 
       widget.onUpdateSetting(widget.exerciseId, 'repTargets', result);
-      print("💾 [DISPOSE] Saved repTargets (map) for ${widget.exerciseName}: $result");
+      print("💾 [DISPOSE] Saved repTargets for ${widget.exerciseName} using model $model → $result");
     }
+
 
     // ✅ Clean and normalize increments
     final cleaned = _incrementsController.text
@@ -1357,43 +1376,42 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   }
 
   void _showDailyUndulatingRepTargetDialog(String exerciseName) {
-
     _syncCachedRepTargets(exerciseName); // 🔁 Pull saved data from settings if available
-
 
     final frequency = int.tryParse(_weeklyFrequencyController.text) ?? 3;
 
     // Load raw saved value
     final existing = _cachedRepTargetMap ?? widget.exerciseSettings[exerciseName]?['repTargets'];
+    print("📍 [DUP Daily - By Week] Raw data: $existing");
 
-    print("📍 [DUP Daily] Raw data: $existing");
-
-    // Get defaults
+    // Get fallback defaults
     final defaults = PeriodizationModelUtils.getDefaultReps(
       PeriodizationModelType.dailyUndulating,
       frequency,
     );
     final defaultReps = defaults['week1']?.values.toList() ?? [];
 
-    // Normalize to saved user reps
-    List<String> repsList = List.generate(frequency, (i) {
-      String? resolved;
+    // Normalize to saved user reps and sets
+    final repsControllers = <TextEditingController>[];
+    final setsControllers = <TextEditingController>[];
+
+    for (int i = 0; i < frequency; i++) {
+      String fallback = (i < defaultReps.length) ? defaultReps[i] : '10 x 3';
+      String saved = '';
+
       if (existing is Map<String, dynamic>) {
         final weekMap = existing['week1'] as Map<String, dynamic>?;
-        resolved = weekMap?['instance${i + 1}']?.toString();
-        print("🔍 [DUP Daily] instance${i + 1} = $resolved");
-        if (resolved != null && resolved.isNotEmpty) return resolved;
+        saved = weekMap?['instance${i + 1}']?.toString() ?? '';
       }
-      // fallback to default
-      final fallback = (i < defaultReps.length) ? defaultReps[i] : '10 x 3';
-      print("📦 [DUP Daily] instance${i + 1} fallback = $fallback");
-      return fallback;
-    });
 
+      final combined = saved.isNotEmpty ? saved : fallback;
+      final parts = combined.split('x').map((s) => s.trim()).toList();
+      final reps = parts.isNotEmpty ? parts[0] : '';
+      final sets = parts.length > 1 ? parts[1] : '';
 
-    final controllers = repsList
-        .map((r) => TextEditingController(text: r))
-        .toList();
+      repsControllers.add(TextEditingController(text: reps));
+      setsControllers.add(TextEditingController(text: sets));
+    }
 
     showDialog(
       context: context,
@@ -1401,28 +1419,51 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         return AlertDialog(
           backgroundColor: Colors.blueGrey.shade900,
           title: const Text(
-            "Edit Daily Undulating Reps (1 Week)",
+            "Daily Undulating Reps (1 Week Pattern)",
             style: TextStyle(color: Colors.white),
           ),
           content: SizedBox(
             width: double.maxFinite,
             child: ListView.builder(
               shrinkWrap: true,
-              itemCount: controllers.length,
+              itemCount: frequency,
               itemBuilder: (context, i) {
                 return Padding(
                   padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: TextField(
-                    controller: controllers[i],
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      labelText: "Day ${i + 1}",
-                      labelStyle: const TextStyle(color: Colors.white70),
-                      filled: true,
-                      fillColor: Colors.blueGrey.shade800,
-                      border: const OutlineInputBorder(),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                    ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: repsControllers[i],
+                          keyboardType: TextInputType.number,
+                          style: const TextStyle(color: Colors.white),
+                          decoration: InputDecoration(
+                            labelText: "Day ${i + 1} Reps",
+                            labelStyle: const TextStyle(color: Colors.white70),
+                            filled: true,
+                            fillColor: Colors.blueGrey.shade800,
+                            border: const OutlineInputBorder(),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: setsControllers[i],
+                          keyboardType: TextInputType.number,
+                          style: const TextStyle(color: Colors.white),
+                          decoration: InputDecoration(
+                            labelText: "Sets",
+                            labelStyle: const TextStyle(color: Colors.white70),
+                            filled: true,
+                            fillColor: Colors.blueGrey.shade800,
+                            border: const OutlineInputBorder(),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 );
               },
@@ -1437,10 +1478,12 @@ class _ExerciseCardState extends State<_ExerciseCard> {
               onPressed: () {
                 final instanceMap = <String, String>{};
 
-                for (int i = 0; i < controllers.length; i++) {
-                  final value = controllers[i].text.trim();
-                  print('✅ Saving instance${i + 1}: "$value"');
-                  instanceMap['instance${i + 1}'] = value;
+                for (int i = 0; i < frequency; i++) {
+                  final reps = repsControllers[i].text.trim();
+                  final sets = setsControllers[i].text.trim();
+                  final combined = reps.isNotEmpty && sets.isNotEmpty ? "$reps x $sets" : '';
+                  instanceMap['instance${i + 1}'] = combined;
+                  print('✅ Saving instance${i + 1}: "$combined"');
                 }
 
                 final result = {'week1': instanceMap};
@@ -1459,8 +1502,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                 Navigator.pop(ctx);
               },
-
-
               child: const Text("Save", style: TextStyle(color: Colors.white)),
             ),
           ],
@@ -1468,6 +1509,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       },
     );
   }
+
 
 
 

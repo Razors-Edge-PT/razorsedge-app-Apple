@@ -89,11 +89,13 @@ class PeriodizationModelUtils {
 
 
 
-  static Map<String, Map<String, String>> getDefaultReps(PeriodizationModelType model, int frequency) {
-    Map<String, Map<String, String>> result = {};
+  static Map<String, Map<String, String>> getDefaultReps(
+      PeriodizationModelType model, int frequency) {
+    final Map<String, Map<String, String>> result = {};
 
     switch (model) {
       case PeriodizationModelType.dailyUndulating:
+      // 🧠 New Daily Undulating – by *week* → repeats weekly
         const pattern = [10, 5, 8, 1, 12, 4, 6];
         final reps = List.generate(frequency, (i) => pattern[i % pattern.length]);
         result['week1'] = {
@@ -102,22 +104,27 @@ class PeriodizationModelUtils {
         break;
 
       case PeriodizationModelType.linearClassic:
-        final classic = linearClassicDefaults.take(frequency).toList();
+      // 📉 Linear – by *week* → weekly drop in reps, set 1 week only, rest computed later
+        final weekly = [12, 10, 8, 6, 4, 2]; // Can expand to 12 later
         result['week1'] = {
-          for (int i = 0; i < classic.length; i++) 'instance${i + 1}': '${classic[i]} x 3'
+          for (int i = 0; i < frequency; i++)
+            'instance${i + 1}': '${weekly[0]} x 3' // Week 1 reps only
         };
         break;
 
       case PeriodizationModelType.linearExposure:
-        final exposure = linearExposureDefaults.take(frequency).toList();
+      // 🪜 Linear – by *exposure* → full rep sequence worked through in order
+        final reps = List.generate(
+            frequency * 12, (i) => (12 - (i ~/ frequency)).clamp(4, 12));
         result['week1'] = {
-          for (int i = 0; i < exposure.length; i++) 'instance${i + 1}': '${exposure[i]} x 3'
+          for (int i = 0; i < frequency; i++) 'instance${i + 1}': '${reps[i]} x 3'
         };
         break;
 
       case PeriodizationModelType.dupSignature:
-        final min = dupSignatureDefaults[0];
-        final max = dupSignatureDefaults[1];
+      // 🧬 Signature → exposure-style, but with fixed range
+        const min = 6;
+        const max = 12;
         final reps = List.generate(frequency, (i) => min + i % (max - min + 1));
         result['week1'] = {
           for (int i = 0; i < reps.length; i++) 'instance${i + 1}': '${reps[i]} x 3'
@@ -125,7 +132,7 @@ class PeriodizationModelUtils {
         break;
 
       case PeriodizationModelType.dupCustom:
-      default:
+      // 🧱 Default fallback – safe pattern
         result['week1'] = {
           for (int i = 0; i < frequency; i++) 'instance${i + 1}': '10 x 3'
         };
@@ -134,6 +141,7 @@ class PeriodizationModelUtils {
 
     return result;
   }
+
 
 
   static PeriodizationModelType stringToModel(String modelName) {
@@ -303,39 +311,41 @@ class PeriodizationModelUtils {
       switch (model) {
         case PeriodizationModelType.dailyUndulating:
           final repTargetsRaw = plannedExerciseDetails?[exerciseName]?['repTargets'];
-          final weekKey = 'week${(weekIndex ?? 0) + 1}';
-
-          // ✅ Always fall back to week1 if other weeks are missing (DUP Daily uses same week)
-          final sourceWeekKey = (repTargetsRaw is Map<String, dynamic> && repTargetsRaw.containsKey(weekKey))
-              ? weekKey
-              : 'week1';
-
           final weekMap = repTargetsRaw is Map<String, dynamic>
-              ? repTargetsRaw[sourceWeekKey] as Map<String, dynamic>?
+              ? repTargetsRaw['week1'] as Map<String, dynamic>?
               : null;
 
           if (weekMap == null || weekMap.isEmpty) {
-            print('⚠️ [DUP] No usable weekMap found for $sourceWeekKey');
+            print('⚠️ [DUP By Week] No usable data in week1 for $exerciseName');
             return 10;
           }
 
-          // 🧠 Convert to sorted list of instance keys (instance1, instance2, etc.)
-          final sortedInstances = weekMap.entries.toList()
+          // Sort instance keys: instance1, instance2, ...
+          final sortedInstances = weekMap.entries
+              .where((e) => e.key.startsWith('instance'))
+              .toList()
             ..sort((a, b) => a.key.compareTo(b.key));
 
-          if (plannedIndex >= sortedInstances.length) {
-            print('⚠️ [DUP] plannedIndex $plannedIndex out of range → default 10');
+          final int frequency = sortedInstances.length;
+
+          if (frequency == 0) {
+            print('⚠️ [DUP By Week] No instances found for $exerciseName');
             return 10;
           }
 
-          final raw = sortedInstances[plannedIndex].value?.toString() ?? '';
-          print('📦 [DUP] Resolved from $sourceWeekKey → ${sortedInstances[plannedIndex].key}: $raw');
+          // Loop through same week1 pattern each week based on plannedIndex
+          final instanceIndex = plannedIndex % frequency;
+          final instanceEntry = sortedInstances[instanceIndex];
+          final raw = instanceEntry.value?.toString() ?? '';
+
+          print('📦 [DUP By Week] Using instance${instanceIndex + 1} = $raw');
 
           final match = RegExp(r'^(\d+)').firstMatch(raw);
           final parsed = match != null ? int.tryParse(match.group(1)!) ?? 10 : 10;
 
-          print('📈 [DUP] Parsed → $parsed reps (week: $sourceWeekKey, instance: ${sortedInstances[plannedIndex].key})');
+          print('📈 [DUP By Week] Parsed → $parsed reps (cycled instance ${instanceIndex + 1})');
           return parsed;
+
 
         case PeriodizationModelType.dupSignature:
           final reps = getSuggestedRepTarget(
