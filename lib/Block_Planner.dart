@@ -576,7 +576,11 @@ class _BlockPlannerState extends State<Block_Planner> {
               children: [
                 ElevatedButton.icon(
                   icon: const Icon(Icons.add, size: 16),
-                  label: const Text("Add Exercises"),
+                  label: const Text(
+                    "Add Exercises",
+                    style: TextStyle(color: Colors.pink),
+                  ),
+
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.blueGrey.shade700,
                     foregroundColor: Colors.white,

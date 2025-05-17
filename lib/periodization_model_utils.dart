@@ -305,12 +305,17 @@ class PeriodizationModelUtils {
           final repTargetsRaw = plannedExerciseDetails?[exerciseName]?['repTargets'];
           final weekKey = 'week${(weekIndex ?? 0) + 1}';
 
+          // ✅ Always fall back to week1 if other weeks are missing (DUP Daily uses same week)
+          final sourceWeekKey = (repTargetsRaw is Map<String, dynamic> && repTargetsRaw.containsKey(weekKey))
+              ? weekKey
+              : 'week1';
+
           final weekMap = repTargetsRaw is Map<String, dynamic>
-              ? repTargetsRaw[weekKey] as Map<String, dynamic>?
+              ? repTargetsRaw[sourceWeekKey] as Map<String, dynamic>?
               : null;
 
           if (weekMap == null || weekMap.isEmpty) {
-            print('⚠️ [DUP] No weekMap for $weekKey');
+            print('⚠️ [DUP] No usable weekMap found for $sourceWeekKey');
             return 10;
           }
 
@@ -324,17 +329,13 @@ class PeriodizationModelUtils {
           }
 
           final raw = sortedInstances[plannedIndex].value?.toString() ?? '';
-          print('📦 [DUP] Resolved from $weekKey → ${sortedInstances[plannedIndex].key}: $raw');
+          print('📦 [DUP] Resolved from $sourceWeekKey → ${sortedInstances[plannedIndex].key}: $raw');
 
           final match = RegExp(r'^(\d+)').firstMatch(raw);
           final parsed = match != null ? int.tryParse(match.group(1)!) ?? 10 : 10;
 
-          print('📈 [DUP] Parsed → $parsed reps (week: $weekKey, instance: ${sortedInstances[plannedIndex].key})');
+          print('📈 [DUP] Parsed → $parsed reps (week: $sourceWeekKey, instance: ${sortedInstances[plannedIndex].key})');
           return parsed;
-
-
-
-
 
         case PeriodizationModelType.dupSignature:
           final reps = getSuggestedRepTarget(
@@ -415,6 +416,15 @@ class PeriodizationModelUtils {
     return reps;
   }
 
+  static Map<String, Map<String, String>> expandDupDailyWeek1(
+      Map<String, String> week1Map,
+      int totalWeeks,
+      ) {
+    return {
+      for (int w = 0; w < totalWeeks; w++)
+        'week${w + 1}': Map<String, String>.from(week1Map)
+    };
+  }
 
 
 

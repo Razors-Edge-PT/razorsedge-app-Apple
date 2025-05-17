@@ -420,15 +420,31 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         PeriodizationModelUtils.exercisePeriodizationModels[exerciseId] = modelEnum;
       }
 
-      // 🔎 Debugging access to rep targets per exerciseId
+      // 🧠 Expand DUP Daily repTargets if only week1 is present
       final repTargetEntry = _repTargetsByExercise[exerciseId];
-      if (repTargetEntry is Map && repTargetEntry.containsKey('repTargets')) {
+      if (repTargetEntry is Map &&
+          repTargetEntry.containsKey('repTargets') &&
+          modelName == 'Daily Undulating Periodization') {
+        final map = repTargetEntry['repTargets'];
+        if (map is Map<String, dynamic> && map.keys.length == 1 && map.containsKey('week1')) {
+          final expanded = PeriodizationModelUtils.expandDupDailyWeek1(
+            Map<String, String>.from(map['week1']),
+            12,
+          );
+          _repTargetsByExercise[exerciseId]['repTargets'] = expanded;
+          print('🔁 Expanded DUP Daily week1 for $exerciseId');
+        }
+      }
+
+      // 🔎 Debugging access to rep targets per exerciseId
+      final updatedEntry = _repTargetsByExercise[exerciseId];
+      if (updatedEntry is Map && updatedEntry.containsKey('repTargets')) {
         print('📦 repTargets structure valid for $exerciseId');
       } else {
-        print('⚠️ Malformed repTargets entry for $exerciseId: $repTargetEntry');
+        print('⚠️ Malformed repTargets entry for $exerciseId: $updatedEntry');
       }
-      if (repTargetEntry != null) {
-        print('🧠 [BB2] Rep targets found for $exerciseId → $repTargetEntry');
+      if (updatedEntry != null) {
+        print('🧠 [BB2] Rep targets found for $exerciseId → $updatedEntry');
       } else {
         print('⚠️ [BB2] repTargets entry missing for $exerciseId');
       }
@@ -436,6 +452,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
     print("✅ [BB2] exercisePeriodizationModels mapped: ${PeriodizationModelUtils.exercisePeriodizationModels.length}");
   }
+
 
 
 
