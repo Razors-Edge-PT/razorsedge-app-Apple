@@ -309,25 +309,24 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           final reps = PeriodizationModelUtils.getLinearExposureRepTarget(
             exerciseId: exerciseId,
             exposureIndex: plannedIndex,
-            repTargetsByExercise: repTargetsByExercise,
+            repTargetsByExercise: { exerciseId: { 'repTargets': repTargets } },
             plannedExerciseDetails: plannedExerciseDetails,
           );
           return reps.toString();
 
         case PeriodizationModelType.linearClassic:
         case PeriodizationModelType.dupCustom:
-          final weekKey = 'week${week + 1}';
-          final instanceKey = 'instance${plannedIndex + 1}';
+        final indexInWeek = getExerciseCountInWeek(exerciseName, week, day, row);
 
-          if (repTargets is Map &&
-              repTargets[weekKey] is Map &&
-              repTargets[weekKey][instanceKey] != null) {
-            final raw = repTargets[weekKey][instanceKey].toString();
-            final match = RegExp(r'^(\d+)').firstMatch(raw);
-            print('🔢 ${model.toString()} $weekKey/$instanceKey → $raw → ${match?.group(1)}');
-            return match?.group(1);
-          }
-          break;
+        final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
+          exerciseName: exerciseId,
+          plannedIndex: indexInWeek, // ✅ This resets each week
+          weekIndex: week,
+          plannedExerciseDetails: plannedExerciseDetails,
+        );
+
+        print('🔁 DUP by Week rep: $rep for $exerciseId');
+          return rep.toString();
 
         case PeriodizationModelType.dupSignature:
         case PeriodizationModelType.dailyUndulating:
@@ -335,7 +334,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             exerciseName: exerciseId,
             plannedIndex: plannedIndex,
             weekIndex: week,
-            repTargetsByExercise: repTargetsByExercise,
+            repTargetsByExercise: { exerciseId: { 'repTargets': repTargets } },
             plannedExerciseDetails: plannedExerciseDetails,
           );
           print('🔁 Model-based rep: $rep for $exerciseId using $model');
@@ -352,6 +351,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     print('! No matching rep target found for "$exerciseName" (model: $model)');
     return null;
   }
+
 
 
 

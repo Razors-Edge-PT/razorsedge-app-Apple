@@ -1798,100 +1798,79 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     );
   }
 
-
-
-
-
   void _showDupCustomRepTargetDialog(String exerciseName) {
+    _syncCachedRepTargets(exerciseName);
     final frequency = int.tryParse(_weeklyFrequencyController.text) ?? 3;
-    final blockLength = 12;
 
-    final baseCycle = [
-      [10, 5, 8, 3, 12, 1, 6],
-      [9, 4, 7, 11, 2, 5, 8],
-      [12, 3, 6, 1, 9, 4, 7],
-    ];
-
-    List<List<int>> extendedCycle = baseCycle.map((weekPattern) {
-      if (weekPattern.length >= frequency) return weekPattern.sublist(0, frequency);
-      final extended = [...weekPattern];
-      int i = 0;
-      while (extended.length < frequency) {
-        extended.add(weekPattern[i % weekPattern.length]);
-        i++;
-      }
-      return extended;
-    }).toList();
-
-    // ✅ Safely normalize saved format
+    // Load saved or default data
     final raw = _cachedRepTargetMap ?? widget.exerciseSettings[exerciseName]?['repTargets'];
-    print("📍 [DUP Custom] Raw data: $raw");
+    final savedMap = raw is Map<String, dynamic> ? Map<String, dynamic>.from(raw['week1'] ?? {}) : {};
 
-    Map<String, dynamic> saved = {};
-    if (raw is Map<String, dynamic>) {
-      saved = raw;
-    }
-
-    List<List<String>> repsByWeek = List.generate(blockLength, (week) {
-      final weekKey = 'week${week + 1}';
-      final savedWeek = saved[weekKey] as Map<String, dynamic>? ?? {};
-
-      return List.generate(frequency, (i) {
-        final instanceKey = 'instance${i + 1}';
-        final savedVal = savedWeek[instanceKey]?.toString();
-        if (savedVal != null && savedVal.isNotEmpty) return savedVal;
-
-        final fallback = extendedCycle[week % extendedCycle.length][i % extendedCycle[0].length];
-        final sets = fallback < 5 ? 4 : 3;
-        return "$fallback x $sets";
-      });
+    final defaultPattern = [10, 5, 8, 3, 12, 1, 6];
+    final fallback = List.generate(frequency, (i) {
+      final base = defaultPattern[i % defaultPattern.length];
+      final sets = base < 5 ? 4 : 3;
+      return '$base x $sets';
     });
 
-    final controllers = List.generate(
-      repsByWeek.length,
-          (week) => List.generate(
-        repsByWeek[week].length,
-            (i) => TextEditingController(text: repsByWeek[week][i]),
-      ),
-    );
+    final reps = List<String>.generate(frequency, (i) {
+      final key = 'instance${i + 1}';
+      return savedMap[key]?.toString() ?? fallback[i];
+    });
+
+    final repsControllers = <TextEditingController>[];
+    final setsControllers = <TextEditingController>[];
+
+    for (final r in reps) {
+      final parts = r.split('x').map((s) => s.trim()).toList();
+      repsControllers.add(TextEditingController(text: parts.isNotEmpty ? parts[0] : '10'));
+      setsControllers.add(TextEditingController(text: parts.length > 1 ? parts[1] : '3'));
+    }
 
     showDialog(
       context: context,
       builder: (ctx) {
         return AlertDialog(
           backgroundColor: Colors.blueGrey.shade900,
-          title: const Text("Rep Targets by Week", style: TextStyle(color: Colors.white)),
+          title: const Text("Rep Targets (1 Week)", style: TextStyle(color: Colors.white)),
           content: SizedBox(
             width: double.maxFinite,
             child: ListView.builder(
               shrinkWrap: true,
-              itemCount: blockLength,
-              itemBuilder: (context, week) {
+              itemCount: frequency,
+              itemBuilder: (context, i) {
                 return Padding(
                   padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  child: Row(
                     children: [
-                      Text("Week ${week + 1}", style: const TextStyle(color: Colors.white70)),
-                      const SizedBox(height: 4),
-                      Wrap(
-                        spacing: 8,
-                        children: List.generate(
-                          frequency,
-                              (i) => SizedBox(
-                            width: 100,
-                            child: TextField(
-                              controller: controllers[week][i],
-                              style: const TextStyle(color: Colors.white, fontSize: 12),
-                              decoration: InputDecoration(
-                                hintText: "e.g. 10 x 3",
-                                hintStyle: const TextStyle(color: Colors.white38),
-                                filled: true,
-                                fillColor: Colors.blueGrey.shade800,
-                                border: const OutlineInputBorder(),
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-                              ),
-                            ),
+                      Expanded(
+                        child: TextField(
+                          controller: repsControllers[i],
+                          keyboardType: TextInputType.number,
+                          style: const TextStyle(color: Colors.white),
+                          decoration: InputDecoration(
+                            labelText: "Day ${i + 1} Reps",
+                            labelStyle: const TextStyle(color: Colors.white70),
+                            filled: true,
+                            fillColor: Colors.blueGrey.shade800,
+                            border: const OutlineInputBorder(),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: setsControllers[i],
+                          keyboardType: TextInputType.number,
+                          style: const TextStyle(color: Colors.white),
+                          decoration: InputDecoration(
+                            labelText: "Sets",
+                            labelStyle: const TextStyle(color: Colors.white70),
+                            filled: true,
+                            fillColor: Colors.blueGrey.shade800,
+                            border: const OutlineInputBorder(),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                           ),
                         ),
                       ),
@@ -1908,37 +1887,23 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             ),
             TextButton(
               onPressed: () {
-                final updated = controllers.map((weekList) {
-                  return weekList.map((c) {
-                    final t = c.text.trim();
-                    return t.isNotEmpty ? t : ""; // Preserve empty slots
-                  }).toList();
-                }).toList();
-
-                final result = <String, Map<String, String>>{};
-                for (int w = 0; w < updated.length; w++) {
-                  final weekKey = 'week${w + 1}';
-                  final instanceMap = <String, String>{};
-                  for (int i = 0; i < updated[w].length; i++) {
-                    instanceMap['instance${i + 1}'] = updated[w][i];
-                  }
-                  result[weekKey] = instanceMap;
+                final instanceMap = <String, String>{};
+                for (int i = 0; i < repsControllers.length; i++) {
+                  final reps = repsControllers[i].text.trim();
+                  final sets = setsControllers[i].text.trim();
+                  instanceMap['instance${i + 1}'] = "$reps x $sets";
                 }
+
+                final result = {'week1': instanceMap};
 
                 setState(() {
                   widget.onUpdateSetting(exerciseName, 'repTargets', result);
-
-                  // 🔍 Show preview of first 3 weeks, skip blanks
-                  _repTargetsDisplayController.text = updated
-                      .take(3)
-                      .map((weekList) => weekList.where((r) => r.isNotEmpty).join(' | '))
-                      .join(' || ') +
-                      (updated.length > 3 ? ' ...' : '');
+                  _repTargetsDisplayController.text =
+                      instanceMap.values.where((v) => v.isNotEmpty).join(' | ');
                 });
 
                 Navigator.pop(ctx);
               },
-
               child: const Text("Save", style: TextStyle(color: Colors.white)),
             ),
           ],
@@ -1946,10 +1911,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       },
     );
   }
-
-
-
-
 
 
   void _showRepTargetDialog(String exerciseName) {
