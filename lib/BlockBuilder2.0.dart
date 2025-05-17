@@ -309,11 +309,10 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           final reps = PeriodizationModelUtils.getLinearExposureRepTarget(
             exerciseId: exerciseId,
             exposureIndex: plannedIndex,
-            repTargetsByExercise: {}, // not used
+            repTargetsByExercise: repTargetsByExercise,
             plannedExerciseDetails: plannedExerciseDetails,
           );
           return reps.toString();
-
 
         case PeriodizationModelType.linearClassic:
         case PeriodizationModelType.dupCustom:
@@ -335,12 +334,12 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
             exerciseName: exerciseId,
             plannedIndex: plannedIndex,
-            weekIndex: week, // ✅ critical for looking up week1/week2 etc.
-            plannedExerciseDetails: plannedExerciseDetails, // ✅ now the only source needed
+            weekIndex: week,
+            repTargetsByExercise: repTargetsByExercise,
+            plannedExerciseDetails: plannedExerciseDetails,
           );
           print('🔁 Model-based rep: $rep for $exerciseId using $model');
           return rep.toString();
-
 
         default:
           print('❌ Unknown model type for $exerciseId: $model');
@@ -353,6 +352,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     print('! No matching rep target found for "$exerciseName" (model: $model)');
     return null;
   }
+
 
 
 
