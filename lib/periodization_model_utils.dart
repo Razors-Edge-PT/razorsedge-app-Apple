@@ -392,15 +392,42 @@ class PeriodizationModelUtils {
           print('📊 LinearExposure → $reps reps');
           return reps;
 
-        case PeriodizationModelType.dupCustom:
-          final reps = getDupCustomRepTargetFromPlanner(
-            exerciseName: exerciseName,
-            weekIndex: weekIndex ?? 0,
-            plannedIndexForWeek: plannedIndex,
-            repTargetsByExercise: repTargetsByExercise ?? {},
-          );
-          print('🧡 DUP Custom → $reps reps (week: ${weekIndex ?? 0})');
-          return reps;
+        case PeriodizationModelType.dupCustom: // Now used as DUP by Week
+          final repTargetsRaw = plannedExerciseDetails?[exerciseName]?['repTargets'];
+          final weekKey = 'week${(weekIndex ?? 0) + 1}';
+
+          final weekMap = repTargetsRaw is Map<String, dynamic>
+              ? (repTargetsRaw[weekKey] ?? repTargetsRaw['week1']) as Map<String, dynamic>?
+              : null;
+
+          if (weekMap == null || weekMap.isEmpty) {
+            print('⚠️ [DUP by Week] No usable data in $weekKey for $exerciseName');
+            return 10;
+          }
+
+          final sortedInstances = weekMap.entries
+              .where((e) => e.key.startsWith('instance'))
+              .toList()
+            ..sort((a, b) => a.key.compareTo(b.key));
+
+          final frequency = sortedInstances.length;
+          if (frequency == 0) {
+            print('⚠️ [DUP by Week] No instances found in $weekKey');
+            return 10;
+          }
+
+          final indexInWeek = plannedIndex % frequency;
+          final instanceEntry = sortedInstances[indexInWeek];
+          final raw = instanceEntry.value?.toString() ?? '';
+
+          print('📦 [DUP by Week] $weekKey → instance${indexInWeek + 1} = $raw');
+
+          final match = RegExp(r'^(\d+)').firstMatch(raw);
+          final parsed = match != null ? int.tryParse(match.group(1)!) ?? 10 : 10;
+
+          print('📈 [DUP by Week] Parsed → $parsed reps');
+          return parsed;
+
       }
     } catch (e) {
       print('⚠️ Error in getSuggestedRepTargetByModel for $exerciseName: $e');
