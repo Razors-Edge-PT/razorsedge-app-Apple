@@ -29,6 +29,8 @@ class _BlockPlannerState extends State<Block_Planner> {
   DateTime? _blockEndDate;
   Map<String, dynamic> exerciseRepTargets = {};
   Map<String, dynamic> plannedExerciseDetails = {};
+  final TextEditingController _blockGoalsController = TextEditingController();
+
 
 
   Map<String, Map<String, dynamic>> exerciseSettings = {};
@@ -73,16 +75,18 @@ class _BlockPlannerState extends State<Block_Planner> {
 
     if (doc.exists) {
       final data = doc.data();
-      if (data != null) {
+      if (data != null && data['blockMeta'] != null) {
+        final meta = Map<String, dynamic>.from(data['blockMeta']);
         setState(() {
-          _blockStartDate = data['blockStartDate'] != null
-              ? DateTime.parse(data['blockStartDate'])
+          _blockStartDate = meta['blockStartDate'] != null
+              ? DateTime.parse(meta['blockStartDate'])
               : null;
-          _blockEndDate = data['blockEndDate'] != null
-              ? DateTime.parse(data['blockEndDate'])
+          _blockEndDate = meta['blockEndDate'] != null
+              ? DateTime.parse(meta['blockEndDate'])
               : null;
         });
       }
+
     }
   }
 
@@ -92,11 +96,11 @@ class _BlockPlannerState extends State<Block_Planner> {
   PeriodizationModelType _mapLabelToModelType(String label) {
     switch (label) {
       case 'Daily Undulating Periodization':
-        return PeriodizationModelType.dailyUndulating;
+        return PeriodizationModelType.dailyUndulatingExposure;
       case 'DUP, Signature':
         return PeriodizationModelType.dupSignature;
       case 'DUP, Custom':
-        return PeriodizationModelType.dupCustom;
+        return PeriodizationModelType.dailyUndulatingWeek;
       case 'Linear, Classic':
         return PeriodizationModelType.linearClassic;
       case 'Linear, by Exposure':
@@ -363,7 +367,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       final entry = Map<String, dynamic>.from(exerciseSettings[exercise] ?? {});
       final repTargets = entry['repTargets'];
 
-      // ✅ Normalize flat List<String> into List<List<String>> (legacy fallback)
+      // ✅ Normalize legacy List<String> format
       if (repTargets is List && repTargets.isNotEmpty && repTargets.first is String) {
         final flat = repTargets
             .expand((e) => e.toString().split(','))
@@ -384,14 +388,15 @@ class _BlockPlannerState extends State<Block_Planner> {
         print("🛠️ Normalized legacy repTargets for $exercise: $nested");
       }
 
-      // ✅ If already in Map<String, Map<String, String>> format, use directly
+      // ✅ Convert to proper Map<String, Map<String, String>>
       final savedTargets = repTargets is Map<String, Map<String, String>>
           ? repTargets
           : _convertToMap(repTargets);
 
-      entry['repTargets'] = savedTargets; // <-- ✅ This was missing before
+      entry['repTargets'] = savedTargets;
 
       print("🧪 Saving repTargets for $exercise: ${jsonEncode(savedTargets)}");
+
       // ✅ Special handling for Daily Undulating Periodization
       final model = entry['periodizationModel'];
       if (model == 'Daily Undulating Periodization' &&
@@ -408,7 +413,6 @@ class _BlockPlannerState extends State<Block_Planner> {
         print('🔁 Converted DUP repTargets for $exercise: ${jsonEncode(dupMap)}');
       }
 
-
       existingDetails[exercise] = {
         'periodizationModel': entry['periodizationModel'] ?? 'Linear Exposure',
         'repTargets': savedTargets,
@@ -418,6 +422,15 @@ class _BlockPlannerState extends State<Block_Planner> {
         'maxWeightXReps': entry['maxWeightXReps'] ?? '',
         'notes': entry['notes'] ?? '',
       };
+    }
+
+    // ✅ Inject block meta into plannedExerciseDetails if dates are valid
+    if (_blockStartDate != null && _blockEndDate != null) {
+      existingDetails['blockMeta'] = {
+        'blockStartDate': _blockStartDate!.toIso8601String(),
+        'blockEndDate': _blockEndDate!.toIso8601String(),
+      };
+      print("📅 Saved blockMeta to plannedExerciseDetails");
     }
 
     print("📤 Saving plannedExerciseDetails:\n${jsonEncode(existingDetails)}");
@@ -440,6 +453,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       print("• $ex: ${exerciseSettings[ex]?['weeklyFrequency']}");
     }
   }
+
 
 
   Map<String, Map<String, String>> _convertToMap(dynamic data) {
@@ -681,10 +695,14 @@ class _BlockPlannerState extends State<Block_Planner> {
                       alignment: Alignment.centerLeft,
                       child: const Icon(Icons.delete, color: Colors.white),
                     ),
-                    child: _ExerciseCard(
+                    child: (_blockStartDate == null || _blockEndDate == null)
+                        ? const SizedBox.shrink() // or show a loading spinner
+                        : _ExerciseCard(
                       exerciseId: exercise,
                       exerciseName: _exerciseIdToName[exercise] ?? 'Unknown Exercise',
                       exerciseSettings: exerciseSettings,
+                      blockStartDate: _blockStartDate, // ✅ now passed properly
+                      blockEndDate: _blockEndDate,     // ✅ now passed properly
                       onUpdateSetting: (exerciseId, key, value) {
                         setState(() {
                           exerciseSettings[exerciseId] ??= {};
@@ -692,6 +710,7 @@ class _BlockPlannerState extends State<Block_Planner> {
                         });
                       },
                     ),
+
 
                   );
                 },
@@ -737,9 +756,16 @@ class _BlockPlannerState extends State<Block_Planner> {
                     setState(() {
                       _blockStartDate = picked.start;
                       _blockEndDate = picked.end;
+
+                      final weeks = PeriodizationModelUtils.getBlockLength(
+                        blockStartDate: _blockStartDate,
+                        blockEndDate: _blockEndDate,
+                      );
+
+                      _blockGoalsController.text = '$weeks week block';
                     });
 
-                    // Optional: save to Firestore here
+                    // ✅ Save to Firestore if needed
                     final user = FirebaseAuth.instance.currentUser;
                     if (user != null) {
                       await FirebaseFirestore.instance
@@ -748,11 +774,15 @@ class _BlockPlannerState extends State<Block_Planner> {
                           .collection('block_planner')
                           .doc('current_block')
                           .set({
-                        'blockStartDate': picked.start.toIso8601String(),
-                        'blockEndDate': picked.end.toIso8601String(),
+                        'blockMeta': {
+                          'blockStartDate': picked.start.toIso8601String(),
+                          'blockEndDate': picked.end.toIso8601String(),
+                        }
                       }, SetOptions(merge: true));
+
                     }
                   }
+
                 },
                 child: Container(
                   height: 56,
@@ -781,7 +811,14 @@ class _BlockPlannerState extends State<Block_Planner> {
         const SizedBox(height: 8),
         Row(
           children: [
-            _buildInputBox("Block goals", multiline: true),
+            _buildInputBox(
+              _blockStartDate != null && _blockEndDate != null
+                  ? '${(((_blockEndDate!.difference(_blockStartDate!).inDays + 6) ~/ 7))} Weeks'
+                  : 'Block goals',
+              multiline: true,
+            ),
+
+
             const SizedBox(width: 8),
             _buildInputBox("Planned calories surplus/deficit", multiline: true),
           ],
@@ -843,12 +880,16 @@ class _ExerciseCard extends StatefulWidget {
   final String exerciseId;
   final Map<String, Map<String, dynamic>> exerciseSettings;
   final void Function(String exerciseName, String key, dynamic value) onUpdateSetting;
+  final DateTime? blockStartDate;
+  final DateTime? blockEndDate;
 
   const _ExerciseCard({
     required this.exerciseId,
     required this.exerciseName,
     required this.exerciseSettings,
     required this.onUpdateSetting,
+    this.blockStartDate,
+    this.blockEndDate,
   });
 
   @override
@@ -860,13 +901,16 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   final FocusNode _incrementsFocusNode = FocusNode();
   final TextEditingController _weeklyFrequencyController = TextEditingController(text: "7");
   final TextEditingController _repTargetsDisplayController = TextEditingController();
-  final List<int> dupCustomDefaultReps = [10, 5, 12, 8, 3, 7, 1];
+  final List<int> dailyUndulatingWeekDefaultReps = [10, 5, 12, 8, 3, 7, 1];
   final TextEditingController _notesController = TextEditingController();
   final TextEditingController _incrementsController = TextEditingController();
   final TextEditingController _maxWeightController = TextEditingController();
   final TextEditingController _maxRepsController = TextEditingController();
   Map<String, Map<String, String>>? _cachedRepTargetMap;
+
   double _currentE1RM = 0.0;
+
+
 
   String _selectedModel = 'DUP, Signature'; // default or load from Firestore
 
@@ -875,11 +919,11 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   PeriodizationModelType _mapLabelToModelType(String label) {
     switch (label) {
       case 'Daily Undulating Periodization':
-        return PeriodizationModelType.dailyUndulating;
+        return PeriodizationModelType.dailyUndulatingExposure;
       case 'DUP, Signature':
         return PeriodizationModelType.dupSignature;
       case 'DUP, Custom':
-        return PeriodizationModelType.dupCustom;
+        return PeriodizationModelType.dailyUndulatingWeek;
       case 'Linear, Classic':
         return PeriodizationModelType.linearClassic;
       case 'Linear, by Exposure':
@@ -1212,170 +1256,218 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   }
 
   void _showLinearClassicRepTargetDialog(String exerciseName) {
+    _syncCachedRepTargets(exerciseName);
 
-    _syncCachedRepTargets(exerciseName); // 🔁 Pull from exerciseSettings if available
+    print("📆 widget.blockStartDate = ${widget.blockStartDate}");
+    print("📆 widget.blockEndDate = ${widget.blockEndDate}");
 
-    final blockLength = 12;
-    final weeklyFreq = int.tryParse(_weeklyFrequencyController.text) ?? 3;
-
-    // Load from exerciseSettings
-    final existing = _cachedRepTargetMap ?? widget.exerciseSettings[exerciseName]?['repTargets'];
-    print('🧪 [BP] Opening rep target dialog for $exerciseName');
-    print('🧪 [BP] Found existing rep targets: ${jsonEncode(existing)}');
-
-    List<List<String>> reps;
-
-    if (existing is Map<String, dynamic>) {
-      print('✅ [BP] Using saved rep targets from Map structure');
-
-      reps = List.generate(blockLength, (weekIndex) {
-        final weekKey = 'week${weekIndex + 1}';
-        final weekMap = existing[weekKey] as Map<String, dynamic>? ?? {};
-        print('📦 [BP] Week $weekKey map: $weekMap');
-
-        return List.generate(weeklyFreq, (i) {
-          final instanceKey = 'instance${i + 1}';
-          final saved = weekMap[instanceKey]?.toString();
-
-          if (saved != null && saved.trim().isNotEmpty) {
-            return saved;
-          } else {
-            // 💡 Use fallback default if nothing saved
-            final defaultReps = (12 - weekIndex - i).clamp(3, 15);
-            final sets = defaultReps < 5 ? 4 : 3;
-            return "$defaultReps x $sets";
-          }
-        });
-
-      });
-
-    } else {
-      print('⚠️ [BP] No valid saved repTargets found — falling back to default');
-
-      reps = List.generate(blockLength, (week) {
-        return List.generate(weeklyFreq, (i) {
-          final repsVal = (12 - week - i).clamp(3, 15);
-          final sets = repsVal < 5 ? 4 : 3;
-          return "$repsVal x $sets";
-        });
-      });
-    }
-    // Create text controllers
-    final controllers = List.generate(
-      reps.length,
-          (week) => List.generate(
-        reps[week].length,
-            (i) => TextEditingController(text: reps[week][i]),
-      ),
+    final blockLength = PeriodizationModelUtils.getBlockLength(
+      blockStartDate: widget.blockStartDate,
+      blockEndDate: widget.blockEndDate,
     );
+    print("🧠 Calculated blockLength = $blockLength");
+
+
+    final frequency = int.tryParse(_weeklyFrequencyController.text) ?? 3;
+
+    final defaultStart = List.generate(frequency, (i) => '${12 - i} x 3');
+    final defaultEnd = List.generate(frequency, (i) => '1 x 3');
+
+    // Load any saved data
+    final raw = _cachedRepTargetMap ?? widget.exerciseSettings[exerciseName]?['repTargets'];
+    final saved = raw is Map<String, dynamic> ? Map<String, dynamic>.from(raw) : {};
+
+    // Extract week1 and finalWeek from saved
+    final week1 = saved['week1'] as Map<String, dynamic>? ?? {};
+    final weekFinal = saved['week$blockLength'] as Map<String, dynamic>? ?? {};
+
+    List<String> week1Vals = List.generate(frequency, (i) {
+      final raw = week1['instance${i + 1}']?.toString();
+      return raw ?? defaultStart[i];
+    });
+
+    List<String> finalWeekVals = List.generate(frequency, (i) {
+      final raw = weekFinal['instance${i + 1}']?.toString();
+      return raw ?? defaultEnd[i];
+    });
+
+    // Create controllers for start and end weeks
+    final week1Reps = <TextEditingController>[];
+    final week1Sets = <TextEditingController>[];
+    final finalReps = <TextEditingController>[];
+    final finalSets = <TextEditingController>[];
+
+    print("🧠 blockLength = $blockLength");
+    print("🧠 week1 raw = ${saved['week1']}");
+    print("🧠 final week raw = ${saved['week$blockLength']}");
+
+
+    for (int i = 0; i < frequency; i++) {
+      final partsStart = week1Vals[i].split('x').map((s) => s.trim()).toList();
+      week1Reps.add(TextEditingController(text: partsStart.isNotEmpty ? partsStart[0] : '10'));
+      week1Sets.add(TextEditingController(text: partsStart.length > 1 ? partsStart[1] : '3'));
+
+      final partsEnd = finalWeekVals[i].split('x').map((s) => s.trim()).toList();
+      finalReps.add(TextEditingController(text: partsEnd.isNotEmpty ? partsEnd[0] : '1'));
+      finalSets.add(TextEditingController(text: partsEnd.length > 1 ? partsEnd[1] : '3'));
+    }
 
     showDialog(
       context: context,
       builder: (ctx) {
         return AlertDialog(
           backgroundColor: Colors.blueGrey.shade900,
-          title: const Text("Rep Targets by Week", style: TextStyle(color: Colors.white)),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: blockLength,
-              itemBuilder: (context, week) {
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: Column(
+          title: const Text("Linear Classic Rep Targets", style: TextStyle(color: Colors.white)),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text("Week 1", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 4),
+                for (int i = 0; i < frequency; i++) ...[
+                  Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      const SizedBox(height: 4),
                       Row(
                         children: [
-                          Text("Week ${week + 1}", style: const TextStyle(color: Colors.white70)),
-                          const SizedBox(width: 12),
-                          const Text("(Linear Classic)", style: TextStyle(color: Colors.white38, fontSize: 11)),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Wrap(
-                        spacing: 8,
-                        children: List.generate(
-                          weeklyFreq,
-                              (i) => SizedBox(
-                            width: 100,
+                          Expanded(
                             child: TextField(
-                              controller: controllers[week][i],
-                              keyboardType: TextInputType.text,
-                              style: const TextStyle(color: Colors.white, fontSize: 12),
+                              controller: week1Reps[i],
+                              keyboardType: TextInputType.number,
+                              style: const TextStyle(color: Colors.white),
                               decoration: InputDecoration(
-                                hintText: "e.g. 10 x 3",
-                                hintStyle: const TextStyle(color: Colors.white38),
+                                labelText: "Day ${i + 1} Reps",
                                 filled: true,
                                 fillColor: Colors.blueGrey.shade800,
                                 border: const OutlineInputBorder(),
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              ),
+                            ),
+
+                          ),
+                          const SizedBox(width: 6),
+                          const Text("x", style: TextStyle(color: Colors.white, fontSize: 14)),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: TextField(
+                              controller: week1Sets[i],
+                              keyboardType: TextInputType.number,
+                              style: const TextStyle(color: Colors.white),
+                              decoration: InputDecoration(
+                                labelText: "Sets",
+                                filled: true,
+                                fillColor: Colors.blueGrey.shade800,
+                                border: const OutlineInputBorder(),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                               ),
                             ),
                           ),
-                        ),
+                        ],
                       ),
+                      const SizedBox(height: 4),
                     ],
                   ),
-                );
-              },
+                ],
+
+                const SizedBox(height: 12),
+                const Text("Final Week", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 6),
+                for (int i = 0; i < frequency; i++) ...[
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: finalReps[i],
+                              keyboardType: TextInputType.number,
+                              style: const TextStyle(color: Colors.white),
+                              decoration: InputDecoration(
+                                labelText: "Day ${i + 1} Reps",
+                                filled: true,
+                                fillColor: Colors.blueGrey.shade800,
+                                border: const OutlineInputBorder(),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          const Text("x", style: TextStyle(color: Colors.white, fontSize: 14)),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: TextField(
+                              controller: finalSets[i],
+                              keyboardType: TextInputType.number,
+                              style: const TextStyle(color: Colors.white),
+                              decoration: InputDecoration(
+                                labelText: "Sets",
+                                filled: true,
+                                fillColor: Colors.blueGrey.shade800,
+                                border: const OutlineInputBorder(),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                  ),
+                ],
+              ],
             ),
-          ),
+          )
+          ,
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
               child: const Text("Cancel", style: TextStyle(color: Colors.white)),
             ),
             TextButton(
-        onPressed: () {
-        final result = <String, Map<String, String>>{};
+              onPressed: () {
+                final result = <String, Map<String, String>>{};
 
-        for (int weekIndex = 0; weekIndex < controllers.length; weekIndex++) {
-        final weekList = controllers[weekIndex];
-        final weekKey = 'week${weekIndex + 1}';
-        final instanceMap = <String, String>{};
+                for (int week = 0; week < blockLength; week++) {
+                  final instanceMap = <String, String>{};
 
-        for (int i = 0; i < weekList.length; i++) {
-        final input = weekList[i].text.trim();
-        print('📝 [SAVE] Week $weekKey, Instance ${i + 1} = "$input"');
+                  for (int i = 0; i < frequency; i++) {
+                    final startReps = int.tryParse(week1Reps[i].text.trim()) ?? 10;
+                    final endReps = int.tryParse(finalReps[i].text.trim()) ?? 1;
+                    final sets = week1Sets[i].text.trim(); // sets stay constant
 
-        if (input.isNotEmpty) {
-        instanceMap['instance${i + 1}'] = input;
-        }
-        }
+                    final repsThisWeek = (startReps + ((endReps - startReps) * (week / (blockLength - 1)))).round();
+                    instanceMap['instance${i + 1}'] = "$repsThisWeek x $sets";
+                    print('💾 finalReps[0] = ${finalReps[0].text}');
+                    print('💾 finalSets[0] = ${finalSets[0].text}');
 
-        if (instanceMap.isNotEmpty) {
-        result[weekKey] = instanceMap;
-        }
-        }
+                  }
 
-        print('💾 [SAVE] Final result to save: ${jsonEncode(result)}');
+                  result['week${week + 1}'] = instanceMap;
+                  print("💾 Saving week${week + 1} = $instanceMap");
 
-        setState(() {
-        widget.onUpdateSetting(exerciseName, 'repTargets', result);
+                }
 
-        final previewText = result.entries.map((e) {
-        final reps = e.value.values.join(' | ');
-        return reps;
-        }).join(' || ');
+                setState(() {
+                  widget.onUpdateSetting(exerciseName, 'repTargets', result);
+                  _repTargetsDisplayController.text = result['week1']!.values.join(' | ');
+                });
 
-        _repTargetsDisplayController.text = previewText;
-        });
-
-        Navigator.pop(ctx);
-        },
-
-
-        child: const Text("Save", style: TextStyle(color: Colors.white)),
+                Navigator.pop(ctx);
+              },
+              child: const Text("Save", style: TextStyle(color: Colors.white)),
             ),
           ],
         );
       },
     );
+
   }
 
-  void _showDailyUndulatingRepTargetDialog(String exerciseName) {
+
+  void _showDailyUndulatingExposureRepTargetDialog(String exerciseName) {
     _syncCachedRepTargets(exerciseName); // 🔁 Pull saved data from settings if available
 
     final frequency = int.tryParse(_weeklyFrequencyController.text) ?? 3;
@@ -1386,7 +1478,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
     // Get fallback defaults
     final defaults = PeriodizationModelUtils.getDefaultReps(
-      PeriodizationModelType.dailyUndulating,
+      PeriodizationModelType.dailyUndulatingExposure,
       frequency,
     );
     final defaultReps = defaults['week1']?.values.toList() ?? [];
@@ -1798,7 +1890,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     );
   }
 
-  void _showDupCustomRepTargetDialog(String exerciseName) {
+  void _showDailyUndulatingWeekRepTargetDialog(String exerciseName) {
     _syncCachedRepTargets(exerciseName);
     final frequency = int.tryParse(_weeklyFrequencyController.text) ?? 3;
 
@@ -2150,8 +2242,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                     onTap: () {
                       final model = _mapLabelToModelType(_selectedModel);
                       switch (model) {
-                        case PeriodizationModelType.dailyUndulating:
-                          _showDailyUndulatingRepTargetDialog(widget.exerciseName);
+                        case PeriodizationModelType.dailyUndulatingExposure:
+                          _showDailyUndulatingExposureRepTargetDialog(widget.exerciseName);
                           break;
 
                         case PeriodizationModelType.dupSignature:
@@ -2167,8 +2259,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                           _showLinearExposureRepTargetDialog(widget.exerciseName);
                           break;
 
-                        case PeriodizationModelType.dupCustom:
-                          _showDupCustomRepTargetDialog(widget.exerciseName);
+                        case PeriodizationModelType.dailyUndulatingWeek:
+                          _showDailyUndulatingWeekRepTargetDialog(widget.exerciseName);
                           break;
                         default:
                           ScaffoldMessenger.of(context).showSnackBar(

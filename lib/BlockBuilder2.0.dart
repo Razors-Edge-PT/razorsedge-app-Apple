@@ -14,10 +14,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 
 
-
-
-
-
 // 🧠 Group exercises by category for dropdown UI
 Map<String, List<String>> groupExercisesByCategory(List<Map<String, String>> allExercises) {
   const desiredOrder = [
@@ -103,13 +99,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   final int exercisesPerDay = 3;
   List <Template> templates = []; // Make sure Template is imported
   List<List<String?>> selectedTemplateIds = [];
- // late List<List<List<String?>>> exerciseSelection;
   List<List<List<ExerciseRow>>> exerciseRows = [];
-
-  //List<List<List<TextEditingController>>> exerciseControllers = [];
-  //List<List<List<TextEditingController>>> weightControllers = [];
-  //List<List<List<TextEditingController>>> repsControllers = [];
-  //List<List<List<TextEditingController>>> rirControllers = [];
   final Map<String, bool> _savedFields = {}; // key = 'w0_d1_r2_weight'
 
   List<List<List<TextEditingController>>> e1rmControllers = [];
@@ -126,6 +116,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
   late DateTime selectedWeekMonday;
   late DateTime blockStartDate;
+  late DateTime blockEndDate;
+
   int? _draggedRowIndex;
   List<Map<String, String>> allExercisesFromFirestore = []; // 🔥 Full list
   Map<String, String> _exerciseIdToName = {}; // 🧠 New: exerciseID ➔ exerciseName lookup
@@ -176,11 +168,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     print("✅ All data loaded for BB2.");
   }
 
-
-
-
-
-
   Future<void> loadBlockDateRange() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -194,8 +181,11 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
     if (doc.exists) {
       final data = doc.data();
-      final startDateStr = data?['blockStartDate'];
-      final endDateStr = data?['blockEndDate'];
+
+      // ✅ Read from blockMeta instead of top-level fields
+      final meta = data?['blockMeta'] as Map<String, dynamic>? ?? {};
+      final startDateStr = meta['blockStartDate'];
+      final endDateStr = meta['blockEndDate'];
 
       if (startDateStr != null && endDateStr != null) {
         final start = DateTime.parse(startDateStr);
@@ -203,26 +193,25 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
         setState(() {
           blockStartDate = start;
+          blockEndDate = end;
           selectedWeekMonday = _getMostRecentMonday(start);
           totalWeeks = ((end.difference(start).inDays) / 7).ceil();
           visibleWeekCount = 2;
           weekIndices = List.generate(totalWeeks, (i) => i);
 
-          // ✅ INITIALIZE 2 STARTING ROWS PER DAY:
           exerciseRows = List.generate(
             totalWeeks,
                 (_) => List.generate(
               7,
                   (_) => [
-                    ExerciseRow(id: const Uuid().v4(), circuitIndex: 0),
-                    ExerciseRow(id: const Uuid().v4(), circuitIndex: 0),
+                ExerciseRow(id: const Uuid().v4(), circuitIndex: 0),
+                ExerciseRow(id: const Uuid().v4(), circuitIndex: 0),
               ],
             ),
           );
         });
       }
     }
-
   }
 
 
@@ -300,44 +289,56 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     if (repTargets == null) return null;
 
     final model = PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
-    final plannedIndex = getExercisePlannedCountBefore(exerciseName, week, day, row);
 
     try {
       switch (model) {
         case PeriodizationModelType.linearExposure:
-          print('🧠 [BB2] linearExposure fallback for $exerciseId @ $plannedIndex');
+          final exposureIndex = getExercisePlannedCountBefore(exerciseName, week, day, row);
           final reps = PeriodizationModelUtils.getLinearExposureRepTarget(
             exerciseId: exerciseId,
-            exposureIndex: plannedIndex,
-            repTargetsByExercise: { exerciseId: { 'repTargets': repTargets } },
+            exposureIndex: exposureIndex,
+            repTargetsByExercise: {exerciseId: {'repTargets': repTargets}},
             plannedExerciseDetails: plannedExerciseDetails,
           );
+          print('📊 LinearExposure rep → $reps for $exerciseId');
           return reps.toString();
 
         case PeriodizationModelType.linearClassic:
-        case PeriodizationModelType.dupCustom:
-        final indexInWeek = getExerciseCountInWeek(exerciseName, week, day, row);
-
-        final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
-          exerciseName: exerciseId,
-          plannedIndex: indexInWeek, // ✅ This resets each week
-          weekIndex: week,
-          plannedExerciseDetails: plannedExerciseDetails,
-        );
-
-        print('🔁 DUP by Week rep: $rep for $exerciseId');
-          return rep.toString();
-
-        case PeriodizationModelType.dupSignature:
-        case PeriodizationModelType.dailyUndulating:
+          final plannedIndex = getExerciseCountInWeek(exerciseName, week, day, row); // 🆕 Use this
           final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
             exerciseName: exerciseId,
             plannedIndex: plannedIndex,
             weekIndex: week,
-            repTargetsByExercise: { exerciseId: { 'repTargets': repTargets } },
+            repTargetsByExercise: repTargetsByExercise,
+            plannedExerciseDetails: plannedExerciseDetails,
+            blockStartDate: blockStartDate,
+            blockEndDate: blockEndDate,
+          );
+          print('📈 LinearClassic rep → $rep for $exerciseId (week $week, instance $plannedIndex)');
+          return rep.toString();
+
+        case PeriodizationModelType.dailyUndulatingWeek:
+          final indexInWeek = getExerciseCountInWeek(exerciseName, week, day, row);
+          final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
+            exerciseName: exerciseId,
+            plannedIndex: indexInWeek, // ✅ resets each week
+            weekIndex: week,
             plannedExerciseDetails: plannedExerciseDetails,
           );
-          print('🔁 Model-based rep: $rep for $exerciseId using $model');
+          print('🔁 DUP by Week rep: $rep for $exerciseId (week $week, index $indexInWeek)');
+          return rep.toString();
+
+        case PeriodizationModelType.dupSignature:
+        case PeriodizationModelType.dailyUndulatingExposure:
+          final globalIndex = getExercisePlannedCountBefore(exerciseName, week, day, row);
+          final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
+            exerciseName: exerciseId,
+            plannedIndex: globalIndex,
+            weekIndex: week,
+            repTargetsByExercise: {exerciseId: {'repTargets': repTargets}},
+            plannedExerciseDetails: plannedExerciseDetails,
+          );
+          print('🔁 Model-based rep: $rep for $exerciseId using $model (index $globalIndex)');
           return rep.toString();
 
         default:
@@ -351,6 +352,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     print('! No matching rep target found for "$exerciseName" (model: $model)');
     return null;
   }
+
 
 
 
@@ -374,9 +376,32 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
     final result = count - 1; // ✅ zero-based index
     print('📊 getExerciseCountInWeek → "$exerciseName" → index $result');
+    print('🧠 getExerciseCountInWeek("$exerciseName", week: $week, day: $day, row: $row) = $result');
+
     return result;
   }
 
+
+  int getPlannedIndexForWeek(String exerciseId, int week, int day, int row) {
+    int count = 0;
+
+    for (int w = 0; w <= week; w++) {
+      final lastDay = (w == week) ? day : 6;
+      for (int d = 0; d <= lastDay; d++) {
+        final lastRow = (w == week && d == day) ? row + 1 : exerciseRows[w][d].length;
+
+        for (int r = 0; r < lastRow; r++) {
+          final thisId = (exerciseRows[w][d][r].exercise ?? '').trim();
+
+          if (thisId == exerciseId) {
+            count++;
+          }
+        }
+      }
+    }
+
+    return count - 1; // zero-based
+  }
 
 
 
@@ -396,16 +421,27 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     if (data == null) return;
 
     setState(() {
-      if (data.containsKey('repTargetsByExercise')) {
-        _repTargetsByExercise = Map<String, dynamic>.from(data['repTargetsByExercise']);
-        print('🧾 [BB2] repTargetsByExercise keys: ${_repTargetsByExercise.keys}');
-      } else {
-        print('❌ [BB2] No repTargetsByExercise found.');
-      }
-
       if (data.containsKey('plannedExerciseDetails')) {
         plannedExerciseDetails = Map<String, dynamic>.from(data['plannedExerciseDetails']);
+
+        // ✅ Inject blockMeta if it exists
+        if (data.containsKey('blockMeta')) {
+          plannedExerciseDetails['blockMeta'] = Map<String, dynamic>.from(data['blockMeta']);
+          print('📎 Injected blockMeta into plannedExerciseDetails');
+        }
+
         print('✅ PlannedExerciseDetails loaded: ${plannedExerciseDetails.length} items');
+
+        // ✅ Preload repTargets into _repTargetsByExercise
+        plannedExerciseDetails.forEach((exerciseId, details) {
+          if (exerciseId == 'blockMeta') return; // skip meta
+          if (details is Map<String, dynamic> && details.containsKey('repTargets')) {
+            _repTargetsByExercise[exerciseId] = {
+              'repTargets': details['repTargets']
+            };
+            print('🧩 [BB2] Injected repTargets for $exerciseId from plannedExerciseDetails');
+          }
+        });
       } else {
         print('❌ [BB2] No plannedExerciseDetails found.');
       }
@@ -414,13 +450,14 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     print("✅ Rep targets map size: ${_repTargetsByExercise.length}");
 
     plannedExerciseDetails.forEach((exerciseId, details) {
+      if (exerciseId == 'blockMeta') return;
+
       final modelName = details['periodizationModel'];
       if (modelName != null) {
         final modelEnum = PeriodizationModelUtils.stringToModel(modelName);
         PeriodizationModelUtils.exercisePeriodizationModels[exerciseId] = modelEnum;
       }
 
-      // 🧠 Expand DUP Daily repTargets if only week1 is present
       final repTargetEntry = _repTargetsByExercise[exerciseId];
       if (repTargetEntry is Map &&
           repTargetEntry.containsKey('repTargets') &&
@@ -436,13 +473,13 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         }
       }
 
-      // 🔎 Debugging access to rep targets per exerciseId
       final updatedEntry = _repTargetsByExercise[exerciseId];
       if (updatedEntry is Map && updatedEntry.containsKey('repTargets')) {
         print('📦 repTargets structure valid for $exerciseId');
       } else {
         print('⚠️ Malformed repTargets entry for $exerciseId: $updatedEntry');
       }
+
       if (updatedEntry != null) {
         print('🧠 [BB2] Rep targets found for $exerciseId → $updatedEntry');
       } else {
@@ -451,9 +488,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     });
 
     print("✅ [BB2] exercisePeriodizationModels mapped: ${PeriodizationModelUtils.exercisePeriodizationModels.length}");
+    print('📄 Full plannedExerciseDetails: ${jsonEncode(plannedExerciseDetails)}');
   }
-
-
 
 
 
@@ -637,9 +673,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       circuitStartIndices[weekIndex][dayIndex] = [0];
     }
   }
-
-
-
 
   Future<void> loadBlockDataFromFirestore() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -1614,36 +1647,40 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     final dayLabel = DateFormat('E d MMM y').format(date); // e.g., "Mon 17 Mar 2025"
 
     return StatefulBuilder(
-        builder: (context, localSetState)
-    {
-      return Card(
-        margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-        color: Colors.blueGrey.shade900,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+        builder: (context, localSetState) {
+          final meta = (plannedExerciseDetails['blockMeta'] ?? {}) as Map<String, dynamic>;
+          final blockStart = DateTime.tryParse(meta['blockStartDate'] ?? '');
+          final blockEnd = DateTime.tryParse(meta['blockEndDate'] ?? '');
+          final blockLength = PeriodizationModelUtils.getBlockLength(
+            blockStartDate: blockStart,
+            blockEndDate: blockEnd,
+          );
 
-
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // 🟣 Day Header Row
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                // ⬅️ Push contents to bottom
+          return Card(
+            margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+            color: Colors.blueGrey.shade900,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Week + Date Label
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.end,
+                  // 🟣 Day Header Row
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                      Text(
-                        "Week ${weekIndex + 1}",
-                        style: const TextStyle(
-                          fontSize: 11,
-                          height: 0.9,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white70,
+                      // Week + Date Label
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          Text(
+                            "Week ${weekIndex + 1} • $blockLength weeks",
+                            style: const TextStyle(
+                              fontSize: 11,
+                              height: 0.9,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white70,
                         ),
                       ),
                       const SizedBox(height: 0),
@@ -1712,10 +1749,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                       ),
                     ],
                   ),
-
-
-
-
 
 
                   // 🟡 Buttons
