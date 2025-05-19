@@ -383,7 +383,7 @@ class PeriodizationModelUtils {
 
 
         case PeriodizationModelType.dupSignature:
-          final reps = getSuggestedRepTarget(
+          final reps = getDupSignatureRepTarget(
             exerciseName,
             weightText: weightText,
             rirText: rirText,
@@ -1052,7 +1052,93 @@ class PeriodizationModelUtils {
     return count;
   }
 
+  static int getDupSignatureRepTarget( //DUP signature
+      String exerciseName, {
+        String? weightText,
+        String? rirText,
+        required int plannedIndex,
+      })
+  {
+    // ✅ If weight is entered, use `updateRepTarget()` to calculate reps based on weight.
+    if (weightText != null && weightText.isNotEmpty) {
+      return updateRepTarget(exerciseName, weightText, rirText ?? "0.5",  plannedIndex,
+      );
+    }
 
+    // ✅ Step 1: Get Available Rep Targets (which removes forbidden reps)
+    List<int> availableReps = getAvailableRepTargets(exerciseName);
+    if (availableReps.isEmpty) return 6; // ✅ Default to 6 if all reps are blocked
+
+    // ✅ Step 2: Get Past Top Set Reps (last 12 workouts)
+    List<int>? pastReps = exercisePreviousTopSetReps[exerciseName];
+    if (pastReps == null || pastReps.isEmpty) return availableReps.first; // ✅ If no history, return first available
+
+    // ✅ Step 3: Define Rep Groups
+    List<List<int>> repGroups = [
+      [1, 2],
+      [3, 4],
+      [5, 6, 7],
+      [8, 9, 10],
+      [11, 12],
+      [13, 14, 15, 16, 17],
+      [18, 19, 20, 21, 22],
+      [23, 24, 25, 26, 27, 28],
+      [29, 30, 31, 32, 33, 34, 35]
+    ];
+
+    // ✅ Step 4: Identify Used Groups in History
+    Set<int> usedGroups = {};
+    for (int rep in pastReps) {
+      for (int i = 0; i < repGroups.length; i++) {
+        if (repGroups[i].contains(rep)) {
+          usedGroups.add(i); // ✅ Track used group indices
+          break;
+        }
+      }
+    }
+
+    // ✅ Step 5: Find the Least Used Group (Only Considering Available Reps)
+    int? bestGroupIndex;
+    for (int i = 0; i < repGroups.length; i++) {
+      if (!usedGroups.contains(i) && repGroups[i].any((rep) => availableReps.contains(rep))) {
+        bestGroupIndex = i; // ✅ Found an unused group with available reps
+        break;
+      }
+    }
+
+    // ✅ Step 6: If All Groups Have Been Used, Pick the Least Recently Used Group
+    if (bestGroupIndex == null) {
+      Map<int, int> groupUsage = {}; // Group Index → Last Used Position
+      for (int i = 0; i < pastReps.length; i++) {
+        for (int j = 0; j < repGroups.length; j++) {
+          if (repGroups[j].contains(pastReps[i])) {
+            groupUsage[j] = i;
+            break;
+          }
+        }
+      }
+
+      // ✅ Find the least recently used group
+      bestGroupIndex = groupUsage.entries
+          .toList()
+          .reduce((a, b) => a.value > b.value ? a : b) // ✅ Find least recently used group
+          .key;
+    }
+
+    // ✅ Step 7: Pick the Least Recently Used Rep Within That Group (Only from Available Reps)
+    List<int> candidates = repGroups[bestGroupIndex!].where((rep) => availableReps.contains(rep)).toList();
+    candidates.sort((a, b) => pastReps.contains(a) ? 1 : -1); // ✅ Prioritize least recently used
+
+    // ✅ Ensure there's at least one candidate before calling `.first`
+    if (candidates.isEmpty) {
+      return availableReps.first; // ✅ Fall back to first available rep if no candidates exist
+    }
+
+    return candidates.first; // ✅ Return the best available rep
+  }
+
+
+  //Old Model - back up fro WES
   static int getSuggestedRepTarget( //DUP signature
       String exerciseName, {
         String? weightText,
@@ -1292,7 +1378,7 @@ class PeriodizationModelUtils {
   }
 
 
-
+//updated this function to use newer signaturerep model for default
   static void updateWeight(
       String exerciseName,
       TextEditingController weightController,
@@ -1313,7 +1399,7 @@ class PeriodizationModelUtils {
 
     // ✅ Get reps and RIR from UI (or use defaults)
     int reps = int.tryParse(repsController.text) ??
-        getSuggestedRepTarget(
+        getDupSignatureRepTarget(
           exerciseName,
           plannedIndex: plannedIndex,
         );
