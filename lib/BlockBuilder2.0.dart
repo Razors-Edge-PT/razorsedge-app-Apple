@@ -354,10 +354,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   }
 
 
-
-
-
-
   int getExerciseCountInWeek(String exerciseName, int week, int day, int row) {
     int count = 0;
 
@@ -560,7 +556,19 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
       for (int week = 0; week < weekIndices.length; week++) {
+        final weekStartDate = blockStartDate.add(Duration(days: week * 7));
+        if (weekStartDate.isAfter(blockEndDate)) {
+          print('⛔ Skipping week_$week — outside block range.');
+          continue;
+        }
+
         for (int day = 0; day < 7; day++) {
+          final thisDate = weekStartDate.add(Duration(days: day));
+          if (thisDate.isAfter(blockEndDate)) {
+            print('⛔ Skipping day $day in week_$week — beyond block end.');
+            continue;
+          }
+
           _trimEmptyExerciseRows(week, day); // ✅ Trim before saving
           saveDayToFirestore(week, day);     // ✅ Save only filled row
         }
@@ -572,9 +580,9 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     }
     _focusNodes.clear();
 
-
     super.dispose();
   }
+
 
 
   void _populateExercisesFromTemplate(int weekIndex, int dayIndex, String templateId) {
