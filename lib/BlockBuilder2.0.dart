@@ -685,6 +685,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         .doc('current_block')
         .collection('weeks')
         .get();
+    print('🧩 Found ${weekSnapshots.docs.length} week documents');
+
 
     for (final weekDoc in weekSnapshots.docs) {
       final weekIndex = int.tryParse(weekDoc.id.replaceAll('week_', '')) ?? 0;
@@ -761,7 +763,14 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
               "${row.rirController.text}");
         }
 
+
+
         exerciseRows[weekIndex][dayIndex] = loadedRows;
+        print('[BLOCK LOAD] Week $weekIndex, Day $dayIndex loaded ${loadedRows.length} rows from block_data');
+
+        for (final row in loadedRows) {
+          print('  • ${row.exercise} | weight: ${row.weightController.text} | reps: ${row.repsController.text} | RIR: ${row.rirController.text}');
+        }
 
         final List<int> newStarts = [];
         int? lastCircuit;
@@ -803,6 +812,9 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           final workoutData = workoutDoc.data();
           final savedExercises = List<Map<String, dynamic>>.from(workoutData?['exercises'] ?? []);
 
+          print('[WES OVERRIDE] Overriding Week $weekIndex, Day $dayIndex with ${savedExercises.length} WES exercises');
+
+
           for (int i = 0; i < savedExercises.length; i++) {
             final ex = savedExercises[i];
             final name = ex['name'] ?? '';
@@ -839,6 +851,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             print('[Override Attempt] Exercise: $name, Circuit: $circuit, Sets: $sets');
 
           }
+
         }
       }
     }
@@ -1013,9 +1026,13 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    final exercises = <Map<String, dynamic>>[];
+    // 🛡️ Guard against index errors
+    if (weekIndex >= exerciseRows.length || weekIndex >= circuitStartIndices.length) return;
+    if (dayIndex >= exerciseRows[weekIndex].length || dayIndex >= circuitStartIndices[weekIndex].length) return;
 
     final rows = exerciseRows[weekIndex][dayIndex];
+    final exercises = <Map<String, dynamic>>[];
+
     for (final row in rows) {
       final name = (row.exercise ?? '').trim();
       if (name.isEmpty) continue;
@@ -1025,8 +1042,13 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         'weight': double.tryParse(row.weightController.text) ?? 0.0,
         'reps': int.tryParse(row.repsController.text) ?? 0,
         'rir': double.tryParse(row.rirController.text) ?? 0.0,
-        'circuitIndex': row.circuitIndex, // ✅ NEW
+        'circuitIndex': row.circuitIndex,
       });
+    }
+
+    print('📝 [SAVE] Week $weekIndex, Day $dayIndex → Saving ${exercises.length} exercises:');
+    for (final ex in exercises) {
+      print('  • ${ex['name']} | weight: ${ex['weight']} | reps: ${ex['reps']} | RIR: ${ex['rir']} | circuit: ${ex['circuitIndex']}');
     }
 
     final weekDocRef = FirebaseFirestore.instance
@@ -1039,7 +1061,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
     await weekDocRef.set({'exists': true}, SetOptions(merge: true));
 
-
     final date = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
     final workoutName = "${DateFormat('EEE d MMM').format(date)} - Week ${weekIndex + 1}";
 
@@ -1048,19 +1069,19 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         .doc('day_$dayIndex')
         .set({
       'exercises': exercises,
-      'circuitStartIndices': circuitStartIndices[weekIndex]?[dayIndex] ?? [0],
+      'circuitStartIndices': circuitStartIndices[weekIndex][dayIndex],
       'date': Timestamp.fromDate(date),
       'workoutName': workoutName,
     });
 
-    // ✅ Mark individual fields as saved
     _markSavedFields(weekIndex, dayIndex, rows);
     await _persistSavedFieldKeysForDay(weekIndex, dayIndex);
 
-    setState(() {}); // Re-render field colors
-
+    if (!mounted) return;
+    setState(() {});
     print("✅ Saved day: week $weekIndex, day $dayIndex");
   }
+
 
 
 
@@ -1070,21 +1091,27 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
     final rows = exerciseRows[weekIndex][dayIndex];
 
+    // 🧹 Remove rows with no exercise name
     rows.removeWhere((row) => (row.exercise ?? '').trim().isEmpty);
 
-    // Optional: clean up circuitStartIndices if needed
-    final totalRows = rows.length;
-    final starts = circuitStartIndices[weekIndex][dayIndex];
+    // 🧪 Safeguard: only access circuitStartIndices if they exist
+    if (weekIndex < circuitStartIndices.length &&
+        dayIndex < circuitStartIndices[weekIndex].length) {
+      final totalRows = rows.length;
+      final starts = circuitStartIndices[weekIndex][dayIndex];
 
-    starts.removeWhere((start) => start >= totalRows);
+      // 🧹 Remove invalid circuit start indices
+      starts.removeWhere((start) => start >= totalRows);
 
-    // Always ensure the first circuit starts at 0
-    if (starts.isEmpty || starts.first != 0) {
-      starts.insert(0, 0);
+      // ✅ Ensure first circuit starts at 0
+      if (starts.isEmpty || starts.first != 0) {
+        starts.insert(0, 0);
+      }
+
+      circuitStartIndices[weekIndex][dayIndex] = starts.toSet().toList()..sort();
     }
-
-    circuitStartIndices[weekIndex][dayIndex] = starts.toSet().toList()..sort();
   }
+
 
   Future<void> deleteAllBlockAndWorkoutData() async {
     final user = FirebaseAuth.instance.currentUser;
