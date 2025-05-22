@@ -383,14 +383,23 @@ class PeriodizationModelUtils {
 
 
         case PeriodizationModelType.dupSignature:
-          final reps = getDupSignatureRepTarget(
-            exerciseName,
-            weightText: weightText,
-            rirText: rirText,
-            plannedIndex: plannedIndex,
-          );
-          print('🔁 DUP Signature → $reps reps');
+        // If weight is entered, still calculate reps dynamically
+          if (weightText != null && weightText.isNotEmpty) {
+            final reps = updateRepTarget(
+              exerciseName,
+              weightText,
+              rirText ?? "0.5",
+              plannedIndex,
+            );
+            print('⚖️ DUP Signature (weight override) → $reps reps');
+            return reps;
+          }
+// Otherwise, use upcoming sequence logic
+          final sequence = upcomingRepTargetSequence(exerciseName, plannedIndex + 1);
+          final reps = sequence.length > plannedIndex ? sequence[plannedIndex] : 6;
+          print('🔮 DUP Signature (sequence-based) → $reps reps (index $plannedIndex)');
           return reps;
+
 
         case PeriodizationModelType.linearClassic:
           final repTargetsRaw = repTargetsByExercise?[exerciseName]?['repTargets'] ??

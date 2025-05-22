@@ -1711,8 +1711,11 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                 setState(() {
                   widget.onUpdateSetting(exerciseName, 'repTargets', firestoreResult);
+                  widget.onUpdateSetting(exerciseName, 'periodizationModel', 'DUP, Signature'); // ✅ Add this line
                   _repTargetsDisplayController.text = "$tempMin – $tempMax reps";
                 });
+                print("💾 [DUP Signature] Model assignment confirmed for $exerciseName → DUP, Signature");
+
 
                 Navigator.pop(ctx);
               }

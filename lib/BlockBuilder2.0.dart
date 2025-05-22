@@ -266,7 +266,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
     for (final doc in snapshot.docs) {
       final id = doc.id;
-      final name = doc['name'] as String;
+      final name = doc['name'].toString(); // 🧠 Ensure consistent string key
       final category = doc['category'] as String;
       final bodyPart = doc['bodyPart'] as String;
 
@@ -277,10 +277,11 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         'bodyPart': bodyPart,
       });
 
-      _exerciseIdToName[id] = name; // 🧠 Store ID ➔ name lookup
-      nameToIdMap[name] = id; // 🧠 Also store name ➔ ID lookup
-
+      _exerciseIdToName[id] = name;           // 🔁 ID ➔ name
+      nameToIdMap[name] = id;                 // 🔁 Name ➔ ID
+      print('✅ Mapped "$name" → $id');       // 🧪 Debug confirmation
     }
+
 
     setState(() {
       groupedExercises = groupExercisesByCategory(allExercisesFromFirestore);
@@ -289,6 +290,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
   String? getRepTargetForExercise(String exerciseName, int week, int day, int row) {
     final exerciseId = nameToIdMap[exerciseName];
+
     if (exerciseId == null) return null;
 
     final details = plannedExerciseDetails[exerciseId];
@@ -298,7 +300,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     if (repTargets == null) return null;
 
     final model = PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
-
+    print('🔍 Model for $exerciseId → $model');
     try {
       switch (model) {
         case PeriodizationModelType.linearExposure:
@@ -338,6 +340,21 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           return rep.toString();
 
         case PeriodizationModelType.dupSignature:
+          final plannedIndex = getExercisePlannedCountBefore(exerciseName, week, day, row);
+          final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
+            exerciseName: exerciseId,
+            plannedIndex: plannedIndex,
+            weightText: null,
+            rirText: null,
+            repTargetsByExercise: {exerciseId: {'repTargets': repTargets}},
+            plannedExerciseDetails: plannedExerciseDetails,
+          );
+          print('🔮 DUP Signature rep (sequence-based): $rep for $exerciseId (index $plannedIndex)');
+          print('🧪 [BB2] Initial rep target for "$exerciseName" (index $plannedIndex): $rep');
+
+          return rep.toString();
+
+
         case PeriodizationModelType.dailyUndulatingExposure:
           final globalIndex = getExercisePlannedCountBefore(exerciseName, week, day, row);
           final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
@@ -1730,24 +1747,26 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                                   color: Colors.white70,
                                 ),
                               ),
-                              Builder(builder: (_) {
-                                final exercise = exerciseRows[weekIndex][dayIndex].isNotEmpty
-                                    ? exerciseRows[weekIndex][dayIndex][0].exercise ?? ''
-                                    : '';
-                                final reps = PeriodizationModelUtils.exercisePreviousTopSetReps[exercise];
+                              Builder(
+                                builder: (_) {
+                                  final rows = exerciseRows[weekIndex][dayIndex];
+                                  final firstExercise = rows.isNotEmpty ? rows[0].exercise : null;
 
-                                print('🧪 [UI DISPLAY] Looking up exercise in row 0 → "$exercise"');
-                                print('🧪 [UI DISPLAY] Found history: ${PeriodizationModelUtils.exercisePreviousTopSetReps[exercise]}');
+                                  if (firstExercise == null || !PeriodizationModelUtils.exercisePreviousTopSetReps.containsKey(firstExercise)) {
+                                    return const Text(
+                                      "Upcoming reps: None",
+                                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.orangeAccent),
+                                    );
+                                  }
 
-                                return Text(
-                                  reps != null ? 'Prev reps: ${reps.join(', ')}' : 'Prev reps: None',
-                                  style: const TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w500,
-                                    color: Colors.orangeAccent,
-                                  ),
-                                );
-                              }),
+                                  final upcoming = PeriodizationModelUtils.upcomingRepTargetSequence(firstExercise, 3);
+                                  return Text(
+                                    "Upcoming reps: ${upcoming.join(', ')}",
+                                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.orangeAccent),
+                                  );
+                                },
+                              ),
+
 
                             ],
                           ),
