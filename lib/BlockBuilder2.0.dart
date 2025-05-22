@@ -150,6 +150,13 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
 
   Future<void> loadAllData() async {
+    print("🧪 [BB2] Starting loadAllData()...");
+
+    // ✅ Load top sets from workout history (PMU global fetch)
+    await PeriodizationModelUtils.fetchLastWorkoutTopSetReps();
+    print('🧪 [BB2] Top set reps loaded: ${PeriodizationModelUtils.exercisePreviousTopSetReps.keys.length} exercises');
+    print('🧪 [BB2] Top set reps loaded: ${PeriodizationModelUtils.exercisePreviousTopSetReps.keys.toList()}');
+
     await loadBlockDateRange();
 
     await Future.wait([
@@ -157,8 +164,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       loadExercisesFromFirestore(),
       loadTopSetsFromWorkouts(),
       loadPlannedExercisesFromFirestore(),
-      _loadRepTargets(), // ✅ Now also loads plannedExerciseDetails
-      PeriodizationModelUtils.loadPeriodizationModelsFromFirestore(), // ✅ Model types (Linear, DUP, etc.)
+      _loadRepTargets(),
+      PeriodizationModelUtils.loadPeriodizationModelsFromFirestore(),
     ]);
 
     selectedTemplateIds = List.generate(totalWeeks, (_) => List.generate(7, (_) => null));
@@ -167,6 +174,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
     print("✅ All data loaded for BB2.");
   }
+
+
 
   Future<void> loadBlockDateRange() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -1709,16 +1718,41 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         mainAxisAlignment: MainAxisAlignment.end,
                         children: [
-                          Text(
-                            "Week ${weekIndex + 1} • $blockLength weeks",
-                            style: const TextStyle(
-                              fontSize: 11,
-                              height: 0.9,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white70,
-                        ),
-                      ),
-                      const SizedBox(height: 0),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                "Week ${weekIndex + 1} • $blockLength weeks",
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  height: 0.9,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.white70,
+                                ),
+                              ),
+                              Builder(builder: (_) {
+                                final exercise = exerciseRows[weekIndex][dayIndex].isNotEmpty
+                                    ? exerciseRows[weekIndex][dayIndex][0].exercise ?? ''
+                                    : '';
+                                final reps = PeriodizationModelUtils.exercisePreviousTopSetReps[exercise];
+
+                                print('🧪 [UI DISPLAY] Looking up exercise in row 0 → "$exercise"');
+                                print('🧪 [UI DISPLAY] Found history: ${PeriodizationModelUtils.exercisePreviousTopSetReps[exercise]}');
+
+                                return Text(
+                                  reps != null ? 'Prev reps: ${reps.join(', ')}' : 'Prev reps: None',
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.orangeAccent,
+                                  ),
+                                );
+                              }),
+
+                            ],
+                          ),
+
+                          const SizedBox(height: 0),
                       Row(
                         children: [
                           Text(

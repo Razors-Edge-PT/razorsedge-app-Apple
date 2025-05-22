@@ -904,6 +904,8 @@ class PeriodizationModelUtils {
   static Future<void> fetchLastWorkoutTopSetReps() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
+    print('🧪 [PMU] Fetching top sets for: ${user.uid}');
+
 
     final snapshot = await FirebaseFirestore.instance
         .collection('users')
@@ -912,6 +914,7 @@ class PeriodizationModelUtils {
         .orderBy('date', descending: true) // ✅ Fetch newest first
         .limit(12) // ✅ Get last 12 workouts
         .get();
+    print('🧪 [PMU] Found ${snapshot.docs.length} workouts in Firestore.');
 
     if (snapshot.docs.isNotEmpty) {
       // ✅ Clear ONLY if new data exists
@@ -920,7 +923,11 @@ class PeriodizationModelUtils {
         exercisePreviousE1RMs.clear();
       }
 
+
       for (var doc in snapshot.docs) {
+        final data = doc.data();
+        print('🧪 [PMU] Processing workout → date: ${data['date']}, exercises: ${data['exercises']}');
+
         final workout = Workout.fromFirestore(doc);
 
         for (var exercise in workout.exercises) {
@@ -970,6 +977,8 @@ class PeriodizationModelUtils {
           }
         }
       }
+      // ✅ ADD THIS HERE (inside the if, after all loops)
+      print('🧪 [PMU] Top set history fully loaded. Keys: ${exercisePreviousTopSetReps.keys.toList()}');
     }
   }
 
