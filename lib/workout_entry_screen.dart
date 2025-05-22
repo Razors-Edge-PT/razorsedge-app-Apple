@@ -1306,11 +1306,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
 
     try {
+      print("🧠 Saving to Firestore: ${jsonEncode(workoutData)}");
+      print("📍 Writing to /users/${user.uid}/workouts/");
       await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
           .collection('workouts')
           .add(workoutData);
+      print("✅ Workout saved to Firestore successfully.");
+
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Workout saved successfully.')),
@@ -1476,10 +1480,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
 
     } catch (error) {
+      print("❌ Failed to save workout: $error");
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to save workout: $error')),
       );
     }
+
 
 
 
