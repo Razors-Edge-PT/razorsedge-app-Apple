@@ -341,18 +341,16 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
         case PeriodizationModelType.dupSignature:
           final plannedIndex = getExercisePlannedCountBefore(exerciseName, week, day, row);
-          final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
-            exerciseName: exerciseId,
-            plannedIndex: plannedIndex,
-            weightText: null,
-            rirText: null,
-            repTargetsByExercise: {exerciseId: {'repTargets': repTargets}},
-            plannedExerciseDetails: plannedExerciseDetails,
-          );
-          print('🔮 DUP Signature rep (sequence-based): $rep for $exerciseId (index $plannedIndex)');
+
+          // 🔁 Use top set–aware DUP sequence
+          final sequence = PeriodizationModelUtils.upcomingRepTargetSequence(exerciseName, plannedIndex + 1);
+          final rep = sequence.isNotEmpty ? sequence.last : 6;
+
+          print('🔮 DUP Signature (sequence-based) → $rep reps (index $plannedIndex)');
           print('🧪 [BB2] Initial rep target for "$exerciseName" (index $plannedIndex): $rep');
 
           return rep.toString();
+
 
 
         case PeriodizationModelType.dailyUndulatingExposure:
@@ -1735,18 +1733,43 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         mainAxisAlignment: MainAxisAlignment.end,
                         children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                "Week ${weekIndex + 1} • $blockLength weeks",
-                                style: const TextStyle(
-                                  fontSize: 11,
-                                  height: 0.9,
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.white70,
-                                ),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    "Week ${weekIndex + 1} • $blockLength weeks",
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      height: 0.9,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.white70,
+                                    ),
+                                  ),
+                                  Builder(
+                                    builder: (_) {
+                                      final rows = exerciseRows[weekIndex][dayIndex];
+                                      final firstExercise = rows.isNotEmpty ? rows[0].exercise : null;
+
+                                      if (firstExercise == null || !PeriodizationModelUtils.exercisePreviousTopSetReps.containsKey(firstExercise)) {
+                                        return const Text(
+                                          "Upcoming reps: None",
+                                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.orangeAccent),
+                                        );
+                                      }
+
+                                      final upcoming = PeriodizationModelUtils.upcomingRepTargetSequence(firstExercise, 3);
+                                      return Text(
+                                        "Upcoming reps: ${upcoming.join(', ')}",
+                                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.orangeAccent),
+                                      );
+                                    },
+                                  ),
+                                ],
                               ),
+                              const SizedBox(height: 4),
                               Builder(
                                 builder: (_) {
                                   final rows = exerciseRows[weekIndex][dayIndex];
@@ -1754,20 +1777,19 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
                                   if (firstExercise == null || !PeriodizationModelUtils.exercisePreviousTopSetReps.containsKey(firstExercise)) {
                                     return const Text(
-                                      "Upcoming reps: None",
-                                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.orangeAccent),
+                                      "Top set history: None",
+                                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.cyanAccent),
                                     );
                                   }
 
-                                  final upcoming = PeriodizationModelUtils.upcomingRepTargetSequence(firstExercise, 3);
+                                  final history = PeriodizationModelUtils.exercisePreviousTopSetReps[firstExercise]!;
                                   return Text(
-                                    "Upcoming reps: ${upcoming.join(', ')}",
-                                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.orangeAccent),
+                                    "Top set history: ${history.reversed.join(', ')}",
+                                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.cyanAccent),
                                   );
+
                                 },
                               ),
-
-
                             ],
                           ),
 
