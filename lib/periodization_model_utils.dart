@@ -1258,13 +1258,17 @@ class PeriodizationModelUtils {
 
 
   static List<int> upcomingRepTargetSequence(String exerciseName, int count) {
-    // Start with current rep history
-    List<int> history = List.from(exercisePreviousTopSetReps[exerciseName] ?? []);
+    // ✅ Get recent top set reps from WES history (most recent first)
+    final raw = exercisePreviousTopSetReps[exerciseName] ?? [];
+
+    // 🔁 Reverse so most recent is first
+    List<int> history = List.from(raw.reversed);
+
+    print('📜 [DUP Seq] Top set history for "$exerciseName": $history');
 
     List<int> result = [];
 
     for (int i = 0; i < count; i++) {
-      // Define inner logic for forbidden reps, scoped to current history
       Set<int> forbidden = {};
       for (int j = 0; j < history.length && j < 4; j++) {
         int rep = history[j];
@@ -1277,30 +1281,30 @@ class PeriodizationModelUtils {
         }
       }
 
-      // Cap rep range
-      List<int> allReps = List.generate(12, (i) => i + 1);
+      List<int> allReps = List.generate(20, (i) => i + 1);
       List<int> available = allReps.where((r) => !forbidden.contains(r)).toList();
 
-      // Sort by least recent usage
       available.sort((a, b) {
         int aIndex = history.indexOf(a);
         int bIndex = history.indexOf(b);
-        if (aIndex == -1 && bIndex == -1) return a.compareTo(b); // both unused
-        if (aIndex == -1) return -1; // a is less used
-        if (bIndex == -1) return 1; // b is less used
+        if (aIndex == -1 && bIndex == -1) return a.compareTo(b);
+        if (aIndex == -1) return -1;
+        if (bIndex == -1) return 1;
         return aIndex.compareTo(bIndex);
       });
 
-      // Pick best candidate
-      int next = available.isNotEmpty ? available.first : 6; // fallback to 6
+      int next = available.isNotEmpty ? available.first : 6;
       result.add(next);
-
-      // Prepend to history to simulate it becoming the most recent
-      history.insert(0, next);
+      history.insert(0, next); // simulate as if it was just completed
     }
 
+    print('✅ [DUP Seq] Final rep sequence for $exerciseName: $result');
     return result;
   }
+
+
+
+
 
 
   static int updateRepTarget(String exerciseName, String weightText, String rirText, int plannedIndex)
