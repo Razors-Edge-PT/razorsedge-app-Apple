@@ -1335,9 +1335,15 @@ class PeriodizationModelUtils {
 
     for (int i = 0; i < count; i++) {
       // 🔍 Filter available reps to fit within min/max range
-      List<int> availableReps = getAvailableRepTargetsFromSimulatedHistory(exerciseName, history)
-          .where((r) => r >= minReps && r <= maxReps)
-          .toList();
+      List<int> availableReps = getAvailableRepTargetsFromSimulatedHistory(
+        exerciseName,
+        history,
+        minReps: minReps,
+        maxReps: maxReps,
+      );
+      print('🔎 [DUP Signature] Available reps after filtering → $availableReps');
+      print('🧠 [DUP Signature] Simulated history so far → $history');
+
 
       if (availableReps.isEmpty) {
         result.add(minReps); // fallback
@@ -1345,74 +1351,92 @@ class PeriodizationModelUtils {
         continue;
       }
 
-      // Step 3: Track used rep groups
-      Set<int> usedGroups = {};
-      for (int rep in history) {
-        for (int g = 0; g < repGroups.length; g++) {
-          if (repGroups[g].contains(rep)) {
-            usedGroups.add(g);
-            break;
-          }
-        }
+      // 🔁 Hybrid logic: fallback to distance-based if tight range
+      if ((maxReps - minReps) <= 2) {
+        print('🧪 [Tight Range] Entering fallback logic... Range = ${maxReps - minReps + 1}');
+
+        List<int> tightRange = List.generate(maxReps - minReps + 1, (i) => minReps + i);
+
+        // Map each rep to its most recent index in history (or -1 if unused)
+        Map<int, int> recencyMap = {
+          for (var rep in tightRange) rep: history.lastIndexOf(rep)
+        };
+
+        // Sort by least recently used (lowest index or -1)
+        tightRange.sort((a, b) =>
+            (recencyMap[a] ?? -1).compareTo(recencyMap[b] ?? -1));
+
+
+        int selected = tightRange.first;
+        print('✅ [Tight Range] Selected least recent rep: $selected');
+
+        result.add(selected);
+        history.add(selected);
+        continue;
       }
 
-      // Step 4: Find an unused group with available reps
-      int? bestGroupIndex;
-      for (int g = 0; g < repGroups.length; g++) {
-        if (!usedGroups.contains(g) &&
-            repGroups[g].any((r) => availableReps.contains(r))) {
-          bestGroupIndex = g;
-          break;
-        }
-      }
-
-      // Step 5: Fallback to least recently used group
-      if (bestGroupIndex == null) {
+      else {
+        // 🧠 Step 1: Build recency map for rep groups
         Map<int, int> groupUsage = {};
         for (int j = 0; j < history.length; j++) {
+          int rep = history[history.length - 1 - j]; // Most recent first
           for (int g = 0; g < repGroups.length; g++) {
-            if (repGroups[g].contains(history[j])) {
-              groupUsage[g] = j;
+            if (repGroups[g].contains(rep) && !groupUsage.containsKey(g)) {
+              groupUsage[g] = j; // record earliest appearance
               break;
             }
           }
         }
 
-        bestGroupIndex = groupUsage.entries.isNotEmpty
-            ? groupUsage.entries.reduce((a, b) => a.value > b.value ? a : b).key
-            : 3; // fallback to [8,9,10]
+        // 🔍 Step 2: Find the group with the least recent or unused appearance
+        int? bestGroupIndex;
+        int bestScore = -1;
+        for (int g = 0; g < repGroups.length; g++) {
+          if (repGroups[g].any((r) => availableReps.contains(r))) {
+            int score = groupUsage.containsKey(g) ? groupUsage[g]! : 9999;
+            if (score > bestScore) {
+              bestScore = score;
+              bestGroupIndex = g;
+            }
+          }
+        }
+
+        // ✅ Step 3: Choose the least used rep within the best group
+        List<int> candidates = repGroups[bestGroupIndex!]
+            .where((r) => availableReps.contains(r))
+            .toList();
+
+        candidates.sort((a, b) =>
+            history.where((x) => x == a).length.compareTo(history.where((x) => x == b).length));
+
+        int selected = candidates.isNotEmpty ? candidates.first : availableReps.first;
+        result.add(selected);
+        history.add(selected);
       }
-
-      // Step 6: Choose least recently used rep from that group (within range)
-      List<int> candidates = repGroups[bestGroupIndex!]
-          .where((r) => availableReps.contains(r) && r >= minReps && r <= maxReps)
-          .toList();
-
-      candidates.sort((a, b) => history.contains(a) ? 1 : -1); // Prefer unused
-
-      int selected = candidates.isNotEmpty ? candidates.first : availableReps.first;
-      result.add(selected);
-      history.add(selected); // ✅ Simulate by appending
     }
+
 
     print('✅ [upcomingRepTargetSequence] Final rep sequence for "$exerciseName": $result');
     return result;
   }
 
 
-
-
-
-
-
   static List<int> getAvailableRepTargetsFromSimulatedHistory(
       String exerciseName,
-      List<int> history,
-      ) {
+      List<int> history, {
+        int minReps = 1,
+        int maxReps = 35,
+      }) {
     List<int> allReps = List.generate(35, (index) => index + 1);
-    Set<int> forbiddenReps = {};
 
-    // 🧠 Read the most recent 4 reps (from the end of the list)
+    // ✅ NEW: Skip filtering for tight ranges
+    if ((maxReps - minReps) <= 2) {
+      final tightRange = allReps.where((r) => r >= minReps && r <= maxReps).toList();
+      print('⚠️ [SimulatedHistory] Skipping filtering due to tight range → $tightRange');
+      return tightRange;
+    }
+
+    Set<int> forbiddenReps = {};
     final recent = history.length >= 4
         ? history.sublist(history.length - 4)
         : history;
@@ -1428,9 +1452,14 @@ class PeriodizationModelUtils {
       }
     }
 
-    // ✅ Return available reps, favoring those not recently used
-    return allReps.where((r) => !forbiddenReps.contains(r)).toList();
+    final filtered = allReps
+        .where((r) => !forbiddenReps.contains(r) && r >= minReps && r <= maxReps)
+        .toList();
+
+    print('🔎 [DUP Signature] Available reps after filtering → $filtered');
+    return filtered;
   }
+
 
 
 
