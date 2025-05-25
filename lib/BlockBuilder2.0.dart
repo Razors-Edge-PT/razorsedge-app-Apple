@@ -258,15 +258,17 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   Map<String, List<String>> groupedExercises = {};
 
   Future<void> loadExercisesFromFirestore() async {
+    print('🚀 [BB2] Starting loadExercisesFromFirestore');
+
     final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
 
-    // Clear both lists/maps before refilling
     allExercisesFromFirestore.clear();
     _exerciseIdToName.clear();
+    PeriodizationModelUtils.nameToId.clear(); // ✅ Clear global map
 
     for (final doc in snapshot.docs) {
       final id = doc.id;
-      final name = doc['name'].toString(); // 🧠 Ensure consistent string key
+      final name = doc['name'].toString();
       final category = doc['category'] as String;
       final bodyPart = doc['bodyPart'] as String;
 
@@ -277,16 +279,20 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         'bodyPart': bodyPart,
       });
 
-      _exerciseIdToName[id] = name;           // 🔁 ID ➔ name
-      nameToIdMap[name] = id;                 // 🔁 Name ➔ ID
-      print('✅ Mapped "$name" → $id');       // 🧪 Debug confirmation
+      _exerciseIdToName[id] = name;
+      nameToIdMap[name] = id;
+      PeriodizationModelUtils.nameToId[name.trim()] = id;
+
+      print('✅ [BB2] Mapped "$name" → $id'); // 🔍 Confirm mapping
     }
 
+    print('📦 [BB2] nameToId map now contains: ${PeriodizationModelUtils.nameToId.length} entries');
 
     setState(() {
       groupedExercises = groupExercisesByCategory(allExercisesFromFirestore);
     });
   }
+
 
   String? getRepTargetForExercise(String exerciseName, int week, int day, int row) {
     final exerciseId = nameToIdMap[exerciseName];
@@ -461,6 +467,9 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             };
             print('🧩 [BB2] Injected repTargets for $exerciseId from plannedExerciseDetails');
           }
+          PeriodizationModelUtils.plannedExerciseDetails[exerciseId] = details;
+          print('✅ [BB2] Assigned full details to plannedExerciseDetails[$exerciseId]');
+
         });
       } else {
         print('❌ [BB2] No plannedExerciseDetails found.');
