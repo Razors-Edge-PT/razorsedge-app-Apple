@@ -25,6 +25,8 @@ class _BlockPlannerState extends State<Block_Planner> {
   // Example list of tracked exercises
   List<String> exercises = [];
   Map<String, String> _exerciseIdToName = {}; // id ➔ name
+  Map<String, String> nameToId = {}; // ✅ global map for name → ID
+
   DateTime? _blockStartDate;
   DateTime? _blockEndDate;
   Map<String, dynamic> exerciseRepTargets = {};
@@ -118,10 +120,12 @@ class _BlockPlannerState extends State<Block_Planner> {
   Map<String, List<String>> groupedExercises = {};
 
   Future<void> loadExercisesFromFirestore() async {
+    print('🚀 Starting loadExercisesFromFirestore');
     final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
 
 // Clear previous
     _exerciseIdToName.clear();
+    PeriodizationModelUtils.nameToId.clear(); // ✅ clear shared name → ID map
 
     final exercises = snapshot.docs.map((doc) {
       final id = doc.id; // 👈 New
@@ -129,7 +133,10 @@ class _BlockPlannerState extends State<Block_Planner> {
       final category = doc['category'] as String;
       final bodyPart = doc['bodyPart'] as String;
 
-      _exerciseIdToName[id] = name; // 👈 New: map id ➔ name
+      _exerciseIdToName[id] = name;
+      PeriodizationModelUtils.nameToId[name.trim()] = id; // ✅ this is what you’re missing
+      print('✅ Mapped "$name" → $id');
+
 
       return {
         'id': id, // 👈 Add id here too if needed later
@@ -413,15 +420,28 @@ class _BlockPlannerState extends State<Block_Planner> {
         print('🔁 Converted DUP repTargets for $exercise: ${jsonEncode(dupMap)}');
       }
 
-      existingDetails[exercise] = {
-        'periodizationModel': entry['periodizationModel'] ?? 'Linear Exposure',
-        'repTargets': savedTargets,
-        'progressionModel': entry['progressionModel'] ?? 'linear',
-        'increments': entry['increments'] ?? {'week': 2.5, 'block': 5.0},
-        'weeklyFrequency': entry['weeklyFrequency'] ?? 3,
-        'maxWeightXReps': entry['maxWeightXReps'] ?? '',
-        'notes': entry['notes'] ?? '',
-      };
+      if (entry['periodizationModel'] == 'DUP, Signature') {
+        existingDetails[exercise] = {
+          'periodizationModel': 'DUP, Signature',
+          'repTargets': entry['repTargets'], // ← include the correct full structure
+          'progressionModel': entry['progressionModel'] ?? 'linear',
+          'increments': entry['increments'] ?? {'week': 2.5, 'block': 5.0},
+          'weeklyFrequency': entry['weeklyFrequency'] ?? 3,
+          'maxWeightXReps': entry['maxWeightXReps'] ?? '',
+          'notes': entry['notes'] ?? '',
+        };
+      } else {
+        existingDetails[exercise] = {
+          'periodizationModel': entry['periodizationModel'] ?? 'Linear Exposure',
+          'repTargets': savedTargets,
+          'progressionModel': entry['progressionModel'] ?? 'linear',
+          'increments': entry['increments'] ?? {'week': 2.5, 'block': 5.0},
+          'weeklyFrequency': entry['weeklyFrequency'] ?? 3,
+          'maxWeightXReps': entry['maxWeightXReps'] ?? '',
+          'notes': entry['notes'] ?? '',
+        };
+      }
+
     }
 
     // ✅ Inject block meta into plannedExerciseDetails if dates are valid
@@ -1066,8 +1086,21 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
           result[weekKey] = instanceMap;
         }
+      } else if (model == 'DUP, Signature') {
+        // 🟣 Parse "min – max reps" from display
+        final parts = repText.split('–');
+        final min = parts.length > 0 ? parts[0].trim() : '6';
+        final max = parts.length > 1 ? parts[1].replaceAll('reps', '').trim() : '10';
+
+        result['repRange'] = {
+          'min': min,
+          'max': max,
+        };
+        result['week1'] = {
+          'instance1': repText,
+        };
       } else {
-        // ✅ All other models (exposure-based and DUP-week) → Single week1
+        // ✅ All other models (DUP-week, exposure, etc.)
         final values = repText
             .split('|')
             .map((s) => s.trim())
@@ -1080,6 +1113,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
         result['week1'] = instanceMap;
       }
+
 
       widget.onUpdateSetting(widget.exerciseId, 'repTargets', result);
       print("💾 [DISPOSE] Saved repTargets for ${widget.exerciseName} using model $model → $result");
@@ -1655,7 +1689,15 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         child: Text("$rep", style: const TextStyle(color: Colors.white)),
                       );
                     }).toList(),
-                    onChanged: (val) => val != null ? setState(() => tempMin = val) : null,
+                      onChanged: (val) {
+                        if (val != null) {
+                          setState(() {
+                            tempMin = val;
+                            _repTargetsDisplayController.text = "$tempMin – $tempMax reps";
+                          });
+                        }
+                      }
+
                   ),
                 ],
               ),
@@ -1672,7 +1714,15 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         child: Text("$rep", style: const TextStyle(color: Colors.white)),
                       );
                     }).toList(),
-                    onChanged: (val) => val != null ? setState(() => tempMax = val) : null,
+                      onChanged: (val) {
+                        if (val != null) {
+                          setState(() {
+                            tempMax = val;
+                            _repTargetsDisplayController.text = "$tempMin – $tempMax reps";
+                          });
+                        }
+                      }
+
                   ),
                 ],
               ),
@@ -1686,14 +1736,17 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             TextButton(
               onPressed: () {
                 final firestoreResult = {
-                  'min': tempMin,
-                  'max': tempMax,
+                  'repRange': {
+                    'min': tempMin.toString(),
+                    'max': tempMax.toString(),
+                  },
                   'week1': {
                     'instance1': "$tempMin – $tempMax reps",
-                  },
+                  }
                 };
 
-// ✅ Save to shared in-memory cache with compatible structure
+
+
                 final memoryCache = {
                   'repRange': {
                     'min': tempMin.toString(),
@@ -1702,27 +1755,24 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                 };
 
                 _cachedRepTargetMap = memoryCache;
-
+                print("💾 [DUP Signature] Saving min=$tempMin, max=$tempMax");
+                print("💾 [DUP Signature] Final repTargets structure: ${jsonEncode(firestoreResult)}"); // 👈 Add here
 
                 print("💾 [DUP Signature] Saving min=$tempMin, max=$tempMax");
 
-                // ✅ Update cache used by dialog open
-                _cachedRepTargetMap = memoryCache;
-
                 setState(() {
+                  print("🧾 Final repTargets structure: ${jsonEncode(firestoreResult)}");
+
                   widget.onUpdateSetting(exerciseName, 'repTargets', firestoreResult);
-                  widget.onUpdateSetting(exerciseName, 'periodizationModel', 'DUP, Signature'); // ✅ Add this line
+                  widget.onUpdateSetting(exerciseName, 'periodizationModel', 'DUP, Signature');
                   _repTargetsDisplayController.text = "$tempMin – $tempMax reps";
                 });
-                print("💾 [DUP Signature] Model assignment confirmed for $exerciseName → DUP, Signature");
-
 
                 Navigator.pop(ctx);
-              }
-              ,
-
+              },
               child: const Text("Save"),
             ),
+
           ],
         );
       },

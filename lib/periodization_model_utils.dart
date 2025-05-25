@@ -26,7 +26,8 @@ class PeriodizationModelUtils {
   static final Map<String, List<double>> exercisePreviousE1RMs = {};
   static final Map<String, List<int>> exercisePreviousTopSetReps = {};
   static Map<String, PeriodizationModelType> exercisePeriodizationModels = {};
-
+  static Map<String, dynamic> plannedExerciseDetails = {}; // ✅ Add this line
+  static final Map<String, String> nameToId = {};
   static final List<int> linearClassicDefaults = [10, 8, 6];
   static final List<int> linearExposureDefaults = [12, 10, 8, 6, 4, 2];
   static final List<int> dupSignatureDefaults = [6, 10];
@@ -1258,50 +1259,178 @@ class PeriodizationModelUtils {
 
 
   static List<int> upcomingRepTargetSequence(String exerciseName, int count) {
-    // ✅ Get recent top set reps from WES history (most recent first)
-    final raw = exercisePreviousTopSetReps[exerciseName] ?? [];
 
-    // 🔁 Reverse so most recent is first
-    List<int> history = List.from(raw.reversed);
+    print('📘 nameToId keys: ${PeriodizationModelUtils.nameToId.keys.toList()}');
+    print('📘 Looking up ID for "$exerciseName"');
 
-    print('📜 [DUP Seq] Top set history for "$exerciseName": $history');
+    // 🔍 Convert exercise name → ID
+    final exerciseId = PeriodizationModelUtils.nameToId[exerciseName] ??
+        (() {
+          print('❌ No match found for "$exerciseName". Available keys: ${PeriodizationModelUtils.nameToId.keys}');
+          return null;
+        })();
+
+    final details = PeriodizationModelUtils.plannedExerciseDetails[exerciseId];
+    if (details == null) {
+      print("❌ [upcomingRepTargetSequence] No details found for ID=$exerciseId at this time.");
+    } else {
+      print("✅ [upcomingRepTargetSequence] Found details for $exerciseName (ID=$exerciseId)");
+
+      final repTargetsMap = details['repTargets'] as Map<String, dynamic>?;
+      final week1 = repTargetsMap?['week1'] as Map<String, dynamic>?;
+      final rawInstance1 = week1?['instance1'];
+
+      print('🧪 [DUP Signature] Raw week1.instance1 value for $exerciseName → $rawInstance1');
+    }
+
+    print('✅ [upcomingRepTargetSequence] Found details for $exerciseName (ID=$exerciseId)');
+    print('🧪 [DUP Signature] Raw week1.instance1 value for $exerciseName → ${PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets']?['week1']?['instance1']}');
+    final rawInstance1 = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets']?['week1']?['instance1']?.toString();
+    print('🧪 [DUP Signature] Raw week1.instance1 value for $exerciseName → $rawInstance1');
+
+    final parsedMin = rawInstance1 != null && rawInstance1.contains('–')
+        ? int.tryParse(rawInstance1.split('–').first.trim())
+        : null;
+
+    print('🔍 [DUP Signature] Parsed min rep value → $parsedMin');
+
+
+    final parsedMax = rawInstance1 != null && rawInstance1.contains('–')
+        ? int.tryParse(
+      rawInstance1
+          .split('–')
+          .last
+          .replaceAll(RegExp(r'[^0-9]'), '') // removes " reps" or other non-digit chars
+          .trim(),
+    )
+        : null;
+
+    print('🔍 [DUP Signature] Parsed max rep value → $parsedMax');
+
+
+// 🔢 Use hardcoded min/max values
+    final int minReps = parsedMin ?? 4;
+    final int maxReps = parsedMax ?? 18;
+    print('📏 [Rep Range] min=$minReps, max=$maxReps for ID=$exerciseId');
+
+
+    // 🧠 Step 1: Load history in chronological order (oldest → newest)
+    List<int> rawHistory = List.from(exercisePreviousTopSetReps[exerciseName] ?? []);
+    List<int> history = List.from(rawHistory);
+
+    // 🧪 Step 2: Setup rep groups
+    List<List<int>> repGroups = [
+      [1, 2],
+      [3, 4],
+      [5, 6, 7],
+      [8, 9, 10],
+      [11, 12],
+      [13, 14, 15, 16, 17],
+      [18, 19, 20, 21, 22],
+      [23, 24, 25, 26, 27, 28],
+      [29, 30, 31, 32, 33, 34, 35]
+    ];
 
     List<int> result = [];
 
     for (int i = 0; i < count; i++) {
-      Set<int> forbidden = {};
-      for (int j = 0; j < history.length && j < 4; j++) {
-        int rep = history[j];
-        if (j == 0) {
-          forbidden.addAll([rep - 2, rep - 1, rep, rep + 1, rep + 2]);
-        } else if (j == 1) {
-          forbidden.addAll([rep - 1, rep, rep + 1]);
-        } else if (j == 2 || j == 3) {
-          forbidden.add(rep);
+      // 🔍 Filter available reps to fit within min/max range
+      List<int> availableReps = getAvailableRepTargetsFromSimulatedHistory(exerciseName, history)
+          .where((r) => r >= minReps && r <= maxReps)
+          .toList();
+
+      if (availableReps.isEmpty) {
+        result.add(minReps); // fallback
+        history.add(minReps);
+        continue;
+      }
+
+      // Step 3: Track used rep groups
+      Set<int> usedGroups = {};
+      for (int rep in history) {
+        for (int g = 0; g < repGroups.length; g++) {
+          if (repGroups[g].contains(rep)) {
+            usedGroups.add(g);
+            break;
+          }
         }
       }
 
-      List<int> allReps = List.generate(20, (i) => i + 1);
-      List<int> available = allReps.where((r) => !forbidden.contains(r)).toList();
+      // Step 4: Find an unused group with available reps
+      int? bestGroupIndex;
+      for (int g = 0; g < repGroups.length; g++) {
+        if (!usedGroups.contains(g) &&
+            repGroups[g].any((r) => availableReps.contains(r))) {
+          bestGroupIndex = g;
+          break;
+        }
+      }
 
-      available.sort((a, b) {
-        int aIndex = history.indexOf(a);
-        int bIndex = history.indexOf(b);
-        if (aIndex == -1 && bIndex == -1) return a.compareTo(b);
-        if (aIndex == -1) return -1;
-        if (bIndex == -1) return 1;
-        return aIndex.compareTo(bIndex);
-      });
+      // Step 5: Fallback to least recently used group
+      if (bestGroupIndex == null) {
+        Map<int, int> groupUsage = {};
+        for (int j = 0; j < history.length; j++) {
+          for (int g = 0; g < repGroups.length; g++) {
+            if (repGroups[g].contains(history[j])) {
+              groupUsage[g] = j;
+              break;
+            }
+          }
+        }
 
-      int next = available.isNotEmpty ? available.first : 6;
-      result.add(next);
-      history.insert(0, next); // simulate as if it was just completed
+        bestGroupIndex = groupUsage.entries.isNotEmpty
+            ? groupUsage.entries.reduce((a, b) => a.value > b.value ? a : b).key
+            : 3; // fallback to [8,9,10]
+      }
+
+      // Step 6: Choose least recently used rep from that group (within range)
+      List<int> candidates = repGroups[bestGroupIndex!]
+          .where((r) => availableReps.contains(r) && r >= minReps && r <= maxReps)
+          .toList();
+
+      candidates.sort((a, b) => history.contains(a) ? 1 : -1); // Prefer unused
+
+      int selected = candidates.isNotEmpty ? candidates.first : availableReps.first;
+      result.add(selected);
+      history.add(selected); // ✅ Simulate by appending
     }
 
-    print('✅ [DUP Seq] Final rep sequence for $exerciseName: $result');
+    print('✅ [upcomingRepTargetSequence] Final rep sequence for "$exerciseName": $result');
     return result;
   }
 
+
+
+
+
+
+
+  static List<int> getAvailableRepTargetsFromSimulatedHistory(
+      String exerciseName,
+      List<int> history,
+      ) {
+    List<int> allReps = List.generate(35, (index) => index + 1);
+    Set<int> forbiddenReps = {};
+
+    // 🧠 Read the most recent 4 reps (from the end of the list)
+    final recent = history.length >= 4
+        ? history.sublist(history.length - 4)
+        : history;
+
+    for (int i = 0; i < recent.length; i++) {
+      int rep = recent[recent.length - 1 - i]; // Newest → Oldest
+      if (i == 0) {
+        forbiddenReps.addAll([rep - 2, rep - 1, rep, rep + 1, rep + 2]);
+      } else if (i == 1) {
+        forbiddenReps.addAll([rep - 1, rep, rep + 1]);
+      } else if (i == 2 || i == 3) {
+        forbiddenReps.add(rep);
+      }
+    }
+
+    // ✅ Return available reps, favoring those not recently used
+    return allReps.where((r) => !forbiddenReps.contains(r)).toList();
+  }
 
 
 
