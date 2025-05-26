@@ -272,23 +272,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   }
 
 
-  int getSuggestedRepTarget(int exerciseIndex, int setIndex, {double? weight}) {
-    String exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
-
-    // 🔢 Count how many times this exercise appears before this exerciseIndex
-    int plannedCountBefore = 0;
-    for (int i = 0; i < exerciseIndex; i++) {
-      if (_selectedExercisesWithCircuits[i]['name'] == exerciseName) {
-        plannedCountBefore++;
-      }
-    }
-
-    return PeriodizationModelUtils.getSuggestedRepTarget(
-      exerciseName,
-      plannedIndex: plannedCountBefore,
-    );
-  }
-
 
   //Determine hint texts for this workout:NEW METHOD
 

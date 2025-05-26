@@ -28,6 +28,7 @@ class PeriodizationModelUtils {
   static Map<String, PeriodizationModelType> exercisePeriodizationModels = {};
   static Map<String, dynamic> plannedExerciseDetails = {}; // ✅ Add this line
   static final Map<String, String> nameToId = {};
+  static final Map<String, String> idToName = {};        // id → name ✅
   static final List<int> linearClassicDefaults = [10, 8, 6];
   static final List<int> linearExposureDefaults = [12, 10, 8, 6, 4, 2];
   static final List<int> dupSignatureDefaults = [6, 10];
@@ -44,6 +45,10 @@ class PeriodizationModelUtils {
       return w * (1 + (0.0333 * totalReps));
     }
   }
+  static String resolveExerciseName(String key) {
+    return idToName[key] ?? key;
+  }
+
 
   static Future<void> loadPeriodizationModelsFromFirestore() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -384,22 +389,25 @@ class PeriodizationModelUtils {
 
 
         case PeriodizationModelType.dupSignature:
-        // If weight is entered, still calculate reps dynamically
-          if (weightText != null && weightText.isNotEmpty) {
-            final reps = updateRepTarget(
-              exerciseName,
-              weightText,
-              rirText ?? "0.5",
-              plannedIndex,
-            );
-            print('⚖️ DUP Signature (weight override) → $reps reps');
-            return reps;
-          }
-// Otherwise, use upcoming sequence logic
-          final sequence = upcomingRepTargetSequence(exerciseName, plannedIndex + 1);
-          final reps = sequence.length > plannedIndex ? sequence[plannedIndex] : 6;
+        // ✅ Use REsignatureRepsByExercise with model-aware min/max range
+
+          final range = getDupSignatureRepRange(exerciseName);
+          final int min = range?['min'] ?? 2;
+          final int max = range?['max'] ?? 10;
+
+          final sequence = REsignatureRepsByExercise(
+            exerciseName: exerciseName,
+            min: min,
+            max: max,
+            count: 20,
+          );
+
+          final reps = sequence.length > plannedIndex ? sequence[plannedIndex] : min;
+          print('🧪 Full sequence for $exerciseName → ${sequence.join(', ')}');
+
           print('🔮 DUP Signature (sequence-based) → $reps reps (index $plannedIndex)');
           return reps;
+
 
 
         case PeriodizationModelType.linearClassic:
@@ -1460,9 +1468,222 @@ class PeriodizationModelUtils {
     return filtered;
   }
 
+  static List<int> parseHistoryInput(String input) {
+    return input
+        .split(',')
+        .map((s) => s.replaceAll(RegExp(r'[^0-9]'), '')) // remove non-numeric
+        .map((s) => int.tryParse(s))
+        .whereType<int>() // remove nulls
+        .toList();
+  }
+
+  static Map<String, int>? getDupSignatureRepRange(String exerciseKey) {
+    // Step 1: Try direct lookup (assume key is an ID)
+    var details = plannedExerciseDetails[exerciseKey];
+
+    // Step 2: If null, try converting from name → ID
+    if (details == null && nameToId.containsKey(exerciseKey)) {
+      final id = nameToId[exerciseKey];
+      if (id != null) {
+        details = plannedExerciseDetails[id];
+        print('🔁 [getDupSignatureRepRange] Used name to find ID "$id"');
+      }
+    }
+
+    if (details == null) {
+      print('❌ [getDupSignatureRepRange] No details found for "$exerciseKey"');
+      return null;
+    }
+
+    final rawInstance1 = details['repTargets']?['week1']?['instance1']?.toString();
+
+    final parsedMin = rawInstance1?.contains('–') == true
+        ? int.tryParse(rawInstance1!.split('–').first.trim())
+        : null;
+
+    final parsedMax = rawInstance1?.contains('–') == true
+        ? int.tryParse(rawInstance1!.split('–').last.replaceAll(RegExp(r'[^0-9]'), '').trim())
+        : null;
+
+    print('📏 [getDupSignatureRepRange] Parsed range → min=$parsedMin, max=$parsedMax for key "$exerciseKey"');
+
+    return {
+      'min': parsedMin ?? 2,
+      'max': parsedMax ?? 10,
+    };
+  }
 
 
 
+  static List<int> REsignatureRepTargets({
+    required int min,
+    required int max,
+    required List<int> history,
+    int count = 20,
+  }) {
+    final allReps = List.generate(max - min + 1, (i) => min + i);
+    final result = <int>[];
+    final usedInCycle = <int>{}; // Tracks current cycle usage
+    final recentHistory = List<int>.from(history.where((r) => r >= min - 4 && r <= max + 4));
+
+    // Seed: if no history, start with something near the top
+    if (recentHistory.isEmpty && result.isEmpty) {
+      result.add(max);
+      usedInCycle.add(max);
+    }
+
+    while (result.length < count) {
+      final currentHistory = [...recentHistory, ...result];
+      final recent = currentHistory.reversed.toList();
+      final lastUsed = result.isNotEmpty ? result.last : null;
+
+      // Step 1: Start with full range
+      final candidates = List<int>.from(allReps);
+
+      // Step 2: Apply recency constraints
+      final Set<int> forbidden = {};
+
+      if (recent.length >= 1) {
+        final r = recent[0];
+        forbidden.addAll([r - 2, r - 1, r, r + 1, r + 2]);
+      }
+      if (recent.length >= 2) {
+        final r = recent[1];
+        forbidden.addAll([r - 1, r, r + 1]);
+      }
+      if (recent.length >= 3) forbidden.add(recent[2]);
+      if (recent.length >= 4) forbidden.add(recent[3]);
+
+      List<int> valid = candidates
+          .where((rep) =>
+      !forbidden.contains(rep) &&
+          (lastUsed == null || rep != lastUsed)) // never repeat immediately
+          .toList();
+
+      // Step 3: Prioritize unused reps in current cycle
+      final unused = valid.where((rep) => !usedInCycle.contains(rep)).toList();
+
+      int? chosen;
+      if (unused.isNotEmpty) {
+        chosen = _repWithMaxDistance(unused, recent);
+      } else if (valid.isNotEmpty) {
+        chosen = _repWithMaxDistance(valid, recent);
+      } else {
+        // 🔁 Relax constraints step-by-step
+        valid = candidates.where((rep) => rep != lastUsed).toList();
+        chosen = _repWithMaxDistance(valid, recent);
+      }
+
+      if (chosen != null) {
+        result.add(chosen);
+        usedInCycle.add(chosen);
+      }
+
+      // Reset cycle if all reps used once
+      if (usedInCycle.length == allReps.length) {
+        usedInCycle.clear();
+      }
+    }
+
+    return result;
+  }
+
+  static int _repWithMaxDistance(List<int> options, List<int> recent) {
+    int maxDistance = -1;
+    int best = options.first;
+
+    for (var rep in options) {
+      int dist = 0;
+      for (int i = 0; i < recent.length && i < 4; i++) {
+        dist += (rep - recent[i]).abs();
+      }
+      if (dist > maxDistance) {
+        maxDistance = dist;
+        best = rep;
+      }
+    }
+    return best;
+  }
+
+  static List<int> REsignatureRepsByExercise({
+    required String exerciseName, // May be name or ID
+    required int min,
+    required int max,
+    int count = 20,
+  }) {
+    // ✅ Resolve name if ID is passed
+    final resolvedName = PeriodizationModelUtils.idToName[exerciseName] ?? exerciseName;
+
+    // ✅ Use name to fetch top set history
+    final history = (exercisePreviousTopSetReps[resolvedName] ?? []).reversed.toList();
+
+    print('🧠 [REsignature] History key used: "$resolvedName"');
+    print('🧠 [REsignature] History values: ${exercisePreviousTopSetReps[resolvedName]}');
+
+
+
+    final allReps = List.generate(max - min + 1, (i) => min + i);
+    final result = <int>[];
+    final usedInCycle = <int>{};
+    final recentHistory = List<int>.from(history.where((r) => r >= min - 4 && r <= max + 4));
+
+    if (recentHistory.isEmpty && result.isEmpty) {
+      result.add(max);
+      usedInCycle.add(max);
+    }
+
+    while (result.length < count) {
+      final currentHistory = [...recentHistory, ...result];
+      final recent = currentHistory.reversed.toList();
+      final lastUsed = result.isNotEmpty ? result.last : null;
+
+      final candidates = List<int>.from(allReps);
+      final Set<int> forbidden = {};
+
+      if (recent.length >= 1) {
+        final r = recent[0];
+        forbidden.addAll([r - 2, r - 1, r, r + 1, r + 2]);
+      }
+      if (recent.length >= 2) {
+        final r = recent[1];
+        forbidden.addAll([r - 1, r, r + 1]);
+      }
+      if (recent.length >= 3) forbidden.add(recent[2]);
+      if (recent.length >= 4) forbidden.add(recent[3]);
+
+      List<int> valid = candidates
+          .where((rep) =>
+      !forbidden.contains(rep) &&
+          (lastUsed == null || rep != lastUsed))
+          .toList();
+
+      final unused = valid.where((rep) => !usedInCycle.contains(rep)).toList();
+
+      int? chosen;
+      if (unused.isNotEmpty) {
+        chosen = _repWithMaxDistance(unused, recent);
+      } else if (valid.isNotEmpty) {
+        chosen = _repWithMaxDistance(valid, recent);
+      } else {
+        valid = candidates.where((rep) => rep != lastUsed).toList();
+        chosen = _repWithMaxDistance(valid, recent);
+      }
+
+      if (chosen != null) {
+        result.add(chosen);
+        usedInCycle.add(chosen);
+      }
+
+      if (usedInCycle.length == allReps.length) {
+        usedInCycle.clear();
+      }
+    }
+    print('🧠 [REsignature] History key used: "$exerciseName"');
+    print('🧠 [REsignature] History values: ${exercisePreviousTopSetReps[exerciseName]}');
+
+
+    return result;
+  }
 
 
   static int updateRepTarget(String exerciseName, String weightText, String rirText, int plannedIndex)
@@ -1503,6 +1724,8 @@ class PeriodizationModelUtils {
     return upcomingRepTargetSequence(exerciseName, plannedIndex + 1).last;
 
   }
+
+
 
 
 
