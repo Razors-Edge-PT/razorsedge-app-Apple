@@ -32,6 +32,8 @@ class PeriodizationModelUtils {
   static final List<int> linearClassicDefaults = [10, 8, 6];
   static final List<int> linearExposureDefaults = [12, 10, 8, 6, 4, 2];
   static final List<int> dupSignatureDefaults = [6, 10];
+  static Map<String, Map<String, dynamic>> bb2DailyData = {};
+
 
   static double calculateE1RM(double? weight, double? reps, double? rir) {
     double w = weight ?? 0.0;
@@ -473,9 +475,6 @@ class PeriodizationModelUtils {
           print('📈 LinearClassic interpolated → $reps reps (week: $currentWeek, $instanceKey)');
           return reps;
 
-
-
-
         case PeriodizationModelType.linearExposure:
           final reps = getLinearExposureRepTarget(
             exerciseId: exerciseName,
@@ -532,9 +531,6 @@ class PeriodizationModelUtils {
     return 10;
   }
 
-
-
-
   static int getdailyUndulatingExposureRepTarget({
     required String exerciseName,
     required int plannedIndex,
@@ -556,6 +552,8 @@ class PeriodizationModelUtils {
         'week${w + 1}': Map<String, String>.from(week1Map)
     };
   }
+
+
 
 
 

@@ -360,9 +360,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
           return rep.toString();
 
-
-
-
         case PeriodizationModelType.dailyUndulatingExposure:
           final globalIndex = getExercisePlannedCountBefore(exerciseName, week, day, row);
           final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
