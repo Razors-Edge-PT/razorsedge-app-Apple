@@ -282,6 +282,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       _exerciseIdToName[id] = name;
       nameToIdMap[name] = id;
       PeriodizationModelUtils.nameToId[name.trim()] = id;
+      PeriodizationModelUtils.idToName[id] = name; // ✅ Add this line
+
 
       print('✅ [BB2] Mapped "$name" → $id'); // 🔍 Confirm mapping
     }
@@ -291,6 +293,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     setState(() {
       groupedExercises = groupExercisesByCategory(allExercisesFromFirestore);
     });
+
   }
 
 
@@ -346,16 +349,17 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           return rep.toString();
 
         case PeriodizationModelType.dupSignature:
-          final plannedIndex = getExercisePlannedCountBefore(exerciseName, week, day, row);
+          final globalIndex = getExercisePlannedCountBefore(exerciseName, week, day, row);
 
-          // 🔁 Use top set–aware DUP sequence
-          final sequence = PeriodizationModelUtils.upcomingRepTargetSequence(exerciseName, plannedIndex + 1);
-          final rep = sequence.isNotEmpty ? sequence.last : 6;
+          final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
 
-          print('🔮 DUP Signature (sequence-based) → $rep reps (index $plannedIndex)');
-          print('🧪 [BB2] Initial rep target for "$exerciseName" (index $plannedIndex): $rep');
+            exerciseName: exerciseId,
+            plannedIndex: globalIndex,
+            weekIndex: week,
+          );
 
           return rep.toString();
+
 
 
 
@@ -985,9 +989,28 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
     setState(() {
       topSetsByExercise = tempTopSets;
+
+      // ✅ ALSO assign to global rep history map using both name + ID
+      for (final name in tempTopSets.keys) {
+        final reps = tempTopSets[name]!
+            .map((set) => int.tryParse(set['reps']?.toString() ?? ''))
+            .whereType<int>()
+            .toList();
+
+        PeriodizationModelUtils.exercisePreviousTopSetReps[name] = reps;
+
+        final id = PeriodizationModelUtils.nameToId[name];
+        if (id != null) {
+          PeriodizationModelUtils.exercisePreviousTopSetReps[id] = reps;
+        }
+
+        print('🧠 [TopSetLoader] Stored ${reps.length} reps for "$name" and ID=$id');
+      }
+
       print("✅ Top sets loaded (max 4 per exercise): ${topSetsByExercise.length} exercises.");
     });
   }
+
 
 
   void updateFutureDaysWithEditedDay(int sourceWeekIndex, int sourceDayIndex) {
@@ -1758,23 +1781,35 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                                     ),
                                   ),
                                   Builder(
-                                    builder: (_) {
-                                      final rows = exerciseRows[weekIndex][dayIndex];
-                                      final firstExercise = rows.isNotEmpty ? rows[0].exercise : null;
+                                      builder: (_) {
+                                        final rows = exerciseRows[weekIndex][dayIndex];
+                                        final firstExercise = rows.isNotEmpty ? rows[0].exercise : null;
+                                        if (firstExercise == null || !PeriodizationModelUtils.exercisePreviousTopSetReps.containsKey(firstExercise)) {
+                                          return const Text(
+                                            "Upcoming reps: None",
+                                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.orangeAccent),
+                                          );
+                                        }
+                                        final range = PeriodizationModelUtils.getDupSignatureRepRange(firstExercise);
+                                        final int min = range?['min'] ?? 2;
+                                        final int max = range?['max'] ?? 10;
 
-                                      if (firstExercise == null || !PeriodizationModelUtils.exercisePreviousTopSetReps.containsKey(firstExercise)) {
-                                        return const Text(
-                                          "Upcoming reps: None",
-                                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.orangeAccent),
+                                        final upcoming = PeriodizationModelUtils.REsignatureRepsByExercise(
+                                          exerciseName: firstExercise,
+                                          min: min,
+                                          max: max,
+                                          count: 5,
+                                        );
+
+                                        // 🧾 Print the 5 reps that will appear in the UI
+                                        print('🔮 [BB2 UI] Upcoming 5 reps for $firstExercise → ${upcoming.join(', ')}');
+
+                                        return Text(
+                                          "Upcoming reps: ${upcoming.join(', ')}",
+                                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.orangeAccent),
                                         );
                                       }
 
-                                      final upcoming = PeriodizationModelUtils.upcomingRepTargetSequence(firstExercise, 3);
-                                      return Text(
-                                        "Upcoming reps: ${upcoming.join(', ')}",
-                                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.orangeAccent),
-                                      );
-                                    },
                                   ),
                                 ],
                               ),
@@ -1792,6 +1827,10 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                                   }
 
                                   final history = PeriodizationModelUtils.exercisePreviousTopSetReps[firstExercise]!;
+
+                                  // 🔍 Print to console
+                                  print('🧠 [BB2 UI] Top set history for $firstExercise → ${history.join(', ')}');
+
                                   return Text(
                                     "Top set history: ${history.reversed.join(', ')}",
                                     style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.cyanAccent),

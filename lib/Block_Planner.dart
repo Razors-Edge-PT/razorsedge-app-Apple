@@ -9,6 +9,8 @@ import 'core_exercises.dart';
 import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'periodization_model_utils.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 
 
 
@@ -26,6 +28,10 @@ class _BlockPlannerState extends State<Block_Planner> {
   List<String> exercises = [];
   Map<String, String> _exerciseIdToName = {}; // id ➔ name
   Map<String, String> nameToId = {}; // ✅ global map for name → ID
+  final TextEditingController _historyInputController = TextEditingController();
+
+  String _repsText = '';
+
 
   DateTime? _blockStartDate;
   DateTime? _blockEndDate;
@@ -33,16 +39,15 @@ class _BlockPlannerState extends State<Block_Planner> {
   Map<String, dynamic> plannedExerciseDetails = {};
   final TextEditingController _blockGoalsController = TextEditingController();
 
-
-
   Map<String, Map<String, dynamic>> exerciseSettings = {};
 
   @override
   void initState() {
     super.initState();
-
-    _initData();
+    _loadRepHistoryAndGenerateReps(); // ⬅️ Load history + generate reps
+    _initData(); // ⬅️ Your existing setup logic
   }
+
 
   @override
   void dispose() {
@@ -53,6 +58,33 @@ class _BlockPlannerState extends State<Block_Planner> {
     super.dispose();
   }
 
+  Future<void> _loadRepHistoryAndGenerateReps() async {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString('repHistoryInput') ?? '';
+
+    _historyInputController.text = stored;
+
+    final parsedHistory = PeriodizationModelUtils.parseHistoryInput(stored);
+    final reps = PeriodizationModelUtils.REsignatureRepTargets(
+      min: 2,
+      max: 10,
+      history: parsedHistory,
+    );
+
+    setState(() {
+      _repsText = reps.join(', ');
+    });
+  }
+
+
+  List<int> _parseHistoryInput(String input) {
+    return input
+        .split(',')
+        .map((s) => s.replaceAll(RegExp(r'[^0-9]'), '')) // remove non-numeric
+        .map((s) => int.tryParse(s))
+        .whereType<int>() // remove nulls
+        .toList();
+  }
 
   Future<void> _initData() async {
     await loadExercisesFromFirestore(); // 🧠 make sure this finishes first
@@ -590,6 +622,8 @@ class _BlockPlannerState extends State<Block_Planner> {
     }, SetOptions(merge: true));
   }
 
+
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -743,7 +777,9 @@ class _BlockPlannerState extends State<Block_Planner> {
     );
   }
 
+
   Widget _buildGlobalBlockInputs() {
+
     return Column(
       children: [
         Row(
@@ -844,22 +880,70 @@ class _BlockPlannerState extends State<Block_Planner> {
           ],
         ),
         const SizedBox(height: 8),
+
         Row(
           children: [
-            _buildInputBox("Injuries", multiline: true),
+            Expanded(
+              child: Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                child: TextField(
+                  controller: _historyInputController,
+                  maxLines: 3,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: InputDecoration(
+                    labelText: "Rep History (comma-separated)",
+                    labelStyle: const TextStyle(color: Colors.white70, fontSize: 12),
+                    filled: true,
+                    fillColor: Colors.blueGrey.shade800,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                  ),
+                  onChanged: (_) async {
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setString('repHistoryInput', _historyInputController.text);
+
+                    setState(() {
+                      final parsedHistory = _parseHistoryInput(_historyInputController.text);
+                      final reps = PeriodizationModelUtils.REsignatureRepTargets(
+                        min: 5,
+                        max: 11,
+                        history: parsedHistory,
+                      );
+                      _repsText = reps.join(', ');
+                    });
+                  },
+
+                ),
+              ),
+            ),
+
             const SizedBox(width: 8),
-            _buildInputBox("General Notes", multiline: true),
+            _buildInputBox(
+              "Signature Rep Targets",
+              multiline: true,
+              initialText: _repsText,
+              readOnly: true,
+            ),
+
+
           ],
         ),
       ],
     );
   }
 
-  Widget _buildInputBox(String label, {bool multiline = false}) {
+  Widget _buildInputBox(
+      String label, {
+        bool multiline = false,
+        String? initialText,
+        bool readOnly = false,
+      }) {
     return Expanded(
       child: Container(
         margin: const EdgeInsets.only(bottom: 8),
         child: TextField(
+          controller: TextEditingController(text: initialText ?? ''),
+          readOnly: readOnly,
           maxLines: multiline ? 3 : 1,
           style: const TextStyle(color: Colors.white, fontSize: 13),
           decoration: InputDecoration(
@@ -874,6 +958,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       ),
     );
   }
+
 
 
   Widget _smallInput(String label, {bool multiline = false}) {
