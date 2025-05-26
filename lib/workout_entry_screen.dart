@@ -79,6 +79,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   []; // New controller list for RIR
   final int _defaultSets = 3;
   VoidCallback? _lastUndoAction;
+  DateTime? _blockStartDate;
+  DateTime? _blockEndDate;
 
 
   bool _isLoadingData = true; // Tracks whether data is still loading
@@ -285,12 +287,17 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       }
     }
 
+    final exerciseId = PeriodizationModelUtils.nameToId[exerciseName.trim()] ?? exerciseName;
+    final weekIndex = _getApplicableWeekIndex(exerciseId);
+
     final reps = PeriodizationModelUtils.getSuggestedRepTargetByModel(
-      exerciseName: exerciseName,
+      exerciseName: exerciseId,
       plannedIndex: plannedCountBefore,
       weightText: _weightControllers[exerciseIndex][0].text,
       rirText: _rirControllers[exerciseIndex][0].text,
+      weekIndex: weekIndex, // ✅ dynamically supplied
     );
+
 
     return reps.toDouble();
   }
@@ -423,8 +430,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     });
   }
 
-
-  @override
   @override
   void initState() {
     super.initState();
@@ -438,6 +443,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
 
   Future<void> _loadInitialData() async {
+
+    await _loadPlannedExerciseDetails();
+    await loadPlannedExercisesFromFirestore();
     await loadPlannedExercisesFromFirestore();
     await loadPreviousWorkoutData();
 
@@ -503,6 +511,100 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     setState(() {});
 
   }
+
+  Future<void> _loadPlannedExerciseDetails() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final doc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('block_planner')
+        .doc('current_block')
+        .get();
+
+    final data = doc.data();
+    if (data == null) return;
+
+    if (data.containsKey('plannedExerciseDetails')) {
+      final details = Map<String, dynamic>.from(data['plannedExerciseDetails']);
+
+      if (data.containsKey('blockMeta')) {
+        details['blockMeta'] = Map<String, dynamic>.from(data['blockMeta']);
+        print('📎 [WES] Injected blockMeta into plannedExerciseDetails');
+      }
+      final meta = data['blockMeta'] as Map<String, dynamic>? ?? {};
+      _blockStartDate = DateTime.tryParse(meta['blockStartDate'] ?? '');
+      _blockEndDate = DateTime.tryParse(meta['blockEndDate'] ?? '');
+
+      print('📅 [WES] Loaded blockStartDate=$_blockStartDate, blockEndDate=$_blockEndDate');
+
+
+      PeriodizationModelUtils.plannedExerciseDetails.clear();
+      PeriodizationModelUtils.exercisePeriodizationModels.clear();
+
+      details.forEach((exerciseId, entry) {
+        if (exerciseId == 'blockMeta') return;
+
+        if (entry is Map<String, dynamic>) {
+          PeriodizationModelUtils.plannedExerciseDetails[exerciseId] = entry;
+
+          final modelName = entry['periodizationModel'];
+          final modelEnum = PeriodizationModelUtils.stringToModel(modelName);
+          if (modelEnum != null) {
+            PeriodizationModelUtils.exercisePeriodizationModels[exerciseId] = modelEnum;
+            print('✅ [WES] Mapped model $modelName → $modelEnum for $exerciseId');
+          }
+          // ✅ If model is DUP Exposure and only has week1, expand it across block
+          if (modelEnum == PeriodizationModelType.dailyUndulatingExposure) {
+            final repTargets = entry['repTargets'];
+            if (repTargets is Map<String, dynamic> &&
+                repTargets.length == 1 &&
+                repTargets.containsKey('week1')) {
+              final week1Map = repTargets['week1'];
+              if (week1Map is Map<String, dynamic> && week1Map.isNotEmpty) {
+                final expanded = PeriodizationModelUtils.expandDupDailyWeek1(
+                  Map<String, String>.from(week1Map.map((k, v) => MapEntry(k, v.toString()))),
+                  12, // Or replace with block length if dynamically available
+                );
+                PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets'] = expanded;
+                print('🔁 [WES] Expanded DUP Exposure week1 → all weeks for $exerciseId');
+                final rep = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets'];
+                print('🧪 [WES] Final repTargets after expansion for $exerciseId: ${jsonEncode(rep)}');
+                print('🧪 [Final WES] repTargets for $exerciseId → ${jsonEncode(PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets'])}');
+
+
+              }
+            }
+          }
+        }
+      });
+
+      print('📄 [WES] Full plannedExerciseDetails loaded: ${jsonEncode(details)}');
+    } else {
+      print('❌ [WES] No plannedExerciseDetails found in Firestore');
+    }
+  }
+
+  int? _getApplicableWeekIndex(String exerciseId) {
+    final model = PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
+
+    if (model == PeriodizationModelType.linearClassic ||
+        model == PeriodizationModelType.dailyUndulatingWeek ||
+        model == PeriodizationModelType.dailyUndulatingExposure) {
+      if (_blockStartDate == null) return 0;
+
+      final daysSinceStart = _selectedDate.difference(_blockStartDate!).inDays;
+      final weekIndex = (daysSinceStart / 7).floor().clamp(0, 11);
+
+      print('📆 [WES] Calculated weekIndex=$weekIndex for $exerciseId');
+      return weekIndex;
+    }
+
+    return null; // exposure-based models
+  }
+
+
 
   void _setInitialWorkoutName() {
     if (widget.initialTemplate != null && widget.initialTemplate!.name.isNotEmpty) {
