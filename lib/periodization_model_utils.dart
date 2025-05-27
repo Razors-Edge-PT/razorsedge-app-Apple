@@ -1072,6 +1072,12 @@ class PeriodizationModelUtils {
     return count;
   }
 
+  //WES Function
+  static int getWeekIndexForDate(DateTime date, DateTime blockStartDate) {
+    final daysSinceStart = date.difference(blockStartDate).inDays;
+    final weekIndex = (daysSinceStart / 7).floor();
+    return weekIndex.clamp(0, 11); // assuming max 12 weeks
+  }
 
 
 

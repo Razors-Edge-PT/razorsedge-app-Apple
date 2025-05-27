@@ -358,6 +358,59 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         return parsed.toDouble();
       }
     }
+    if (model == PeriodizationModelType.linearClassic) {
+      final repTargets = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets'];
+      final weekKeyStart = 'week1';
+      final weekKeyFinal = 'week${_blockEndDate != null && _blockStartDate != null
+          ? PeriodizationModelUtils.getBlockLength(blockStartDate: _blockStartDate!, blockEndDate: _blockEndDate!)
+          : 12}';
+
+      final weekStart = repTargets?[weekKeyStart];
+      final weekFinal = repTargets?[weekKeyFinal];
+
+      if (weekStart is Map<String, dynamic> && weekFinal is Map<String, dynamic>) {
+        final instanceCount = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+          exerciseName: exerciseName,
+          savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+          blockStartDate: _blockStartDate!,
+          weekIndex: weekIndex ?? 0,
+        );
+
+        print('📊 [WES] LC weekly instance count for "$exerciseName" = $instanceCount');
+
+        final sortedKeys = weekStart.keys
+            .where((k) => k.startsWith('instance'))
+            .toList()
+          ..sort();
+
+        final frequency = sortedKeys.length;
+        if (frequency == 0) return 10;
+
+        final index = instanceCount % frequency;
+        final instanceKey = sortedKeys[index];
+
+        final startRaw = weekStart[instanceKey]?.toString() ?? '10 x 3';
+        final endRaw = weekFinal[instanceKey]?.toString() ?? '1 x 3';
+
+        final startMatch = RegExp(r'^(\d+)').firstMatch(startRaw);
+        final endMatch = RegExp(r'^(\d+)').firstMatch(endRaw);
+
+        final startReps = startMatch != null ? int.tryParse(startMatch.group(1)!) ?? 10 : 10;
+        final endReps = endMatch != null ? int.tryParse(endMatch.group(1)!) ?? 1 : 1;
+
+        final week = weekIndex ?? 0;
+        final blockLength = PeriodizationModelUtils.getBlockLength(
+          blockStartDate: _blockStartDate!,
+          blockEndDate: _blockEndDate!,
+        );
+
+        final reps = (startReps + ((endReps - startReps) * (week / (blockLength - 1)))).round();
+
+        print('🎯 [WES] LC → week$week → $instanceKey → $reps reps (from $startReps → $endReps)');
+        return reps.toDouble();
+      }
+    }
+
 
 
     // 🔁 Fallback to default model logic
@@ -520,26 +573,37 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     await _loadPlannedExerciseDetails(); // 🧠 Ensures blockStartDate is set
     await loadSavedWorkoutsForInstanceCount(); // 🧠 Fills savedWorkoutsList
 
-    // ✅ Now test the instance count here
-    final testExercise = "Bench Press, Barbell"; // Replace with a real one
+// ✅ Define test exercise (must exist in workouts)
+    final testExercise = "Bench Press, Barbell";
+
+// 🧠 Calculate current week index from today's date
+    final currentWeekIndex = PeriodizationModelUtils.getWeekIndexForDate(
+      DateTime.now(),
+      _blockStartDate!,
+    );
+
+// 🧮 Count total appearances across the whole block
     final blockCount = PeriodizationModelUtils.getInstanceCountForExerciseInBlock(
       exerciseName: testExercise,
       savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
       blockStartDate: _blockStartDate!,
       blockEndDate: _blockEndDate!,
     );
-    print('🧪 [Test] Instance count for "$testExercise" = $count');
-    print('🧪 [Test] Block-wide instance count for "$testExercise" = $blockCount');
 
-// ✅ Test for dailyUndulatingWeek (week-specific)
-    final testWeekIndex = 1; // Replace with the week you want to test (e.g. 0-based: 0 = week 1)
+// 🧮 Count appearances in the current week
     final weekCount = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
       exerciseName: testExercise,
       savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
       blockStartDate: _blockStartDate!,
-      weekIndex: testWeekIndex,
+      weekIndex: currentWeekIndex,
     );
-    print('🧪 [Test] Week $testWeekIndex instance count for "$testExercise" = $weekCount');
+
+// 🖨️ Output
+    print('📆 [WES] Today = ${DateTime.now()}');
+    print('📅 [WES] Current weekIndex = $currentWeekIndex (week ${currentWeekIndex + 1})');
+    print('🔁 [WES] Block-wide instance count for "$testExercise" = $blockCount');
+    print('🔁 [WES] Instance count for "$testExercise" in current week = $weekCount');
+
 
     // ...continue with your original logic
     await loadPlannedExercisesFromFirestore();
@@ -706,6 +770,29 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
               }
             }
           }
+
+          if (modelEnum == PeriodizationModelType.linearClassic) {
+            final repTargets = entry['repTargets'];
+            if (repTargets is Map<String, dynamic>) {
+              print('🧪 [WES] Linear Classic repTargets for $exerciseId → ${jsonEncode(repTargets)}');
+
+              final blockMeta = details['blockMeta'] as Map<String, dynamic>? ?? {};
+              final start = DateTime.tryParse(blockMeta['blockStartDate'] ?? '');
+              final end = DateTime.tryParse(blockMeta['blockEndDate'] ?? '');
+              final blockLength = PeriodizationModelUtils.getBlockLength(
+                blockStartDate: start,
+                blockEndDate: end,
+              );
+              print('🧠 [WES] Linear Classic blockLength = $blockLength');
+
+              final week1 = repTargets['week1'];
+              final finalWeek = repTargets['week$blockLength'];
+
+              print('📅 [WES] week1: ${jsonEncode(week1)}');
+              print('📅 [WES] finalWeek: ${jsonEncode(finalWeek)}');
+            }
+          }
+
 
 
         }
