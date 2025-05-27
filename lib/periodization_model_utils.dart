@@ -1005,6 +1005,7 @@ class PeriodizationModelUtils {
     return availableReps;
   }
 
+  //WES Function
   static int getInstanceCountForExerciseInBlock({
     required String exerciseName,
     required List<Map<String, dynamic>> savedWorkouts,
@@ -1036,6 +1037,40 @@ class PeriodizationModelUtils {
     return count;
   }
 
+  //WES Function
+  static int getInstanceCountForExerciseInWeek({
+    required String exerciseName,
+    required List<Map<String, dynamic>> savedWorkouts,
+    required DateTime blockStartDate,
+    required int weekIndex,
+  }) {
+    final weekStart = blockStartDate.add(Duration(days: weekIndex * 7));
+    final weekEnd = weekStart.add(const Duration(days: 7));
+
+    final usedDates = <String>{};
+
+    for (final workout in savedWorkouts) {
+      final dateStr = workout['date'] ?? '';
+      final date = DateTime.tryParse(dateStr);
+      if (date == null || date.isBefore(weekStart) || date.isAfter(weekEnd)) continue;
+
+      final exercises = workout['exercises'];
+      if (exercises is! List) continue;
+
+      final hasExercise = exercises.any((ex) {
+        final exName = ex['name']?.toString().trim();
+        return exName == exerciseName;
+      });
+
+      if (hasExercise) {
+        usedDates.add(dateStr); // Count once per day
+      }
+    }
+
+    final count = usedDates.length;
+    print('📊 [Week Instance Count] "$exerciseName" used on $count day(s) in week ${weekIndex + 1}');
+    return count;
+  }
 
 
 
