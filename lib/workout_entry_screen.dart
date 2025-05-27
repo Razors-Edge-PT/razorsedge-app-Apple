@@ -289,18 +289,30 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     final exerciseId = PeriodizationModelUtils.nameToId[exerciseName.trim()] ?? exerciseName;
     final weekIndex = _getApplicableWeekIndex(exerciseId);
+    final model = PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
+
+    if (model == PeriodizationModelType.dailyUndulatingExposure) {
+      final count = PeriodizationModelUtils.getInstanceCountForExerciseInBlock(
+        exerciseName: exerciseName,
+        savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+        blockStartDate: _blockStartDate!,
+        blockEndDate: _blockEndDate!,
+      );
+
+      print('📊 [WES] Instance count for "$exerciseName" in block = $count');
+    }
 
     final reps = PeriodizationModelUtils.getSuggestedRepTargetByModel(
       exerciseName: exerciseId,
       plannedIndex: plannedCountBefore,
       weightText: _weightControllers[exerciseIndex][0].text,
       rirText: _rirControllers[exerciseIndex][0].text,
-      weekIndex: weekIndex, // ✅ dynamically supplied
+      weekIndex: weekIndex,
     );
-
 
     return reps.toDouble();
   }
+
 
 
 
@@ -438,13 +450,27 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     _setInitialWorkoutName();
     _loadInitialData();
     _fetchLastWorkoutTopSetReps();
+
   }
 
 
 
   Future<void> _loadInitialData() async {
 
-    await _loadPlannedExerciseDetails();
+    await _loadPlannedExerciseDetails(); // 🧠 Ensures blockStartDate is set
+    await loadSavedWorkoutsForInstanceCount(); // 🧠 Fills savedWorkoutsList
+
+    // ✅ Now test the instance count here
+    final testExercise = "Bench Press, Barbell"; // Replace with a known logged exercise
+    final count = PeriodizationModelUtils.getInstanceCountForExerciseInBlock(
+      exerciseName: testExercise,
+      savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+      blockStartDate: _blockStartDate!,
+      blockEndDate: _blockEndDate!,
+    );
+    print('🧪 [Test] Instance count for "$testExercise" = $count');
+
+    // ...continue with your original logic
     await loadPlannedExercisesFromFirestore();
     await loadPlannedExercisesFromFirestore();
     await loadPreviousWorkoutData();
@@ -585,6 +611,23 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       print('❌ [WES] No plannedExerciseDetails found in Firestore');
     }
   }
+
+  Future<void> loadSavedWorkoutsForInstanceCount() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final snapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('workouts')
+        .get();
+
+    final workouts = snapshot.docs.map((doc) => doc.data()).toList();
+    PeriodizationModelUtils.savedWorkoutsList = List<Map<String, dynamic>>.from(workouts);
+
+    print('📦 [WES] Loaded ${workouts.length} saved workouts into savedWorkoutsList');
+  }
+
 
   int? _getApplicableWeekIndex(String exerciseId) {
     final model = PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
