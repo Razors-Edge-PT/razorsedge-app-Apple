@@ -81,6 +81,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   VoidCallback? _lastUndoAction;
   DateTime? _blockStartDate;
   DateTime? _blockEndDate;
+  Map<String, Map<String, dynamic>> _bb2DataByExercise = {};
+
 
 
   bool _isLoadingData = true; // Tracks whether data is still loading
@@ -273,11 +275,42 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
   }
 
+  void _printBB2PlannedRepsForExercise(int exerciseIndex) {
+    final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
+    final bb2Entry = _bb2DataByExercise[exerciseName];
+
+    final fallback = _calculateFallbackSet1Reps(exerciseIndex);
+
+    if (bb2Entry == null) {
+      print('❌ [WES] No BB2 data found for "$exerciseName"');
+      print('🧠 [WES] Fallback reps for "$exerciseName" = $fallback');
+      return;
+    }
+
+    final reps = bb2Entry['reps'];
+    final rir = bb2Entry['rir'];
+    final weight = bb2Entry['weight'];
+
+    print('📦 [WES] BB2 data for "$exerciseName" → reps: $reps | rir: $rir | weight: $weight');
+    print('🧠 [WES] Fallback reps for "$exerciseName" = $fallback');
+
+    if (reps == 0 || reps == null) {
+      if (fallback.toInt() == 10) {
+        print('✅ [WES] BB2 hint matches fallback.');
+      } else {
+        print('⚠️ [WES] BB2 reps = 0 (likely hint), but fallback ≠ $fallback');
+      }
+    } else {
+      print('🔁 [WES] User override detected in BB2 → using: $reps');
+    }
+  }
+
 
 
   //Determine hint texts for this workout:NEW METHOD
 
   double set1SuggestedReps(int exerciseIndex) {
+    _printBB2PlannedRepsForExercise(exerciseIndex); // 🔍 Debug print
     String exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
 
     int plannedCountBefore = 0;
@@ -361,22 +394,23 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     if (model == PeriodizationModelType.linearClassic) {
       final repTargets = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets'];
       final weekKeyStart = 'week1';
-      final weekKeyFinal = 'week${_blockEndDate != null && _blockStartDate != null
-          ? PeriodizationModelUtils.getBlockLength(blockStartDate: _blockStartDate!, blockEndDate: _blockEndDate!)
-          : 12}';
-
       final weekStart = repTargets?[weekKeyStart];
-      final weekFinal = repTargets?[weekKeyFinal];
 
-      if (weekStart is Map<String, dynamic> && weekFinal is Map<String, dynamic>) {
+      final week = weekIndex ?? 0;
+      final blockLength = PeriodizationModelUtils.getBlockLength(
+        blockStartDate: _blockStartDate!,
+        blockEndDate: _blockEndDate!,
+      );
+
+      if (weekStart is Map<String, dynamic>) {
         final instanceCount = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
           exerciseName: exerciseName,
           savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
           blockStartDate: _blockStartDate!,
-          weekIndex: weekIndex ?? 0,
+          weekIndex: week,
         );
 
-        print('📊 [WES] LC weekly instance count for "$exerciseName" = $instanceCount');
+        print('📊 [WES] LC → weekIndex = $week | instanceCount = $instanceCount');
 
         final sortedKeys = weekStart.keys
             .where((k) => k.startsWith('instance'))
@@ -390,26 +424,23 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         final instanceKey = sortedKeys[index];
 
         final startRaw = weekStart[instanceKey]?.toString() ?? '10 x 3';
-        final endRaw = weekFinal[instanceKey]?.toString() ?? '1 x 3';
-
         final startMatch = RegExp(r'^(\d+)').firstMatch(startRaw);
-        final endMatch = RegExp(r'^(\d+)').firstMatch(endRaw);
+        final setMatch = RegExp(r'x\s*(\d+)').firstMatch(startRaw);
 
         final startReps = startMatch != null ? int.tryParse(startMatch.group(1)!) ?? 10 : 10;
-        final endReps = endMatch != null ? int.tryParse(endMatch.group(1)!) ?? 1 : 1;
+        final sets = setMatch != null ? setMatch.group(1)! : '3';
 
-        final week = weekIndex ?? 0;
-        final blockLength = PeriodizationModelUtils.getBlockLength(
-          blockStartDate: _blockStartDate!,
-          blockEndDate: _blockEndDate!,
-        );
+        // ✅ Default final reps to 1 x same sets
+        final endReps = 1;
 
         final reps = (startReps + ((endReps - startReps) * (week / (blockLength - 1)))).round();
 
-        print('🎯 [WES] LC → week$week → $instanceKey → $reps reps (from $startReps → $endReps)');
+        print('🎯 [WES] LC → week${week + 1} → $instanceKey → $reps reps (from $startReps → $endReps)');
+
         return reps.toDouble();
       }
     }
+
 
 
 
@@ -540,21 +571,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   }
 
 
-
-
-  void _navigateToTemplateSelection() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => const TemplatesScreen(fromWorkoutPage: true),
-      ),
-    ).then((selectedTemplate) {
-      if (selectedTemplate != null && selectedTemplate is Template) {
-        _loadTemplate(selectedTemplate);
-      }
-    });
-  }
-
   @override
   void initState() {
     super.initState();
@@ -565,8 +581,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     _fetchLastWorkoutTopSetReps();
 
   }
-
-
 
   Future<void> _loadInitialData() async {
 
@@ -670,8 +684,131 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
 
     setState(() {});
-
   }
+
+  double _calculateFallbackSet1Reps(int exerciseIndex) {
+    String exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
+    int plannedCountBefore = 0;
+
+    for (int i = 0; i < exerciseIndex; i++) {
+      if (_selectedExercisesWithCircuits[i]['name'] == exerciseName) {
+        plannedCountBefore++;
+      }
+    }
+
+    final exerciseId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
+    final weekIndex = _getApplicableWeekIndex(exerciseId);
+    final model = PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
+
+    // dailyUndulatingExposure
+    if (model == PeriodizationModelType.dailyUndulatingExposure) {
+      final count = PeriodizationModelUtils.getInstanceCountForExerciseInBlock(
+        exerciseName: exerciseName,
+        savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+        blockStartDate: _blockStartDate!,
+        blockEndDate: _blockEndDate!,
+      );
+
+      final week1 = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets']?['week1'];
+
+      if (week1 is Map<String, dynamic>) {
+        final sorted = week1.entries
+            .where((e) => e.key.startsWith('instance'))
+            .toList()
+          ..sort((a, b) => a.key.compareTo(b.key));
+
+        final frequency = sorted.length;
+        if (frequency == 0) return 10;
+
+        final index = count % frequency;
+        final raw = sorted[index].value?.toString() ?? '';
+        final match = RegExp(r'^(\d+)').firstMatch(raw);
+        final parsed = match != null ? int.tryParse(match.group(1)!) ?? 10 : 10;
+
+        return parsed.toDouble();
+      }
+    }
+
+    // dailyUndulatingWeek
+    if (model == PeriodizationModelType.dailyUndulatingWeek) {
+      final count = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+        exerciseName: exerciseName,
+        savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+        blockStartDate: _blockStartDate!,
+        weekIndex: weekIndex ?? 0,
+      );
+
+      final repTargets = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets'];
+      final weekKey = 'week${(weekIndex ?? 0) + 1}';
+      final weekMap = repTargets?[weekKey];
+
+      if (weekMap is Map<String, dynamic>) {
+        final sorted = weekMap.entries
+            .where((e) => e.key.startsWith('instance'))
+            .toList()
+          ..sort((a, b) => a.key.compareTo(b.key));
+
+        final frequency = sorted.length;
+        if (frequency == 0) return 10;
+
+        final index = count % frequency;
+        final raw = sorted[index].value?.toString() ?? '';
+        final match = RegExp(r'^(\d+)').firstMatch(raw);
+        final parsed = match != null ? int.tryParse(match.group(1)!) ?? 10 : 10;
+
+        return parsed.toDouble();
+      }
+    }
+
+    // linearClassic
+    if (model == PeriodizationModelType.linearClassic) {
+      final repTargets = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets'];
+      final weekStart = repTargets?['week1'];
+
+      if (weekStart is Map<String, dynamic>) {
+        final instanceCount = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+          exerciseName: exerciseName,
+          savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+          blockStartDate: _blockStartDate!,
+          weekIndex: weekIndex ?? 0,
+        );
+
+        final sortedKeys = weekStart.keys
+            .where((k) => k.startsWith('instance'))
+            .toList()
+          ..sort();
+
+        final frequency = sortedKeys.length;
+        if (frequency == 0) return 10;
+
+        final index = instanceCount % frequency;
+        final instanceKey = sortedKeys[index];
+
+        final startRaw = weekStart[instanceKey]?.toString() ?? '10 x 3';
+        final startMatch = RegExp(r'^(\d+)').firstMatch(startRaw);
+        final setMatch = RegExp(r'x\s*(\d+)').firstMatch(startRaw);
+
+        final startReps = startMatch != null ? int.tryParse(startMatch.group(1)!) ?? 10 : 10;
+        final sets = setMatch != null ? setMatch.group(1)! : '3';
+        final endReps = 1;
+
+        final blockLength = PeriodizationModelUtils.getBlockLength(
+          blockStartDate: _blockStartDate!,
+          blockEndDate: _blockEndDate!,
+        );
+
+        final week = weekIndex ?? 0;
+        final reps = (startReps + ((endReps - startReps) * (week / (blockLength - 1)))).round();
+
+        return reps.toDouble();
+      }
+    }
+
+    // Default fallback
+    return 10.0;
+  }
+
+
 
   Future<void> _loadPlannedExerciseDetails() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -1847,19 +1984,52 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     if (exercises.isEmpty) return;
 
     setState(() {
-      _selectedExercisesWithCircuits.clear();
-      _selectedExercisesWithCircuits.addAll(
-        exercises.map((e) => {
-          'name': e['name'] ?? '',
-          'circuitIndex': e['circuitIndex'] ?? 0,
-        }),
-      );
+      _bb2DataByExercise.clear(); // 🔄 Cache full BB2 day data
 
+      _selectedExercisesWithCircuits.clear();
       _workoutSets.clear();
-      _workoutSets.addAll(List.generate(exercises.length, (_) => List.generate(_defaultSets, (_) => SetDetails())));
+
+      for (var ex in exercises) {
+        final name = (ex['name'] ?? '').toString().trim();
+        final circuitIndex = ex['circuitIndex'] ?? 0;
+
+        final dynamic rawWeight = ex['weight'];
+        final dynamic rawReps = ex['reps'];
+        final dynamic rawRIR = ex['rir'];
+
+        final double weightVal = rawWeight != null ? double.tryParse(rawWeight.toString()) ?? 0.0 : 0.0;
+        final int repsVal = rawReps != null ? int.tryParse(rawReps.toString()) ?? 0 : 0;
+        final double rirVal = rawRIR != null ? double.tryParse(rawRIR.toString()) ?? 0.0 : 0.0;
+
+// Add to visual circuit layout
+        _selectedExercisesWithCircuits.add({
+          'name': name,
+          'circuitIndex': circuitIndex,
+        });
+
+// Cache full entry for override logic
+        final normalizedKey = name.toLowerCase().trim();
+
+        _bb2DataByExercise[normalizedKey] = {
+          'reps': repsVal,
+          'weight': weightVal,
+          'rir': rirVal,
+          'circuitIndex': circuitIndex,
+        };
+        print('🔑 [WES] Stored BB2 data for: ${_bb2DataByExercise.keys}');
+
+
+        print('✅ [WES] BB2 override loaded → $name → reps: $repsVal, weight: $weightVal, RIR: $rirVal');
+
+
+        _bb2DataByExercise[name.trim()] = ex; // 💾 Cache full BB2 entry
+
+        _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
+      }
 
       _initializeControllers();
     });
+
   }
 
 
