@@ -10,6 +10,7 @@ import 'exercise_details_screen.dart'; // Import your exercise details screen
 import 'top_sets_screen.dart';
 import 'Block_Planner.dart';
 import 'dart:convert';
+import 'WorkoutSummaryScreen.dart';
 
 
 enum PeriodizationModelType {
@@ -33,6 +34,7 @@ class PeriodizationModelUtils {
   static final List<int> linearExposureDefaults = [12, 10, 8, 6, 4, 2];
   static final List<int> dupSignatureDefaults = [6, 10];
   static Map<String, Map<String, dynamic>> bb2DailyData = {};
+  static List<Map<String, dynamic>> savedWorkoutsList = [];
 
 
   static double calculateE1RM(double? weight, double? reps, double? rir) {
@@ -531,17 +533,6 @@ class PeriodizationModelUtils {
     return 10;
   }
 
-  static int getdailyUndulatingExposureRepTarget({
-    required String exerciseName,
-    required int plannedIndex,
-    required int weeklyFrequency,
-  }) {
-    const pattern = [10, 5, 8, 1, 12, 4, 6]; // rotating pattern
-    final repsList = List.generate(weeklyFrequency, (i) => pattern[i % pattern.length]);
-    final reps = repsList[plannedIndex % repsList.length];
-    print('🔄 getdailyUndulatingExposureRepTarget → $reps reps for $exerciseName (index $plannedIndex of $weeklyFrequency freq)');
-    return reps;
-  }
 
   static Map<String, Map<String, String>> expandDupDailyWeek1(
       Map<String, String> week1Map,
@@ -552,9 +543,6 @@ class PeriodizationModelUtils {
         'week${w + 1}': Map<String, String>.from(week1Map)
     };
   }
-
-
-
 
 
   static double getDupSignatureSet2SuggestedReps({
@@ -838,33 +826,6 @@ class PeriodizationModelUtils {
   }
 
 
-
-  static int getDupCustomRepTargetFromPlanner({
-    required String exerciseName,
-    required int weekIndex,
-    required int plannedIndexForWeek,
-    required Map<String, dynamic> repTargetsByExercise,
-  }) {
-    try {
-      final allWeeks = repTargetsByExercise[exerciseName];
-      if (allWeeks == null || allWeeks.isEmpty) return 6;
-
-      final List weekData = allWeeks[weekIndex.clamp(0, allWeeks.length - 1)];
-      if (plannedIndexForWeek >= weekData.length) {
-        return int.tryParse(weekData.last.toString().split('x')[0].trim()) ?? 6;
-      }
-
-      final repString = weekData[plannedIndexForWeek].toString().toLowerCase();
-      final repValue = repString.split('x')[0].trim();
-      return int.tryParse(repValue) ?? 6;
-    } catch (e) {
-      print('[DUP CUSTOM] Failed to parse rep target for $exerciseName: $e');
-      return 6;
-    }
-  }
-
-
-
   static double getAverageE1RM(String exerciseName) {
     if (!exercisePreviousE1RMs.containsKey(exerciseName) || exercisePreviousE1RMs[exerciseName]!.isEmpty) {
       return 0.0; // ✅ Default if no history
@@ -1043,6 +1004,41 @@ class PeriodizationModelUtils {
 
     return availableReps;
   }
+
+  static int getInstanceCountForExerciseInBlock({
+    required String exerciseName,
+    required List<Map<String, dynamic>> savedWorkouts,
+    required DateTime blockStartDate,
+    required DateTime blockEndDate,
+  }) {
+    final usedDates = <String>{};
+
+    for (final workout in savedWorkouts) {
+      final dateStr = workout['date'] ?? '';
+      final date = DateTime.tryParse(dateStr);
+      if (date == null || date.isBefore(blockStartDate) || date.isAfter(blockEndDate)) continue;
+
+      final exercises = workout['exercises'];
+      if (exercises is! List) continue;
+
+      final hasExercise = exercises.any((ex) {
+        final exName = ex['name']?.toString().trim();
+        return exName == exerciseName;
+      });
+
+      if (hasExercise) {
+        usedDates.add(dateStr); // Count once per day
+      }
+    }
+
+    final count = usedDates.length;
+    print('📊 [Instance Count] "$exerciseName" used on $count unique training day(s) in this block.');
+    return count;
+  }
+
+
+
+
 
   static Future<int> getExposureCountForExercise({
     required String exerciseName,
