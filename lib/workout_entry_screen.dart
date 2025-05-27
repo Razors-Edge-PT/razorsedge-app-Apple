@@ -291,6 +291,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final weekIndex = _getApplicableWeekIndex(exerciseId);
     final model = PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
 
+    // ✅ Custom logic for dailyUndulatingExposure
     if (model == PeriodizationModelType.dailyUndulatingExposure) {
       final count = PeriodizationModelUtils.getInstanceCountForExerciseInBlock(
         exerciseName: exerciseName,
@@ -300,8 +301,66 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       );
 
       print('📊 [WES] Instance count for "$exerciseName" in block = $count');
+
+      final week1 = PeriodizationModelUtils
+          .plannedExerciseDetails[exerciseId]?['repTargets']?['week1'];
+
+      if (week1 is Map<String, dynamic>) {
+        final sorted = week1.entries
+            .where((e) => e.key.startsWith('instance'))
+            .toList()
+          ..sort((a, b) => a.key.compareTo(b.key));
+
+        final frequency = sorted.length;
+        if (frequency == 0) return 10;
+
+        final index = count % frequency;
+        final raw = sorted[index].value?.toString() ?? '';
+
+        final match = RegExp(r'^(\d+)').firstMatch(raw);
+        final parsed = match != null ? int.tryParse(match.group(1)!) ?? 10 : 10;
+
+        print('🎯 [WES] Using instance${index + 1} → $parsed reps');
+        return parsed.toDouble();
+      }
     }
 
+    if (model == PeriodizationModelType.dailyUndulatingWeek) {
+      final count = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+        exerciseName: exerciseName,
+        savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+        blockStartDate: _blockStartDate!,
+        weekIndex: weekIndex ?? 0,
+      );
+
+      print('📊 [WES] Weekly instance count for "$exerciseName" in week ${weekIndex ?? 0} = $count');
+
+      final repTargets = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets'];
+      final weekKey = 'week${(weekIndex ?? 0) + 1}';
+      final weekMap = repTargets?[weekKey];
+
+      if (weekMap is Map<String, dynamic>) {
+        print('📦 [WES] $exerciseName → $weekKey repTargets = ${jsonEncode(weekMap)}');
+        final sorted = weekMap.entries
+            .where((e) => e.key.startsWith('instance'))
+            .toList()
+          ..sort((a, b) => a.key.compareTo(b.key));
+
+        final frequency = sorted.length;
+        if (frequency == 0) return 10;
+
+        final index = count % frequency;
+        final raw = sorted[index].value?.toString() ?? '';
+        final match = RegExp(r'^(\d+)').firstMatch(raw);
+        final parsed = match != null ? int.tryParse(match.group(1)!) ?? 10 : 10;
+
+        print('🎯 [WES] DU Weekly: $weekKey → instance${index + 1} → $parsed reps');
+        return parsed.toDouble();
+      }
+    }
+
+
+    // 🔁 Fallback to default model logic
     final reps = PeriodizationModelUtils.getSuggestedRepTargetByModel(
       exerciseName: exerciseId,
       plannedIndex: plannedCountBefore,
@@ -312,6 +371,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     return reps.toDouble();
   }
+
 
 
 
@@ -461,14 +521,25 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     await loadSavedWorkoutsForInstanceCount(); // 🧠 Fills savedWorkoutsList
 
     // ✅ Now test the instance count here
-    final testExercise = "Bench Press, Barbell"; // Replace with a known logged exercise
-    final count = PeriodizationModelUtils.getInstanceCountForExerciseInBlock(
+    final testExercise = "Bench Press, Barbell"; // Replace with a real one
+    final blockCount = PeriodizationModelUtils.getInstanceCountForExerciseInBlock(
       exerciseName: testExercise,
       savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
       blockStartDate: _blockStartDate!,
       blockEndDate: _blockEndDate!,
     );
     print('🧪 [Test] Instance count for "$testExercise" = $count');
+    print('🧪 [Test] Block-wide instance count for "$testExercise" = $blockCount');
+
+// ✅ Test for dailyUndulatingWeek (week-specific)
+    final testWeekIndex = 1; // Replace with the week you want to test (e.g. 0-based: 0 = week 1)
+    final weekCount = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+      exerciseName: testExercise,
+      savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+      blockStartDate: _blockStartDate!,
+      weekIndex: testWeekIndex,
+    );
+    print('🧪 [Test] Week $testWeekIndex instance count for "$testExercise" = $weekCount');
 
     // ...continue with your original logic
     await loadPlannedExercisesFromFirestore();
@@ -603,6 +674,40 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
               }
             }
           }
+          if (modelEnum == PeriodizationModelType.dailyUndulatingWeek) {
+            final repTargets = entry['repTargets'];
+
+            // 🔍 Debug output
+            if (repTargets is Map<String, dynamic>) {
+              print('🧪 [WES] DUP Weekly raw repTargets for $exerciseId → ${jsonEncode(repTargets)}');
+
+              for (final weekKey in repTargets.keys) {
+                final weekMap = repTargets[weekKey];
+                if (weekMap is Map<String, dynamic>) {
+                  final instanceKeys = weekMap.keys.join(', ');
+                  print('📅 [WES] $exerciseId → $weekKey contains: $instanceKeys');
+                }
+              }
+            }
+
+            // 🔁 Expand week1 to all weeks if it's the only key
+            if (repTargets is Map<String, dynamic> &&
+                repTargets.length == 1 &&
+                repTargets.containsKey('week1')) {
+              final week1Map = repTargets['week1'];
+              if (week1Map is Map<String, dynamic> && week1Map.isNotEmpty) {
+                final expanded = PeriodizationModelUtils.expandDupDailyWeek1(
+                  Map<String, String>.from(week1Map.map((k, v) => MapEntry(k, v.toString()))),
+                  12,
+                );
+                PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets'] = expanded;
+                print('🔁 [WES] Expanded DUP Weekly week1 → all weeks for $exerciseId');
+                print('🧪 [Final WES] repTargets for $exerciseId → ${jsonEncode(expanded)}');
+              }
+            }
+          }
+
+
         }
       });
 
