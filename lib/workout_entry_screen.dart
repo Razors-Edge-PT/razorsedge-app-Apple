@@ -275,42 +275,43 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
   }
 
-  void _printBB2PlannedRepsForExercise(int exerciseIndex) {
+  Future<void> printBB2ValuesForExercise(int exerciseIndex) async {
     final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
-    final bb2Entry = _bb2DataByExercise[exerciseName];
-
     final fallback = _calculateFallbackSet1Reps(exerciseIndex);
 
-    if (bb2Entry == null) {
-      print('❌ [WES] No BB2 data found for "$exerciseName"');
+    final values = await getBB2ExerciseValuesForDate(
+      exerciseName: exerciseName,
+      date: _selectedDate,
+      blockStartDate: _blockStartDate!,
+    );
+
+    if (values == null) {
+      print('❌ [WES] No BB2 data found for "$exerciseName" on $_selectedDate');
       print('🧠 [WES] Fallback reps for "$exerciseName" = $fallback');
-      return;
-    }
-
-    final reps = bb2Entry['reps'];
-    final rir = bb2Entry['rir'];
-    final weight = bb2Entry['weight'];
-
-    print('📦 [WES] BB2 data for "$exerciseName" → reps: $reps | rir: $rir | weight: $weight');
-    print('🧠 [WES] Fallback reps for "$exerciseName" = $fallback');
-
-    if (reps == 0 || reps == null) {
-      if (fallback.toInt() == 10) {
-        print('✅ [WES] BB2 hint matches fallback.');
-      } else {
-        print('⚠️ [WES] BB2 reps = 0 (likely hint), but fallback ≠ $fallback');
-      }
     } else {
-      print('🔁 [WES] User override detected in BB2 → using: $reps');
+      final reps = values['reps'];
+      final weight = values['weight'];
+      final rir = values['rir'];
+
+      print('📦 [WES] BB2 → "$exerciseName" → reps: $reps | weight: $weight | RIR: $rir');
+      print('🧠 [WES] Fallback reps for "$exerciseName" = $fallback');
+
+      if (reps == null || reps == 0) {
+        print('⚠️ [WES] BB2 reps = 0/null → using fallback: $fallback');
+      } else {
+        print('🔁 [WES] Using BB2-planned value: $reps');
+      }
     }
   }
+
+
 
 
 
   //Determine hint texts for this workout:NEW METHOD
 
   double set1SuggestedReps(int exerciseIndex) {
-    _printBB2PlannedRepsForExercise(exerciseIndex); // 🔍 Debug print
+    printBB2ValuesForExercise(exerciseIndex); // Fire-and-forget
     String exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
 
     int plannedCountBefore = 0;
@@ -1950,6 +1951,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   }
 
   Future<void> _loadPlannedBlockBuilderExercisesIfAny() async {
+    print('📥 [WES] Running _loadPlannedBlockBuilderExercisesIfAny()...');
+
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
@@ -1989,7 +1992,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       _selectedExercisesWithCircuits.clear();
       _workoutSets.clear();
 
-      for (var ex in exercises) {
+      for (final ex in exercises) {
         final name = (ex['name'] ?? '').toString().trim();
         final circuitIndex = ex['circuitIndex'] ?? 0;
 
@@ -1997,40 +2000,82 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         final dynamic rawReps = ex['reps'];
         final dynamic rawRIR = ex['rir'];
 
-        final double weightVal = rawWeight != null ? double.tryParse(rawWeight.toString()) ?? 0.0 : 0.0;
-        final int repsVal = rawReps != null ? int.tryParse(rawReps.toString()) ?? 0 : 0;
-        final double rirVal = rawRIR != null ? double.tryParse(rawRIR.toString()) ?? 0.0 : 0.0;
+        final double? weightVal = rawWeight != null ? double.tryParse(rawWeight.toString()) : null;
+        final int? repsVal = rawReps != null ? int.tryParse(rawReps.toString()) : null;
+        final double? rirVal = rawRIR != null ? double.tryParse(rawRIR.toString()) : null;
 
-// Add to visual circuit layout
+        // ✅ Add to visual circuit layout
         _selectedExercisesWithCircuits.add({
           'name': name,
           'circuitIndex': circuitIndex,
         });
 
-// Cache full entry for override logic
-        final normalizedKey = name.toLowerCase().trim();
-
-        _bb2DataByExercise[normalizedKey] = {
-          'reps': repsVal,
-          'weight': weightVal,
-          'rir': rirVal,
+        // ✅ Store override values (null-safe, clean)
+        _bb2DataByExercise[name] = {
+          if (repsVal != null) 'reps': repsVal,
+          if (weightVal != null) 'weight': weightVal,
+          if (rirVal != null) 'rir': rirVal,
           'circuitIndex': circuitIndex,
         };
-        print('🔑 [WES] Stored BB2 data for: ${_bb2DataByExercise.keys}');
-
-
-        print('✅ [WES] BB2 override loaded → $name → reps: $repsVal, weight: $weightVal, RIR: $rirVal');
-
-
-        _bb2DataByExercise[name.trim()] = ex; // 💾 Cache full BB2 entry
+        print('📦 [WES] Final BB2 keys: ${_bb2DataByExercise.keys}');
 
         _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
+
+        print('✅ [WES] BB2 override loaded → $name → reps: $repsVal, weight: $weightVal, RIR: $rirVal');
       }
+
 
       _initializeControllers();
     });
 
   }
+
+  Future<Map<String, dynamic>?> getBB2ExerciseValuesForDate({
+    required String exerciseName,
+    required DateTime date,
+    required DateTime blockStartDate,
+  }) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return null;
+
+    final normalizedName = exerciseName.trim().toLowerCase();
+    final weekIndex = PeriodizationModelUtils.getWeekIndexForDate(date, blockStartDate);
+    final dayIndex = date.weekday - 1;
+
+    final weekDocRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('block_data')
+        .doc('current_block')
+        .collection('weeks')
+        .doc('week_$weekIndex');
+
+    final daySnapshot = await weekDocRef.collection('days').doc('day_$dayIndex').get();
+    if (!daySnapshot.exists) return null;
+
+    final exercises = List<Map<String, dynamic>>.from(daySnapshot.data()?['exercises'] ?? []);
+
+    for (final ex in exercises) {
+      final name = (ex['name'] ?? '').toString().trim().toLowerCase();
+      if (name == normalizedName) {
+        final reps = int.tryParse(ex['reps']?.toString() ?? '');
+        final weight = double.tryParse(ex['weight']?.toString() ?? '');
+        final rir = double.tryParse(ex['rir']?.toString() ?? '');
+
+        return {
+          'reps': reps,
+          'weight': weight,
+          'rir': rir,
+        };
+      }
+    }
+
+    return null;
+  }
+
+
+
+
 
 
   Future<void> _saveWorkoutDraftToCache() async {
