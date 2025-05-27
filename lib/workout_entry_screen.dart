@@ -82,6 +82,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   DateTime? _blockStartDate;
   DateTime? _blockEndDate;
   Map<String, Map<String, dynamic>> _bb2DataByExercise = {};
+  Map<String, Map<String, dynamic>> _resolvedBB2Values = {};
 
 
 
@@ -311,8 +312,18 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   //Determine hint texts for this workout:NEW METHOD
 
   double set1SuggestedReps(int exerciseIndex) {
-    printBB2ValuesForExercise(exerciseIndex); // Fire-and-forget
-    String exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
+    final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
+    final bb2Entry = _resolvedBB2Values[exerciseName.toLowerCase()];
+
+    print('🧪 [BB2 Lookup] $exerciseName → $bb2Entry');
+
+    if (bb2Entry != null) {
+      final reps = bb2Entry['reps'];
+      if (reps != null && reps > 0) {
+        print('🔁 [WES] Using BB2-planned value: $reps');
+        return reps.toDouble();
+      }
+    }
 
     int plannedCountBefore = 0;
     for (int i = 0; i < exerciseIndex; i++) {
@@ -683,6 +694,24 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     if (_selectedExercisesWithCircuits.isNotEmpty) {
       _initializeControllers();
     }
+
+    // ✅ Preload BB2 values for all selected exercises
+    _resolvedBB2Values.clear();
+    for (final ex in _selectedExercisesWithCircuits) {
+      final name = ex['name']?.trim() ?? '';
+      final values = await getBB2ExerciseValuesForDate(
+        exerciseName: name,
+        date: _selectedDate,
+        blockStartDate: _blockStartDate!,
+      );
+      if (values != null) {
+        _resolvedBB2Values[name.toLowerCase()] = values;
+        print('📦 [BB2 Preload] Cached for "$name": $values');
+      } else {
+        print('🚫 [BB2 Preload] No values found for "$name"');
+      }
+    }
+
 
     setState(() {});
   }
