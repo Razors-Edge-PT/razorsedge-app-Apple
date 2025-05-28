@@ -1,0 +1,2 @@
+C:/Users/lorim/AndroidStudioProjects/localtest222/android/app/.cxx/Debug/5e35613p/x86/CMakeFiles/edit_cache.dir
+C:/Users/lorim/AndroidStudioProjects/localtest222/android/app/.cxx/Debug/5e35613p/x86/CMakeFiles/rebuild_cache.dir
