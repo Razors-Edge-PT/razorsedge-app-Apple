@@ -1,14 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'template_model.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'workout_entry_screen.dart';
 import 'periodization_model_utils.dart';
-import 'core_exercises.dart';
 import 'dart:convert';
 import 'package:flutter/services.dart';
-import 'periodization_model_utils.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 
@@ -26,7 +22,7 @@ class Block_Planner extends StatefulWidget {
 class _BlockPlannerState extends State<Block_Planner> {
   // Example list of tracked exercises
   List<String> exercises = [];
-  Map<String, String> _exerciseIdToName = {}; // id ➔ name
+  final Map<String, String> _exerciseIdToName = {}; // id ➔ name
   Map<String, String> nameToId = {}; // ✅ global map for name → ID
   final TextEditingController _historyInputController = TextEditingController();
 
@@ -1174,7 +1170,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       } else if (model == 'DUP, Signature') {
         // 🟣 Parse "min – max reps" from display
         final parts = repText.split('–');
-        final min = parts.length > 0 ? parts[0].trim() : '6';
+        final min = parts.isNotEmpty ? parts[0].trim() : '6';
         final max = parts.length > 1 ? parts[1].replaceAll('reps', '').trim() : '10';
 
         result['repRange'] = {
@@ -1222,7 +1218,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
     if (parsedIncrements.isNotEmpty) {
       final Map<String, double> incrementsMap = {};
-      if (parsedIncrements.length > 0) incrementsMap['primary'] = parsedIncrements[0];
+      if (parsedIncrements.isNotEmpty) incrementsMap['primary'] = parsedIncrements[0];
       if (parsedIncrements.length > 1) incrementsMap['secondary'] = parsedIncrements[1];
       if (parsedIncrements.length > 2) incrementsMap['tertiary'] = parsedIncrements[2];
       if (parsedIncrements.length > 3) incrementsMap['quaternary'] = parsedIncrements[3];
@@ -2328,10 +2324,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         final preview = defaultReps.entries
                             .expand((weekEntry) {
                           final instanceMap = weekEntry.value;
-                          if (instanceMap is Map<String, dynamic>) {
-                            return instanceMap.values;
-                          }
-                          return <dynamic>[];
+                          return instanceMap.values;
+                                                  return <dynamic>[];
                         })
                             .join(', ');
                         _repTargetsDisplayController.text = preview;

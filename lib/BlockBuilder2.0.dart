@@ -5,10 +5,9 @@ import 'template_model.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'workout_entry_screen.dart';
 import 'periodization_model_utils.dart';
-import 'core_exercises.dart';
 import 'package:uuid/uuid.dart';
-import 'template_details.dart'; // if you're navigating directly to TemplateDetailsScreen
-import 'templates.dart'; // ✅ this is the one that defines TemplatesScreen
+// if you're navigating directly to TemplateDetailsScreen
+// ✅ this is the one that defines TemplatesScreen
 import 'WorkoutSummaryScreen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
@@ -109,7 +108,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   Map<String, dynamic> repTargetsByExercise = {};
   Map<String, dynamic> plannedExerciseDetails = {};
 
-  Map<String, dynamic> _repTargetsByExercise = {};
+  final Map<String, dynamic> _repTargetsByExercise = {};
   Map<String, List<int>> scheduledRepTargets = {}; // 🆕
   Map<String, List<Map<String, dynamic>>> topSetsByExercise = {};
   Map<String, List<Map<String, dynamic>>> completedWesRows = {};
@@ -120,7 +119,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
   int? _draggedRowIndex;
   List<Map<String, String>> allExercisesFromFirestore = []; // 🔥 Full list
-  Map<String, String> _exerciseIdToName = {}; // 🧠 New: exerciseID ➔ exerciseName lookup
+  final Map<String, String> _exerciseIdToName = {}; // 🧠 New: exerciseID ➔ exerciseName lookup
   Map<String, String> nameToIdMap = {}; // 🧠 Exercise name ➔ ID lookup
   List<String> plannedExercises = []; // 💡 Selected in BlockPlanner
   List<int> weekIndices = [];
@@ -1067,7 +1066,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         .map((e) => e.key)
         .toList();
 
-    await prefs.setStringList('savedFields_w${week}_d${day}', keysForDay);
+    await prefs.setStringList('savedFields_w${week}_d$day', keysForDay);
   }
   Future<void> _loadPersistedSavedFields() async {
     final prefs = await SharedPreferences.getInstance();
@@ -1445,7 +1444,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         print('📋 repsController: "${repsController.text}", plannedRep: "$plannedRep", hintReps: "$hintReps"');
 
 
-        final double? e1rm = PeriodizationModelUtils.calculateE1RM(
+        final double e1rm = PeriodizationModelUtils.calculateE1RM(
           weight ?? (weightController.text.isEmpty ? 25.0 : null),
           reps?.toDouble() ??
               (repsController.text.isEmpty
@@ -1489,21 +1488,21 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                             rirController.clear();
 
                             if (isPlanned) {
-                              print('🧾 [BB2] repTargetsByExercise contains: ${repTargetsByExercise?.keys}');
+                              print('🧾 [BB2] repTargetsByExercise contains: ${repTargetsByExercise.keys}');
                               print('🧾 [BB2] looking for: $exerciseId');
-                              print('🧾 [BB2] entry for $exerciseId: ${repTargetsByExercise?[exerciseId]}');
+                              print('🧾 [BB2] entry for $exerciseId: ${repTargetsByExercise[exerciseId]}');
 
                               // ✅ Normalize repTargets (flat → nested) for safety
-                              if (repTargetsByExercise?[exerciseId]?['repTargets'] is List) {
-                                final reps = repTargetsByExercise?[exerciseId]?['repTargets'];
+                              if (repTargetsByExercise[exerciseId]?['repTargets'] is List) {
+                                final reps = repTargetsByExercise[exerciseId]?['repTargets'];
                                 if (reps.isNotEmpty && reps.first is String) {
-                                  repTargetsByExercise?[exerciseId]?['repTargets'] = [List<String>.from(reps)];
+                                  repTargetsByExercise[exerciseId]?['repTargets'] = [List<String>.from(reps)];
                                   print('🔄 [BB2] Normalized flat repTargets → nested for $exerciseId');
                                 }
                               }
 
                               final repTarget = PeriodizationModelUtils.getSuggestedRepTargetByModel(
-                                exerciseName: exerciseId!,
+                                exerciseName: exerciseId,
                                 plannedIndex: getExerciseCountInWeek(
                                   selectedExerciseName,
                                   weekIndex,
@@ -1563,7 +1562,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                 child: Container(
                   alignment: Alignment.center,
                   child: Text(
-                    e1rm != null && e1rm > 0 ? e1rm.toStringAsFixed(1) : '',
+                    e1rm > 0 ? e1rm.toStringAsFixed(1) : '',
                     style: const TextStyle(color: Colors.white, fontSize: 12),
                   ),
                 ),

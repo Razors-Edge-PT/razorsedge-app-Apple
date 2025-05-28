@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'WorkoutSummaryScreen.dart';
 
-import 'workout_details_screen.dart'; // Import the details screen
+// Import the details screen
 import 'workout_model.dart'; // Import Workout and Exercise models
 
 class SavedWorkoutsScreen extends StatefulWidget {

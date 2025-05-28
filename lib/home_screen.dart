@@ -2,14 +2,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'core_exercises.dart';
 import 'body_weight_tracker.dart';
 import 'workout_details_screen.dart'; // Import workout details screen
 import 'workout_entry_screen.dart'; // Import workout entry screen
 import 'workout_model.dart'; // Import Workout model
 import 'block_planner.dart'; // 👈 Add this line
-import 'WorkoutSummaryScreen.dart';
-import'update_exercises.dart';
 import 'SavedWorkoutsScreen.dart';
 
 

@@ -1,16 +1,10 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:intl/intl.dart'; // Import for date formatting
+// Import for date formatting
 import 'package:localtest222/workout_model.dart';
-import 'exercise_selection_screen.dart';
-import 'template_model.dart';
-import 'templates.dart';
-import 'exercise_details_screen.dart'; // Import your exercise details screen
-import 'top_sets_screen.dart';
-import 'Block_Planner.dart';
+// Import your exercise details screen
 import 'dart:convert';
-import 'WorkoutSummaryScreen.dart';
 
 
 enum PeriodizationModelType {
@@ -453,7 +447,7 @@ class PeriodizationModelUtils {
           print('🧪 week1Val = $week1Val');
           print('🧪 finalVal = $finalVal');
 
-          if (week1Val == null || finalVal == null) {
+          if (week1Val == null) {
             print('❌ Missing instance data for $exerciseName → $instanceKey');
             return 10;
           }
@@ -1188,7 +1182,7 @@ class PeriodizationModelUtils {
     }
 
     // ✅ Step 7: Pick the Least Recently Used Rep Within That Group (Only from Available Reps)
-    List<int> candidates = repGroups[bestGroupIndex!].where((rep) => availableReps.contains(rep)).toList();
+    List<int> candidates = repGroups[bestGroupIndex].where((rep) => availableReps.contains(rep)).toList();
     candidates.sort((a, b) => pastReps.contains(a) ? 1 : -1); // ✅ Prioritize least recently used
 
     // ✅ Ensure there's at least one candidate before calling `.first`
@@ -1275,7 +1269,7 @@ class PeriodizationModelUtils {
     }
 
     // ✅ Step 7: Pick the Least Recently Used Rep Within That Group (Only from Available Reps)
-    List<int> candidates = repGroups[bestGroupIndex!].where((rep) => availableReps.contains(rep)).toList();
+    List<int> candidates = repGroups[bestGroupIndex].where((rep) => availableReps.contains(rep)).toList();
     candidates.sort((a, b) => pastReps.contains(a) ? 1 : -1); // ✅ Prioritize least recently used
 
     // ✅ Ensure there's at least one candidate before calling `.first`
@@ -1578,7 +1572,7 @@ class PeriodizationModelUtils {
       // Step 2: Apply recency constraints
       final Set<int> forbidden = {};
 
-      if (recent.length >= 1) {
+      if (recent.isNotEmpty) {
         final r = recent[0];
         forbidden.addAll([r - 2, r - 1, r, r + 1, r + 2]);
       }
@@ -1609,11 +1603,9 @@ class PeriodizationModelUtils {
         chosen = _repWithMaxDistance(valid, recent);
       }
 
-      if (chosen != null) {
-        result.add(chosen);
-        usedInCycle.add(chosen);
-      }
-
+      result.add(chosen);
+      usedInCycle.add(chosen);
+    
       // Reset cycle if all reps used once
       if (usedInCycle.length == allReps.length) {
         usedInCycle.clear();
@@ -1675,7 +1667,7 @@ class PeriodizationModelUtils {
       final candidates = List<int>.from(allReps);
       final Set<int> forbidden = {};
 
-      if (recent.length >= 1) {
+      if (recent.isNotEmpty) {
         final r = recent[0];
         forbidden.addAll([r - 2, r - 1, r, r + 1, r + 2]);
       }
@@ -1704,11 +1696,9 @@ class PeriodizationModelUtils {
         chosen = _repWithMaxDistance(valid, recent);
       }
 
-      if (chosen != null) {
-        result.add(chosen);
-        usedInCycle.add(chosen);
-      }
-
+      result.add(chosen);
+      usedInCycle.add(chosen);
+    
       if (usedInCycle.length == allReps.length) {
         usedInCycle.clear();
       }

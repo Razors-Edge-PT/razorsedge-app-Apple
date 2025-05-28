@@ -1,7 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'core_exercises.dart'; // at the top
+// at the top
 
 class ExercisesScreen extends StatefulWidget {
   const ExercisesScreen({super.key});
@@ -190,8 +190,8 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
       ),
       floatingActionButton: FloatingActionButton(
         backgroundColor: Colors.blueGrey.shade700,
-        child: const Icon(Icons.add),
         onPressed: _showAddExerciseDialog,
+        child: const Icon(Icons.add),
       ),
     );
   }

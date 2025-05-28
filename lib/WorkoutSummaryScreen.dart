@@ -1,13 +1,8 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:intl/intl.dart'; // Import for date formatting
-import 'package:localtest222/workout_model.dart';
-import 'exercise_selection_screen.dart';
-import 'template_model.dart';
-import 'templates.dart';
-import 'exercise_details_screen.dart'; // Import your exercise details screen
-import 'top_sets_screen.dart';
+// Import for date formatting
+// Import your exercise details screen
 import 'periodization_model_utils.dart';
 
 class WorkoutSummaryScreen extends StatefulWidget {
@@ -30,7 +25,7 @@ class WorkoutSummaryScreen extends StatefulWidget {
 class _WorkoutSummaryScreenState extends State<WorkoutSummaryScreen> {
   late List<Map<String, dynamic>> editableExercises;
   bool isEditable = false;
-  Set<int> _expandedCards = {};
+  final Set<int> _expandedCards = {};
 
   @override
   void initState() {
@@ -284,7 +279,7 @@ class _WorkoutSummaryScreenState extends State<WorkoutSummaryScreen> {
                             ],
                           ),
                         );
-                      }).toList(),
+                      }),
                     ],
                   ],
                 ),

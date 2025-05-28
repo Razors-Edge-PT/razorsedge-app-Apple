@@ -4,8 +4,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:uuid/uuid.dart';
 
 import 'template_model.dart';
-import 'workout_entry_screen.dart';
-import 'workout_model.dart';
 
 class ExerciseRow {
   final String id;
@@ -24,10 +22,10 @@ class TemplateDetailsScreen extends StatefulWidget {
   final void Function(Template)? onLoadTemplate; // 👈 Add this line
 
   const TemplateDetailsScreen({
-    Key? key,
+    super.key,
     required this.template,
     this.onLoadTemplate, // 👈 Add this too
-  }) : super(key: key);
+  });
 
 
   @override
@@ -54,7 +52,7 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
       allRows = widget.template.exercises.map((e) {
         return ExerciseRow(
           name: e is String ? e : (e['name'] ?? ''),
-          circuitIndex: e is Map<String, dynamic> && e.containsKey('circuitIndex') ? e['circuitIndex'] ?? 0 : 0,
+          circuitIndex: e.containsKey('circuitIndex') ? e['circuitIndex'] ?? 0 : 0,
         );
       }).toList();
     } else {
