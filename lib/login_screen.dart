@@ -122,17 +122,34 @@ class _LoginScreenState extends State<LoginScreen> {
                       children: [
                         const Text(
                           "Welcome Back",
-                          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.black54),
                         ),
                         const SizedBox(height: 16),
 
                         TextFormField(
                           controller: _emailController,
                           keyboardType: TextInputType.emailAddress,
+                          style: TextStyle(color: Colors.black54), // 👈 Text color
                           decoration: InputDecoration(
                             labelText: 'Email',
-                            border: OutlineInputBorder(
+                            labelStyle: TextStyle(color: Colors.blueAccent), // 👈 Label color
+                            hintText: 'Enter your email',
+                            hintStyle: TextStyle(color: Colors.blueAccent.withOpacity(0.6), fontSize: 16),
+                            enabledBorder: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(color: Colors.blueAccent), // 👈 Default border color
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(color: Colors.lightBlue, width: 2), // 👈 Focused border color
+                            ),
+                            errorBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(color: Colors.red), // 👈 Error border color
+                            ),
+                            focusedErrorBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(color: Colors.redAccent, width: 2),
                             ),
                           ),
                           validator: (value) {
@@ -147,13 +164,36 @@ class _LoginScreenState extends State<LoginScreen> {
                         TextFormField(
                           controller: _passwordController,
                           obscureText: _obscurePassword,
+                          style: TextStyle(color: Colors.black54), // 👈 User-entered text color
                           decoration: InputDecoration(
                             labelText: 'Password',
+                            labelStyle: TextStyle(color: Colors.blueAccent), // 👈 Label text color
+                            hintText: 'Enter your password',
+                            hintStyle: TextStyle(color: Colors.blueAccent.withOpacity(0.6), fontSize: 16),
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(color: Colors.blueAccent), // 👈 Normal border
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(color: Colors.lightBlue, width: 2), // 👈 Focused border
+                            ),
+                            errorBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(color: Colors.red), // 👈 Error border
+                            ),
+                            focusedErrorBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(color: Colors.redAccent, width: 2),
+                            ),
                             suffixIcon: IconButton(
-                              icon: Icon(_obscurePassword ? Icons.visibility : Icons.visibility_off),
+                              icon: Icon(
+                                _obscurePassword ? Icons.visibility : Icons.visibility_off,
+                                color: Colors.blueAccent, // 👈 Icon color
+                              ),
                               onPressed: () {
                                 setState(() {
                                   _obscurePassword = !_obscurePassword;
