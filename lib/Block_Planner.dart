@@ -1012,6 +1012,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   final TextEditingController _maxWeightController = TextEditingController();
   final TextEditingController _maxRepsController = TextEditingController();
   Map<String, Map<String, String>>? _cachedRepTargetMap;
+  Map<String, String> _selectedRirModel = {}; // Keeps track of selection per exercise
+
 
   double _currentE1RM = 0.0;
 
@@ -2428,7 +2430,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                 const SizedBox(height: 6, width:400), // Adjust to 10 or 12 if you want more breathing room
                 SizedBox(
-                  width: 158,
+                  width: 158, height: 39,
                   child: TextFormField(
                     controller: _incrementsController,
                     focusNode: _incrementsFocusNode,
@@ -2438,7 +2440,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                       // ❌ Removed auto-formatting to preserve cursor position
                     ],
-                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
                     decoration: InputDecoration(
                       labelText: 'Increments (kg)',
                       hintText: '2.5, 1, 0.5, …',
@@ -2454,9 +2456,78 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   ),
                 ),
 
+                const SizedBox(height: 5), // Add spacing if needed
+                SizedBox(
+                  width: 150,
+                  child: Theme(
+                    data: Theme.of(context).copyWith(
+                      canvasColor: Colors.blueGrey.shade700,
+                    ),
+                    child: DropdownButtonFormField<String>(
+                      value: _selectedRirModel[widget.exerciseName],
+                      isExpanded: true, // ✅ Prevents layout overflow
+                      items: [
+                        'Linear-Taper',
+                        'Wave RIR undulation',
+                        'Session based RIR undulation',
+                        'Static RIR',
+                      ].map((label) {
+                        return DropdownMenuItem<String>(
+                          value: label,
+                          child: Text(
+                            label,
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                            softWrap: false,
+                          ),
+                        );
+                      }).toList(),
+                      selectedItemBuilder: (context) {
+                        return [
+                          'Linear-Taper',
+                          'Wave RIR undulation',
+                          'Session based RIR undulation',
+                          'Static RIR',
+                        ].map((label) {
+                          return Container(
+                            alignment: Alignment.centerLeft,
+                            width: 130,
+                            child: Text(
+                              label,
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                              softWrap: false,
+                              style: const TextStyle(color: Colors.white, fontSize: 12),
+                            ),
+                          );
+                        }).toList();
+                      },
+                      onChanged: (value) {
+                        setState(() {
+                          _selectedRirModel[widget.exerciseName] = value!;
+                        });
+                      },
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                      decoration: InputDecoration(
+                        labelText: 'RIR Model',
+                        labelStyle: const TextStyle(color: Colors.white),
+                        floatingLabelBehavior: FloatingLabelBehavior.always,
+                        filled: true,
+                        fillColor: Colors.blueGrey.shade700,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                      ),
+                    ),
+                  ),
+                ),
 
 
-                const SizedBox(height: 6, width:400), // Adjust to 10 or 12 if you want more breathing room
+
+
+
+
+                const SizedBox(height: 6, width:200), // Adjust to 10 or 12 if you want more breathing room
 
 
                 SizedBox(
