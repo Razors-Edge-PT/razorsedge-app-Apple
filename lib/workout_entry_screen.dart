@@ -11,7 +11,7 @@ import 'top_sets_screen.dart';
 import 'periodization_model_utils.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'dart:convert'; // For JSON encoding
+// For JSON encoding
 import 'debounce_Utils.dart';
 
 
@@ -48,7 +48,7 @@ class WorkoutPage extends StatefulWidget {
   final String? initialWorkoutName; // ✅ Add this
 
   const WorkoutPage({
-    Key? key,
+    super.key,
     this.initialTemplate,
     this.workout,
     this.isNewWorkout = true,
@@ -56,7 +56,7 @@ class WorkoutPage extends StatefulWidget {
     this.prefilledExercises, // ✅ Don't forget this!
     this.initialDate,
     this.initialWorkoutName, // ✅ Add this
-  }) : super(key: key);
+  });
 
 
   @override
@@ -712,11 +712,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
           final modelName = entry['periodizationModel'];
           final modelEnum = PeriodizationModelUtils.stringToModel(modelName);
-          if (modelEnum != null) {
-            PeriodizationModelUtils.exercisePeriodizationModels[exerciseId] = modelEnum;
-            print('✅ [WES] Mapped model $modelName → $modelEnum for $exerciseId');
-          }
-          // ✅ If model is DUP Exposure and only has week1, expand it across block
+          PeriodizationModelUtils.exercisePeriodizationModels[exerciseId] = modelEnum;
+          print('✅ [WES] Mapped model $modelName → $modelEnum for $exerciseId');
+                  // ✅ If model is DUP Exposure and only has week1, expand it across block
           if (modelEnum == PeriodizationModelType.dailyUndulatingExposure) {
             final repTargets = entry['repTargets'];
             if (repTargets is Map<String, dynamic> &&
@@ -910,7 +908,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       for (var e in template.exercises) {
         _selectedExercisesWithCircuits.add({
           'name': (e is String) ? e : (e['name'] ?? 'Unnamed'),
-          'circuitIndex': (e is Map && e.containsKey('circuitIndex')) ? e['circuitIndex'] : 0,
+          'circuitIndex': (e.containsKey('circuitIndex')) ? e['circuitIndex'] : 0,
         });
       }
 

@@ -50,7 +50,6 @@ class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen> {
 
       workouts = querySnapshot.docs.map((doc) {
         final data = doc.data();
-        if (data == null) return null;
 
         return Workout(
           name: data['name'] ?? 'Unnamed Workout',

@@ -9,10 +9,10 @@ class TopSetsScreen extends StatefulWidget {
   final List<Workout> recentWorkouts; // ✅ Add recent workouts as a parameter
 
   const TopSetsScreen({
-    Key? key,
+    super.key,
     required this.exerciseName,
     required this.recentWorkouts, // ✅ Accepts recent workouts
-  }) : super(key: key);
+  });
 
   @override
   _TopSetsScreenState createState() => _TopSetsScreenState();
@@ -84,8 +84,8 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
 
 
   void _showFilterDialog(BuildContext context) {
-    TextEditingController _repTargetController = TextEditingController();
-    _repTargetController.text = _selectedRepTarget?.toString() ?? '';
+    TextEditingController repTargetController = TextEditingController();
+    repTargetController.text = _selectedRepTarget?.toString() ?? '';
 
     showDialog(
       context: context,
@@ -93,7 +93,7 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
         return AlertDialog(
           title: const Text("Filter by Rep Target"),
           content: TextField(
-            controller: _repTargetController,
+            controller: repTargetController,
             keyboardType: TextInputType.number,
             decoration: const InputDecoration(
               labelText: "Enter Rep Target",

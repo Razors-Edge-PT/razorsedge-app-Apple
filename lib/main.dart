@@ -33,6 +33,8 @@ void main() async {
   runApp(const MyApp());
 }
 class AuthGate extends StatelessWidget {
+  const AuthGate({super.key});
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<User?>(
@@ -72,7 +74,6 @@ class MyApp extends StatelessWidget {
           onPrimary: Colors.white,
           surface: Colors.blueGrey.shade800,
           onSurface: Colors.white,
-          background: Colors.blueGrey.shade900,
         ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(

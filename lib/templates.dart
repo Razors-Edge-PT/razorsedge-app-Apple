@@ -63,7 +63,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
               ? (rawExercises.first is Map
               ? List<Map<String, dynamic>>.from(rawExercises)
               : List<Map<String, dynamic>>.from(
-              (rawExercises as List).map((e) => {'name': e, 'circuitIndex': 0})))
+              (rawExercises).map((e) => {'name': e, 'circuitIndex': 0})))
               : <Map<String, dynamic>>[];
 
           return Template(

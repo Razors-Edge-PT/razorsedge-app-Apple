@@ -2,14 +2,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
-import 'exercise_selection_screen.dart';
 import 'template_model.dart';
-import 'templates.dart';
-import 'exercise_details_screen.dart';
-import 'top_sets_screen.dart';
-import 'workout_model.dart';
 import 'periodization_model_utils.dart';
-import 'package:intl/intl.dart'; // Import this for date formatting
+// Import this for date formatting
 import 'package:table_calendar/table_calendar.dart';
 
 
@@ -34,9 +29,9 @@ class _BlockBuilderScreenState extends State<BlockBuilderScreen> {
   List<List<double?>> rirValues = List.generate(7, (_) => List.generate(11, (_) => null, growable: true));
   bool _isLoadingData = true; // Tracks data loading
   List<int> addedWeeks = [];
-  List<int> _exerciseRowsPerDay = List.generate(12, (_) => 11); // ✅ Match 12 weeks
-  Map<int, bool> _showAddRowButton = {}; // ✅ Track when to show button
-  ScrollController _scrollController = ScrollController(); // ✅ Detect scrolling
+  final List<int> _exerciseRowsPerDay = List.generate(12, (_) => 11); // ✅ Match 12 weeks
+  final Map<int, bool> _showAddRowButton = {}; // ✅ Track when to show button
+  final ScrollController _scrollController = ScrollController(); // ✅ Detect scrolling
 
   late DateTime selectedWeekMonday; // ✅ Declare without assigning
 
