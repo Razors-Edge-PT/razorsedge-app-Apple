@@ -2286,6 +2286,55 @@ class _ExerciseCardState extends State<_ExerciseCard> {
               spacing: 5,
               runSpacing: 4,
               children: [
+
+                SizedBox(
+                  width: 158, height: 39,
+                  child: TextFormField(
+                    controller: _incrementsController,
+                    focusNode: _incrementsFocusNode,
+                    keyboardType: TextInputType.text,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9., ]'))
+
+                      // ❌ Removed auto-formatting to preserve cursor position
+                    ],
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    decoration: InputDecoration(
+                      labelText: 'Increments (kg)',
+                      hintText: '2.5, 1, 0.5, …',
+                      labelStyle: const TextStyle(color: Colors.white),
+                      hintStyle: const TextStyle(color: Colors.white38),
+                      floatingLabelBehavior: FloatingLabelBehavior.always,
+                      filled: true,
+                      fillColor: Colors.blueGrey.shade700,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 5),
+
+                _smallInput(
+                  "Weekly Frequency",
+                  controller: _weeklyFrequencyController,
+                  width: 148,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    FilteringTextInputFormatter.allow(RegExp(r'^[0-9]{0,2}$')),
+                    TextInputFormatter.withFunction((oldValue, newValue) {
+                      final intVal = int.tryParse(newValue.text);
+                      if (intVal != null && intVal > 14) {
+                        return oldValue;
+                      }
+                      return newValue;
+                    }),
+                  ],
+                ),
+
+                const SizedBox(height: 6, width:400),
+
                 SizedBox(
                   width: 158,
                   child: DropdownButtonFormField<String>(
@@ -2346,38 +2395,19 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                     dropdownColor: Colors.blueGrey.shade800,
                     decoration: InputDecoration(
-                      labelText: "Periodization Model",
+                      labelText: "Rep Periodization Model",
                       labelStyle: const TextStyle(color: Colors.white),
                       filled: true,
                       fillColor: Colors.blueGrey.shade700,
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
                     ),
 
                   ),
                 ),
 
-                _smallInput(
-                  "Weekly Frequency",
-                  controller: _weeklyFrequencyController,
-                  width: 158,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    FilteringTextInputFormatter.allow(RegExp(r'^[0-9]{0,2}$')),
-                    TextInputFormatter.withFunction((oldValue, newValue) {
-                      final intVal = int.tryParse(newValue.text);
-                      if (intVal != null && intVal > 14) {
-                        return oldValue;
-                      }
-                      return newValue;
-                    }),
-                  ],
-                ),
-
-
-                _smallInput("Progression Model", width: 158),
                 SizedBox(
-                  width: 158,
+                  width: 158, height: 48,
                   child: GestureDetector(
                     onTap: () {
                       final model = _mapLabelToModelType(_selectedModel);
@@ -2412,7 +2442,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                       child: TextFormField(
                         controller: _repTargetsDisplayController,
                         readOnly: true,
-                        style: const TextStyle(color: Colors.white, fontSize: 12),
+                        style: const TextStyle(color: Colors.white, fontSize: 13),
                         decoration: InputDecoration(
                           labelText: 'Rep Targets X sets',
                           labelStyle: const TextStyle(color: Colors.white),
@@ -2421,44 +2451,17 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                           fillColor: Colors.blueGrey.shade700,
                           border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
                           isDense: true,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
                         ),
                       ),
                     ),
                   ),
                 ),
 
-                const SizedBox(height: 6, width:400), // Adjust to 10 or 12 if you want more breathing room
-                SizedBox(
-                  width: 158, height: 39,
-                  child: TextFormField(
-                    controller: _incrementsController,
-                    focusNode: _incrementsFocusNode,
-                    keyboardType: TextInputType.text,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.allow(RegExp(r'[0-9., ]'))
+                const SizedBox(height: 6, width:400),
 
-                      // ❌ Removed auto-formatting to preserve cursor position
-                    ],
-                    style: const TextStyle(color: Colors.white, fontSize: 13),
-                    decoration: InputDecoration(
-                      labelText: 'Increments (kg)',
-                      hintText: '2.5, 1, 0.5, …',
-                      labelStyle: const TextStyle(color: Colors.white),
-                      hintStyle: const TextStyle(color: Colors.white38),
-                      floatingLabelBehavior: FloatingLabelBehavior.always,
-                      filled: true,
-                      fillColor: Colors.blueGrey.shade700,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
-                      isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 5), // Add spacing if needed
                 SizedBox(
-                  width: 150,
+                  width: 158,
                   child: Theme(
                     data: Theme.of(context).copyWith(
                       canvasColor: Colors.blueGrey.shade700,
@@ -2509,7 +2512,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                       },
                       style: const TextStyle(color: Colors.white, fontSize: 12),
                       decoration: InputDecoration(
-                        labelText: 'RIR Model',
+                        labelText: 'RIR Periodization Model',
                         labelStyle: const TextStyle(color: Colors.white),
                         floatingLabelBehavior: FloatingLabelBehavior.always,
                         filled: true,
@@ -2521,6 +2524,14 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                     ),
                   ),
                 ),
+
+                _smallInput("RIR Targets", width: 158),
+
+
+                const SizedBox(height: 6, width:400), // Adjust to 10 or 12 if you want more breathing room
+
+                // Add spacing if needed
+
 
 
 
