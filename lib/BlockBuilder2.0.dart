@@ -692,7 +692,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
     // Rotate through your preferred circuit colors
     final circuitColors = [
-      Colors.blueGrey.shade700,
+      Colors.blueGrey.shade800,
       Colors.blueGrey.shade900,
       Colors.blueGrey.shade800,
     ];
@@ -1582,9 +1582,9 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   Color _getFieldColor(String state) {
     switch (state) {
       case 'hint':
-        return Colors.black;
+        return Colors.white;
       case 'user':
-        return Colors.orange;
+        return Color(0xFFF8BBD0);
       default:
         return Colors.black;
     }
@@ -1667,8 +1667,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       height: exerciseRowHeight,
       padding: const EdgeInsets.symmetric(horizontal: 2),
       decoration: BoxDecoration(
-        color: Colors.pink.withOpacity(0.15),
-        border: Border(bottom: BorderSide(color: Colors.pink.shade200, width: 0.5)),
+        color: Colors.blueGrey[300]!.withOpacity(0.15),
+        border: Border(bottom: BorderSide(color: Colors.blueGrey[500]!   , width: 0.5)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -1680,7 +1680,13 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
               padding: const EdgeInsets.symmetric(horizontal: 6),
               child: Text(name,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.pinkAccent, fontSize: 11, fontWeight: FontWeight.w600),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  fontStyle: FontStyle.italic,
+                ),
+
               ),
             ),
           ),
@@ -1688,25 +1694,25 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             flex: 2,
             child: Text(weight.toStringAsFixed(1),
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 12, color: Colors.white)),
+                style: const TextStyle(fontSize: 12, color: Colors.white,  fontStyle: FontStyle.italic)),
           ),
           Expanded(
             flex: 1,
             child: Text(reps.toStringAsFixed(0),
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 12, color: Colors.white)),
+                style: const TextStyle(fontSize: 12, color: Colors.white,  fontStyle: FontStyle.italic)),
           ),
           Expanded(
             flex: 1,
             child: Text(rir.toStringAsFixed(1),
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 12, color: Colors.white)),
+                style: const TextStyle(fontSize: 12, color: Colors.white,  fontStyle: FontStyle.italic)),
           ),
           Expanded(
             flex: 2,
             child: Text(e1rm.toStringAsFixed(1),
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 12, color: Colors.white70)),
+                style: const TextStyle(fontSize: 12, color: Colors.white70,  fontStyle: FontStyle.italic)),
           ),
         ],
       ),
@@ -1777,14 +1783,14 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                                       color: Colors.white70,
                                     ),
                                   ),
-                                  Builder(
+                                  /*Builder(
                                       builder: (_) {
                                         final rows = exerciseRows[weekIndex][dayIndex];
                                         final firstExercise = rows.isNotEmpty ? rows[0].exercise : null;
                                         if (firstExercise == null || !PeriodizationModelUtils.exercisePreviousTopSetReps.containsKey(firstExercise)) {
                                           return const Text(
-                                            "Upcoming reps: None",
-                                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.orangeAccent),
+                                            "  Upcoming reps: None",
+                                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.white70  ),
                                           );
                                         }
                                         final range = PeriodizationModelUtils.getDupSignatureRepRange(firstExercise);
@@ -1802,15 +1808,16 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                                         print('🔮 [BB2 UI] Upcoming 5 reps for $firstExercise → ${upcoming.join(', ')}');
 
                                         return Text(
-                                          "Upcoming reps: ${upcoming.join(', ')}",
-                                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.orangeAccent),
+                                          "  Upcoming reps: ${upcoming.join(', ')}",
+                                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.white70   ),
                                         );
                                       }
 
-                                  ),
+                                  ),*/
                                 ],
                               ),
-                              const SizedBox(height: 4),
+
+                              /*
                               Builder(
                                 builder: (_) {
                                   final rows = exerciseRows[weekIndex][dayIndex];
@@ -1819,7 +1826,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                                   if (firstExercise == null || !PeriodizationModelUtils.exercisePreviousTopSetReps.containsKey(firstExercise)) {
                                     return const Text(
                                       "Top set history: None",
-                                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.cyanAccent),
+                                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.white70  ),
                                     );
                                   }
 
@@ -1830,11 +1837,11 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
                                   return Text(
                                     "Top set history: ${history.reversed.join(', ')}",
-                                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.cyanAccent),
+                                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.white70  ),
                                   );
 
                                 },
-                              ),
+                              ),*/
                             ],
                           ),
 
