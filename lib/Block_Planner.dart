@@ -987,14 +987,18 @@ class _ExerciseCard extends StatefulWidget {
   final void Function(String exerciseName, String key, dynamic value) onUpdateSetting;
   final DateTime? blockStartDate;
   final DateTime? blockEndDate;
+  final Map<String, dynamic>? plannedExerciseDetails;
+
 
   const _ExerciseCard({
     required this.exerciseId,
     required this.exerciseName,
     required this.exerciseSettings,
     required this.onUpdateSetting,
+    this.plannedExerciseDetails, // 🔁 not required
     this.blockStartDate,
     this.blockEndDate,
+
   });
 
   @override
@@ -1261,6 +1265,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
     super.dispose();
   }
+
+
+
 
   void _syncCachedRepTargets(String exerciseName) {
     final settings = widget.exerciseSettings[exerciseName];
@@ -2145,6 +2152,91 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   }
 
 
+
+  // RIR Models                                               RIR MODELS
+
+  void _showLinearTaperRirTargetDialog(String exerciseName) {
+    final exerciseId = PeriodizationModelUtils.nameToId[exerciseName]; // 🔑 map exerciseName to Firestore ID
+    final details = widget.plannedExerciseDetails?[widget.exerciseId] ?? {};
+
+
+    final blockStart = DateTime.tryParse(details['blockMeta']?['blockStartDate'] ?? '');
+    final blockEnd = DateTime.tryParse(details['blockMeta']?['blockEndDate'] ?? '');
+    final blockLengthWeeks = blockStart != null && blockEnd != null
+        ? blockEnd.difference(blockStart).inDays ~/ 7
+        : 6; // fallback
+
+    final weeklyFrequency = details['weeklyFrequency'] ?? 3;
+
+    // 🔍 Determine base RIR
+    final startRir = blockLengthWeeks > 5 ? 4.0 : 3.0;
+    final decrementPerWeek = startRir / blockLengthWeeks;
+
+    // 🔍 Determine sets per session from week1 > instance1
+    final repString = details['repTargets']?['week1']?['instance1'] ?? '';
+    final match = RegExp(r'x\s*(\d+)').firstMatch(repString);
+    final setsPerSession = int.tryParse(match?.group(1) ?? '3') ?? 3;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          child: SizedBox(
+            width: double.maxFinite,
+            height: 500,
+            child: Scrollbar(
+              thumbVisibility: true,
+              child: ListView.builder(
+                itemCount: 3, // Weeks 1–3
+                itemBuilder: (context, weekIndex) {
+                  final currentWeek = weekIndex + 1;
+                  final baseRir = (startRir - (weekIndex * decrementPerWeek)).clamp(0, 4).toStringAsFixed(1);
+
+                  return ExpansionTile(
+                    title: Text('Week $currentWeek'),
+                    children: List.generate(setsPerSession, (setIndex) {
+                      final rir = () {
+                        if (setIndex == 0) return baseRir;
+                        if (setIndex == 1) return (double.parse(baseRir) + 1).toStringAsFixed(1);
+                        return (double.parse(baseRir) + 1 + (setIndex - 1) * 0.5).toStringAsFixed(1);
+                      }();
+
+                      // 🔍 Parse reps from "10 x 3"
+                      final repMatch = RegExp(r'^(\d+)\s*x\s*\d+').firstMatch(repString);
+                      final set1Reps = int.tryParse(repMatch?.group(1) ?? '10') ?? 10;
+
+                      // 🧮 Determine reps for this set
+                      final reps = () {
+                        if (setIndex == 0) return '$set1Reps';
+                        final low = (set1Reps - (1 + (setIndex - 1))).clamp(1, set1Reps);
+                        return '$low–$set1Reps';
+                      }();
+
+                      return ListTile(
+                        title: Row(
+                          children: [
+                            Expanded(child: Text('Set ${setIndex + 1}')),
+                            const SizedBox(width: 12),
+                            Text('Reps: $reps'),
+                            const SizedBox(width: 12),
+                            Text('RIR: $rir'),
+                          ],
+                        ),
+                      );
+                    }),
+
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+
+
   void _showRepTargetDialog(String exerciseName) {
     List<int> reps = List<int>.from(widget.exerciseSettings[widget.exerciseName]?['repTargets'] ?? List.filled(12, 6));
 
@@ -2525,18 +2617,48 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   ),
                 ),
 
-                _smallInput("RIR Targets", width: 158),
+                SizedBox(
+                  width: 158,
+                  height: 48,
+                  child: GestureDetector(
+                    onTap: () {
+                      final model = _selectedRirModel[widget.exerciseName];
+                      switch (model) {
+                        case 'Linear-Taper':
+                          _showLinearTaperRirTargetDialog(widget.exerciseName);
+                          break;
+
+                      // 🔜 Add other models here later
+                        default:
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Model "$model" not supported yet')),
+                          );
+                      }
+                    },
+                    child: AbsorbPointer(
+                      child: TextFormField(
+                        readOnly: true,
+                        style: const TextStyle(color: Colors.white, fontSize: 13),
+                        decoration: InputDecoration(
+                          labelText: 'RIR Targets',
+                          labelStyle: const TextStyle(color: Colors.white),
+                          floatingLabelBehavior: FloatingLabelBehavior.always,
+                          filled: true,
+                          fillColor: Colors.blueGrey.shade700,
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
 
 
                 const SizedBox(height: 6, width:400), // Adjust to 10 or 12 if you want more breathing room
 
                 // Add spacing if needed
-
-
-
-
-
-
 
                 const SizedBox(height: 6, width:200), // Adjust to 10 or 12 if you want more breathing room
 
