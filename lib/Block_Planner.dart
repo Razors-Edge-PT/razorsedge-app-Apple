@@ -77,6 +77,8 @@ class _BlockPlannerState extends State<Block_Planner> {
   }
 
 
+
+
   List<int> _parseHistoryInput(String input) {
     return input
         .split(',')
@@ -1267,7 +1269,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   }
 
 
-
+  double roundToNearestHalf(double value) {
+    return (value * 2).round() / 2.0;
+  }
 
   void _syncCachedRepTargets(String exerciseName) {
     final settings = widget.exerciseSettings[exerciseName];
@@ -2159,12 +2163,10 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     final exerciseId = PeriodizationModelUtils.nameToId[exerciseName]; // 🔑 map exerciseName to Firestore ID
     final details = widget.plannedExerciseDetails?[widget.exerciseId] ?? {};
 
-
-    final blockStart = DateTime.tryParse(details['blockMeta']?['blockStartDate'] ?? '');
-    final blockEnd = DateTime.tryParse(details['blockMeta']?['blockEndDate'] ?? '');
-    final blockLengthWeeks = blockStart != null && blockEnd != null
-        ? blockEnd.difference(blockStart).inDays ~/ 7
-        : 6; // fallback
+    final blockLengthWeeks = PeriodizationModelUtils.getBlockLength(
+      blockStartDate: widget.blockStartDate,
+      blockEndDate: widget.blockEndDate,
+    );
 
     final weeklyFrequency = details['weeklyFrequency'] ?? 3;
 
@@ -2187,46 +2189,105 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             child: Scrollbar(
               thumbVisibility: true,
               child: ListView.builder(
-                itemCount: 3, // Weeks 1–3
-                itemBuilder: (context, weekIndex) {
-                  final currentWeek = weekIndex + 1;
-                  final baseRir = (startRir - (weekIndex * decrementPerWeek)).clamp(0, 4).toStringAsFixed(1);
+                  itemCount: blockLengthWeeks,
+                  itemBuilder: (context, weekIndex) {
+                    final currentWeek = weekIndex + 1;
+                    final rawBase = startRir - (weekIndex * decrementPerWeek);
+                    final baseRir = roundToNearestHalf(rawBase.clamp(0, 4));
 
-                  return ExpansionTile(
-                    title: Text('Week $currentWeek'),
-                    children: List.generate(setsPerSession, (setIndex) {
-                      final rir = () {
-                        if (setIndex == 0) return baseRir;
-                        if (setIndex == 1) return (double.parse(baseRir) + 1).toStringAsFixed(1);
-                        return (double.parse(baseRir) + 1 + (setIndex - 1) * 0.5).toStringAsFixed(1);
-                      }();
 
-                      // 🔍 Parse reps from "10 x 3"
-                      final repMatch = RegExp(r'^(\d+)\s*x\s*\d+').firstMatch(repString);
-                      final set1Reps = int.tryParse(repMatch?.group(1) ?? '10') ?? 10;
+                    return ExpansionTile(
+                      title: Text('Week $currentWeek'),
+                      children: List.generate(weeklyFrequency, (sessionIndex) {
+                        final sessionTitle = 'Session ${sessionIndex + 1}';
 
-                      // 🧮 Determine reps for this set
-                      final reps = () {
-                        if (setIndex == 0) return '$set1Reps';
-                        final low = (set1Reps - (1 + (setIndex - 1))).clamp(1, set1Reps);
-                        return '$low–$set1Reps';
-                      }();
+                        // 🔍 Parse "10 x 3" style string to get reps for set 1
+                        final repMatch = RegExp(r'^(\d+)\s*x\s*\d+').firstMatch(repString);
+                        final set1Reps = int.tryParse(repMatch?.group(1) ?? '10') ?? 10;
 
-                      return ListTile(
-                        title: Row(
-                          children: [
-                            Expanded(child: Text('Set ${setIndex + 1}')),
-                            const SizedBox(width: 12),
-                            Text('Reps: $reps'),
-                            const SizedBox(width: 12),
-                            Text('RIR: $rir'),
-                          ],
-                        ),
-                      );
-                    }),
+                        return ExpansionTile(
+                          title: Text(sessionTitle),
+                          children: List.generate(setsPerSession, (setIndex) {
+                            final repsValue = () {
+                              if (setIndex == 0) return '$set1Reps';
+                              return (set1Reps - setIndex).clamp(1, set1Reps).toString();
+                            }();
 
-                  );
-                },
+                            final rirValue = () {
+                              double rir;
+                              if (setIndex == 0) {
+                                rir = baseRir;
+                              } else if (setIndex == 1) {
+                                rir = baseRir + 1.0;
+                              } else {
+                                rir = baseRir + 1.0 + (setIndex - 1) * 0.5;
+                              }
+                              return roundToNearestHalf(rir.clamp(0, 4)).toStringAsFixed(1);
+                            }();
+
+
+
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                              child: Row(
+                                children: [
+                                  // Reps field
+                                  Expanded(
+                                    child: TextField(
+                                      controller: TextEditingController(text: repsValue),
+                                      keyboardType: TextInputType.number,
+                                      readOnly: setIndex == 0, // 👈 Only Set 1 is read-only
+                                      style: TextStyle(
+                                        color: setIndex == 0 ? Colors.white54 : Colors.white, // 👈 Muted text if locked
+                                      ),
+                                      decoration: InputDecoration(
+                                        labelText: 'Set ${setIndex + 1} Reps',
+                                        labelStyle: const TextStyle(color: Colors.white70),
+                                        filled: true,
+                                        fillColor: setIndex == 0
+                                            ? Colors.blueGrey.shade800 // slightly darker to show it's locked
+                                            : Colors.blueGrey.shade800,
+                                        border: const OutlineInputBorder(),
+                                        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                      ),
+                                      onChanged: (val) {
+                                        if (setIndex != 0) {
+                                          // Only store if editable
+                                        }
+                                      },
+                                    ),
+                                  ),
+
+                                  const SizedBox(width: 12),
+                                  // RIR field
+                                  Expanded(
+                                    child: TextField(
+                                      controller: TextEditingController(text: rirValue),
+                                      keyboardType: TextInputType.number,
+                                      style: const TextStyle(color: Colors.white),
+                                      decoration: InputDecoration(
+                                        labelText: 'Set ${setIndex + 1} RIR',
+                                        labelStyle: const TextStyle(color: Colors.white70),
+                                        filled: true,
+                                        fillColor: Colors.blueGrey.shade800,
+                                        border: const OutlineInputBorder(),
+                                        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                      ),
+                                      onChanged: (val) {
+                                        // 🔁 Optional: save RIR
+                                      },
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }),
+                        );
+                      }),
+                    );
+
+                  }
+
               ),
             ),
           ),
