@@ -455,9 +455,12 @@ class _BlockPlannerState extends State<Block_Planner> {
       }
 
       if (entry['periodizationModel'] == 'DUP, Signature') {
+
         existingDetails[exercise] = {
           'periodizationModel': 'DUP, Signature',
           'repTargets': entry['repTargets'], // ← include the correct full structure
+          'rirPlan': entry['rirPlan'], // ✅ Add this
+          'rirModel': entry['rirModel'], // ✅ add this line
           'progressionModel': entry['progressionModel'] ?? 'linear',
           'increments': entry['increments'] ?? {'week': 2.5, 'block': 5.0},
           'weeklyFrequency': entry['weeklyFrequency'] ?? 3,
@@ -468,6 +471,8 @@ class _BlockPlannerState extends State<Block_Planner> {
         existingDetails[exercise] = {
           'periodizationModel': entry['periodizationModel'] ?? 'Linear Exposure',
           'repTargets': savedTargets,
+          'rirPlan': entry['rirPlan'], // ✅ Add this
+          'rirModel': entry['rirModel'], // ✅ add this line
           'progressionModel': entry['progressionModel'] ?? 'linear',
           'increments': entry['increments'] ?? {'week': 2.5, 'block': 5.0},
           'weeklyFrequency': entry['weeklyFrequency'] ?? 3,
@@ -1019,6 +1024,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   final TextEditingController _maxRepsController = TextEditingController();
   Map<String, Map<String, String>>? _cachedRepTargetMap;
   Map<String, String> _selectedRirModel = {}; // Keeps track of selection per exercise
+  Map<String, Map<String, Map<String, Map<String, String>>>>? _cachedRirPlan;
 
 
   double _currentE1RM = 0.0;
@@ -1134,6 +1140,35 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         widget.onUpdateSetting(widget.exerciseId, 'weeklyFrequency', value);
       }
     });
+
+    final rirModel = settings?['rirModel'];
+    if (rirModel != null && rirModel is String) {
+      _selectedRirModel[widget.exerciseName] = rirModel;
+      print("📥 [INIT] Loaded RIR model for ${widget.exerciseName}: $rirModel");
+    }
+
+
+    final rirPlan = settings?['rirPlan'];
+    if (rirPlan != null && rirPlan is Map<String, dynamic>) {
+      _cachedRirPlan = rirPlan.map((weekKey, weekVal) {
+        return MapEntry(
+          weekKey,
+          (weekVal as Map).map((sessionKey, sessionVal) {
+            return MapEntry(
+              sessionKey,
+              (sessionVal as Map).map((setKey, setVal) {
+                return MapEntry(
+                  setKey,
+                  Map<String, String>.from(setVal),
+                );
+              }),
+            );
+          }),
+        );
+      });
+      print("📥 [INIT] Loaded RIR plan for ${widget.exerciseName}");
+    }
+
   }
 
   @override
@@ -1258,6 +1293,18 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       print("⚠️ [DISPOSE] Skipped saving maxWeightXReps due to invalid input.");
     }
 
+    final rirModel = _selectedRirModel[widget.exerciseName];
+    if (rirModel != null && rirModel.isNotEmpty) {
+      widget.onUpdateSetting(widget.exerciseId, 'rirModel', rirModel);
+      print("💾 [DISPOSE] Saved RIR model for ${widget.exerciseName}: $rirModel");
+    }
+
+
+    if (_cachedRirPlan != null && _cachedRirPlan!.isNotEmpty) {
+      widget.onUpdateSetting(widget.exerciseId, 'rirPlan', _cachedRirPlan);
+      print("💾 [DISPOSE] Saved rirPlan for ${widget.exerciseName}: ${jsonEncode(_cachedRirPlan)}");
+    }
+
     _weeklyFrequencyController.dispose();
     _repTargetsDisplayController.dispose();
     _incrementsController.dispose();
@@ -1312,6 +1359,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     } else {
       print("! [_syncCachedRepTargets] No valid repTargets found (value: $reps)");
     }
+
+
   }
 
 
@@ -2163,10 +2212,13 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     final exerciseId = PeriodizationModelUtils.nameToId[exerciseName]; // 🔑 map exerciseName to Firestore ID
     final details = widget.plannedExerciseDetails?[widget.exerciseId] ?? {};
 
-    final blockLengthWeeks = PeriodizationModelUtils.getBlockLength(
-      blockStartDate: widget.blockStartDate,
-      blockEndDate: widget.blockEndDate,
-    );
+    final blockLengthWeeks = widget.blockStartDate != null && widget.blockEndDate != null
+        ? PeriodizationModelUtils.getBlockLength(
+      blockStartDate: widget.blockStartDate!,
+      blockEndDate: widget.blockEndDate!,
+    )
+        : 6;
+
 
     final weeklyFrequency = details['weeklyFrequency'] ?? 3;
 
@@ -2208,22 +2260,30 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         return ExpansionTile(
                           title: Text(sessionTitle),
                           children: List.generate(setsPerSession, (setIndex) {
-                            final repsValue = () {
-                              if (setIndex == 0) return '$set1Reps';
-                              return (set1Reps - setIndex).clamp(1, set1Reps).toString();
-                            }();
+                            final weekKey = 'week${weekIndex + 1}';
+                            final sessionKey = 'session${sessionIndex + 1}';
+                            final setKey = 'set${setIndex + 1}';
 
-                            final rirValue = () {
-                              double rir;
-                              if (setIndex == 0) {
-                                rir = baseRir;
-                              } else if (setIndex == 1) {
-                                rir = baseRir + 1.0;
-                              } else {
-                                rir = baseRir + 1.0 + (setIndex - 1) * 0.5;
-                              }
-                              return roundToNearestHalf(rir.clamp(0, 4)).toStringAsFixed(1);
-                            }();
+                            final defaultRir = setIndex == 0
+                                ? roundToNearestHalf(baseRir).toString()
+                                : roundToNearestHalf((baseRir + 1 + (setIndex - 1) * 0.5).clamp(0, 4)).toString();
+
+                            final defaultReps = setIndex == 0
+                                ? set1Reps.toString()
+                                : (set1Reps - setIndex).clamp(1, set1Reps).toString();
+
+// ✅ Ensure defaults are stored if nothing has been edited
+                            _cachedRirPlan ??= {};
+                            _cachedRirPlan![weekKey] ??= {};
+                            _cachedRirPlan![weekKey]![sessionKey] ??= {};
+                            _cachedRirPlan![weekKey]![sessionKey]![setKey] ??= {
+                              'rir': defaultRir,
+                              'reps': defaultReps,
+                            };
+
+// ✅ Retrieve current values
+                            final repsValue = _cachedRirPlan![weekKey]![sessionKey]![setKey]?['reps'] ?? defaultReps;
+                            final rirValue  = _cachedRirPlan![weekKey]![sessionKey]![setKey]?['rir'] ?? defaultRir;
 
 
 
@@ -2250,11 +2310,19 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                                         border: const OutlineInputBorder(),
                                         contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                                       ),
-                                      onChanged: (val) {
-                                        if (setIndex != 0) {
-                                          // Only store if editable
+                                        onChanged: (val) {
+                                          final weekKey = 'week${weekIndex + 1}';
+                                          final sessionKey = 'session${sessionIndex + 1}';
+                                          final setKey = 'set${setIndex + 1}';
+
+                                          _cachedRirPlan ??= {};
+                                          _cachedRirPlan!.putIfAbsent(weekKey, () => {});
+                                          _cachedRirPlan![weekKey]!.putIfAbsent(sessionKey, () => {});
+                                          _cachedRirPlan![weekKey]![sessionKey]!.putIfAbsent(setKey, () => {});
+
+                                          _cachedRirPlan![weekKey]![sessionKey]![setKey]!['reps'] = val;
                                         }
-                                      },
+
                                     ),
                                   ),
 
@@ -2273,9 +2341,23 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                                         border: const OutlineInputBorder(),
                                         contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                                       ),
-                                      onChanged: (val) {
-                                        // 🔁 Optional: save RIR
-                                      },
+                                        onChanged: (val) {
+                                          final weekKey = 'week${weekIndex + 1}';
+                                          final sessionKey = 'session${sessionIndex + 1}';
+                                          final setKey = 'set${setIndex + 1}';
+
+                                          _cachedRirPlan ??= {};
+                                          if (setIndex == 0) {
+                                            print('🧪 [Linear Taper] Week ${weekIndex + 1}, Session ${sessionIndex + 1} → Set 1 baseRIR = $baseRir');
+                                          }
+
+                                          _cachedRirPlan!.putIfAbsent(weekKey, () => {});
+                                          _cachedRirPlan![weekKey]!.putIfAbsent(sessionKey, () => {});
+                                          _cachedRirPlan![weekKey]![sessionKey]!.putIfAbsent(setKey, () => {});
+
+                                          _cachedRirPlan![weekKey]![sessionKey]![setKey]!['rir'] = val;
+                                        }
+
                                     ),
                                   ),
                                 ],
@@ -2288,6 +2370,143 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                   }
 
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+
+  void _showWaveRirUndulationDialog(String exerciseName) {
+    final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
+    final details = widget.plannedExerciseDetails?[widget.exerciseId] ?? {};
+
+    final blockLengthWeeks = widget.blockStartDate != null && widget.blockEndDate != null
+        ? PeriodizationModelUtils.getBlockLength(
+      blockStartDate: widget.blockStartDate!,
+      blockEndDate: widget.blockEndDate!,
+    )
+        : 6;
+
+    final weeklyFrequency = details['weeklyFrequency'] ?? 3;
+
+    // 🔍 Determine sets per session from week1 > instance1
+    final repString = details['repTargets']?['week1']?['instance1'] ?? '';
+    final match = RegExp(r'x\s*(\d+)').firstMatch(repString);
+    final setsPerSession = int.tryParse(match?.group(1) ?? '3') ?? 3;
+
+    // 🔁 Define base RIR wave (3 → 2 → 1)
+    final wave = [3.0, 2.0, 1.0];
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          child: SizedBox(
+            width: double.maxFinite,
+            height: 500,
+            child: Scrollbar(
+              thumbVisibility: true,
+              child: ListView.builder(
+                itemCount: blockLengthWeeks,
+                itemBuilder: (context, weekIndex) {
+                  final currentWeek = weekIndex + 1;
+                  final baseRir = wave[weekIndex % wave.length]; // ⬅ wave cycle
+
+                  return ExpansionTile(
+                    title: Text('Week $currentWeek'),
+                    children: List.generate(weeklyFrequency, (sessionIndex) {
+                      final sessionTitle = 'Session ${sessionIndex + 1}';
+
+                      final repMatch = RegExp(r'^(\d+)\s*x\s*\d+').firstMatch(repString);
+                      final set1Reps = int.tryParse(repMatch?.group(1) ?? '10') ?? 10;
+
+                      return ExpansionTile(
+                        title: Text(sessionTitle),
+                        children: List.generate(setsPerSession, (setIndex) {
+                          final weekKey = 'week${weekIndex + 1}';
+                          final sessionKey = 'session${sessionIndex + 1}';
+                          final setKey = 'set${setIndex + 1}';
+
+                          final defaultRir = setIndex == 0
+                              ? roundToNearestHalf(baseRir).toString()
+                              : roundToNearestHalf((baseRir + 1 + (setIndex - 1) * 0.5).clamp(0, 4)).toString();
+
+                          final defaultReps = setIndex == 0
+                              ? set1Reps.toString()
+                              : (set1Reps - setIndex).clamp(1, set1Reps).toString();
+
+                          _cachedRirPlan ??= {};
+                          if (setIndex == 0) {
+                            print('🧪 [Wave RIR] Week ${weekIndex + 1}, Session ${sessionIndex + 1} → Set 1 baseRIR = $baseRir');
+                          }
+
+                          _cachedRirPlan![weekKey] ??= {};
+                          _cachedRirPlan![weekKey]![sessionKey] ??= {};
+                          _cachedRirPlan![weekKey]![sessionKey]![setKey] ??= {
+                            'rir': defaultRir,
+                            'reps': defaultReps,
+                          };
+
+                          final repsValue = _cachedRirPlan![weekKey]![sessionKey]![setKey]?['reps'] ?? defaultReps;
+                          final rirValue = _cachedRirPlan![weekKey]![sessionKey]![setKey]?['rir'] ?? defaultRir;
+
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            child: Row(
+                              children: [
+                                // Reps field
+                                Expanded(
+                                  child: TextField(
+                                    controller: TextEditingController(text: repsValue),
+                                    keyboardType: TextInputType.number,
+                                    readOnly: setIndex == 0,
+                                    style: TextStyle(
+                                      color: setIndex == 0 ? Colors.white54 : Colors.white,
+                                    ),
+                                    decoration: InputDecoration(
+                                      labelText: 'Set ${setIndex + 1} Reps',
+                                      labelStyle: const TextStyle(color: Colors.white70),
+                                      filled: true,
+                                      fillColor: Colors.blueGrey.shade800,
+                                      border: const OutlineInputBorder(),
+                                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                    ),
+                                    onChanged: (val) {
+                                      _cachedRirPlan![weekKey]![sessionKey]![setKey]!['reps'] = val;
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                // RIR field
+                                Expanded(
+                                  child: TextField(
+                                    controller: TextEditingController(text: rirValue),
+                                    keyboardType: TextInputType.number,
+                                    style: const TextStyle(color: Colors.white),
+                                    decoration: InputDecoration(
+                                      labelText: 'Set ${setIndex + 1} RIR',
+                                      labelStyle: const TextStyle(color: Colors.white70),
+                                      filled: true,
+                                      fillColor: Colors.blueGrey.shade800,
+                                      border: const OutlineInputBorder(),
+                                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                    ),
+                                    onChanged: (val) {
+                                      _cachedRirPlan![weekKey]![sessionKey]![setKey]!['rir'] = val;
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }),
+                      );
+                    }),
+                  );
+                },
               ),
             ),
           ),
@@ -2661,8 +2880,13 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                       onChanged: (value) {
                         setState(() {
                           _selectedRirModel[widget.exerciseName] = value!;
+                          print("💾 [UI] Saved RIR model '$value' for ${widget.exerciseName}");
+
+                          // ✅ Save to Firestore via onUpdateSetting
+                          widget.onUpdateSetting(widget.exerciseId, 'rirModel', value);
                         });
                       },
+
                       style: const TextStyle(color: Colors.white, fontSize: 12),
                       decoration: InputDecoration(
                         labelText: 'RIR Periodization Model',
@@ -2684,12 +2908,16 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   child: GestureDetector(
                     onTap: () {
                       final model = _selectedRirModel[widget.exerciseName];
+                      _cachedRirPlan = {}; // ✅ reset before loading new defaults
                       switch (model) {
                         case 'Linear-Taper':
                           _showLinearTaperRirTargetDialog(widget.exerciseName);
                           break;
 
-                      // 🔜 Add other models here later
+                        case 'Wave RIR undulation':
+                          _showWaveRirUndulationDialog(widget.exerciseName);
+                          break;
+
                         default:
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(content: Text('Model "$model" not supported yet')),
@@ -2714,6 +2942,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                     ),
                   ),
                 ),
+
 
 
 

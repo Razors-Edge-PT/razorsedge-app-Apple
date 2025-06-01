@@ -305,6 +305,21 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
   }
 
+  double getSet1RirFromPlan({
+    required String exerciseId,
+    required int weekIndex,
+    required int sessionIndex,
+  }) {
+    final rirPlan = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['rirPlan'];
+    if (rirPlan == null) return 0.5;
+
+    final weekKey = 'week${weekIndex + 1}';
+    final sessionKey = 'session${sessionIndex + 1}';
+    final setKey = 'set1';
+
+    final rir = rirPlan[weekKey]?[sessionKey]?[setKey]?['rir'];
+    return double.tryParse(rir?.toString() ?? '') ?? 0.5;
+  }
 
 
 
@@ -452,9 +467,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         return reps.toDouble();
       }
     }
-
-
-
 
     // 🔁 Fallback to default model logic
     final reps = PeriodizationModelUtils.getSuggestedRepTargetByModel(

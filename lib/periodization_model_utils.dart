@@ -21,6 +21,14 @@ enum PeriodizationModelType {
   linearExposure,
 }
 
+enum RirModelType {
+  linearTaper,
+  waveUndulation,
+  sessionBased,
+  static,
+}
+
+
 
 
 class PeriodizationModelUtils {
@@ -185,7 +193,7 @@ class PeriodizationModelUtils {
     return result;
   }
 
-
+// Rep Target Logic
 
   static PeriodizationModelType stringToModel(String modelName) {
     switch (modelName) {
@@ -531,6 +539,41 @@ class PeriodizationModelUtils {
 
     // 🛡️ Fallback to default
     return 10;
+  }
+
+
+  // RIR LOGIC
+
+  static String? getSet1RirForExercise({
+    required String exerciseId,
+    required int weekNumber,
+    required int sessionNumber,
+  }) {
+    final rirPlan = plannedExerciseDetails[exerciseId]?['rirPlan'];
+    if (rirPlan == null) return null;
+
+    final weekKey = 'week$weekNumber';
+    final sessionKey = 'session$sessionNumber';
+    final setKey = 'set1';
+
+    return rirPlan[weekKey]?[sessionKey]?[setKey]?['rir'];
+  }
+
+  static String getSet1RirByModel({
+    required String exerciseId,
+    required int weekIndex,
+    required int sessionIndex,
+    required Map<String, dynamic> plannedExerciseDetails,
+  }) {
+    final rirPlan = plannedExerciseDetails[exerciseId]?['rirPlan'];
+    if (rirPlan == null) return '0.5';
+
+    final weekKey = 'week${weekIndex + 1}';
+    final sessionKey = 'session${sessionIndex + 1}';
+    final setKey = 'set1';
+
+    final rir = rirPlan[weekKey]?[sessionKey]?[setKey]?['rir'];
+    return rir?.toString() ?? '0.5';
   }
 
 
@@ -1004,6 +1047,35 @@ class PeriodizationModelUtils {
 
     return availableReps;
   }
+
+  //BB2 Function
+  static int getExercisePlannedCountInWeek({
+    required String exerciseName,
+    required int week,
+    required int day,
+    required int row,
+    required List<List<List<Map<String, dynamic>>>> exerciseGrid,
+  }) {
+    int count = 0;
+
+    for (int d = 0; d <= day; d++) {
+      final rows = exerciseGrid[week][d];
+      final lastRow = (d == day) ? row + 1 : rows.length; // ✅ include current row only to that point
+
+      for (int r = 0; r < lastRow; r++) {
+        final thisName = (rows[r]['exercise'] ?? '').toString().trim();
+        if (thisName == exerciseName.trim()) {
+          count++;
+          print('🔎 Match: "$thisName" == "$exerciseName" (week $week, day $d, row $r)');
+        }
+      }
+    }
+
+    final result = count - 1; // ✅ zero-based index
+    print('📊 getExercisePlannedCountInWeek → "$exerciseName" → index $result');
+    return result;
+  }
+
 
   //WES Function
   static int getInstanceCountForExerciseInBlock({

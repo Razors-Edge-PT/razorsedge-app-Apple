@@ -296,6 +296,34 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
   }
 
+  Map<String, dynamic>? getPlannedRirSetValues({
+    required String exerciseName,
+    required int week,
+    required int day,
+    required int row,
+  }) {
+    final exerciseId = nameToIdMap[exerciseName];
+    if (exerciseId == null) return null;
+
+    final rirPlan = plannedExerciseDetails[exerciseId]?['rirPlan'];
+    if (rirPlan == null) return null;
+
+    final sessionIndex = getExerciseCountInWeek(exerciseName, week, day, row);
+    final weekKey = 'week${week + 1}';
+    final sessionKey = 'session${sessionIndex + 1}';
+
+    final Map<String, dynamic>? sessionData =
+    (rirPlan[weekKey]?[sessionKey] as Map?)?.cast<String, dynamic>();
+
+    if (sessionData == null) return null;
+
+    return sessionData.map((setKey, setValue) => MapEntry(setKey, {
+      'reps': setValue['reps'],
+      'rir': setValue['rir'],
+    }));
+  }
+
+
 
   String? getRepTargetForExercise(String exerciseName, int week, int day, int row) {
     final exerciseId = nameToIdMap[exerciseName];
@@ -1441,6 +1469,18 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             ? RegExp(r'^\d+').firstMatch(plannedRep)?.group(0) ?? ''
             : '';
 
+        final Map<String, dynamic>? rirSetValues = getPlannedRirSetValues(
+          exerciseName: exerciseName,
+          week: weekIndex,
+          day: dayIndex,
+          row: rowIndex,
+        );
+
+        final String hintRir = (rirController.text.isEmpty && rirSetValues != null)
+            ? (rirSetValues['set1']?['rir']?.toString() ?? '0.5')
+            : rirController.text;
+
+
 
         print('📋 repsController: "${repsController.text}", plannedRep: "$plannedRep", hintReps: "$hintReps"');
 
@@ -1519,6 +1559,16 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                               // Do not set repsController.text — just clear it
                               repsController.clear();
                             }
+                            final hintRir = (() {
+                              final planned = getPlannedRirSetValues(
+                                exerciseName: exerciseName,
+                                week: weekIndex,
+                                day: dayIndex,
+                                row: rowIndex,
+                              );
+                              return planned?['set1']?['rir']?.toString() ?? '0.5';
+                            })();
+
 
                           });
                         },
@@ -1555,7 +1605,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
               _buildFieldBox(repsController, hintReps, weekIndex, dayIndex, rowIndex, "reps", localSetState),
 
               // RIR
-              _buildFieldBox(rirController, "0.5", weekIndex, dayIndex, rowIndex, "rir", localSetState),
+              _buildFieldBox(rirController, hintRir, weekIndex, dayIndex, rowIndex, "rir", localSetState),
+
 
               // E1RM
               Expanded(
