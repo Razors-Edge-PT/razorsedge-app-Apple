@@ -2212,6 +2212,13 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
   void _showLinearTaperRirTargetDialog(String exerciseName, {int? frequency}) {
     final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
+    final settings = widget.exerciseSettings[exerciseId];
+    final model = settings?['periodizationModel'];
+    final weeklyFrequency = settings?['weeklyFrequency'];
+
+    print("🧪 [RIR Tap] Settings for $exerciseName: $settings");
+    print("📆 [RIR Tap] Weekly Frequency from settings = $weeklyFrequency hello");
+    print("🧪 [RIR Tap] $exerciseName → Selected model: $model");
     final details = widget.exerciseSettings[exerciseName] ?? {}; // ✅ consistent with wave
 
     final blockLengthWeeks = widget.blockStartDate != null && widget.blockEndDate != null
@@ -2223,16 +2230,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
     final periodizationModel = details['periodizationModel'] ?? '';
     final instanceMap = details['repTargets']?['week1'] ?? {};
-
-    final weeklyFrequency = frequency ??
-        (periodizationModel == 'DUP, Signature'
-            ? (details['weeklyFrequency'] ?? 1)
-            : instanceMap.keys
-            .where((k) => k.toString().startsWith('instance'))
-            .length);
-
-
-
 
     // ✅ Rep string parsing for sets per session
     final repString = details['repTargets']?['week1']?['instance1'] ?? '';
@@ -2264,9 +2261,17 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                     final baseRir = roundToNearestHalf(rawBase.clamp(0, 4));
 
 
+                    final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
+                    final settings = widget.exerciseSettings[exerciseId];
+                    final model = settings?['periodizationModel'];
+                    final frequency = model == 'DUP, Signature'
+                        ? (settings?['weeklyFrequency'] ?? 3)
+                        : instanceMap.keys.where((k) => k.toString().startsWith('instance')).length;
+
+
                     return ExpansionTile(
                       title: Text('Week $currentWeek'),
-                      children: List.generate(weeklyFrequency, (sessionIndex) {
+                      children: List.generate(frequency, (sessionIndex) {
                         final sessionTitle = 'Session ${sessionIndex + 1}';
 
                         // 🔍 Parse "10 x 3" style string to get reps for set 1
@@ -2404,7 +2409,14 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
   void _showWaveRirUndulationDialog(String exerciseName, {int? frequency}) {
     final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
-    final details = widget.exerciseSettings[exerciseName] ?? {};
+    final settings = widget.exerciseSettings[exerciseId];
+    final model = settings?['periodizationModel'];
+    final weeklyFrequency = settings?['weeklyFrequency'];
+
+    print("🧪 [RIR Tap] Settings for $exerciseName: $settings");
+    print("📆 [RIR Tap] Weekly Frequency from settings = $weeklyFrequency hello");
+    print("🧪 [RIR Tap] $exerciseName → Selected model: $model");
+    final details = widget.exerciseSettings[exerciseName] ?? {}; // ✅ consistent with wave
 
     final blockLengthWeeks = widget.blockStartDate != null && widget.blockEndDate != null
         ? PeriodizationModelUtils.getBlockLength(
@@ -2413,14 +2425,13 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     )
         : 6;
 
-    final instanceMap = details['repTargets']?['week1'] ?? {};
     final periodizationModel = details['periodizationModel'] ?? '';
+    final instanceMap = details['repTargets']?['week1'] ?? {};
 
-    final weeklyFrequency = periodizationModel == 'DUP, Signature'
-        ? (details['weeklyFrequency'] ?? 3)
-        : instanceMap.keys
-        .where((k) => k.toString().startsWith('instance'))
-        .length;
+    // ✅ Rep string parsing for sets per session
+    final repString = details['repTargets']?['week1']?['instance1'] ?? '';
+    final match = RegExp(r'x\s*(\d+)').firstMatch(repString);
+    final setsPerSession = int.tryParse(match?.group(1) ?? '3') ?? 3;
 
 
     final wave = [3.0, 2.0, 1.0];
@@ -2440,9 +2451,15 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   final currentWeek = weekIndex + 1;
                   final baseRir = wave[weekIndex % wave.length];
 
+                  final model = settings?['periodizationModel'];
+                  final frequency = model == 'DUP, Signature'
+                      ? (settings?['weeklyFrequency'] ?? 3)
+                      : instanceMap.keys.where((k) => k.toString().startsWith('instance')).length;
+
                   return ExpansionTile(
                     title: Text('Week $currentWeek'),
-                    children: List.generate(weeklyFrequency, (sessionIndex) {
+                    children: List.generate(frequency, (sessionIndex) {
+
                       final sessionKey = 'instance${sessionIndex + 1}';
                       final sessionRepString = instanceMap[sessionKey] ?? '';
                       final repMatch = RegExp(r'^(\d+)\s*x\s*(\d+)').firstMatch(sessionRepString);
