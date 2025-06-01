@@ -516,31 +516,89 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     );
   }
 
+  double getRirFromPlanOrInput(int exerciseIndex, int setNumber) {
+    if (setNumber < 1 || setNumber > 8) return 0.5; // Safety fallback
+
+    final controllerText = _rirControllers[exerciseIndex].length > (setNumber - 1)
+        ? _rirControllers[exerciseIndex][setNumber - 1].text
+        : '';
+
+    if (controllerText.isNotEmpty) {
+      return double.tryParse(controllerText) ?? (setNumber == 1 ? 0.5 : 1.5);
+    }
+
+    final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
+    final exerciseId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
+
+    final weekIndex = _getApplicableWeekIndex(exerciseId);
+    if (weekIndex == null) return setNumber == 1 ? 0.5 : 1.5;
+
+    final sessionIndex = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+      exerciseName: exerciseName,
+      savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+      blockStartDate: _blockStartDate!,
+      weekIndex: weekIndex,
+    );
+
+    final rirPlan = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['rirPlan'];
+    final weekKey = 'week${weekIndex + 1}';
+    final sessionKey = 'session${sessionIndex + 1}';
+    final setKey = 'set$setNumber';
+
+    final rir = rirPlan?[weekKey]?[sessionKey]?[setKey]?['rir'];
+    return double.tryParse(rir?.toString() ?? '') ?? (setNumber == 1 ? 0.5 : 1.5);
+  }
+
+
+
 
 
   // ✅ Function to determine RIR for Set 1 (Default: 0.5, Modifiable in Future)
   double set1RIR(int exerciseIndex) {
-    if (_rirControllers[exerciseIndex][0].text.isNotEmpty) {
-      return double.tryParse(_rirControllers[exerciseIndex][0].text) ?? 0.5;
+    // ✅ Use user input if present
+    final text = _rirControllers[exerciseIndex][0].text;
+    if (text.isNotEmpty) {
+      return double.tryParse(text) ?? 0.5;
     }
-    return 0.5; // Default RIR for Set 1
+
+    // ✅ Look up exercise ID
+    final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
+    final exerciseId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
+
+    // ✅ Get week index from WES utility
+    final weekIndex = _getApplicableWeekIndex(exerciseId);
+    if (weekIndex == null) return 0.5;
+
+    // ✅ Get session index (instance within week)
+    final sessionIndex = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+      exerciseName: exerciseName,
+      savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+      blockStartDate: _blockStartDate!,
+      weekIndex: weekIndex,
+    );
+
+    // ✅ Use core function to get RIR value
+    final rirString = PeriodizationModelUtils.getSet1RirByModel(
+      exerciseId: exerciseId,
+      weekIndex: weekIndex,
+      sessionIndex: sessionIndex,
+      plannedExerciseDetails: PeriodizationModelUtils.plannedExerciseDetails,
+    );
+
+    return double.tryParse(rirString) ?? 0.5;
   }
+
+
+
 
 // ✅ Function to determine RIR for Set 2 (Default: 1.5, Modifiable in Future)
-  double set2RIR(int exerciseIndex) {
-    if (_rirControllers[exerciseIndex][1].text.isNotEmpty) {
-      return double.tryParse(_rirControllers[exerciseIndex][1].text) ?? 1.5;
-    }
-    return 1.5; // Default RIR for Set 2
-  }
-
-// ✅ Function to determine RIR for Set 3 (Default: 2.5, Modifiable in Future)
-  double set3RIR(int exerciseIndex) {
-    if (_rirControllers[exerciseIndex][2].text.isNotEmpty) {
-      return double.tryParse(_rirControllers[exerciseIndex][2].text) ?? 2.5;
-    }
-    return 2.5; // Default RIR for Set 3
-  }
+  double set2RIR(int i) => getRirFromPlanOrInput(i, 2);
+  double set3RIR(int i) => getRirFromPlanOrInput(i, 3);
+  double set4RIR(int i) => getRirFromPlanOrInput(i, 4);
+  double set5RIR(int i) => getRirFromPlanOrInput(i, 5);
+  double set6RIR(int i) => getRirFromPlanOrInput(i, 6);
+  double set7RIR(int i) => getRirFromPlanOrInput(i, 7);
+  double set8RIR(int i) => getRirFromPlanOrInput(i, 8);
 
   double set1SuggestedWeight(int exerciseIndex) {
     final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
