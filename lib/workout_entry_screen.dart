@@ -711,15 +711,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     _loadInitialData();
     _fetchLastWorkoutTopSetReps();
 
-    Future.delayed(Duration(seconds: 1), () {
-      final result = getPlannedRirSetValuesWES(
-        exerciseName: "Machine Row, Supported", // use exact dropdown name
-        exerciseIndex: 0,
-        setNumber: 1,
-      );
-
-      print('🧪 [MANUAL TEST] RIR fetch result for Machine Row = $result');
-    });
 
   }
 
@@ -1122,6 +1113,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     if (model == PeriodizationModelType.linearClassic ||
         model == PeriodizationModelType.dailyUndulatingWeek ||
+        model == PeriodizationModelType.dupSignature ||
         model == PeriodizationModelType.dailyUndulatingExposure) {
       if (_blockStartDate == null) return 0;
 
