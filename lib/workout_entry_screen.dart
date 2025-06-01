@@ -588,9 +588,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     return double.tryParse(rirString) ?? 0.5;
   }
 
-
-
-
 // ✅ Function to determine RIR for Set 2 (Default: 1.5, Modifiable in Future)
   double set2RIR(int i) => getRirFromPlanOrInput(i, 2);
   double set3RIR(int i) => getRirFromPlanOrInput(i, 3);
