@@ -1121,6 +1121,8 @@ class PeriodizationModelUtils {
 
     final usedDates = <String>{};
 
+
+
     for (final workout in savedWorkouts) {
       final dateStr = workout['date'] ?? '';
       final date = DateTime.tryParse(dateStr);
@@ -1129,10 +1131,12 @@ class PeriodizationModelUtils {
       final exercises = workout['exercises'];
       if (exercises is! List) continue;
 
+      final targetId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
       final hasExercise = exercises.any((ex) {
-        final exName = ex['name']?.toString().trim();
-        return exName == exerciseName;
+        final exId = ex['exerciseId']?.toString();
+        return exId == targetId;
       });
+
 
       if (hasExercise) {
         usedDates.add(dateStr); // Count once per day

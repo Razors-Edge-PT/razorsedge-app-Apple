@@ -305,24 +305,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
   }
 
-  double getSet1RirFromPlan({
-    required String exerciseId,
-    required int weekIndex,
-    required int sessionIndex,
-  }) {
-    final rirPlan = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['rirPlan'];
-    if (rirPlan == null) return 0.5;
-
-    final weekKey = 'week${weekIndex + 1}';
-    final sessionKey = 'session${sessionIndex + 1}';
-    final setKey = 'set1';
-
-    final rir = rirPlan[weekKey]?[sessionKey]?[setKey]?['rir'];
-    return double.tryParse(rir?.toString() ?? '') ?? 0.5;
-  }
-
-
-
 
   //Determine hint texts for this workout:NEW METHOD
 
@@ -516,6 +498,55 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     );
   }
 
+  Map<String, dynamic>? getPlannedRirSetValuesWES({
+    required String exerciseName,
+    required int exerciseIndex,
+    required int setNumber,
+  }) {
+    final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
+    if (exerciseId == null) {
+      print('❌ [WES ALT] No exerciseId found for "$exerciseName"');
+      return null;
+    }
+
+    final rirPlan = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['rirPlan'];
+    if (rirPlan == null) {
+      print('❌ [WES ALT] No rirPlan found for ID "$exerciseId"');
+      return null;
+    }
+
+    final weekIndex = _getApplicableWeekIndex(exerciseId);
+    if (weekIndex == null) {
+      print('❌ [WES ALT] No weekIndex for "$exerciseName"');
+      return null;
+    }
+
+    final sessionIndex = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+      exerciseName: exerciseName,
+      savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+      blockStartDate: _blockStartDate!,
+      weekIndex: weekIndex,
+    );
+
+    final weekKey = 'week${weekIndex + 1}';
+    final sessionKey = 'session${sessionIndex + 1}';
+    final setKey = 'set$setNumber';
+
+    print('🧪 [WES ALT] $exerciseName ($exerciseId) → $weekKey > $sessionKey > $setKey');
+    final sessionData = rirPlan[weekKey]?[sessionKey] as Map?;
+    if (sessionData == null) {
+      print('❌ [WES ALT] No session data found for $weekKey → $sessionKey');
+      return null;
+    }
+
+    return sessionData.map((key, value) => MapEntry(key, {
+      'reps': value['reps'],
+      'rir': value['rir'],
+    }));
+  }
+
+
+
   double getRirFromPlanOrInput(int exerciseIndex, int setNumber) {
     if (setNumber < 1 || setNumber > 8) return 0.5; // Safety fallback
 
@@ -540,10 +571,26 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       weekIndex: weekIndex,
     );
 
+    // 🔍 Add debug prints here
+    print('🧪 [DEBUG] Looking for exact ID → $exerciseId');
+    print('🧪 [DEBUG] Full rirPlan structure: ${PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['rirPlan']}');
+    print('🧪 [DEBUG] All plannedExerciseDetails keys: ${PeriodizationModelUtils.plannedExerciseDetails.keys}');
+
+    // 🧪 Call getPlannedRirSetValuesWES() here for additional inspection
+    final setData = getPlannedRirSetValuesWES(
+      exerciseName: exerciseName,
+      exerciseIndex: exerciseIndex,
+      setNumber: setNumber,
+    );
+    print('🧪 [WES ALT DEBUG] Returned planned RIR values for hello $exerciseName → $setData');
     final rirPlan = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['rirPlan'];
+
     final weekKey = 'week${weekIndex + 1}';
     final sessionKey = 'session${sessionIndex + 1}';
     final setKey = 'set$setNumber';
+
+    print('🧪 [WES RIR] $exerciseName ($exerciseId) → week=$weekKey, session=$sessionKey, set=$setKey');
+    print('🧪 [WES RIR] rirPlan = ${rirPlan?[weekKey]?[sessionKey]?[setKey]}');
 
     final rir = rirPlan?[weekKey]?[sessionKey]?[setKey]?['rir'];
     return double.tryParse(rir?.toString() ?? '') ?? (setNumber == 1 ? 0.5 : 1.5);
@@ -553,8 +600,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
 
 
+
   // ✅ Function to determine RIR for Set 1 (Default: 0.5, Modifiable in Future)
-  double set1RIR(int exerciseIndex) {
+  /*double set1RIR(int exerciseIndex) {
     // ✅ Use user input if present
     final text = _rirControllers[exerciseIndex][0].text;
     if (text.isNotEmpty) {
@@ -587,6 +635,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     return double.tryParse(rirString) ?? 0.5;
   }
+
+   */
+
+  double set1RIR(int i) => getRirFromPlanOrInput(i, 1);
 
 // ✅ Function to determine RIR for Set 2 (Default: 1.5, Modifiable in Future)
   double set2RIR(int i) => getRirFromPlanOrInput(i, 2);
@@ -658,6 +710,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     _setInitialWorkoutName();
     _loadInitialData();
     _fetchLastWorkoutTopSetReps();
+
+    Future.delayed(Duration(seconds: 1), () {
+      final result = getPlannedRirSetValuesWES(
+        exerciseName: "Machine Row, Supported", // use exact dropdown name
+        exerciseIndex: 0,
+        setNumber: 1,
+      );
+
+      print('🧪 [MANUAL TEST] RIR fetch result for Machine Row = $result');
+    });
 
   }
 

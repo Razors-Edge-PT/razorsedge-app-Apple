@@ -1229,6 +1229,15 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         result['week1'] = {
           'instance1': repText,
         };
+
+        // ✅ Save RIR plan from cache
+        if (_cachedRirPlan != null) {
+          widget.onUpdateSetting(widget.exerciseId, 'rirPlan', _cachedRirPlan);
+          print("💾 [DISPOSE] Saved DUP Signature rirPlan → $_cachedRirPlan");
+        } else {
+          print("⚠️ [DISPOSE] No cached RIR plan found for DUP Signature");
+        }
+
       } else {
         // ✅ All other models (DUP-week, exposure, etc.)
         final values = repText
@@ -1244,9 +1253,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         result['week1'] = instanceMap;
       }
 
-
       widget.onUpdateSetting(widget.exerciseId, 'repTargets', result);
       print("💾 [DISPOSE] Saved repTargets for ${widget.exerciseName} using model $model → $result");
+
     }
 
 
