@@ -2263,156 +2263,135 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             child: Scrollbar(
               thumbVisibility: true,
               child: ListView.builder(
-                  itemCount: blockLengthWeeks,
-                  itemBuilder: (context, weekIndex) {
-                    final currentWeek = weekIndex + 1;
-                    final rawBase = startRir - (weekIndex * decrementPerWeek);
-                    final baseRir = roundToNearestHalf(rawBase.clamp(0, 4));
+                itemCount: blockLengthWeeks,
+                itemBuilder: (context, weekIndex) {
+                  final currentWeek = weekIndex + 1;
+                  final rawBase = startRir - (weekIndex * decrementPerWeek);
+                  final baseRir = roundToNearestHalf(rawBase.clamp(0, 4));
 
+                  final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
+                  final settings = widget.exerciseSettings[exerciseId];
+                  final model = settings?['periodizationModel'];
+                  final frequency = model == 'DUP, Signature'
+                      ? (settings?['weeklyFrequency'] ?? 3)
+                      : instanceMap.keys.where((k) => k.toString().startsWith('instance')).length;
 
-                    final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
-                    final settings = widget.exerciseSettings[exerciseId];
-                    final model = settings?['periodizationModel'];
-                    final frequency = model == 'DUP, Signature'
-                        ? (settings?['weeklyFrequency'] ?? 3)
-                        : instanceMap.keys.where((k) => k.toString().startsWith('instance')).length;
+                  return ExpansionTile(
+                    title: Text('Week $currentWeek'),
+                    children: List.generate(frequency, (sessionIndex) {
+                      final sessionTitle = 'Session ${sessionIndex + 1}';
+                      final sessionInstanceKey = 'instance${sessionIndex + 1}';
+                      final sessionRepString = instanceMap[sessionInstanceKey] ?? '';
+                      final repMatch = RegExp(r'^(\d+)\s*x\s*(\d+)').firstMatch(sessionRepString);
 
+                      final set1Reps = int.tryParse(repMatch?.group(1) ?? '10') ?? 10;
+                      final setsPerSession = int.tryParse(repMatch?.group(2) ?? '3') ?? 3;
 
-                    return ExpansionTile(
-                      title: Text('Week $currentWeek'),
-                      children: List.generate(frequency, (sessionIndex) {
-                        final sessionTitle = 'Session ${sessionIndex + 1}';
+                      print('📘 [LinearTaper] $exerciseName → Week $currentWeek, $sessionTitle = $sessionRepString → $setsPerSession sets');
 
-                        // 🔍 Parse "10 x 3" style string to get reps for set 1
-                        final sessionInstanceKey = 'instance${sessionIndex + 1}';
-                        final sessionRepString = instanceMap[sessionInstanceKey] ?? '';
-                        final repMatch = RegExp(r'^(\d+)\s*x\s*(\d+)').firstMatch(sessionRepString);
+                      return ExpansionTile(
+                        title: Text(sessionTitle),
+                        children: List.generate(setsPerSession, (setIndex) {
+                          final weekKey = 'week${weekIndex + 1}';
+                          final sessionKey = 'session${sessionIndex + 1}';
+                          final setKey = 'set${setIndex + 1}';
 
-                        final set1Reps = int.tryParse(repMatch?.group(1) ?? '10') ?? 10;
-                        final setsPerSession = int.tryParse(repMatch?.group(2) ?? '3') ?? 3;
+                          final defaultRir = setIndex == 0
+                              ? roundToNearestHalf(baseRir).toString()
+                              : roundToNearestHalf((baseRir + 1 + (setIndex - 1) * 0.5).clamp(0, 4)).toString();
 
-                        print('📘 [LinearTaper] $exerciseName → Week $currentWeek, $sessionTitle = $sessionRepString → $setsPerSession sets');
+                          final defaultReps = setIndex == 0
+                              ? set1Reps.toString()
+                              : (set1Reps - setIndex).clamp(1, set1Reps).toString();
 
+                          _cachedRirPlan ??= {};
+                          _cachedRirPlan!.putIfAbsent(weekKey, () => {});
+                          _cachedRirPlan![weekKey]!.putIfAbsent(sessionKey, () => {});
+                          _cachedRirPlan![weekKey]![sessionKey]!.putIfAbsent(setKey, () => {
+                            'rir': defaultRir,
+                            'reps': defaultReps,
+                          });
 
-                        return ExpansionTile(
-                          title: Text(sessionTitle),
-                          children: List.generate(setsPerSession, (setIndex) {
-                            final weekKey = 'week${weekIndex + 1}';
-                            final sessionKey = 'session${sessionIndex + 1}';
-                            final setKey = 'set${setIndex + 1}';
+                          final currentSetData = _cachedRirPlan![weekKey]![sessionKey]![setKey]!;
+                          final repsValue = currentSetData['reps'] ?? defaultReps;
+                          final rirValue = currentSetData['rir'] ?? defaultRir;
 
-                            final defaultRir = setIndex == 0
-                                ? roundToNearestHalf(baseRir).toString()
-                                : roundToNearestHalf((baseRir + 1 + (setIndex - 1) * 0.5).clamp(0, 4)).toString();
+                          print('🧪 [RIR INIT] Final value for $weekKey/$sessionKey/$setKey = $currentSetData');
 
-                            final defaultReps = setIndex == 0
-                                ? set1Reps.toString()
-                                : (set1Reps - setIndex).clamp(1, set1Reps).toString();
-
-// ✅ Ensure defaults are stored if nothing has been edited
-                            _cachedRirPlan ??= {};
-                            _cachedRirPlan![weekKey] ??= {};
-                            _cachedRirPlan![weekKey]![sessionKey] ??= {};
-                            _cachedRirPlan![weekKey]![sessionKey]![setKey] ??= {
-                              'rir': defaultRir,
-                              'reps': defaultReps,
-                            };
-
-// ✅ Retrieve current values
-                            final repsValue = _cachedRirPlan![weekKey]![sessionKey]![setKey]?['reps'] ?? defaultReps;
-                            final rirValue  = _cachedRirPlan![weekKey]![sessionKey]![setKey]?['rir'] ?? defaultRir;
-
-
-
-                            return Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                              child: Row(
-                                children: [
-                                  // Reps field
-                                  Expanded(
-                                    child: TextField(
-                                      controller: TextEditingController(text: repsValue),
-                                      keyboardType: TextInputType.number,
-                                      readOnly: setIndex == 0, // 👈 Only Set 1 is read-only
-                                      style: TextStyle(
-                                        color: setIndex == 0 ? Colors.white54 : Colors.white, // 👈 Muted text if locked
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: TextField(
+                                    controller: TextEditingController.fromValue(
+                                      TextEditingValue(
+                                        text: repsValue,
+                                        selection: TextSelection.collapsed(offset: repsValue.length),
                                       ),
-                                      decoration: InputDecoration(
-                                        labelText: 'Set ${setIndex + 1} Reps',
-                                        labelStyle: const TextStyle(color: Colors.white70),
-                                        filled: true,
-                                        fillColor: setIndex == 0
-                                            ? Colors.blueGrey.shade800 // slightly darker to show it's locked
-                                            : Colors.blueGrey.shade800,
-                                        border: const OutlineInputBorder(),
-                                        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                                      ),
-                                        onChanged: (val) {
-                                          final weekKey = 'week${weekIndex + 1}';
-                                          final sessionKey = 'session${sessionIndex + 1}';
-                                          final setKey = 'set${setIndex + 1}';
-
-                                          _cachedRirPlan ??= {};
-                                          _cachedRirPlan!.putIfAbsent(weekKey, () => {});
-                                          _cachedRirPlan![weekKey]!.putIfAbsent(sessionKey, () => {});
-                                          _cachedRirPlan![weekKey]![sessionKey]!.putIfAbsent(setKey, () => {});
-
-                                          _cachedRirPlan![weekKey]![sessionKey]![setKey]!['reps'] = val;
-                                        }
-
                                     ),
-                                  ),
-
-                                  const SizedBox(width: 12),
-                                  // RIR field
-                                  Expanded(
-                                    child: TextField(
-                                      controller: TextEditingController(text: rirValue),
-                                      keyboardType: TextInputType.number,
-                                      style: const TextStyle(color: Colors.white),
-                                      decoration: InputDecoration(
-                                        labelText: 'Set ${setIndex + 1} RIR',
-                                        labelStyle: const TextStyle(color: Colors.white70),
-                                        filled: true,
-                                        fillColor: Colors.blueGrey.shade800,
-                                        border: const OutlineInputBorder(),
-                                        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                                      ),
-                                        onChanged: (val) {
-                                          final weekKey = 'week${weekIndex + 1}';
-                                          final sessionKey = 'session${sessionIndex + 1}';
-                                          final setKey = 'set${setIndex + 1}';
-
-                                          _cachedRirPlan ??= {};
-                                          if (setIndex == 0) {
-                                            print('🧪 [Linear Taper] Week ${weekIndex + 1}, Session ${sessionIndex + 1} → Set 1 baseRIR = $baseRir');
-                                          }
-
-                                          _cachedRirPlan!.putIfAbsent(weekKey, () => {});
-                                          _cachedRirPlan![weekKey]!.putIfAbsent(sessionKey, () => {});
-                                          _cachedRirPlan![weekKey]![sessionKey]!.putIfAbsent(setKey, () => {});
-
-                                          _cachedRirPlan![weekKey]![sessionKey]![setKey]!['rir'] = val;
-                                        }
-
+                                    keyboardType: TextInputType.number,
+                                    readOnly: setIndex == 0,
+                                    style: TextStyle(
+                                      color: setIndex == 0 ? Colors.white54 : Colors.white,
                                     ),
+                                    decoration: InputDecoration(
+                                      labelText: 'Set ${setIndex + 1} Reps',
+                                      labelStyle: const TextStyle(color: Colors.white70),
+                                      filled: true,
+                                      fillColor: Colors.blueGrey.shade800,
+                                      border: const OutlineInputBorder(),
+                                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                    ),
+                                    onChanged: (val) {
+                                      _cachedRirPlan![weekKey]![sessionKey]![setKey]!['reps'] = val;
+                                    },
                                   ),
-                                ],
-                              ),
-                            );
-                          }),
-                        );
-                      }),
-                    );
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: TextField(
+                                    controller: TextEditingController.fromValue(
+                                      TextEditingValue(
+                                        text: rirValue,
+                                        selection: TextSelection.collapsed(offset: rirValue.length),
+                                      ),
+                                    ),
+                                    keyboardType: TextInputType.number,
+                                    style: const TextStyle(color: Colors.white),
+                                    decoration: InputDecoration(
+                                      labelText: 'Set ${setIndex + 1} RIR',
+                                      labelStyle: const TextStyle(color: Colors.white70),
+                                      filled: true,
+                                      fillColor: Colors.blueGrey.shade800,
+                                      border: const OutlineInputBorder(),
+                                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                    ),
+                                    onChanged: (val) {
+                                      if (setIndex == 0) {
+                                        print('🧪 [Linear Taper] Week $currentWeek, $sessionTitle → Set 1 baseRIR = $baseRir');
+                                      }
+                                      _cachedRirPlan![weekKey]![sessionKey]![setKey]!['rir'] = val;
+                                      print('💾 [RIR SAVE] User entered RIR for $weekKey > $sessionKey > $setKey = $val');
+                                    },
+                                  ),
+                                ),
 
-                  }
-
+                              ],
+                            ),
+                          );
+                        }),
+                      );
+                    }),
+                  );
+                },
               ),
             ),
           ),
         );
       },
     );
+
   }
 
 
@@ -2496,13 +2475,19 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                           _cachedRirPlan ??= {};
                           _cachedRirPlan![weekKey] ??= {};
                           _cachedRirPlan![weekKey]![sKey] ??= {};
-                          _cachedRirPlan![weekKey]![sKey]![setKey] ??= {
-                            'rir': defaultRir,
-                            'reps': defaultReps,
-                          };
+
+                          final current = _cachedRirPlan![weekKey]![sKey]![setKey];
+
+                          if (current == null || !(current.containsKey('rir') && current.containsKey('reps'))) {
+                            _cachedRirPlan![weekKey]![sKey]![setKey] = {
+                              'rir': defaultRir,
+                              'reps': defaultReps,
+                            };
+                          }
 
                           final repsValue = _cachedRirPlan![weekKey]![sKey]![setKey]?['reps'] ?? defaultReps;
                           final rirValue  = _cachedRirPlan![weekKey]![sKey]![setKey]?['rir'] ?? defaultRir;
+
 
                           return Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),

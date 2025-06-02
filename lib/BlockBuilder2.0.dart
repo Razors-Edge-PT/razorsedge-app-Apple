@@ -1163,14 +1163,49 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       'workoutName': workoutName,
     });
 
+    await saveDayToSharedPrefs(weekIndex, dayIndex); // 👈 Add this right after Firestore save
+
     _markSavedFields(weekIndex, dayIndex, rows);
     await _persistSavedFieldKeysForDay(weekIndex, dayIndex);
 
     if (!mounted) return;
     setState(() {});
     print("✅ Saved day: week $weekIndex, day $dayIndex");
+
+
+
   }
 
+  Future<void> saveDayToSharedPrefs(int weekIndex, int dayIndex) async {
+    final prefs = await SharedPreferences.getInstance();
+    final rows = exerciseRows[weekIndex][dayIndex];
+    final exercises = <Map<String, dynamic>>[];
+
+    for (final row in rows) {
+      final name = (row.exercise ?? '').trim();
+      if (name.isEmpty) continue;
+
+      exercises.add({
+        'name': name,
+        'weight': double.tryParse(row.weightController.text) ?? 0.0,
+        'reps': int.tryParse(row.repsController.text) ?? 0,
+        'rir': double.tryParse(row.rirController.text) ?? 0.0,
+        'circuitIndex': row.circuitIndex,
+      });
+    }
+
+    final date = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
+    final dateKey = DateFormat('yyyy-MM-dd').format(date);
+
+    final dayData = {
+      'exercises': exercises,
+      'circuitStartIndices': circuitStartIndices[weekIndex][dayIndex],
+      'date': date.toIso8601String(),
+    };
+
+    await prefs.setString('bb2_dayData_$dateKey', jsonEncode(dayData));
+    print('💾 [BB2 → SharedPrefs] Saved day $dateKey → ${jsonEncode(dayData)}');
+  }
 
 
 

@@ -276,43 +276,19 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> printBB2ValuesForExercise(int exerciseIndex) async {
-    final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
-    final fallback = _calculateFallbackSet1Reps(exerciseIndex);
-
-    final values = await getBB2ExerciseValuesForDate(
-      exerciseName: exerciseName,
-      date: _selectedDate,
-      blockStartDate: _blockStartDate!,
-    );
-
-    if (values == null) {
-      print('❌ [WES] No BB2 data found for "$exerciseName" on $_selectedDate');
-      print('🧠 [WES] Fallback reps for "$exerciseName" = $fallback');
-    } else {
-      final reps = values['reps'];
-      final weight = values['weight'];
-      final rir = values['rir'];
-
-      print('📦 [WES] BB2 → "$exerciseName" → reps: $reps | weight: $weight | RIR: $rir');
-      print('🧠 [WES] Fallback reps for "$exerciseName" = $fallback');
-
-      if (reps == null || reps == 0) {
-        print('⚠️ [WES] BB2 reps = 0/null → using fallback: $fallback');
-      } else {
-        print('🔁 [WES] Using BB2-planned value: $reps');
-      }
-    }
-  }
 
 
   //Determine hint texts for this workout:NEW METHOD
 
   double set1SuggestedReps(int exerciseIndex) {
+    print('📦 [WES] Full _resolvedBB2Values on load: ${jsonEncode(_resolvedBB2Values)}');
+
     final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
     final bb2Entry = _resolvedBB2Values[exerciseName.toLowerCase()];
 
-    print('🧪 [BB2 Lookup] $exerciseName → $bb2Entry');
+    print('🧪 [WES DEBUG] Looking up key "${exerciseName.toLowerCase()}" in BB2 map');
+    print('🧪 [WES DEBUG] Available keys in _resolvedBB2Values: ${_resolvedBB2Values.keys.join(', ')}');
+
 
     if (bb2Entry != null) {
       final reps = bb2Entry['reps'];
@@ -744,22 +720,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       weekIndex: currentWeekIndex,
     );
 
-// 🖨️ Output
-    print('📆 [WES] Today = ${DateTime.now()}');
-    print('📅 [WES] Current weekIndex = $currentWeekIndex (week ${currentWeekIndex + 1})');
-    print('🔁 [WES] Block-wide instance count for "$testExercise" = $blockCount');
-    print('🔁 [WES] Instance count for "$testExercise" in current week = $weekCount');
-
-
     // ...continue with your original logic
     await loadPlannedExercisesFromFirestore();
     await loadPlannedExercisesFromFirestore();
     await loadPreviousWorkoutData();
 
     final draftLoaded = await _loadWorkoutDraftFromCache();
-    print('[WES] Checking data sources for $_selectedDate...');
-    print('→ hasDraft: $draftLoaded');
-    print('→ hasPrefilled: ${widget.prefilledExercisesWithCircuits != null && widget.prefilledExercisesWithCircuits!.isNotEmpty}');
+
+
+
     if (draftLoaded) {
       // ✅ Priority 1: Use saved draft
       await Future.delayed(const Duration(milliseconds: 400));
@@ -815,24 +784,17 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       _initializeControllers();
     }
 
+
     // ✅ Preload BB2 values for all selected exercises
     _resolvedBB2Values.clear();
     for (final ex in _selectedExercisesWithCircuits) {
       final name = ex['name']?.trim() ?? '';
-      final values = await getBB2ExerciseValuesForDate(
-        exerciseName: name,
-        date: _selectedDate,
-        blockStartDate: _blockStartDate!,
-      );
+      final values = await getBB2SavedValuesFromSharedPrefs(name, _selectedDate);
       if (values != null) {
         _resolvedBB2Values[name.toLowerCase()] = values;
-        print('📦 [BB2 Preload] Cached for "$name": $values');
-      } else {
-        print('🚫 [BB2 Preload] No values found for "$name"');
+
       }
     }
-
-
     setState(() {});
   }
 
@@ -2224,6 +2186,37 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   }
 
 
+  Future<Map<String, dynamic>?> getBB2SavedValuesFromSharedPrefs(String exerciseName, DateTime date) async {
+    final prefs = await SharedPreferences.getInstance();
+    final dateKey = DateFormat('yyyy-MM-dd').format(date);
+    final raw = prefs.getString('bb2_dayData_$dateKey');
+
+    if (raw == null) {
+      print('❌ [WES] No BB2 SharedPrefs for $dateKey');
+      return null;
+    }
+
+    final data = jsonDecode(raw);
+    final exercises = List<Map<String, dynamic>>.from(data['exercises'] ?? []);
+
+    final match = exercises.firstWhere(
+          (e) => (e['name']?.toString().trim().toLowerCase() ?? '') ==
+          exerciseName.trim().toLowerCase(),
+      orElse: () => {},
+    );
+
+    if (match.isNotEmpty) {
+      print('🧪 [WES] BB2 SharedPrefs match for "$exerciseName": $match');
+      return {
+        'reps': match['reps'],
+        'weight': match['weight'],
+        'rir': match['rir'],
+      };
+    } else {
+      print('🚫 [WES] No matching exercise "$exerciseName" found in SharedPrefs for $dateKey');
+      return null;
+    }
+  }
 
 
 
