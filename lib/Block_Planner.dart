@@ -1180,6 +1180,28 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       print("📥 [INIT] Loaded and casted RIR plan for ${widget.exerciseName}: $_cachedRirPlan");
     }
 
+    final weekData = _cachedRirPlan?['week1'] as Map<String, dynamic>?;
+
+    if (weekData != null) {
+      final summary = <String>[];
+
+      for (int i = 1; i <= 3; i++) {
+        final session = weekData['session$i'] as Map<String, dynamic>?;
+
+        if (session != null) {
+          final set1 = session['set1'] as Map<String, dynamic>?;
+
+          if (set1 != null) {
+            final rir = set1['rir'];
+            if (rir != null) summary.add(rir.toString());
+          }
+        }
+      }
+
+      _rirDisplayController.text = 'W1 → ${summary.join(' | ')}';
+    }
+
+
 
   }
 
@@ -2320,143 +2342,180 @@ class _ExerciseCardState extends State<_ExerciseCard> {
           child: SizedBox(
             width: double.maxFinite,
             height: 500,
-            child: Scrollbar(
-              thumbVisibility: true,
-              child: ListView.builder(
-                itemCount: blockLengthWeeks,
-                itemBuilder: (context, weekIndex) {
-                  final currentWeek = weekIndex + 1;
-                  final rawBase = startRir - (weekIndex * decrementPerWeek);
-                  final baseRir = roundToNearestHalf(rawBase.clamp(0, 4));
+            child: Column(
+              children: [
+                Expanded(
+                  child: Scrollbar(
+                    thumbVisibility: true,
+                    child: ListView.builder(
+                      itemCount: blockLengthWeeks,
+                      itemBuilder: (context, weekIndex) {
+                        final currentWeek = weekIndex + 1;
+                        final rawBase = startRir - (weekIndex * decrementPerWeek);
+                        final baseRir = roundToNearestHalf(rawBase.clamp(0, 4));
 
-                  final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
-                  final settings = widget.exerciseSettings[exerciseId];
-                  final model = settings?['periodizationModel'];
-                  final frequency = model == 'DUP, Signature'
-                      ? (settings?['weeklyFrequency'] ?? 3)
-                      : instanceMap.keys.where((k) => k.toString().startsWith('instance')).length;
+                        final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
+                        final settings = widget.exerciseSettings[exerciseId];
+                        final model = settings?['periodizationModel'];
+                        final frequency = model == 'DUP, Signature'
+                            ? (settings?['weeklyFrequency'] ?? 3)
+                            : instanceMap.keys.where((k) => k.toString().startsWith('instance')).length;
 
-                  return ExpansionTile(
-                    title: Text('Week $currentWeek'),
-                    children: List.generate(frequency, (sessionIndex) {
-                      final sessionTitle = 'Session ${sessionIndex + 1}';
-                      final sessionInstanceKey = 'instance${sessionIndex + 1}';
-                      final sessionRepString = instanceMap[sessionInstanceKey] ?? '';
-                      final repMatch = RegExp(r'^(\d+)\s*x\s*(\d+)').firstMatch(sessionRepString);
+                        return ExpansionTile(
+                          title: Text('Week $currentWeek'),
+                          children: List.generate(frequency, (sessionIndex) {
+                            final sessionTitle = 'Session ${sessionIndex + 1}';
+                            final sessionInstanceKey = 'instance${sessionIndex + 1}';
+                            final sessionRepString = instanceMap[sessionInstanceKey] ?? '';
+                            final repMatch = RegExp(r'^(\d+)\s*x\s*(\d+)').firstMatch(sessionRepString);
 
-                      final set1Reps = int.tryParse(repMatch?.group(1) ?? '10') ?? 10;
-                      final setsPerSession = int.tryParse(repMatch?.group(2) ?? '3') ?? 3;
+                            final set1Reps = int.tryParse(repMatch?.group(1) ?? '10') ?? 10;
+                            final setsPerSession = int.tryParse(repMatch?.group(2) ?? '3') ?? 3;
 
-                      print('📘 [LinearTaper] $exerciseName → Week $currentWeek, $sessionTitle = $sessionRepString → $setsPerSession sets');
+                            return ExpansionTile(
+                              title: Text(sessionTitle),
+                              children: List.generate(setsPerSession, (setIndex) {
+                                final weekKey = 'week${weekIndex + 1}';
+                                final sessionKey = 'session${sessionIndex + 1}';
+                                final setKey = 'set${setIndex + 1}';
 
-                      return ExpansionTile(
-                        title: Text(sessionTitle),
-                        children: List.generate(setsPerSession, (setIndex) {
-                          final weekKey = 'week${weekIndex + 1}';
-                          final sessionKey = 'session${sessionIndex + 1}';
-                          final setKey = 'set${setIndex + 1}';
+                                final defaultRir = setIndex == 0
+                                    ? roundToNearestHalf(baseRir).toString()
+                                    : roundToNearestHalf((baseRir + 1 + (setIndex - 1) * 0.5).clamp(0, 4)).toString();
 
-                          final defaultRir = setIndex == 0
-                              ? roundToNearestHalf(baseRir).toString()
-                              : roundToNearestHalf((baseRir + 1 + (setIndex - 1) * 0.5).clamp(0, 4)).toString();
+                                final defaultReps = setIndex == 0
+                                    ? set1Reps.toString()
+                                    : (set1Reps - setIndex).clamp(1, set1Reps).toString();
 
-                          final defaultReps = setIndex == 0
-                              ? set1Reps.toString()
-                              : (set1Reps - setIndex).clamp(1, set1Reps).toString();
+                                _cachedRirPlan ??= {};
+                                _cachedRirPlan!.putIfAbsent(weekKey, () => {});
+                                _cachedRirPlan![weekKey]!.putIfAbsent(sessionKey, () => {});
+                                _cachedRirPlan![weekKey]![sessionKey]!.putIfAbsent(setKey, () {
+                                  return {
+                                    'rir': defaultRir,
+                                    'reps': defaultReps,
+                                  };
+                                });
 
-                          print('🔍 [CHECK] Existing value for $weekKey/$sessionKey/$setKey before insert: '
-                              '${_cachedRirPlan?[weekKey]?[sessionKey]?[setKey]}');
+                                final currentSetData = _cachedRirPlan![weekKey]![sessionKey]![setKey]!;
+                                final repsValue = currentSetData['reps'] ?? defaultReps;
+                                final rirValue = currentSetData['rir'] ?? defaultRir;
 
-
-                          _cachedRirPlan ??= {};
-                          _cachedRirPlan!.putIfAbsent(weekKey, () => {});
-                          _cachedRirPlan![weekKey]!.putIfAbsent(sessionKey, () => {});
-                          _cachedRirPlan![weekKey]![sessionKey]!.putIfAbsent(setKey, () {
-                            return {
-                              'rir': defaultRir,
-                              'reps': defaultReps,
-                            };
-                          });
-
-                          final currentSetData = _cachedRirPlan![weekKey]![sessionKey]![setKey]!;
-                          final repsValue = currentSetData['reps'] ?? defaultReps;
-                          final rirValue = currentSetData['rir'] ?? defaultRir;
-
-// Optional debug logging
-                          print('🧪 [RIR INIT] Final value for $weekKey/$sessionKey/$setKey = $currentSetData');
-
-
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: TextField(
-                                    controller: TextEditingController.fromValue(
-                                      TextEditingValue(
-                                        text: repsValue,
-                                        selection: TextSelection.collapsed(offset: repsValue.length),
+                                return Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: TextField(
+                                          controller: TextEditingController.fromValue(
+                                            TextEditingValue(
+                                              text: repsValue,
+                                              selection: TextSelection.collapsed(offset: repsValue.length),
+                                            ),
+                                          ),
+                                          keyboardType: TextInputType.number,
+                                          readOnly: setIndex == 0,
+                                          style: TextStyle(
+                                            color: setIndex == 0 ? Colors.white54 : Colors.white,
+                                          ),
+                                          decoration: InputDecoration(
+                                            labelText: 'Set ${setIndex + 1} Reps',
+                                            labelStyle: const TextStyle(color: Colors.white70),
+                                            filled: true,
+                                            fillColor: Colors.blueGrey.shade800,
+                                            border: const OutlineInputBorder(),
+                                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                          ),
+                                          onChanged: (val) {
+                                            _cachedRirPlan![weekKey]![sessionKey]![setKey]!['reps'] = val;
+                                          },
+                                        ),
                                       ),
-                                    ),
-                                    keyboardType: TextInputType.number,
-                                    readOnly: setIndex == 0,
-                                    style: TextStyle(
-                                      color: setIndex == 0 ? Colors.white54 : Colors.white,
-                                    ),
-                                    decoration: InputDecoration(
-                                      labelText: 'Set ${setIndex + 1} Reps',
-                                      labelStyle: const TextStyle(color: Colors.white70),
-                                      filled: true,
-                                      fillColor: Colors.blueGrey.shade800,
-                                      border: const OutlineInputBorder(),
-                                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                                    ),
-                                    onChanged: (val) {
-                                      _cachedRirPlan![weekKey]![sessionKey]![setKey]!['reps'] = val;
-                                    },
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: TextField(
-                                    controller: TextEditingController.fromValue(
-                                      TextEditingValue(
-                                        text: rirValue,
-                                        selection: TextSelection.collapsed(offset: rirValue.length),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: TextField(
+                                          controller: TextEditingController.fromValue(
+                                            TextEditingValue(
+                                              text: rirValue,
+                                              selection: TextSelection.collapsed(offset: rirValue.length),
+                                            ),
+                                          ),
+                                          keyboardType: TextInputType.number,
+                                          style: const TextStyle(color: Colors.white),
+                                          decoration: InputDecoration(
+                                            labelText: 'Set ${setIndex + 1} RIR',
+                                            labelStyle: const TextStyle(color: Colors.white70),
+                                            filled: true,
+                                            fillColor: Colors.blueGrey.shade800,
+                                            border: const OutlineInputBorder(),
+                                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                          ),
+                                          onChanged: (val) {
+                                            _cachedRirPlan![weekKey]![sessionKey]![setKey]!['rir'] = val;
+                                          },
+                                        ),
                                       ),
-                                    ),
-                                    keyboardType: TextInputType.number,
-                                    style: const TextStyle(color: Colors.white),
-                                    decoration: InputDecoration(
-                                      labelText: 'Set ${setIndex + 1} RIR',
-                                      labelStyle: const TextStyle(color: Colors.white70),
-                                      filled: true,
-                                      fillColor: Colors.blueGrey.shade800,
-                                      border: const OutlineInputBorder(),
-                                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                                    ),
-                                    onChanged: (val) {
-                                      if (setIndex == 0) {
-                                        print('🧪 [Linear Taper] Week $currentWeek, $sessionTitle → Set 1 baseRIR = $baseRir');
-                                      }
-                                      _cachedRirPlan![weekKey]![sessionKey]![setKey]!['rir'] = val;
-                                      print('💾 [RIR SAVE] User entered RIR for $weekKey > $sessionKey > $setKey = $val');
-                                    },
+                                    ],
                                   ),
-                                ),
-
-                              ],
-                            ),
+                                );
+                              }),
+                            );
+                          }),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                const Divider(height: 1),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () {
+                          Navigator.of(context).pop();
+                        },
+                        child: const Text('Cancel'),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton(
+                        onPressed: () {
+                          widget.onUpdateSetting(
+                            exerciseName,
+                            'rirPlan',
+                            _cachedRirPlan ?? {},
                           );
-                        }),
-                      );
-                    }),
-                  );
-                },
-              ),
+
+                          final weekData = _cachedRirPlan?['week1'] as Map<String, dynamic>?;
+                          final freq = widget.exerciseSettings[PeriodizationModelUtils.nameToId[exerciseName]]?['weeklyFrequency'] ?? 3;
+
+                          if (weekData != null) {
+                            final summary = <String>[];
+
+                            for (int i = 1; i <= freq; i++) {
+                              final session = weekData['session$i'] as Map<String, dynamic>?;
+                              final set1 = session?['set1'] as Map<String, dynamic>?;
+                              final rir = set1?['rir'];
+                              if (rir != null) summary.add(rir.toString());
+                            }
+
+                            _rirDisplayController.text = 'W1 → ${summary.join(' | ')}';
+                          }
+
+                          Navigator.of(context).pop();
+                        },
+
+                        child: const Text('Save'),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
         );
+
       },
     );
 
@@ -2466,7 +2525,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   void _showWaveRirUndulationDialog(String exerciseName, {int? frequency}) {
     final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
 
-    _syncCachedRirPlan(exerciseName); // ✅ ← Add here
 
     final settings = widget.exerciseSettings[exerciseId];
     final model = settings?['periodizationModel'];
@@ -2715,70 +2773,260 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     );
   }
 
+  void _showStaticRirDialog(String exerciseName, {int? frequency}) {
+    final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
+    final settings = widget.exerciseSettings[exerciseId];
+    final weeklyFrequency = settings?['weeklyFrequency'];
+    final details = widget.exerciseSettings[exerciseName] ?? {};
 
+    final blockLengthWeeks = widget.blockStartDate != null && widget.blockEndDate != null
+        ? PeriodizationModelUtils.getBlockLength(
+      blockStartDate: widget.blockStartDate!,
+      blockEndDate: widget.blockEndDate!,
+    )
+        : 6;
 
-
-  void _showRepTargetDialog(String exerciseName) {
-    List<int> reps = List<int>.from(widget.exerciseSettings[widget.exerciseName]?['repTargets'] ?? List.filled(12, 6));
-
+    final instanceMap = details['repTargets']?['week1'] ?? {};
+    final repString = instanceMap['instance1'] ?? '';
+    final match = RegExp(r'x\s*(\d+)').firstMatch(repString);
+    final setsPerSession = int.tryParse(match?.group(1) ?? '3') ?? 3;
 
     showDialog(
       context: context,
-      builder: (ctx) {
-        List<TextEditingController> controllers = List.generate(
-          reps.length,
-              (i) => TextEditingController(text: reps[i].toString()),
-        );
+      builder: (context) {
+        final Map<String, TextEditingController> _rirControllers = {};
+        final Map<String, TextEditingController> _repsControllers = {};
 
-        return AlertDialog(
-          backgroundColor: Colors.blueGrey.shade900,
-          title: const Text("Rep Targets by Week", style: TextStyle(color: Colors.white)),
-          content: SizedBox(
+        return Dialog(
+          child: SizedBox(
             width: double.maxFinite,
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: 12,
-              itemBuilder: (context, i) {
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: TextField(
-                    controller: controllers[i],
-                    keyboardType: TextInputType.number,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      labelText: "Week ${i + 1}",
-                      labelStyle: const TextStyle(color: Colors.white70),
-                      filled: true,
-                      fillColor: Colors.blueGrey.shade800,
-                      border: OutlineInputBorder(),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            height: 560,
+            child: Column(
+              children: [
+                Expanded(
+                  child: Scrollbar(
+                    thumbVisibility: true,
+                    child: ListView.builder(
+                      itemCount: blockLengthWeeks,
+                      itemBuilder: (context, weekIndex) {
+                        final currentWeek = weekIndex + 1;
+                        final isWeek1 = weekIndex == 0;
+                        final weekKey = 'week$currentWeek';
+                        final week1Values = _cachedRirPlan?['week1'];
+
+                        final model = settings?['periodizationModel'];
+                        final frequency = model == 'DUP, Signature'
+                            ? (settings?['weeklyFrequency'] ?? 3)
+                            : instanceMap.keys.where((k) => k.toString().startsWith('instance')).length;
+
+                        return ExpansionTile(
+                          title: Text('Week $currentWeek'),
+                          children: List.generate(frequency, (sessionIndex) {
+                            final sKey = 'session${sessionIndex + 1}';
+                            final instanceKey = 'instance${sessionIndex + 1}';
+                            final repMatch = RegExp(r'^(\d+)\s*x\s*(\d+)').firstMatch(instanceMap[instanceKey] ?? '');
+
+                            final set1Reps = int.tryParse(repMatch?.group(1) ?? '10') ?? 10;
+                            final setsPerSession = int.tryParse(repMatch?.group(2) ?? '3') ?? 3;
+
+                            return ExpansionTile(
+                              title: Text('Session ${sessionIndex + 1}'),
+                              children: List.generate(setsPerSession, (setIndex) {
+                                final weekKey = 'week${weekIndex + 1}';
+                                final sessionKey = 'session${sessionIndex + 1}';
+                                final setKey = 'set${setIndex + 1}';
+                                final isWeek1 = weekIndex == 0;
+
+                                // 👇 Default RIR matrix by session index
+                                final List<List<double>> defaultRirMatrix = [
+                                  [2.0, 2.0, 2.5, 3.0],   // Session 1
+                                  [2.0, 2.0, 2.5, 3.0],   // Session 2
+                                  [2.0, 2.0, 2.5, 3.5],   // Session 3
+                                  [2.5, 3.0, 3.0, 3.5],   // Session 4
+                                ];
+
+                                final sessionPatternIndex = sessionIndex < defaultRirMatrix.length
+                                    ? sessionIndex
+                                    : (sessionIndex % 3); // Cycle if more than 4 sessions
+
+                                final defaultRirFromPattern = setIndex < defaultRirMatrix[sessionPatternIndex].length
+                                    ? defaultRirMatrix[sessionPatternIndex][setIndex]
+                                    : 3.0;
+
+                                final defaultRir = defaultRirFromPattern.toString();
+                                final defaultReps = '10';
+// Ensure cache entry exists
+                                _cachedRirPlan ??= {};
+                                _cachedRirPlan!.putIfAbsent(weekKey, () => {});
+                                _cachedRirPlan![weekKey]!.putIfAbsent(sessionKey, () => {});
+                                _cachedRirPlan![weekKey]![sessionKey]!.putIfAbsent(setKey, () {
+                                  return {
+                                    'rir': defaultRir,
+                                    'reps': defaultReps,
+                                  };
+                                });
+
+                                final currentSetData = _cachedRirPlan![weekKey]![sessionKey]![setKey]!;
+                                final repsValue = currentSetData['reps'] ?? defaultReps;
+                                final rirValue = currentSetData['rir'] ?? defaultRir;
+
+                                final controllerKey = '$weekKey-$sKey-$setKey';
+                                _repsControllers[controllerKey] ??= TextEditingController(text: repsValue);
+                                _rirControllers[controllerKey] ??= TextEditingController(text: rirValue);
+
+                                return Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: TextField(
+                                          controller: _repsControllers[controllerKey],
+                                          keyboardType: TextInputType.number,
+                                          readOnly: setIndex == 0,
+                                          style: TextStyle(color: setIndex == 0 ? Colors.white54 : Colors.white),
+                                          decoration: InputDecoration(
+                                            labelText: 'Set ${setIndex + 1} Reps',
+                                            labelStyle: const TextStyle(color: Colors.white70),
+                                            filled: true,
+                                            fillColor: Colors.blueGrey.shade800,
+                                            border: const OutlineInputBorder(),
+                                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: TextField(
+                                          controller: _rirControllers[controllerKey],
+                                          keyboardType: TextInputType.number,
+                                          style: const TextStyle(color: Colors.white),
+                                          decoration: InputDecoration(
+                                            labelText: 'Set ${setIndex + 1} RIR',
+                                            labelStyle: const TextStyle(color: Colors.white70),
+                                            filled: true,
+                                            fillColor: Colors.blueGrey.shade800,
+                                            border: const OutlineInputBorder(),
+                                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }),
+                            );
+
+                          }),
+                        );
+                      },
                     ),
                   ),
-                );
-              },
+                ),
+                const Divider(height: 1),
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text("Cancel", style: TextStyle(color: Colors.white)),
+                      ),
+                      const SizedBox(width: 8),
+                      TextButton(
+                        onPressed: () {
+                          for (final key in _rirControllers.keys) {
+                            final parts = key.split('-');
+                            if (parts.length != 3) continue;
+
+                            final weekKey = parts[0];
+                            final sessionKey = parts[1];
+                            final setKey = parts[2];
+
+                            _cachedRirPlan![weekKey]![sessionKey]![setKey] = {
+                              'rir': _rirControllers[key]?.text.trim() ?? '',
+                              'reps': _repsControllers[key]?.text.trim() ?? '',
+                            };
+                          }
+
+                          widget.onUpdateSetting(
+                            exerciseName,
+                            'rirPlan',
+                            _cachedRirPlan ?? {},
+                          );
+
+                          final weekData = _cachedRirPlan?['week1'] as Map<String, dynamic>?;
+                          if (weekData != null) {
+                            final summary = <String>[];
+                            for (int i = 1; i <= 3; i++) {
+                              final session = weekData['session$i'] as Map<String, dynamic>?;
+                              final set1 = session?['set1'] as Map<String, dynamic>?;
+                              final rir = set1?['rir'];
+                              if (rir != null) summary.add(rir.toString());
+                            }
+                            _rirDisplayController.text = 'W1 → ${summary.join(' | ')}';
+                          }
+
+                          print("💾 [Static RIR] Saved RIR plan for $exerciseName → $_cachedRirPlan");
+                          Navigator.pop(context);
+                        },
+                        child: const Text("Save", style: TextStyle(color: Colors.white)),
+                      ),
+                    ],
+                  ),
+                )
+              ],
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text("Cancel", style: TextStyle(color: Colors.white)),
-            ),
-            TextButton(
-              onPressed: () {
-                final updatedReps = controllers.map((c) => int.tryParse(c.text) ?? 6).toList();
-                setState(() {
-                  widget.exerciseSettings[widget.exerciseName]?['repTargets'] = updatedReps;
-
-                });
-                Navigator.pop(ctx);
-              },
-              child: const Text("Save", style: TextStyle(color: Colors.white)),
-            ),
-          ],
         );
       },
     );
   }
+
+
+  static Map<String, dynamic> generateStaticRirPlan({
+    required int weeks,
+    required int sessionsPerWeek,
+    required int setsPerSession,
+  }) {
+    final Map<String, dynamic> plan = {};
+
+    final List<List<double>> defaultRirMatrix = [
+      [2.0, 2.0, 2.5, 3.0],
+      [2.0, 2.0, 2.5, 3.0],
+      [2.0, 2.0, 2.5, 3.5],
+      [2.5, 3.0, 3.0, 3.5],
+    ];
+
+    for (int week = 1; week <= weeks; week++) {
+      final weekKey = 'week$week';
+      plan[weekKey] = {};
+
+      for (int session = 1; session <= sessionsPerWeek; session++) {
+        final sessionKey = 'session$session';
+        plan[weekKey][sessionKey] = {};
+
+        final patternIndex = session < defaultRirMatrix.length ? session - 1 : (session - 1) % 3;
+
+        for (int set = 1; set <= setsPerSession; set++) {
+          final setKey = 'set$set';
+          final rir = set - 1 < defaultRirMatrix[patternIndex].length
+              ? defaultRirMatrix[patternIndex][set - 1]
+              : 3.0;
+
+          plan[weekKey][sessionKey][setKey] = {
+            'rir': rir.toString(),
+            'reps': '10',
+          };
+        }
+      }
+    }
+
+    return plan;
+  }
+
+
+
 
 
 
@@ -3083,10 +3331,17 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                           _selectedRirModel[widget.exerciseName] = value!;
                           print("💾 [UI] Saved RIR model '$value' for ${widget.exerciseName}");
 
+                          // ✅ Clear cached RIR plan so new model starts with fresh defaults
+                          _cachedRirPlan = null;
+                          print("🧹 [CACHE RESET] Cleared cached RIR plan due to model change to '$value'");
+                          // ✅ Clear or update RIR summary box
+                          _rirDisplayController.text = 'W1 → [Not generated]';
+
                           // ✅ Save to Firestore via onUpdateSetting
                           widget.onUpdateSetting(widget.exerciseId, 'rirModel', value);
                         });
                       },
+
 
                       style: const TextStyle(color: Colors.white, fontSize: 12),
                       decoration: InputDecoration(
@@ -3124,6 +3379,10 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                         case 'Wave RIR undulation':
                           _showWaveRirUndulationDialog(widget.exerciseName, frequency: weeklyFrequency);
+                          break;
+
+                        case 'Static RIR':
+                          _showStaticRirDialog(widget.exerciseName, frequency: weeklyFrequency);
                           break;
 
                         default:
