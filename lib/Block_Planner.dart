@@ -382,8 +382,21 @@ class _BlockPlannerState extends State<Block_Planner> {
     ) ?? [];
 
     setState(() {
-      exercises = selected; // 🧠 Now saving IDs
+      exercises = selected;
+
+      for (final id in selected) {
+        final match = exercisesFromFirestore.firstWhere(
+              (ex) => ex['id'] == id,
+          orElse: () => {},
+        );
+
+        if (match.isNotEmpty) {
+          _exerciseIdToName[id] = match['name']!;
+          exerciseSettings.putIfAbsent(id, () => {});
+        }
+      }
     });
+
   }
 
 
@@ -661,7 +674,7 @@ class _BlockPlannerState extends State<Block_Planner> {
                   icon: const Icon(Icons.add, size: 16),
                   label: const Text(
                     "Add Exercises",
-                    style: TextStyle(color: Colors.pink),
+                    style: TextStyle(color: Colors.white),
                   ),
 
                   style: ElevatedButton.styleFrom(
