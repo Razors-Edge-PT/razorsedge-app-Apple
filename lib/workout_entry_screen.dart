@@ -526,17 +526,25 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   double getRirFromPlanOrInput(int exerciseIndex, int setNumber) {
     if (setNumber < 1 || setNumber > 8) return 0.5; // Safety fallback
 
+    final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
+    final bb2Entry = _resolvedBB2Values[exerciseName.toLowerCase()];
+    final bb2Rir = bb2Entry != null ? double.tryParse(bb2Entry['rir']?.toString() ?? '') : null;
+
+    // ✅ Set 1: Use BB2 if available
+    if (setNumber == 1 && bb2Rir != null) {
+      print('🔁 [WES] Using BB2-entered RIR for "$exerciseName" Set 1: $bb2Rir');
+      return bb2Rir;
+    }
+
+    // ✅ Check WES controller override
     final controllerText = _rirControllers[exerciseIndex].length > (setNumber - 1)
         ? _rirControllers[exerciseIndex][setNumber - 1].text
         : '';
-
     if (controllerText.isNotEmpty) {
       return double.tryParse(controllerText) ?? (setNumber == 1 ? 0.5 : 1.5);
     }
 
-    final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
     final exerciseId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
-
     final weekIndex = _getApplicableWeekIndex(exerciseId);
     if (weekIndex == null) return setNumber == 1 ? 0.5 : 1.5;
 
@@ -547,30 +555,25 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       weekIndex: weekIndex,
     );
 
-    // 🔍 Add debug prints here
-    print('🧪 [DEBUG] Looking for exact ID → $exerciseId');
-    print('🧪 [DEBUG] Full rirPlan structure: ${PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['rirPlan']}');
-    print('🧪 [DEBUG] All plannedExerciseDetails keys: ${PeriodizationModelUtils.plannedExerciseDetails.keys}');
-
-    // 🧪 Call getPlannedRirSetValuesWES() here for additional inspection
-    final setData = getPlannedRirSetValuesWES(
-      exerciseName: exerciseName,
-      exerciseIndex: exerciseIndex,
-      setNumber: setNumber,
-    );
-    print('🧪 [WES ALT DEBUG] Returned planned RIR values for hello $exerciseName → $setData');
     final rirPlan = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['rirPlan'];
-
     final weekKey = 'week${weekIndex + 1}';
     final sessionKey = 'session${sessionIndex + 1}';
     final setKey = 'set$setNumber';
 
-    print('🧪 [WES RIR] $exerciseName ($exerciseId) → week=$weekKey, session=$sessionKey, set=$setKey');
-    print('🧪 [WES RIR] rirPlan = ${rirPlan?[weekKey]?[sessionKey]?[setKey]}');
+    final plannedRir = double.tryParse(
+      rirPlan?[weekKey]?[sessionKey]?[setKey]?['rir']?.toString() ?? '',
+    );
 
-    final rir = rirPlan?[weekKey]?[sessionKey]?[setKey]?['rir'];
-    return double.tryParse(rir?.toString() ?? '') ?? (setNumber == 1 ? 0.5 : 1.5);
+    // ✅ Sets 2–8: Use BB2 RIR if it's higher than planned
+    if (setNumber > 1 && bb2Rir != null && plannedRir != null) {
+      final chosen = bb2Rir > plannedRir ? bb2Rir : plannedRir;
+      print('🔁 [WES] Using higher of BB2 ($bb2Rir) vs planned ($plannedRir) → $chosen');
+      return chosen;
+    }
+
+    return plannedRir ?? (setNumber == 1 ? 0.5 : 1.5);
   }
+
 
 
 

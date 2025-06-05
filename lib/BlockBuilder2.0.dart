@@ -1493,16 +1493,15 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
         print('🔢 plannedRep returned: $plannedRep');
 
-
         final double? weight = double.tryParse(weightController.text);
         final int? reps = int.tryParse(repsController.text);
         final double? rir = double.tryParse(rirController.text);
 
         final bool isExerciseNamed = exerciseName.isNotEmpty;
-        final String hintWeight = (weightController.text.isEmpty && isExerciseNamed) ? '25.0' : '';
-        final String hintReps = (repsController.text.isEmpty && isExerciseNamed && plannedRep != null)
-            ? RegExp(r'^\d+').firstMatch(plannedRep)?.group(0) ?? ''
-            : '';
+        final double repsValue = reps?.toDouble() ??
+            (repsController.text.isEmpty
+                ? double.tryParse(plannedRep?.split('x').first.trim() ?? '') ?? 10.0
+                : double.tryParse(repsController.text) ?? 10.0);
 
         final Map<String, dynamic>? rirSetValues = getPlannedRirSetValues(
           exerciseName: exerciseName,
@@ -1511,9 +1510,36 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           row: rowIndex,
         );
 
+        // 🧠 First define hintRir (safe to use afterward)
         final String hintRir = (rirController.text.isEmpty && rirSetValues != null)
             ? (rirSetValues['set1']?['rir']?.toString() ?? '0.5')
             : rirController.text;
+
+// ✅ Then use it here
+        final double rirValue = rirController.text.isNotEmpty
+            ? double.tryParse(rirController.text) ?? 0.5
+            : double.tryParse(hintRir) ?? 0.5;
+
+
+
+        final double historyWeight = PeriodizationModelUtils.getSuggestedWeightFromRep(
+          exerciseName, // ✅ not exerciseId
+          repsValue.toInt(),
+          rirValue,
+        );
+
+
+        final String hintWeight = (weightController.text.isEmpty && isExerciseNamed)
+            ? historyWeight.toStringAsFixed(1)
+            : '';
+
+        final String hintReps = (repsController.text.isEmpty && isExerciseNamed && plannedRep != null)
+            ? RegExp(r'^\d+').firstMatch(plannedRep)?.group(0) ?? ''
+            : '';
+
+
+
+
 
 
 
@@ -1521,14 +1547,11 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
 
         final double? e1rm = PeriodizationModelUtils.calculateE1RM(
-          weight ?? (weightController.text.isEmpty ? 25.0 : null),
-          reps?.toDouble() ??
-              (repsController.text.isEmpty
-                  ? double.tryParse(plannedRep?.split('x').first.trim() ?? '') ?? 10.0
-                  : null),
-
-          rir ?? (rirController.text.isEmpty ? 0.5 : null),
+          weight ?? (weightController.text.isEmpty ? historyWeight : null),
+          repsValue,
+          rirValue,
         );
+
 
         return Container(
           height: exerciseRowHeight,

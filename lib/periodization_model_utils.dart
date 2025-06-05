@@ -1837,9 +1837,6 @@ class PeriodizationModelUtils {
   }
 
 
-
-
-
   static double getSuggestedWeight(
       String exerciseName,
       TextEditingController repsController,
@@ -1888,6 +1885,7 @@ class PeriodizationModelUtils {
       suggestedWeight = avgE1RM / (1 + 0.0333 * effectiveReps);
     }
 
+    print('🧪 [BB2] Top set E1RM history for $exerciseName → $e1rms');
     return (suggestedWeight / 2.5).round() * 2.5; // round to nearest 2.5kg
   }
 

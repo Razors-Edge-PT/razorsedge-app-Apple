@@ -137,9 +137,9 @@ class _HomeScreenState extends State<HomeScreen> {
         child: ListView(
           padding: EdgeInsets.zero,
           children: [
-            const DrawerHeader(
+             DrawerHeader(
               decoration: BoxDecoration(
-                color: Colors.cyan,
+                color: Colors.blueGrey.shade900,
               ),
               child: Text('Menu'),
             ),

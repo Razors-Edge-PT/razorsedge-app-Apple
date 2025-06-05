@@ -2810,6 +2810,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         final Map<String, TextEditingController> _rirControllers = {};
         final Map<String, TextEditingController> _repsControllers = {};
 
+        bool _isUpdating = false;
+
         return Dialog(
           child: SizedBox(
             width: double.maxFinite,
@@ -2885,7 +2887,43 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                                 final controllerKey = '$weekKey-$sKey-$setKey';
                                 _repsControllers[controllerKey] ??= TextEditingController(text: repsValue);
+                                if (isWeek1) {
+                                  _repsControllers[controllerKey]!.addListener(() {
+                                    if (_isUpdating) return;
+                                    _isUpdating = true;
+
+                                    final updatedValue = _repsControllers[controllerKey]!.text;
+                                    for (int w = 1; w < blockLengthWeeks; w++) {
+                                      final wk = 'week${w + 1}';
+                                      final copyKey = '$wk-$sKey-$setKey';
+                                      if (_repsControllers[copyKey] != null) {
+                                        _repsControllers[copyKey]!.text = updatedValue;
+                                      }
+                                    }
+
+                                    _isUpdating = false;
+                                  });
+                                }
+
                                 _rirControllers[controllerKey] ??= TextEditingController(text: rirValue);
+                                if (isWeek1) {
+                                  _rirControllers[controllerKey]!.addListener(() {
+                                    if (_isUpdating) return;
+                                    _isUpdating = true;
+
+                                    final updatedValue = _rirControllers[controllerKey]!.text;
+                                    for (int w = 1; w < blockLengthWeeks; w++) {
+                                      final wk = 'week${w + 1}';
+                                      final copyKey = '$wk-$sKey-$setKey';
+                                      if (_rirControllers[copyKey] != null) {
+                                        _rirControllers[copyKey]!.text = updatedValue;
+                                      }
+                                    }
+
+                                    _isUpdating = false;
+                                  });
+                                }
+
 
                                 return Padding(
                                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
