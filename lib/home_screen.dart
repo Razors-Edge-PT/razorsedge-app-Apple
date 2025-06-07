@@ -157,6 +157,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ListTile(title: const Text('Body Weight Tracker'), onTap: () => Navigator.pushNamed(context, '/body_weight_tracker')),
             ListTile(title: const Text('Exercises'), onTap: () => Navigator.pushNamed(context, '/exercises')),
             ListTile(title: const Text('Workout Planner'), onTap: () => Navigator.pushNamed(context, '/templates')),
+            ListTile(title: const Text('Planned Blocks'), onTap: () => Navigator.pushNamed(context, '/planned_blocks')),
             ListTile(title: const Text('Workout History'), onTap: () => Navigator.pushNamed(context, '/workouts_list')),
             ListTile(title: const Text('Week Planner 🚀'), onTap: () => Navigator.pushNamed(context, '/block_builder_2')),
             ListTile(title: const Text('Block Planner 🧠'), onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const Block_Planner()))),
