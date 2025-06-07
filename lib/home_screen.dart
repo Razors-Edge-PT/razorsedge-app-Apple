@@ -114,6 +114,54 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<DocumentSnapshot<Object?>> _fetchActiveBlock() async {
+    final userId = FirebaseAuth.instance.currentUser?.uid;
+    if (userId == null) {
+      throw Exception('User not logged in');
+    }
+
+    final query = await FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(userId)
+        .collection('blocks')
+        .where('isActive', isEqualTo: true)
+        .limit(1)
+        .get();
+
+    if (query.docs.isNotEmpty) {
+      return query.docs.first;
+    } else {
+      throw Exception('No active block found');
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchTopLifts() async {
+    final userId = FirebaseAuth.instance.currentUser?.uid;
+    final snapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(userId)
+        .collection('workouts')
+        .get();
+
+    Map<String, double> maxes = {};
+
+    for (var doc in snapshot.docs) {
+      final exercises = List.from(doc['exercises'] ?? []);
+      for (var exercise in exercises) {
+        final name = exercise['name'] ?? '';
+        final sets = List.from(exercise['sets'] ?? []);
+        for (var set in sets) {
+          final weight = (set['weight'] as num?)?.toDouble() ?? 0;
+          if (!maxes.containsKey(name) || weight > maxes[name]!) {
+            maxes[name] = weight;
+          }
+        }
+      }
+    }
+
+    return maxes.entries.map((e) => {'exercise': e.key, 'weight': e.value}).toList();
+  }
+
   Widget _buildFeatureCard(IconData icon, String label, String route) {
     return GestureDetector(
       onTap: () => Navigator.pushNamed(context, route),
@@ -137,28 +185,39 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final userEmail = FirebaseAuth.instance.currentUser?.email ?? '';
+
     return Scaffold(
       key: _scaffoldKey,
       appBar: AppBar(
-        title: const Text('Home'),
+        automaticallyImplyLeading: false,
         leading: IconButton(
           icon: const Icon(Icons.menu),
           onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+        ),
+        title: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Welcome back!', style: TextStyle(fontSize: 14)),
+                Text(userEmail, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              ],
+            ),
+            const CircleAvatar(radius: 20, backgroundImage: AssetImage('assets/avatar.png')),
+          ],
         ),
       ),
       drawer: Drawer(
         child: ListView(
           padding: EdgeInsets.zero,
           children: [
-            const DrawerHeader(
-              decoration: BoxDecoration(color: Colors.cyan),
-              child: Text('Menu'),
-            ),
-            ListTile(title: const Text('Body Weight Tracker'), onTap: () => Navigator.pushNamed(context, '/body_weight_tracker')),
+            const DrawerHeader(decoration: BoxDecoration(color: Colors.cyan), child: Text('Menu')),
+            ListTile(title: const Text('Weigh In'), onTap: () => Navigator.pushNamed(context, '/body_weight_tracker')),
             ListTile(title: const Text('Exercises'), onTap: () => Navigator.pushNamed(context, '/exercises')),
             ListTile(title: const Text('Workout Planner'), onTap: () => Navigator.pushNamed(context, '/templates')),
             ListTile(title: const Text('Planned Blocks'), onTap: () => Navigator.pushNamed(context, '/planned_blocks')),
-            ListTile(title: const Text('Workout History'), onTap: () => Navigator.pushNamed(context, '/workouts_list')),
             ListTile(title: const Text('Week Planner 🚀'), onTap: () => Navigator.pushNamed(context, '/block_builder_2')),
             ListTile(title: const Text('Block Planner 🧠'), onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const Block_Planner()))),
             ListTile(title: const Text('Saved Workouts 📓'), onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const SavedWorkoutsScreen()))),
@@ -175,63 +234,64 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Welcome back!', style: TextStyle(fontSize: 18, color: Colors.grey[700])),
-                    Text(FirebaseAuth.instance.currentUser?.email ?? '', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-                  ],
-                ),
-                const CircleAvatar(
-                  radius: 24,
-                  backgroundImage: AssetImage('assets/avatar.png'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
-            Card(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              elevation: 4,
-              margin: const EdgeInsets.only(bottom: 16),
-              child: ListTile(
-                leading: const Icon(Icons.monitor_weight, color: Colors.blueAccent),
-                title: const Text("Most Recent Weight"),
-                subtitle: Text(mostRecentWeight ?? 'No recent weight found'),
-                onTap: () {
-                  if (mostRecentWeight != null) {
-                    Navigator.push(context, MaterialPageRoute(builder: (context) => const BodyWeightTracker()));
-                  }
-                },
-              ),
-            ),
-            Card(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              elevation: 4,
-              child: ListTile(
-                leading: const Icon(Icons.fitness_center, color: Colors.blueAccent),
-                title: const Text("Most Recent Workout"),
-                subtitle: Text(mostRecentWorkout != null
-                    ? '${mostRecentWorkout!.name} - ${DateFormat('dd-MM-yyyy').format(mostRecentWorkout!.date)}'
-                    : 'No recent workout found'),
-                trailing: ElevatedButton(
-                  onPressed: () {
-                    Navigator.push(context, MaterialPageRoute(builder: (context) => const WorkoutPage()));
+            FutureBuilder<DocumentSnapshot>(
+              future: _fetchActiveBlock(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const CircularProgressIndicator();
+                }
+                if (snapshot.hasError || !snapshot.hasData || !snapshot.data!.exists) {
+                  return const Text('No active training block found.');
+                }
+
+                final data = snapshot.data!.data() as Map<String, dynamic>;
+                final exercises = List<String>.from(data['exercises'] ?? []);
+                final startDate = (data['startDate'] as Timestamp).toDate();
+                final endDate = (data['endDate'] as Timestamp).toDate();
+
+                return ListTile(
+                  leading: const Icon(Icons.calendar_today, color: Colors.orangeAccent),
+                  title: const Text("Upcoming Workout"),
+                  subtitle: Text(
+                    exercises.isNotEmpty
+                        ? 'Next: ${exercises.first} (Block: ${DateFormat('MMM d').format(startDate)}–${DateFormat('MMM d').format(endDate)})'
+                        : 'Active block found but no exercises listed.',
+                  ),
+                  onTap: () {
+                    Navigator.pushNamed(context, '/block_builder', arguments: {
+                      'blockId': snapshot.data!.id,
+                    });
                   },
-                  child: const Text('Add Workout'),
-                ),
-                onTap: () {
-                  if (mostRecentWorkout != null) {
-                    Navigator.push(context, MaterialPageRoute(builder: (context) => WorkoutDetailsScreen(workout: mostRecentWorkout!)));
-                  } else {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('No recent workout available')),
-                    );
-                  }
+                );
+              },
+            ),
+            const SizedBox(height: 16),
+            ListTile(
+              leading: const Icon(Icons.fitness_center, color: Colors.blueAccent),
+              title: const Text("Most Recent Workout"),
+              subtitle: Text(mostRecentWorkout != null
+                  ? '${mostRecentWorkout!.name} - ${DateFormat('dd-MM-yyyy').format(mostRecentWorkout!.date)}'
+                  : 'No recent workout found'),
+              trailing: ElevatedButton(
+                onPressed: () {
+                  Navigator.push(context, MaterialPageRoute(builder: (context) => const WorkoutPage()));
                 },
+                child: const Text('Add Workout'),
               ),
+              onTap: () {
+                if (mostRecentWorkout != null) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => WorkoutDetailsScreen(workout: mostRecentWorkout!),
+                    ),
+                  );
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('No recent workout available')),
+                  );
+                }
+              },
             ),
             const SizedBox(height: 20),
             GridView.count(
@@ -241,11 +301,28 @@ class _HomeScreenState extends State<HomeScreen> {
               mainAxisSpacing: 12,
               physics: const NeverScrollableScrollPhysics(),
               children: [
-                _buildFeatureCard(Icons.bar_chart, 'Weight Log', '/body_weight_tracker'),
-                _buildFeatureCard(Icons.schedule, 'Planner', '/block_builder_2'),
+                _buildFeatureCard(Icons.bar_chart, 'Weigh In', '/body_weight_tracker'),
+                _buildFeatureCard(Icons.schedule, 'Week Planner', '/block_builder_2'),
                 _buildFeatureCard(Icons.bookmark, 'Saved Workouts', '/saved_workouts'),
                 _buildFeatureCard(Icons.logout, 'Logout', '/login'),
               ],
+            ),
+            const SizedBox(height: 20),
+            const Text('Top Lifts', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            FutureBuilder<List<Map<String, dynamic>>>(
+              future: _fetchTopLifts(),
+              builder: (context, snapshot) {
+                if (!snapshot.hasData) return const CircularProgressIndicator();
+                final lifts = snapshot.data!;
+                return Column(
+                  children: lifts
+                      .map((e) => ListTile(
+                    title: Text(e['exercise']),
+                    trailing: Text('${e['weight'].toStringAsFixed(1)} kg'),
+                  ))
+                      .toList(),
+                );
+              },
             ),
           ],
         ),

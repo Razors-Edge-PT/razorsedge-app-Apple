@@ -83,15 +83,15 @@ class ExerciseRow {
 }
 
 
-class BlockBuilder2 extends StatefulWidget {
-  const BlockBuilder2({super.key});
+class WeekPlanner extends StatefulWidget {
+  const WeekPlanner({super.key});
 
   @override
-  State<BlockBuilder2> createState() => _BlockBuilder2State();
+  State<WeekPlanner> createState() => _WeekPlannerState();
 }
 
 
-class _BlockBuilder2State extends State<BlockBuilder2> {
+class _WeekPlannerState extends State<WeekPlanner> {
   final int initialWeeks = 12;
   int visibleWeekCount = 2; // Initially load 3 weeks
   int totalWeeks = 12;
@@ -2445,7 +2445,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
       return Scaffold(
         appBar: AppBar(
-          title: const Text("Block Builder 2.0"),
+          title: const Text("Week Planner"),
         actions: [
           IconButton(
             icon: const Icon(Icons.undo),
