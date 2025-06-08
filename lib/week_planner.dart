@@ -27,7 +27,7 @@ Map<String, List<String>> groupExercisesByCategory(List<Map<String, String>> all
     'Hip Hinge',
     'Leg Extension',
     'Leg Curl',
-    'Hip Abduction/adduction',
+    'Hip Abduction/Adduction',
     'Calf Raise',
     'Core',
   ];

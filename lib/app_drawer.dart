@@ -53,7 +53,11 @@ class AppDrawer extends StatelessWidget {
             Navigator.pushNamed(context, '/planned_blocks');
           }),
           _drawerTile(context, Icons.extension, 'Block Planner', () {
-            Navigator.push(context, MaterialPageRoute(builder: (context) => const Block_Planner()));
+            Navigator.pushNamed(
+              context,
+              '/block_builder',
+              arguments: {'newBlock': true},
+            );
           }),
           _drawerTile(context, Icons.schedule, 'Week Planner', () {
             Navigator.pushNamed(context, '/block_builder_2');
