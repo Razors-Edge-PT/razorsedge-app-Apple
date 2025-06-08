@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:intl/intl.dart';
 
 class PlannedBlocksScreen extends StatefulWidget {
   const PlannedBlocksScreen({Key? key}) : super(key: key);
@@ -13,15 +14,17 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
   final userId = FirebaseAuth.instance.currentUser!.uid;
 
   Future<void> _setBlockAsActive(String blockId) async {
-    final blocksRef = FirebaseFirestore.instance.collection('planned_blocks').doc(userId).collection('blocks');
-    final activeBlocks = await blocksRef.where('isActive', isEqualTo: true).get();
+    final blocksRef = FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(userId)
+        .collection('blocks');
 
+    final activeBlocks = await blocksRef.where('isActive', isEqualTo: true).get();
     for (var doc in activeBlocks.docs) {
       await doc.reference.update({'isActive': false});
     }
 
     await blocksRef.doc(blockId).update({'isActive': true});
-    setState(() {});
   }
 
   Future<void> _deleteBlock(String blockId) async {
@@ -33,13 +36,35 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
         .delete();
   }
 
+  void _createNewBlock() {
+    Navigator.pushNamed(
+      context,
+      '/block_builder',
+      arguments: {'newBlock': true}, // ✅ prevents draft from loading
+    );
+  }
+
+  void _editBlock(String blockId) {
+    Navigator.pushNamed(
+      context,
+      '/block_builder',
+      arguments: {'blockId': blockId},
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final blocksRef = FirebaseFirestore.instance.collection('planned_blocks').doc(userId).collection('blocks');
+    final blocksRef = FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(userId)
+        .collection('blocks');
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Planned Blocks'),
+      appBar: AppBar(title: const Text('Planned Blocks')),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _createNewBlock,
+        icon: const Icon(Icons.add),
+        label: const Text('New Block'),
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: blocksRef.orderBy('createdAt', descending: true).snapshots(),
@@ -48,49 +73,107 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
             return const Center(child: CircularProgressIndicator());
           }
 
-          final blocks = snapshot.data!.docs;
+          final rawDocs = snapshot.data!.docs;
 
-          if (blocks.isEmpty) {
-            return const Center(child: Text('No planned blocks found.'));
+          if (rawDocs.isEmpty) {
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Text('No planned blocks yet.'),
+                  const SizedBox(height: 12),
+                  ElevatedButton.icon(
+                    onPressed: _createNewBlock,
+                    icon: const Icon(Icons.add),
+                    label: const Text('Create Block'),
+                  )
+                ],
+              ),
+            );
           }
 
-          return ListView.builder(
+          final blocks = rawDocs.map((doc) {
+            final data = doc.data() as Map<String, dynamic>;
+            data['id'] = doc.id;
+            return data;
+          }).toList();
+
+          // ✅ Sort active blocks first
+          blocks.sort((a, b) {
+            final aActive = a['isActive'] == true;
+            final bActive = b['isActive'] == true;
+            return (bActive ? 1 : 0).compareTo(aActive ? 1 : 0);
+          });
+
+          return ListView.separated(
+            padding: const EdgeInsets.all(12),
             itemCount: blocks.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 10),
             itemBuilder: (context, index) {
-              final doc = blocks[index];
-              final data = doc.data() as Map<String, dynamic>;
-              final blockId = doc.id;
-              final blockName = data['blockName'] ?? 'Untitled Block';
-              final isActive = data['isActive'] ?? false;
-              final start = (data['startDate'] as Timestamp).toDate();
-              final end = (data['endDate'] as Timestamp).toDate();
+              final block = blocks[index];
+              final blockId = block['id'];
+
+              final blockName = block['blockName'] ?? 'Untitled Block';
+              final isActive = block['isActive'] ?? false;
+
+              String dateRange = 'No dates';
+              try {
+                final start = (block['startDate'] as Timestamp).toDate();
+                final end = (block['endDate'] as Timestamp).toDate();
+                dateRange =
+                '${DateFormat('dd MMM').format(start)} → ${DateFormat('dd MMM yyyy').format(end)}';
+              } catch (_) {}
+
+              final exercises = (block['exercises'] as List?)?.length ?? 0;
 
               return Card(
-                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                elevation: 3,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 child: ListTile(
-                  title: Text(blockName),
-                  subtitle: Text('From ${start.toLocal().toString().split(" ")[0]} to ${end.toLocal().toString().split(" ")[0]}'),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
+
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  onTap: () => _editBlock(blockId),
+
+                  title: Text(
+                    blockName,
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (isActive)
-                        const Chip(label: Text('Active', style: TextStyle(color: Colors.white)), backgroundColor: Colors.green),
-                      IconButton(
-                        icon: const Icon(Icons.check_circle_outline),
-                        onPressed: () => _setBlockAsActive(blockId),
-                        tooltip: 'Set Active',
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.delete_outline),
-                        onPressed: () => _deleteBlock(blockId),
-                        tooltip: 'Delete Block',
+                      Text(dateRange),
+                      if (exercises > 0)
+                        Text('$exercises exercises', style: const TextStyle(fontSize: 12)),
+                    ],
+                  ),
+                  leading: CircleAvatar(
+                    backgroundColor: isActive ? Colors.green : Colors.grey[300],
+                    child: Icon(
+                      isActive ? Icons.check : Icons.fitness_center,
+                      color: Colors.white,
+                    ),
+                  ),
+
+                  trailing: PopupMenuButton<String>(
+                    onSelected: (value) async {
+                      if (value == 'activate') {
+                        await _setBlockAsActive(blockId);
+                      } else if (value == 'delete') {
+                        await _deleteBlock(blockId);
+                      }
+                    },
+                    itemBuilder: (context) => [
+                      if (!isActive)
+                        const PopupMenuItem(
+                          value: 'activate',
+                          child: Text('Set Active'),
+                        ),
+                      const PopupMenuItem(
+                        value: 'delete',
+                        child: Text('Delete'),
                       ),
                     ],
                   ),
-                  onTap: () {
-                    // Navigate to block editor screen with blockId
-                    Navigator.pushNamed(context, '/block_builder', arguments: {'blockId': blockId});
-                  },
                 ),
               );
             },

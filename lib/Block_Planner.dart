@@ -31,6 +31,11 @@ class _BlockPlannerState extends State<Block_Planner> {
 
   Map<String, Map<String, dynamic>> exerciseSettings = {};
 
+  bool _isSavedBlock = false;
+  bool _isNewBlock = true;
+  bool _didLoadData = false;
+
+
 // 🔁 AUTO-SAVE & SAVE BLOCK FEATURES INTEGRATED
 // Add this inside your _BlockPlannerState class:
 
@@ -39,7 +44,41 @@ class _BlockPlannerState extends State<Block_Planner> {
     super.initState();
     _loadRepHistoryAndGenerateReps();
     _initData();
-    _loadDraft(); // ✅ Load any unsaved draft
+
+    _isSavedBlock = false; // ✅ reset for this session
+  }
+
+  void _clearStateForNewBlock() {
+    setState(() {
+      exercises = [];
+      exerciseSettings.clear();
+      _blockStartDate = null;
+      _blockEndDate = null;
+      _blockGoalsController.clear();
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_didLoadData) return;
+    _didLoadData = true;
+
+    final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+
+    if (args != null && args.containsKey('blockId')) {
+      _isNewBlock = false;
+      _loadBlockFromFirestore(args['blockId']);
+    } else if (args != null && args['newBlock'] == true) {
+      _isNewBlock = true;
+      _clearStateForNewBlock(); // 🔁 fresh start
+    } else {
+      // 🔒 Only load draft if the user manually launches BlockPlanner from the menu with no intent
+      _isNewBlock = true;
+      _loadDraft();
+    }
+
+    _initData();
   }
 
   @override
@@ -66,6 +105,8 @@ class _BlockPlannerState extends State<Block_Planner> {
   }
 
   Future<void> _autoSaveDraft() async {
+    if (_isSavedBlock) return; // ✅ skip auto-save if saved manually
+
     final prefs = await SharedPreferences.getInstance();
     final draft = jsonEncode({
       'exercises': exercises,
@@ -74,10 +115,35 @@ class _BlockPlannerState extends State<Block_Planner> {
     await prefs.setString('draft_block_data', draft);
   }
 
+  Future<void> _loadBlockFromFirestore(String blockId) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final doc = await FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(user.uid)
+        .collection('blocks')
+        .doc(blockId)
+        .get();
+
+    if (!doc.exists) return;
+
+    final data = doc.data()!;
+    setState(() {
+      _blockStartDate = (data['startDate'] as Timestamp).toDate();
+      _blockEndDate = (data['endDate'] as Timestamp).toDate();
+      exercises = List<String>.from(data['exercises'] ?? []);
+      exerciseSettings = Map<String, Map<String, dynamic>>.from(
+        (data['exerciseSettings'] ?? {}).map(
+              (key, value) => MapEntry(key, Map<String, dynamic>.from(value)),
+        ),
+      );
+    });
+  }
+
 // Call _autoSaveDraft anywhere changes are made:
 // e.g. in setState blocks in _showExercisePickerDialog and onUpdateSetting
 
-// Example: Update on exercise change
   void _onUpdateSetting(String exerciseId, String key, dynamic value) {
     setState(() {
       exerciseSettings[exerciseId] ??= {};
@@ -87,32 +153,45 @@ class _BlockPlannerState extends State<Block_Planner> {
   }
 
 // Call this when user wants to save the block permanently
-  Future<void> _savePlannedBlock() async {
+  Future<void> _savePlannedBlock({bool setActive = false}) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    final docRef = FirebaseFirestore.instance
+    final userBlocksRef = FirebaseFirestore.instance
         .collection('planned_blocks')
         .doc(user.uid)
-        .collection('blocks')
-        .doc(); // auto-id
+        .collection('blocks');
 
-    await docRef.set({
+    // ✅ Deactivate any other active blocks
+    if (setActive) {
+      final snapshot = await userBlocksRef
+          .where('isActive', isEqualTo: true)
+          .get();
+
+      for (final doc in snapshot.docs) {
+        await doc.reference.update({'isActive': false});
+      }
+    }
+
+    final newDocRef = userBlocksRef.doc(); // Auto-ID
+    await newDocRef.set({
       'blockName': 'My Training Block',
       'startDate': _blockStartDate,
       'endDate': _blockEndDate,
       'exercises': exercises,
       'exerciseSettings': exerciseSettings,
-      'isActive': false,
+      'isActive': setActive,
       'createdAt': FieldValue.serverTimestamp(),
+
     });
 
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('draft_block_data'); // ✅ clear draft after saving
+    await prefs.remove('draft_block_data'); // Clear draft after saving
+    _isSavedBlock = true;
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('✅ Block saved')),
+        SnackBar(content: Text('✅ Block saved${setActive ? ' and activated' : ''}.')),
       );
     }
   }
@@ -698,7 +777,29 @@ class _BlockPlannerState extends State<Block_Planner> {
                 context: context,
                 builder: (ctx) => AlertDialog(
                   title: const Text("Save Block?"),
-                  content: const Text("Do you want to save this block to your plans?"),
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text("Do you want to save this block to your plans?"),
+                      Row(
+                        children: [
+                          const Text("Set as Active?"),
+                          const SizedBox(width: 12),
+                          StatefulBuilder(
+                            builder: (context, setState) {
+                              bool tempActive = false;
+                              return Checkbox(
+                                value: tempActive,
+                                onChanged: (val) => setState(() {
+                                  tempActive = val ?? false;
+                                }),
+                              );
+                            },
+                          )
+                        ],
+                      )
+                    ],
+                  ),
                   actions: [
                     TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
                     TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Save")),
@@ -707,9 +808,10 @@ class _BlockPlannerState extends State<Block_Planner> {
               );
 
               if (confirm == true) {
-                await _savePlannedBlock();
+                await _savePlannedBlock(setActive: true); // or false if not selected
               }
             },
+
           ),
         ],
       ),

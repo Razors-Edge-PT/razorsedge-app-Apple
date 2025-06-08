@@ -8,6 +8,9 @@ import 'workout_entry_screen.dart';
 import 'workout_model.dart';
 import 'block_planner.dart';
 import 'SavedWorkoutsScreen.dart';
+import 'app_drawer.dart';
+import 'package:table_calendar/table_calendar.dart';
+
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -24,10 +27,37 @@ class _HomeScreenState extends State<HomeScreen> {
   bool isLoading = true;
   String errorMessage = '';
 
+  CalendarFormat _calendarFormat = CalendarFormat.month;
+  DateTime _focusedDay = DateTime.now();
+  DateTime? _selectedDay;
+  Set<DateTime> _trainingDays = {};
+
   @override
   void initState() {
     super.initState();
     _fetchRecentData();
+    _fetchTrainingDays();
+  }
+
+  Future<void> _fetchTrainingDays() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final snapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('workouts')
+        .get();
+
+    final days = snapshot.docs.map((doc) {
+      final date = doc['date'];
+      if (date is Timestamp) {
+        return DateTime(date.toDate().year, date.toDate().month, date.toDate().day);
+      }
+      return null;
+    }).whereType<DateTime>().toSet();
+
+    setState(() => _trainingDays = days);
   }
 
   Future<void> _fetchRecentData() async {
@@ -191,40 +221,27 @@ class _HomeScreenState extends State<HomeScreen> {
       key: _scaffoldKey,
       appBar: AppBar(
         automaticallyImplyLeading: false,
-        leading: IconButton(
-          icon: const Icon(Icons.menu),
-          onPressed: () => _scaffoldKey.currentState?.openDrawer(),
-        ),
         title: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Welcome back!', style: TextStyle(fontSize: 14)),
-                Text(userEmail, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                SizedBox(height: 10),
+                Image(image: AssetImage('assets/re_banner.png'), height: 40),
               ],
             ),
-            const CircleAvatar(radius: 20, backgroundImage: AssetImage('assets/avatar.png')),
+            GestureDetector(
+              onTap: () => _scaffoldKey.currentState?.openDrawer(),
+              child: const CircleAvatar(
+                radius: 20,
+                backgroundImage: AssetImage('assets/avatar.png'),
+              ),
+            ),
           ],
         ),
       ),
-      drawer: Drawer(
-        child: ListView(
-          padding: EdgeInsets.zero,
-          children: [
-            const DrawerHeader(decoration: BoxDecoration(color: Colors.cyan), child: Text('Menu')),
-            ListTile(title: const Text('Weigh In'), onTap: () => Navigator.pushNamed(context, '/body_weight_tracker')),
-            ListTile(title: const Text('Exercises'), onTap: () => Navigator.pushNamed(context, '/exercises')),
-            ListTile(title: const Text('Workout Planner'), onTap: () => Navigator.pushNamed(context, '/templates')),
-            ListTile(title: const Text('Planned Blocks'), onTap: () => Navigator.pushNamed(context, '/planned_blocks')),
-            ListTile(title: const Text('Week Planner 🚀'), onTap: () => Navigator.pushNamed(context, '/block_builder_2')),
-            ListTile(title: const Text('Block Planner 🧠'), onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const Block_Planner()))),
-            ListTile(title: const Text('Saved Workouts 📓'), onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const SavedWorkoutsScreen()))),
-            ListTile(title: const Text('Logout'), onTap: () async { await FirebaseAuth.instance.signOut(); Navigator.pushReplacementNamed(context, '/login'); }),
-          ],
-        ),
-      ),
+      drawer: const AppDrawer(),
       body: isLoading
           ? const Center(child: CircularProgressIndicator())
           : errorMessage.isNotEmpty
@@ -234,79 +251,45 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            FutureBuilder<DocumentSnapshot>(
-              future: _fetchActiveBlock(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const CircularProgressIndicator();
-                }
-                if (snapshot.hasError || !snapshot.hasData || !snapshot.data!.exists) {
-                  return const Text('No active training block found.');
-                }
-
-                final data = snapshot.data!.data() as Map<String, dynamic>;
-                final exercises = List<String>.from(data['exercises'] ?? []);
-                final startDate = (data['startDate'] as Timestamp).toDate();
-                final endDate = (data['endDate'] as Timestamp).toDate();
-
-                return ListTile(
-                  leading: const Icon(Icons.calendar_today, color: Colors.orangeAccent),
-                  title: const Text("Upcoming Workout"),
-                  subtitle: Text(
-                    exercises.isNotEmpty
-                        ? 'Next: ${exercises.first} (Block: ${DateFormat('MMM d').format(startDate)}–${DateFormat('MMM d').format(endDate)})'
-                        : 'Active block found but no exercises listed.',
+            const SizedBox(height: 20),
+            const Text('Training Calendar', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            TableCalendar(
+              firstDay: DateTime.utc(2020, 1, 1),
+              lastDay: DateTime.utc(2100, 12, 31),
+              focusedDay: _focusedDay,
+              calendarFormat: _calendarFormat,
+              selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
+              eventLoader: (day) {
+                final normalized = DateTime(day.year, day.month, day.day);
+                return _trainingDays.contains(normalized) ? [1] : [];
+              },
+              onDaySelected: (selectedDay, focusedDay) {
+                setState(() {
+                  _selectedDay = selectedDay;
+                  _focusedDay = focusedDay;
+                });
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => WorkoutPage(initialDate: selectedDay), // 👈 you'll need to support this
                   ),
-                  onTap: () {
-                    Navigator.pushNamed(context, '/block_builder', arguments: {
-                      'blockId': snapshot.data!.id,
-                    });
-                  },
                 );
               },
-            ),
-            const SizedBox(height: 16),
-            ListTile(
-              leading: const Icon(Icons.fitness_center, color: Colors.blueAccent),
-              title: const Text("Most Recent Workout"),
-              subtitle: Text(mostRecentWorkout != null
-                  ? '${mostRecentWorkout!.name} - ${DateFormat('dd-MM-yyyy').format(mostRecentWorkout!.date)}'
-                  : 'No recent workout found'),
-              trailing: ElevatedButton(
-                onPressed: () {
-                  Navigator.push(context, MaterialPageRoute(builder: (context) => const WorkoutPage()));
-                },
-                child: const Text('Add Workout'),
-              ),
-              onTap: () {
-                if (mostRecentWorkout != null) {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => WorkoutDetailsScreen(workout: mostRecentWorkout!),
-                    ),
-                  );
-                } else {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('No recent workout available')),
-                  );
-                }
+              onFormatChanged: (format) {
+                setState(() {
+                  _calendarFormat = format;
+                });
               },
+              onPageChanged: (focusedDay) {
+                _focusedDay = focusedDay;
+              },
+              calendarStyle: CalendarStyle(
+                todayDecoration: BoxDecoration(color: Colors.blue.shade100, shape: BoxShape.circle),
+                selectedDecoration: const BoxDecoration(color: Colors.blueAccent, shape: BoxShape.circle),
+                markerDecoration: const BoxDecoration(color: Colors.deepOrange, shape: BoxShape.circle),
+              ),
             ),
-            const SizedBox(height: 20),
-            GridView.count(
-              crossAxisCount: 2,
-              shrinkWrap: true,
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 12,
-              physics: const NeverScrollableScrollPhysics(),
-              children: [
-                _buildFeatureCard(Icons.bar_chart, 'Weigh In', '/body_weight_tracker'),
-                _buildFeatureCard(Icons.schedule, 'Week Planner', '/block_builder_2'),
-                _buildFeatureCard(Icons.bookmark, 'Saved Workouts', '/saved_workouts'),
-                _buildFeatureCard(Icons.logout, 'Logout', '/login'),
-              ],
-            ),
+
             const SizedBox(height: 20),
             const Text('Top Lifts', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             FutureBuilder<List<Map<String, dynamic>>>(

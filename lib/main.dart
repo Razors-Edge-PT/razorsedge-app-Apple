@@ -12,6 +12,7 @@ import 'workout_entry_screen.dart';
 import 'workout_history_screen.dart';
 import 'week_planner.dart'; // Update path if needed
 import 'planned_blocks_screen.dart';
+import 'Block_Planner.dart';
 
 
 void main() async {
@@ -104,6 +105,7 @@ class MyApp extends StatelessWidget {
         '/body_weight_tracker': (context) => const BodyWeightTracker(),
         '/block_builder_2': (context) => const WeekPlanner(),
         '/planned_blocks': (context) => const PlannedBlocksScreen(),
+        '/block_builder': (context) => const Block_Planner(),
 
       },
     );
