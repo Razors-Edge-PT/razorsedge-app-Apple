@@ -19,7 +19,8 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
         .doc(userId)
         .collection('blocks');
 
-    final activeBlocks = await blocksRef.where('isActive', isEqualTo: true).get();
+    final activeBlocks =
+        await blocksRef.where('isActive', isEqualTo: true).get();
     for (var doc in activeBlocks.docs) {
       await doc.reference.update({'isActive': false});
     }
@@ -121,29 +122,31 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
                 final start = (block['startDate'] as Timestamp).toDate();
                 final end = (block['endDate'] as Timestamp).toDate();
                 dateRange =
-                '${DateFormat('dd MMM').format(start)} → ${DateFormat('dd MMM yyyy').format(end)}';
+                    '${DateFormat('dd MMM').format(start)} → ${DateFormat('dd MMM yyyy').format(end)}';
               } catch (_) {}
 
               final exercises = (block['exercises'] as List?)?.length ?? 0;
 
               return Card(
                 elevation: 3,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
                 child: ListTile(
-
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   onTap: () => _editBlock(blockId),
-
                   title: Text(
                     blockName,
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 16),
                   ),
                   subtitle: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(dateRange),
                       if (exercises > 0)
-                        Text('$exercises exercises', style: const TextStyle(fontSize: 12)),
+                        Text('$exercises exercises',
+                            style: const TextStyle(fontSize: 12)),
                     ],
                   ),
                   leading: CircleAvatar(
@@ -153,7 +156,6 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
                       color: Colors.white,
                     ),
                   ),
-
                   trailing: PopupMenuButton<String>(
                     onSelected: (value) async {
                       if (value == 'activate') {

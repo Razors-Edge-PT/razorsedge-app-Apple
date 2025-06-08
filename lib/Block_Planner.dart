@@ -20,6 +20,8 @@ class _BlockPlannerState extends State<Block_Planner> {
   final Map<String, String> _exerciseIdToName = {}; // id ➔ name
   Map<String, String> nameToId = {}; // ✅ global map for name → ID
   final TextEditingController _historyInputController = TextEditingController();
+  List<String> selectedDays = []; // e.g., ['Mon', 'Wed', 'Fri']
+
 
   String _repsText = '';
 
@@ -47,6 +49,10 @@ class _BlockPlannerState extends State<Block_Planner> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final args =
       ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+
+      await loadExercisesFromFirestore(); // ✅ Always load this first
+
+      print('🚀 loadExercisesFromFirestore() called');
 
       if (args != null && args['blockId'] != null) {
         await _loadBlockFromFirestore(args['blockId']);
@@ -993,7 +999,7 @@ class _BlockPlannerState extends State<Block_Planner> {
               ),
             ),
             const SizedBox(width: 8),
-            _buildInputBox("Training days per week"),
+            _buildTrainingDaySelector(),
           ],
         ),
         const SizedBox(height: 8),
@@ -1005,8 +1011,8 @@ class _BlockPlannerState extends State<Block_Planner> {
                   : 'Block goals',
               multiline: true,
             ),
-            const SizedBox(width: 8),
-            _buildInputBox("Planned calories surplus/deficit", multiline: true),
+//            const SizedBox(width: 8),
+//             _buildInputBox("Planned calories surplus/deficit", multiline: true),
           ],
         ),
         const SizedBox(height: 8),
@@ -1019,6 +1025,7 @@ class _BlockPlannerState extends State<Block_Planner> {
                   controller: _historyInputController,
                   maxLines: 3,
                   style: const TextStyle(color: Colors.white, fontSize: 13),
+
                   decoration: InputDecoration(
                     labelText: "Rep History (comma-separated)",
                     labelStyle:
@@ -1030,7 +1037,8 @@ class _BlockPlannerState extends State<Block_Planner> {
                     contentPadding: const EdgeInsets.symmetric(
                         horizontal: 10, vertical: 10),
                   ),
-                  onChanged: (_) async {
+
+                 onChanged: (_) async {
                     final prefs = await SharedPreferences.getInstance();
                     await prefs.setString(
                         'repHistoryInput', _historyInputController.text);
@@ -1059,6 +1067,72 @@ class _BlockPlannerState extends State<Block_Planner> {
             ),
           ],
         ),
+      ],
+    );
+  }
+
+  Widget _buildTrainingDaySelector() {
+    final days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    final initials = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 6),
+          child: Text(
+            "Select Training Days",
+            style: TextStyle(color: Colors.white70, fontSize: 13),
+          ),
+        ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: List.generate(7, (index) {
+            final day = days[index];
+            final isSelected = selectedDays.contains(day);
+
+            return GestureDetector(
+              onTap: () {
+                setState(() {
+                  if (isSelected) {
+                    selectedDays.remove(day);
+                  } else {
+                    selectedDays.add(day);
+                  }
+
+                  // ✅ Auto-update weeklyFrequency in each exercise
+                  final newFreq = selectedDays.length;
+                  for (final ex in exercises) {
+                    exerciseSettings[ex] ??= {};
+                    exerciseSettings[ex]!['weeklyFrequency'] = newFreq;
+                  }
+                });
+              },
+              child: CircleAvatar(
+                radius: 16,
+                backgroundColor: isSelected
+                    ? Colors.pinkAccent
+                    : Colors.blueGrey.shade700,
+                child: Text(
+                  initials[index],
+                  style: TextStyle(
+                    color: isSelected ? Colors.white : Colors.white70,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+            );
+          }),
+        ),
+        if (selectedDays.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              "Selected: ${selectedDays.join(', ')}",
+              style: const TextStyle(color: Colors.white54, fontSize: 12),
+            ),
+          ),
       ],
     );
   }
