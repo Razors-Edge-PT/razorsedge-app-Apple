@@ -35,17 +35,33 @@ class _BlockPlannerState extends State<Block_Planner> {
   bool _isNewBlock = true;
   bool _didLoadData = false;
 
-
 // 🔁 AUTO-SAVE & SAVE BLOCK FEATURES INTEGRATED
 // Add this inside your _BlockPlannerState class:
 
   @override
   void initState() {
     super.initState();
-    _loadRepHistoryAndGenerateReps();
-    _initData();
 
-    _isSavedBlock = false; // ✅ reset for this session
+    _loadRepHistoryAndGenerateReps();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+
+      if (args != null && args.containsKey('blockId')) {
+        _isNewBlock = false;
+        _loadBlockFromFirestore(args['blockId']);
+      } else if (args != null && args['newBlock'] == true) {
+        _isNewBlock = true;
+        _clearStateForNewBlock(); // Start with empty plan
+        _initData(); // Init from Firestore without draft
+      } else {
+        _isNewBlock = true;
+        _loadDraft(); // Fallback only if nothing else was passed
+        _initData();
+      }
+
+      _isSavedBlock = false; // Reset autosave flag
+    });
   }
 
   void _clearStateForNewBlock() {
@@ -56,29 +72,6 @@ class _BlockPlannerState extends State<Block_Planner> {
       _blockEndDate = null;
       _blockGoalsController.clear();
     });
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (_didLoadData) return;
-    _didLoadData = true;
-
-    final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
-
-    if (args != null && args.containsKey('blockId')) {
-      _isNewBlock = false;
-      _loadBlockFromFirestore(args['blockId']);
-    } else if (args != null && args['newBlock'] == true) {
-      _isNewBlock = true;
-      _clearStateForNewBlock(); // 🔁 fresh start
-    } else {
-      // 🔒 Only load draft if the user manually launches BlockPlanner from the menu with no intent
-      _isNewBlock = true;
-      _loadDraft();
-    }
-
-    _initData();
   }
 
   @override
@@ -119,6 +112,8 @@ class _BlockPlannerState extends State<Block_Planner> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
+    await loadExercisesFromFirestore(); // ✅ Ensure names are ready
+
     final doc = await FirebaseFirestore.instance
         .collection('planned_blocks')
         .doc(user.uid)
@@ -133,6 +128,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       _blockStartDate = (data['startDate'] as Timestamp).toDate();
       _blockEndDate = (data['endDate'] as Timestamp).toDate();
       exercises = List<String>.from(data['exercises'] ?? []);
+
       exerciseSettings = Map<String, Map<String, dynamic>>.from(
         (data['exerciseSettings'] ?? {}).map(
               (key, value) => MapEntry(key, Map<String, dynamic>.from(value)),
@@ -164,9 +160,8 @@ class _BlockPlannerState extends State<Block_Planner> {
 
     // ✅ Deactivate any other active blocks
     if (setActive) {
-      final snapshot = await userBlocksRef
-          .where('isActive', isEqualTo: true)
-          .get();
+      final snapshot =
+      await userBlocksRef.where('isActive', isEqualTo: true).get();
 
       for (final doc in snapshot.docs) {
         await doc.reference.update({'isActive': false});
@@ -182,7 +177,6 @@ class _BlockPlannerState extends State<Block_Planner> {
       'exerciseSettings': exerciseSettings,
       'isActive': setActive,
       'createdAt': FieldValue.serverTimestamp(),
-
     });
 
     final prefs = await SharedPreferences.getInstance();
@@ -191,7 +185,9 @@ class _BlockPlannerState extends State<Block_Planner> {
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('✅ Block saved${setActive ? ' and activated' : ''}.')),
+        SnackBar(
+            content:
+            Text('✅ Block saved${setActive ? ' and activated' : ''}.')),
       );
     }
   }
@@ -279,7 +275,7 @@ class _BlockPlannerState extends State<Block_Planner> {
   Future<void> loadExercisesFromFirestore() async {
     print('🚀 Starting loadExercisesFromFirestore');
     final snapshot =
-        await FirebaseFirestore.instance.collection('exercises').get();
+    await FirebaseFirestore.instance.collection('exercises').get();
 
 // Clear previous
     _exerciseIdToName.clear();
@@ -368,13 +364,13 @@ class _BlockPlannerState extends State<Block_Planner> {
 
     // 🔥 Fetch exercises from Firestore (including ID)
     final snapshot =
-        await FirebaseFirestore.instance.collection('exercises').get();
+    await FirebaseFirestore.instance.collection('exercises').get();
     final exercisesFromFirestore = snapshot.docs
         .map((doc) => {
-              'id': doc.id,
-              'name': doc['name'] as String,
-              'category': doc['category'] as String,
-            })
+      'id': doc.id,
+      'name': doc['name'] as String,
+      'category': doc['category'] as String,
+    })
         .toList();
 
     // 🧠 Desired category order
@@ -427,95 +423,95 @@ class _BlockPlannerState extends State<Block_Planner> {
     };
 
     final List<String> selected = await showDialog<List<String>>(
-          context: context,
-          builder: (ctx) {
-            List<String> tempSelected = [
-              ...exercises
-            ]; // exercises = selected IDs now
+      context: context,
+      builder: (ctx) {
+        List<String> tempSelected = [
+          ...exercises
+        ]; // exercises = selected IDs now
 
-            return StatefulBuilder(builder: (context, setLocalState) {
-              return AlertDialog(
-                backgroundColor: Colors.blueGrey.shade900,
-                title: const Text(
-                  "Select Exercises",
-                  style: TextStyle(color: Colors.white),
-                ),
-                content: SizedBox(
-                  width: double.maxFinite,
-                  child: ListView(
-                    children: orderedGrouped.entries.map((entry) {
-                      final category = entry.key;
-                      final exercises = entry.value;
-                      final isExpanded = expandedGroups[category] ?? true;
+        return StatefulBuilder(builder: (context, setLocalState) {
+          return AlertDialog(
+            backgroundColor: Colors.blueGrey.shade900,
+            title: const Text(
+              "Select Exercises",
+              style: TextStyle(color: Colors.white),
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: ListView(
+                children: orderedGrouped.entries.map((entry) {
+                  final category = entry.key;
+                  final exercises = entry.value;
+                  final isExpanded = expandedGroups[category] ?? true;
 
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          ListTile(
-                            tileColor: Colors.blueGrey.shade800,
-                            title: Text(
-                              category,
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold),
-                            ),
-                            trailing: Icon(
-                              isExpanded
-                                  ? Icons.expand_less
-                                  : Icons.expand_more,
-                              color: Colors.white70,
-                            ),
-                            onTap: () {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ListTile(
+                        tileColor: Colors.blueGrey.shade800,
+                        title: Text(
+                          category,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold),
+                        ),
+                        trailing: Icon(
+                          isExpanded
+                              ? Icons.expand_less
+                              : Icons.expand_more,
+                          color: Colors.white70,
+                        ),
+                        onTap: () {
+                          setLocalState(() {
+                            expandedGroups[category] = !isExpanded;
+                          });
+                        },
+                      ),
+                      if (isExpanded)
+                        ...exercises.map((exercise) {
+                          final id = exercise['id']!;
+                          final name = exercise['name']!;
+                          final isChecked = tempSelected.contains(id);
+                          return CheckboxListTile(
+                            value: isChecked,
+                            title: Text(name,
+                                style:
+                                const TextStyle(color: Colors.white)),
+                            controlAffinity:
+                            ListTileControlAffinity.leading,
+                            activeColor: Colors.lightBlueAccent,
+                            checkColor: Colors.black,
+                            onChanged: (checked) {
                               setLocalState(() {
-                                expandedGroups[category] = !isExpanded;
+                                if (checked == true) {
+                                  tempSelected.add(id);
+                                } else {
+                                  tempSelected.remove(id);
+                                }
                               });
                             },
-                          ),
-                          if (isExpanded)
-                            ...exercises.map((exercise) {
-                              final id = exercise['id']!;
-                              final name = exercise['name']!;
-                              final isChecked = tempSelected.contains(id);
-                              return CheckboxListTile(
-                                value: isChecked,
-                                title: Text(name,
-                                    style:
-                                        const TextStyle(color: Colors.white)),
-                                controlAffinity:
-                                    ListTileControlAffinity.leading,
-                                activeColor: Colors.lightBlueAccent,
-                                checkColor: Colors.black,
-                                onChanged: (checked) {
-                                  setLocalState(() {
-                                    if (checked == true) {
-                                      tempSelected.add(id);
-                                    } else {
-                                      tempSelected.remove(id);
-                                    }
-                                  });
-                                },
-                              );
-                            }),
-                          const Divider(height: 10, color: Colors.grey),
-                        ],
-                      );
-                    }).toList(),
-                  ),
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(ctx),
-                    child: const Text("Cancel"),
-                  ),
-                  TextButton(
-                    onPressed: () => Navigator.pop(ctx, tempSelected),
-                    child: const Text("Save"),
-                  ),
-                ],
-              );
-            });
-          },
-        ) ??
+                          );
+                        }),
+                      const Divider(height: 10, color: Colors.grey),
+                    ],
+                  );
+                }).toList(),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text("Cancel"),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, tempSelected),
+                child: const Text("Save"),
+              ),
+            ],
+          );
+        });
+      },
+    ) ??
         [];
 
     setState(() {
@@ -598,7 +594,7 @@ class _BlockPlannerState extends State<Block_Planner> {
         existingDetails[exercise] = {
           'periodizationModel': 'DUP, Signature',
           'repTargets':
-              entry['repTargets'], // ← include the correct full structure
+          entry['repTargets'], // ← include the correct full structure
           'progressionModel': entry['progressionModel'] ?? 'linear',
           'increments': entry['increments'] ?? {'week': 2.5, 'block': 5.0},
           'weeklyFrequency': entry['weeklyFrequency'] ?? 3,
@@ -608,7 +604,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       } else {
         existingDetails[exercise] = {
           'periodizationModel':
-              entry['periodizationModel'] ?? 'Linear Exposure',
+          entry['periodizationModel'] ?? 'Linear Exposure',
           'repTargets': savedTargets,
           'progressionModel': entry['progressionModel'] ?? 'linear',
           'increments': entry['increments'] ?? {'week': 2.5, 'block': 5.0},
@@ -741,11 +737,11 @@ class _BlockPlannerState extends State<Block_Planner> {
 
       final entry = {
         'periodizationModel':
-            existingEntry?['periodizationModel'] ?? 'Linear Exposure',
+        existingEntry?['periodizationModel'] ?? 'Linear Exposure',
         'repTargets': reps,
         'progressionModel': existingEntry?['progressionModel'] ?? 'linear',
         'increments':
-            existingEntry?['increments'] ?? {'week': 2.5, 'block': 5.0},
+        existingEntry?['increments'] ?? {'week': 2.5, 'block': 5.0},
         'weeklyFrequency': existingEntry?['weeklyFrequency'] ?? 3,
         'maxWeightXReps': existingEntry?['maxWeightXReps'] ?? '',
         'notes': existingEntry?['notes'] ?? '',
@@ -780,7 +776,8 @@ class _BlockPlannerState extends State<Block_Planner> {
                   content: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Text("Do you want to save this block to your plans?"),
+                      const Text(
+                          "Do you want to save this block to your plans?"),
                       Row(
                         children: [
                           const Text("Set as Active?"),
@@ -801,17 +798,21 @@ class _BlockPlannerState extends State<Block_Planner> {
                     ],
                   ),
                   actions: [
-                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
-                    TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Save")),
+                    TextButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: const Text("Cancel")),
+                    TextButton(
+                        onPressed: () => Navigator.pop(ctx, true),
+                        child: const Text("Save")),
                   ],
                 ),
               );
 
               if (confirm == true) {
-                await _savePlannedBlock(setActive: true); // or false if not selected
+                await _savePlannedBlock(
+                    setActive: true); // or false if not selected
               }
             },
-
           ),
         ],
       ),
@@ -834,7 +835,7 @@ class _BlockPlannerState extends State<Block_Planner> {
                     backgroundColor: Colors.blueGrey.shade700,
                     foregroundColor: Colors.white,
                     padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   ),
                   onPressed: _showExercisePickerDialog,
                 ),
@@ -846,7 +847,7 @@ class _BlockPlannerState extends State<Block_Planner> {
                     backgroundColor: Colors.blueGrey.shade700,
                     foregroundColor: Colors.white,
                     padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   ),
                   onPressed: () async {
                     final confirm = await showDialog<bool>(
@@ -884,7 +885,7 @@ class _BlockPlannerState extends State<Block_Planner> {
               child: ReorderableListView.builder(
                 shrinkWrap: true,
                 physics:
-                    const NeverScrollableScrollPhysics(), // Prevent internal scrolling
+                const NeverScrollableScrollPhysics(), // Prevent internal scrolling
                 onReorder: (oldIndex, newIndex) {
                   setState(() {
                     if (newIndex > oldIndex) newIndex -= 1;
@@ -934,21 +935,21 @@ class _BlockPlannerState extends State<Block_Planner> {
                     child: (_blockStartDate == null || _blockEndDate == null)
                         ? const SizedBox.shrink() // or show a loading spinner
                         : _ExerciseCard(
-                            exerciseId: exercise,
-                            exerciseName: _exerciseIdToName[exercise] ??
-                                'Unknown Exercise',
-                            exerciseSettings: exerciseSettings,
-                            blockStartDate:
-                                _blockStartDate, // ✅ now passed properly
-                            blockEndDate:
-                                _blockEndDate, // ✅ now passed properly
-                            onUpdateSetting: (exerciseId, key, value) {
-                              setState(() {
-                                exerciseSettings[exerciseId] ??= {};
-                                exerciseSettings[exerciseId]![key] = value;
-                              });
-                            },
-                          ),
+                      exerciseId: exercise,
+                      exerciseName: _exerciseIdToName[exercise] ??
+                          'Unknown Exercise',
+                      exerciseSettings: exerciseSettings,
+                      blockStartDate:
+                      _blockStartDate, // ✅ now passed properly
+                      blockEndDate:
+                      _blockEndDate, // ✅ now passed properly
+                      onUpdateSetting: (exerciseId, key, value) {
+                        setState(() {
+                          exerciseSettings[exerciseId] ??= {};
+                          exerciseSettings[exerciseId]![key] = value;
+                        });
+                      },
+                    ),
                   );
                 },
               ),
@@ -973,10 +974,10 @@ class _BlockPlannerState extends State<Block_Planner> {
                     firstDate: now.subtract(const Duration(days: 365)),
                     lastDate: now.add(const Duration(days: 365 * 2)),
                     initialDateRange:
-                        _blockStartDate != null && _blockEndDate != null
-                            ? DateTimeRange(
-                                start: _blockStartDate!, end: _blockEndDate!)
-                            : null,
+                    _blockStartDate != null && _blockEndDate != null
+                        ? DateTimeRange(
+                        start: _blockStartDate!, end: _blockEndDate!)
+                        : null,
                     builder: (context, child) {
                       return Theme(
                         data: ThemeData.dark().copyWith(
@@ -1068,7 +1069,7 @@ class _BlockPlannerState extends State<Block_Planner> {
                   decoration: InputDecoration(
                     labelText: "Rep History (comma-separated)",
                     labelStyle:
-                        const TextStyle(color: Colors.white70, fontSize: 12),
+                    const TextStyle(color: Colors.white70, fontSize: 12),
                     filled: true,
                     fillColor: Colors.blueGrey.shade800,
                     border: OutlineInputBorder(
@@ -1083,9 +1084,9 @@ class _BlockPlannerState extends State<Block_Planner> {
 
                     setState(() {
                       final parsedHistory =
-                          _parseHistoryInput(_historyInputController.text);
+                      _parseHistoryInput(_historyInputController.text);
                       final reps =
-                          PeriodizationModelUtils.REsignatureRepTargets(
+                      PeriodizationModelUtils.REsignatureRepTargets(
                         min: 5,
                         max: 11,
                         history: parsedHistory,
@@ -1110,11 +1111,11 @@ class _BlockPlannerState extends State<Block_Planner> {
   }
 
   Widget _buildInputBox(
-    String label, {
-    bool multiline = false,
-    String? initialText,
-    bool readOnly = false,
-  }) {
+      String label, {
+        bool multiline = false,
+        String? initialText,
+        bool readOnly = false,
+      }) {
     return Expanded(
       child: Container(
         margin: const EdgeInsets.only(bottom: 8),
@@ -1130,7 +1131,7 @@ class _BlockPlannerState extends State<Block_Planner> {
             fillColor: Colors.blueGrey.shade800,
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
             contentPadding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
           ),
         ),
       ),
@@ -1150,7 +1151,7 @@ class _BlockPlannerState extends State<Block_Planner> {
           fillColor: Colors.blueGrey.shade700,
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
           contentPadding:
-              const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
         ),
       ),
     );
@@ -1162,7 +1163,7 @@ class _ExerciseCard extends StatefulWidget {
   final String exerciseId;
   final Map<String, Map<String, dynamic>> exerciseSettings;
   final void Function(String exerciseName, String key, dynamic value)
-      onUpdateSetting;
+  onUpdateSetting;
   final DateTime? blockStartDate;
   final DateTime? blockEndDate;
 
@@ -1183,9 +1184,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   bool isExpanded = false;
   final FocusNode _incrementsFocusNode = FocusNode();
   final TextEditingController _weeklyFrequencyController =
-      TextEditingController(text: "7");
+  TextEditingController(text: "7");
   final TextEditingController _repTargetsDisplayController =
-      TextEditingController();
+  TextEditingController();
   final List<int> dailyUndulatingWeekDefaultReps = [10, 5, 12, 8, 3, 7, 1];
   final TextEditingController _notesController = TextEditingController();
   final TextEditingController _incrementsController = TextEditingController();
@@ -1355,7 +1356,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         final parts = repText.split('–');
         final min = parts.isNotEmpty ? parts[0].trim() : '6';
         final max =
-            parts.length > 1 ? parts[1].replaceAll('reps', '').trim() : '10';
+        parts.length > 1 ? parts[1].replaceAll('reps', '').trim() : '10';
 
         result['repRange'] = {
           'min': min,
@@ -1528,7 +1529,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
       case 'Linear, by Exposure':
         final reps =
-            [12, 10, 8, 6, 4, 2].take(frequency).map((r) => '$r x 3').toList();
+        [12, 10, 8, 6, 4, 2].take(frequency).map((r) => '$r x 3').toList();
         return [reps];
 
       case 'DUP, Signature':
@@ -1536,7 +1537,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         const dupMax = 10;
         final week = List.generate(
           frequency,
-          (i) => '${dupMin + (i % (dupMax - dupMin + 1))} x 3',
+              (i) => '${dupMin + (i % (dupMax - dupMin + 1))} x 3',
         );
         return [week];
 
@@ -1582,7 +1583,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     final raw = _cachedRepTargetMap ??
         widget.exerciseSettings[exerciseName]?['repTargets'];
     final saved =
-        raw is Map<String, dynamic> ? Map<String, dynamic>.from(raw) : {};
+    raw is Map<String, dynamic> ? Map<String, dynamic>.from(raw) : {};
 
     // Extract week1 and finalWeek from saved
     final week1 = saved['week1'] as Map<String, dynamic>? ?? {};
@@ -1616,7 +1617,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
           text: partsStart.length > 1 ? partsStart[1] : '3'));
 
       final partsEnd =
-          finalWeekVals[i].split('x').map((s) => s.trim()).toList();
+      finalWeekVals[i].split('x').map((s) => s.trim()).toList();
       finalReps.add(
           TextEditingController(text: partsEnd.isNotEmpty ? partsEnd[0] : '1'));
       finalSets.add(
@@ -1663,7 +1664,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                           const SizedBox(width: 6),
                           const Text("x",
                               style:
-                                  TextStyle(color: Colors.white, fontSize: 14)),
+                              TextStyle(color: Colors.white, fontSize: 14)),
                           const SizedBox(width: 6),
                           Expanded(
                             child: TextField(
@@ -1716,7 +1717,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                           const SizedBox(width: 6),
                           const Text("x",
                               style:
-                                  TextStyle(color: Colors.white, fontSize: 14)),
+                              TextStyle(color: Colors.white, fontSize: 14)),
                           const SizedBox(width: 6),
                           Expanded(
                             child: TextField(
@@ -1746,7 +1747,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             TextButton(
               onPressed: () => Navigator.pop(ctx),
               child:
-                  const Text("Cancel", style: TextStyle(color: Colors.white)),
+              const Text("Cancel", style: TextStyle(color: Colors.white)),
             ),
             TextButton(
               onPressed: () {
@@ -1762,8 +1763,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                     final sets = week1Sets[i].text.trim(); // sets stay constant
 
                     final repsThisWeek = (startReps +
-                            ((endReps - startReps) *
-                                (week / (blockLength - 1))))
+                        ((endReps - startReps) *
+                            (week / (blockLength - 1))))
                         .round();
                     instanceMap['instance${i + 1}'] = "$repsThisWeek x $sets";
                     print('💾 finalReps[0] = ${finalReps[0].text}');
@@ -1892,7 +1893,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             TextButton(
               onPressed: () => Navigator.pop(ctx),
               child:
-                  const Text("Cancel", style: TextStyle(color: Colors.white)),
+              const Text("Cancel", style: TextStyle(color: Colors.white)),
             ),
             TextButton(
               onPressed: () {
@@ -1902,7 +1903,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   final reps = repsControllers[i].text.trim();
                   final sets = setsControllers[i].text.trim();
                   final combined =
-                      reps.isNotEmpty && sets.isNotEmpty ? "$reps x $sets" : '';
+                  reps.isNotEmpty && sets.isNotEmpty ? "$reps x $sets" : '';
                   instanceMap['instance${i + 1}'] = combined;
                   print('✅ Saving instance${i + 1}: "$combined"');
                 }
@@ -1914,9 +1915,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   widget.onUpdateSetting(exerciseName, 'repTargets', result);
 
                   final preview = instanceMap.values
-                          .take(5)
-                          .where((r) => r.isNotEmpty)
-                          .join(' | ') +
+                      .take(5)
+                      .where((r) => r.isNotEmpty)
+                      .join(' | ') +
                       (instanceMap.length > 5 ? ' ...' : '');
                   _repTargetsDisplayController.text = preview;
                 });
@@ -1988,7 +1989,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                           setState(() {
                             tempMin = val;
                             _repTargetsDisplayController.text =
-                                "$tempMin – $tempMax reps";
+                            "$tempMin – $tempMax reps";
                           });
                         }
                       }),
@@ -2014,7 +2015,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                           setState(() {
                             tempMax = val;
                             _repTargetsDisplayController.text =
-                                "$tempMin – $tempMax reps";
+                            "$tempMin – $tempMax reps";
                           });
                         }
                       }),
@@ -2062,7 +2063,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   widget.onUpdateSetting(
                       exerciseName, 'periodizationModel', 'DUP, Signature');
                   _repTargetsDisplayController.text =
-                      "$tempMin – $tempMax reps";
+                  "$tempMin – $tempMax reps";
                 });
 
                 Navigator.pop(ctx);
@@ -2123,7 +2124,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     }
 
     final controllers =
-        repsList.map((value) => TextEditingController(text: value)).toList();
+    repsList.map((value) => TextEditingController(text: value)).toList();
 
     showDialog(
       context: context,
@@ -2166,7 +2167,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                               decoration: InputDecoration(
                                 hintText: "e.g. 10 x 3",
                                 hintStyle:
-                                    const TextStyle(color: Colors.white38),
+                                const TextStyle(color: Colors.white38),
                                 filled: true,
                                 fillColor: Colors.blueGrey.shade800,
                                 border: const OutlineInputBorder(),
@@ -2184,7 +2185,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                                 decoration: InputDecoration(
                                   hintText: "e.g. 8 x 4",
                                   hintStyle:
-                                      const TextStyle(color: Colors.white38),
+                                  const TextStyle(color: Colors.white38),
                                   filled: true,
                                   fillColor: Colors.blueGrey.shade800,
                                   border: const OutlineInputBorder(),
@@ -2205,7 +2206,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             TextButton(
               onPressed: () => Navigator.pop(ctx),
               child:
-                  const Text("Cancel", style: TextStyle(color: Colors.white)),
+              const Text("Cancel", style: TextStyle(color: Colors.white)),
             ),
             TextButton(
               onPressed: () {
@@ -2336,7 +2337,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             TextButton(
               onPressed: () => Navigator.pop(ctx),
               child:
-                  const Text("Cancel", style: TextStyle(color: Colors.white)),
+              const Text("Cancel", style: TextStyle(color: Colors.white)),
             ),
             TextButton(
               onPressed: () {
@@ -2367,7 +2368,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
   void _showRepTargetDialog(String exerciseName) {
     List<int> reps = List<int>.from(widget.exerciseSettings[widget.exerciseName]
-            ?['repTargets'] ??
+    ?['repTargets'] ??
         List.filled(12, 6));
 
     showDialog(
@@ -2375,7 +2376,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       builder: (ctx) {
         List<TextEditingController> controllers = List.generate(
           reps.length,
-          (i) => TextEditingController(text: reps[i].toString()),
+              (i) => TextEditingController(text: reps[i].toString()),
         );
 
         return AlertDialog(
@@ -2412,12 +2413,12 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             TextButton(
               onPressed: () => Navigator.pop(ctx),
               child:
-                  const Text("Cancel", style: TextStyle(color: Colors.white)),
+              const Text("Cancel", style: TextStyle(color: Colors.white)),
             ),
             TextButton(
               onPressed: () {
                 final updatedReps =
-                    controllers.map((c) => int.tryParse(c.text) ?? 6).toList();
+                controllers.map((c) => int.tryParse(c.text) ?? 6).toList();
                 setState(() {
                   widget.exerciseSettings[widget.exerciseName]?['repTargets'] =
                       updatedReps;
@@ -2437,7 +2438,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 6),
       padding:
-          const EdgeInsets.fromLTRB(6, 10, 6, 10), // reduced horizontal padding
+      const EdgeInsets.fromLTRB(6, 10, 6, 10), // reduced horizontal padding
       decoration: BoxDecoration(
         color: Colors.blueGrey.shade800,
         borderRadius: BorderRadius.circular(8),
@@ -2484,9 +2485,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                 Builder(
                   builder: (_) {
                     final double? weight =
-                        double.tryParse(_maxWeightController.text);
+                    double.tryParse(_maxWeightController.text);
                     final double? reps =
-                        double.tryParse(_maxRepsController.text);
+                    double.tryParse(_maxRepsController.text);
 
                     String displayText;
                     if (weight != null && reps != null) {
@@ -2500,7 +2501,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                     return Text(
                       displayText,
                       style:
-                          const TextStyle(color: Colors.white70, fontSize: 11),
+                      const TextStyle(color: Colors.white70, fontSize: 11),
                     );
                   },
                 )
@@ -2544,8 +2545,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                       final frequency =
                           int.tryParse(_weeklyFrequencyController.text) ?? 3;
                       final defaultReps =
-                          PeriodizationModelUtils.getDefaultReps(
-                              modelType, frequency);
+                      PeriodizationModelUtils.getDefaultReps(
+                          modelType, frequency);
 
                       print("🧠 Model selected: $value → mapped to $modelType");
                       print(
@@ -2647,7 +2648,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         controller: _repTargetsDisplayController,
                         readOnly: true,
                         style:
-                            const TextStyle(color: Colors.white, fontSize: 12),
+                        const TextStyle(color: Colors.white, fontSize: 12),
                         decoration: InputDecoration(
                           labelText: 'Rep Targets X sets',
                           labelStyle: const TextStyle(color: Colors.white),
@@ -2668,7 +2669,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                 const SizedBox(
                     height: 6,
                     width:
-                        400), // Adjust to 10 or 12 if you want more breathing room
+                    400), // Adjust to 10 or 12 if you want more breathing room
                 SizedBox(
                   width: 158,
                   child: TextFormField(
@@ -2701,7 +2702,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                 const SizedBox(
                     height: 6,
                     width:
-                        400), // Adjust to 10 or 12 if you want more breathing room
+                    400), // Adjust to 10 or 12 if you want more breathing room
 
                 SizedBox(
                   width: 158,
@@ -2808,14 +2809,14 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   }
 
   Widget _smallInput(
-    String label, {
-    TextEditingController? controller,
-    bool multiline = false,
-    double width = 150,
-    double verticalPadding = 10,
-    TextInputType? keyboardType, // 👈 Add this
-    List<TextInputFormatter>? inputFormatters, // 👈 And this
-  }) {
+      String label, {
+        TextEditingController? controller,
+        bool multiline = false,
+        double width = 150,
+        double verticalPadding = 10,
+        TextInputType? keyboardType, // 👈 Add this
+        List<TextInputFormatter>? inputFormatters, // 👈 And this
+      }) {
     return SizedBox(
       width: width,
       child: TextField(
@@ -2833,7 +2834,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
           isDense: true,
           contentPadding:
-              EdgeInsets.symmetric(horizontal: 10, vertical: verticalPadding),
+          EdgeInsets.symmetric(horizontal: 10, vertical: verticalPadding),
         ),
       ),
     );
