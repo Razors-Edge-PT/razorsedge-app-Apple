@@ -478,6 +478,9 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     setState(() {
       if (data.containsKey('plannedExerciseDetails')) {
         plannedExerciseDetails = Map<String, dynamic>.from(data['plannedExerciseDetails']);
+        PeriodizationModelUtils.setExerciseSettings(plannedExerciseDetails);
+        print('✅ [PMU] Set exerciseSettings in PMU for ${plannedExerciseDetails.length} exercises');
+
 
         // ✅ Inject blockMeta if it exists
         if (data.containsKey('blockMeta')) {
@@ -1536,11 +1539,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         final String hintReps = (repsController.text.isEmpty && isExerciseNamed && plannedRep != null)
             ? RegExp(r'^\d+').firstMatch(plannedRep)?.group(0) ?? ''
             : '';
-
-
-
-
-
 
 
         print('📋 repsController: "${repsController.text}", plannedRep: "$plannedRep", hintReps: "$hintReps"');

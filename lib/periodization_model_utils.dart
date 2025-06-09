@@ -1868,6 +1868,66 @@ class PeriodizationModelUtils {
     return (suggestedWeight / 2.5).round() * 2.5;
   }
 
+  static Map<String, dynamic> _exerciseSettings = {};
+
+  static void setExerciseSettings(Map<String, dynamic> settings) {
+    _exerciseSettings = settings;
+    print('✅ [PMU] setExerciseSettings called with keys: ${settings.keys}');
+    final testId = 'AmfUWbF1DH3I7qPAdh5k';
+    print('🔍 [PMU] Details for Bench ID ($testId): ${settings[testId]}');
+  }
+
+
+
+  static double roundToNearestValidIncrement({
+    required double targetWeight,
+    required String exerciseName,
+  }) {
+    // Try name first, then fallback to ID
+    final byName = _exerciseSettings[exerciseName]?['increments'];
+    final id = nameToId[exerciseName];
+
+    print('🧠 [BB2] nameToId lookup for "$exerciseName" → $id');
+    print('🧾 [BB2] Details for ID $id → ${_exerciseSettings[id]}');
+
+    Map<String, dynamic>? byId;
+    if (id != null && _exerciseSettings.containsKey(id)) {
+      byId = _exerciseSettings[id]?['increments'];
+    }
+
+    final increments = byName ?? byId;
+
+    if (increments == null) {
+      print('❌ [BB2] No increments found for $exerciseName by name or ID');
+      return (targetWeight / 2.5).round() * 2.5;
+    }
+
+    final double primary = increments['primary']?.toDouble() ?? 2.5;
+    final double secondary = increments['secondary']?.toDouble() ?? 0.0;
+
+    final Set<double> options = {};
+
+    for (int i = 0; i < 100; i++) {
+      options.add(20 + i * primary);
+    }
+
+    if (secondary > 0) {
+      for (final base in options.toList()) {
+        options.add(base + secondary);
+      }
+    }
+
+    final rounded = options.reduce((a, b) =>
+    (a - targetWeight).abs() < (b - targetWeight).abs() ? a : b);
+
+    print('📏 [BB2] Valid options for $exerciseName: ${options.toList()..toSet().toList()..sort()}');
+    print('🎯 [BB2] Chose: $rounded from target: $targetWeight');
+
+    return rounded;
+  }
+
+
+
 
   static double getSuggestedWeightFromRep(String exerciseName, int reps, double rir) {
     final e1rms = exercisePreviousE1RMs[exerciseName];
@@ -1885,9 +1945,20 @@ class PeriodizationModelUtils {
       suggestedWeight = avgE1RM / (1 + 0.0333 * effectiveReps);
     }
 
+    final rounded = roundToNearestValidIncrement(
+      targetWeight: suggestedWeight,
+      exerciseName: exerciseName,
+    );
+
+
     print('🧪 [BB2] Top set E1RM history for $exerciseName → $e1rms');
-    return (suggestedWeight / 2.5).round() * 2.5; // round to nearest 2.5kg
+    print('🎯 [BB2] Rounded $suggestedWeight → $rounded using custom increments');
+    print('🧩 [BB2] Increments for $exerciseName: ${_exerciseSettings[exerciseName]?['increments']}');
+
+
+    return rounded;
   }
+
 
 
 //updated this function to use newer signaturerep model for default

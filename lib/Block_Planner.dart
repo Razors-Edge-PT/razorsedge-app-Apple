@@ -494,6 +494,7 @@ class _BlockPlannerState extends State<Block_Planner> {
           'notes': entry['notes'] ?? '',
         };
       }
+      print('💾 Saving exercise $exercise with increments: ${entry['increments']}');
 
     }
 
