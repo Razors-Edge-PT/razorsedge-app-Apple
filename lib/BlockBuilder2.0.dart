@@ -1525,15 +1525,36 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
 
 
+        // 🔍 Check for selected progression model (optional per-exercise)
+        final String? progressionModelName = plannedExerciseDetails[exerciseId]?['progressionModel'];
+        final ProgressionModelType progressionModel = progressionModelName == 'Linear Weight Increase'
+            ? ProgressionModelType.linearWeightIncrease
+            : ProgressionModelType.none;
+
+// 🧠 Calculate default E1RM-based suggested weight
         final double historyWeight = PeriodizationModelUtils.getSuggestedWeightFromRep(
-          exerciseName, // ✅ not exerciseId
+          exerciseName,
           repsValue.toInt(),
           rirValue,
         );
 
+// 🚀 Progression logic (only triggers if model is explicitly selected)
+        final double progressedWeight = (progressionModel == ProgressionModelType.linearWeightIncrease)
+            ? PeriodizationModelUtils.getProgressedWeight(
+          exerciseName: exerciseName,
+          repTarget: repsValue.toInt(),
+          defaultWeight: historyWeight,
+          topSetHistory: topSetsByExercise[exerciseId] ?? [],
+          increments: PeriodizationModelUtils.getIncrementsForExercise(exerciseId ?? ''),
+          maxWeightByReps: plannedExerciseDetails[exerciseId]?['maxWeightByReps'],
+        )
+            : historyWeight;
+
+        print('🧠 Progression model "$progressionModelName" → using weight ${progressedWeight.toStringAsFixed(1)} (base: $historyWeight)');
+
 
         final String hintWeight = (weightController.text.isEmpty && isExerciseNamed)
-            ? historyWeight.toStringAsFixed(1)
+            ? progressedWeight.toStringAsFixed(1)
             : '';
 
         final String hintReps = (repsController.text.isEmpty && isExerciseNamed && plannedRep != null)

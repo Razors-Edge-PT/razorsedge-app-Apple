@@ -28,6 +28,10 @@ enum RirModelType {
   static,
 }
 
+enum ProgressionModelType {
+  none,
+  linearWeightIncrease,
+}
 
 
 
@@ -578,6 +582,155 @@ class PeriodizationModelUtils {
     final rir = rirPlan[weekKey]?[sessionKey]?[setKey]?['rir'];
     return rir?.toString() ?? '0.5';
   }
+
+  // Weight Logic
+
+  static double getSuggestedWeightFromRep(String exerciseName, int reps, double rir) {
+    final e1rms = exercisePreviousE1RMs[exerciseName];
+    if (e1rms == null || e1rms.isEmpty) return 20.0;
+
+    final recent = e1rms.take(4).toList();
+    final avgE1RM = recent.reduce((a, b) => a + b) / recent.length;
+    final effectiveReps = reps + rir;
+
+    double suggestedWeight;
+
+    if (effectiveReps <= 6) {
+      suggestedWeight = avgE1RM * (37 - effectiveReps) / 36;
+    } else {
+      suggestedWeight = avgE1RM / (1 + 0.0333 * effectiveReps);
+    }
+
+    final rounded = roundToNearestValidIncrement(
+      targetWeight: suggestedWeight,
+      exerciseName: exerciseName,
+    );
+
+
+    print('🧪 [BB2] Top set E1RM history for $exerciseName → $e1rms');
+    print('🎯 [BB2] Rounded $suggestedWeight → $rounded using custom increments');
+    print('🧩 [BB2] Increments for $exerciseName: ${_exerciseSettings[exerciseName]?['increments']}');
+
+
+    return rounded;
+  }
+
+  static void setExerciseSettings(Map<String, dynamic> settings) {
+    _exerciseSettings = settings;
+    print('✅ [PMU] setExerciseSettings called with keys: ${settings.keys}');
+    final testId = 'AmfUWbF1DH3I7qPAdh5k';
+    print('🔍 [PMU] Details for Bench ID ($testId): ${settings[testId]}');
+
+  }
+
+  static Map<String, dynamic> _exerciseSettings = {};
+
+  static double roundToNearestValidIncrement({
+    required double targetWeight,
+    required String exerciseName,
+  }) {
+    // Try name first, then fallback to ID
+    final byName = _exerciseSettings[exerciseName]?['increments'];
+    final id = nameToId[exerciseName];
+
+    print('🧠 [BB2] nameToId lookup for "$exerciseName" → $id');
+    print('🧾 [BB2] Details for ID $id → ${_exerciseSettings[id]}');
+
+    Map<String, dynamic>? byId;
+    if (id != null && _exerciseSettings.containsKey(id)) {
+      byId = _exerciseSettings[id]?['increments'];
+    }
+
+    final increments = byName ?? byId;
+
+    if (increments == null) {
+      print('❌ [BB2] No increments found for $exerciseName by name or ID');
+      return (targetWeight / 2.5).round() * 2.5;
+    }
+
+    final double primary = increments['primary']?.toDouble() ?? 2.5;
+    final double secondary = increments['secondary']?.toDouble() ?? 0.0;
+
+    final Set<double> options = {};
+
+    for (int i = 0; i < 100; i++) {
+      options.add(20 + i * primary);
+    }
+
+    if (secondary > 0) {
+      for (final base in options.toList()) {
+        options.add(base + secondary);
+      }
+    }
+
+    final rounded = options.reduce((a, b) =>
+    (a - targetWeight).abs() < (b - targetWeight).abs() ? a : b);
+
+    print('📏 [BB2] Valid options for $exerciseName: ${options.toList()..toSet().toList()..sort()}');
+    print('🎯 [BB2] Chose: $rounded from target: $targetWeight');
+
+    return rounded;
+  }
+
+  static List<double> getIncrementsForExercise(String exerciseNameOrId) {
+    final raw = _exerciseSettings[exerciseNameOrId]?['increments'];
+    if (raw == null || raw.toString().isEmpty) return [2.5]; // fallback
+
+    return raw
+        .toString()
+        .split(',')
+        .map((e) => double.tryParse(e.trim()))
+        .whereType<double>()
+        .where((v) => v > 0)
+        .toList();
+  }
+
+
+  // Progression model logic
+
+  static double getProgressedWeight({
+    required String exerciseName,
+    required int repTarget,
+    required double defaultWeight,
+    required List<Map<String, dynamic>> topSetHistory,
+    required List<double> increments,
+    Map<String, dynamic>? maxWeightByReps,
+  }) {
+    // 🔍 Find most recent entry with this rep target
+    final match = topSetHistory.firstWhere(
+          (entry) => entry['reps'] == repTarget,
+      orElse: () => {},
+    );
+
+    if (match.isNotEmpty) {
+      final double lastWeight = (match['weight'] as num?)?.toDouble() ?? defaultWeight;
+      final int lastReps = match['reps'];
+
+      if (lastReps >= repTarget) {
+        print('✅ Rep target $repTarget met at $lastWeight kg. Increasing by ${increments.first}');
+        return lastWeight + increments.first;
+      } else if ((repTarget - lastReps) <= 1) {
+        print('➕ Close miss ($lastReps/$repTarget), keep weight $lastWeight');
+        return lastWeight;
+      } else {
+        print('⚠️ Missed rep target badly ($lastReps/$repTarget), retry with rep += 1 at $lastWeight');
+        return lastWeight; // Later: add separate rep suggestion
+      }
+    }
+
+    // 🛠️ Fallback to Max Weight by Reps from BP
+    if (maxWeightByReps != null &&
+        (maxWeightByReps['reps'] == repTarget || maxWeightByReps['reps'].toString() == repTarget.toString())) {
+      final fallbackWeight = (maxWeightByReps['weight'] as num?)?.toDouble() ?? defaultWeight;
+      print('🪂 Using maxWeightByReps fallback → $fallbackWeight');
+      return fallbackWeight;
+    }
+
+    // 🛡️ Fallback to default if no match
+    print('🚨 No match found for $repTarget reps, using defaultWeight → $defaultWeight');
+    return defaultWeight;
+  }
+
 
 
   static Map<String, Map<String, String>> expandDupDailyWeek1(
@@ -1862,95 +2015,10 @@ class PeriodizationModelUtils {
 
 
 
-  static void setExerciseSettings(Map<String, dynamic> settings) {
-    _exerciseSettings = settings;
-    print('✅ [PMU] setExerciseSettings called with keys: ${settings.keys}');
-    final testId = 'AmfUWbF1DH3I7qPAdh5k';
-    print('🔍 [PMU] Details for Bench ID ($testId): ${settings[testId]}');
-
-  }
-
-  static Map<String, dynamic> _exerciseSettings = {};
-
-  static double roundToNearestValidIncrement({
-    required double targetWeight,
-    required String exerciseName,
-  }) {
-    // Try name first, then fallback to ID
-    final byName = _exerciseSettings[exerciseName]?['increments'];
-    final id = nameToId[exerciseName];
-
-    print('🧠 [BB2] nameToId lookup for "$exerciseName" → $id');
-    print('🧾 [BB2] Details for ID $id → ${_exerciseSettings[id]}');
-
-    Map<String, dynamic>? byId;
-    if (id != null && _exerciseSettings.containsKey(id)) {
-      byId = _exerciseSettings[id]?['increments'];
-    }
-
-    final increments = byName ?? byId;
-
-    if (increments == null) {
-      print('❌ [BB2] No increments found for $exerciseName by name or ID');
-      return (targetWeight / 2.5).round() * 2.5;
-    }
-
-    final double primary = increments['primary']?.toDouble() ?? 2.5;
-    final double secondary = increments['secondary']?.toDouble() ?? 0.0;
-
-    final Set<double> options = {};
-
-    for (int i = 0; i < 100; i++) {
-      options.add(20 + i * primary);
-    }
-
-    if (secondary > 0) {
-      for (final base in options.toList()) {
-        options.add(base + secondary);
-      }
-    }
-
-    final rounded = options.reduce((a, b) =>
-    (a - targetWeight).abs() < (b - targetWeight).abs() ? a : b);
-
-    print('📏 [BB2] Valid options for $exerciseName: ${options.toList()..toSet().toList()..sort()}');
-    print('🎯 [BB2] Chose: $rounded from target: $targetWeight');
-
-    return rounded;
-  }
 
 
 
 
-  static double getSuggestedWeightFromRep(String exerciseName, int reps, double rir) {
-    final e1rms = exercisePreviousE1RMs[exerciseName];
-    if (e1rms == null || e1rms.isEmpty) return 20.0;
-
-    final recent = e1rms.take(4).toList();
-    final avgE1RM = recent.reduce((a, b) => a + b) / recent.length;
-    final effectiveReps = reps + rir;
-
-    double suggestedWeight;
-
-    if (effectiveReps <= 6) {
-      suggestedWeight = avgE1RM * (37 - effectiveReps) / 36;
-    } else {
-      suggestedWeight = avgE1RM / (1 + 0.0333 * effectiveReps);
-    }
-
-    final rounded = roundToNearestValidIncrement(
-      targetWeight: suggestedWeight,
-      exerciseName: exerciseName,
-    );
-
-
-    print('🧪 [BB2] Top set E1RM history for $exerciseName → $e1rms');
-    print('🎯 [BB2] Rounded $suggestedWeight → $rounded using custom increments');
-    print('🧩 [BB2] Increments for $exerciseName: ${_exerciseSettings[exerciseName]?['increments']}');
-
-
-    return rounded;
-  }
 
 
 

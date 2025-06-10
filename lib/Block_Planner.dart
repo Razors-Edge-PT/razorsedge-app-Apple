@@ -474,7 +474,7 @@ class _BlockPlannerState extends State<Block_Planner> {
           'repTargets': entry['repTargets'], // ← include the correct full structure
           'rirPlan': entry['rirPlan'], // ✅ Add this
           'rirModel': entry['rirModel'], // ✅ add this line
-          'progressionModel': entry['progressionModel'] ?? 'linear',
+          'progressionModel': entry['progressionModel'] ?? 'Linear Weight Increase',
           'increments': entry['increments'] ?? {'week': 2.5, 'block': 5.0},
           'weeklyFrequency': entry['weeklyFrequency'] ?? 3,
           'maxWeightXReps': entry['maxWeightXReps'] ?? '',
@@ -487,7 +487,7 @@ class _BlockPlannerState extends State<Block_Planner> {
           'repTargets': savedTargets,
           'rirPlan': entry['rirPlan'], // ✅ Add this
           'rirModel': entry['rirModel'], // ✅ add this line
-          'progressionModel': entry['progressionModel'] ?? 'linear',
+          'progressionModel': entry['progressionModel'] ?? 'Linear Weight Increase',
           'increments': entry['increments'] ?? {'week': 2.5, 'block': 5.0},
           'weeklyFrequency': entry['weeklyFrequency'] ?? 3,
           'maxWeightXReps': entry['maxWeightXReps'] ?? '',
@@ -633,7 +633,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       final entry = {
         'periodizationModel': existingEntry?['periodizationModel'] ?? 'Linear Exposure',
         'repTargets': reps,
-        'progressionModel': existingEntry?['progressionModel'] ?? 'linear',
+        'progressionModel': existingEntry?['progressionModel'] ?? "Linear Weight Increase",
         'increments': existingEntry?['increments'] ?? {'week': 2.5, 'block': 5.0},
         'weeklyFrequency': existingEntry?['weeklyFrequency'] ?? 3,
         'maxWeightXReps': existingEntry?['maxWeightXReps'] ?? '',
@@ -1050,6 +1050,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   final TextEditingController _maxRepsController = TextEditingController();
   Map<String, Map<String, String>>? _cachedRepTargetMap;
   Map<String, String> _selectedRirModel = {}; // Keeps track of selection per exercise
+  Map<String, String> _selectedProgressionModel = {};
+
   Map<String, Map<String, Map<String, Map<String, String>>>>? _cachedRirPlan;
 
 
@@ -1215,6 +1217,12 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       _rirDisplayController.text = 'W1 → ${summary.join(' | ')}';
     }
 
+    final savedProgressionModel = widget.exerciseSettings[widget.exerciseId]?['progressionModel'];
+    if (savedProgressionModel is String && savedProgressionModel.isNotEmpty) {
+      final normalized = (savedProgressionModel == 'linear') ? 'Linear Weight Increase' : savedProgressionModel;
+      _selectedProgressionModel[widget.exerciseName] = normalized;
+    }
+
 
 
   }
@@ -1330,6 +1338,13 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       widget.onUpdateSetting(widget.exerciseId, 'increments', incrementsMap);
       print("💾 [DISPOSE] Saved increments for ${widget.exerciseName}: $incrementsMap");
     }
+
+    final progressionModel = _selectedProgressionModel[widget.exerciseName];
+    if (progressionModel != null && progressionModel.isNotEmpty) {
+      widget.onUpdateSetting(widget.exerciseId, 'progressionModel', progressionModel);
+      print("💾 [DISPOSE] Saved progression model for ${widget.exerciseName}: $progressionModel");
+    }
+
 
     final notes = _notesController.text.trim();
     widget.onUpdateSetting(widget.exerciseId, 'notes', notes);
@@ -3665,21 +3680,84 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                 const SizedBox(height: 6, width:400), // Adjust to 10 or 12 if you want more breathing room
 
+                SizedBox(
+                  width: 158,
+                  height: 48,
+                  child: Theme(
+                    data: Theme.of(context).copyWith(
+                      canvasColor: Colors.blueGrey.shade700,
+                    ),
+                    child: DropdownButtonFormField<String>(
+                      value: _selectedProgressionModel[widget.exerciseName],
+                      isExpanded: true,
+                      items: [
+                        DropdownMenuItem<String>(
+                          value: 'Linear Weight Increase',
+                          child: Text(
+                            'Linear Weight Increase',
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                            softWrap: false,
+                          ),
+                        ),
+                      ],
+                      selectedItemBuilder: (context) {
+                        return [
+                          'Linear Weight Increase',
+                        ].map((label) {
+                          return Container(
+                            alignment: Alignment.centerLeft,
+                            width: 130,
+                            child: Text(
+                              label,
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                              softWrap: false,
+                              style: const TextStyle(color: Colors.white, fontSize: 12),
+                            ),
+                          );
+                        }).toList();
+                      },
+                      onChanged: (value) {
+                        setState(() {
+                          _selectedProgressionModel[widget.exerciseName] = value!;
+                          widget.onUpdateSetting(widget.exerciseId, 'progressionModel', value);
+                          print("💾 [UI] Saved progression model '$value' for ${widget.exerciseName}");
+                        });
+                      },
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                      decoration: InputDecoration(
+                        labelText: 'Progression Model',
+                        labelStyle: const TextStyle(color: Colors.white),
+                        floatingLabelBehavior: FloatingLabelBehavior.always,
+                        filled: true,
+                        fillColor: Colors.blueGrey.shade700,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                      ),
+                    ),
+
+                  ),
+                ),
+
+
+
                 // Add spacing if needed
 
-                const SizedBox(height: 6, width:200), // Adjust to 10 or 12 if you want more breathing room
+
 
 
                 SizedBox(
                   width: 158,
-                  height: 48, // Match Notes height
+                  height: 44, // Match Notes height
                   child: Stack(
                     children: [
                       Positioned.fill(
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
                           decoration: BoxDecoration(
-                            color: Colors.blueGrey.shade800,
+                            color: Colors.blueGrey.shade700,
                             borderRadius: BorderRadius.circular(4),
                             border: Border.all(color: Colors.white38),
                           ),
@@ -3726,8 +3804,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         left: 8,
                         top: -4,
                         child: Text(
-                          'Max Weight × Reps',
-                          style: TextStyle(fontSize: 12, color: Colors.white, backgroundColor: Colors.blueGrey.shade800
+                          'Best Weight × Reps',
+                          style: TextStyle(fontSize: 12, color: Colors.white, backgroundColor: Colors.blueGrey.shade700
                           ),
                         ),
                       ),
@@ -3735,10 +3813,10 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   ),
                 ),
 
-
+                const SizedBox(height: 3, width:400), // Adjust to 10 or 12 if you want more breathing room
 
                 SizedBox(
-                  width: 158,
+                  width: 350,
                   height:48,
                   child: TextField(
                     controller: _notesController,
@@ -3749,7 +3827,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                       labelText: 'Notes',
                       labelStyle: const TextStyle(color: Colors.white),
                       filled: true,
-                      fillColor: Colors.blueGrey.shade800,
+                      fillColor: Colors.blueGrey.shade700,
                       border: const OutlineInputBorder(),
                       contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
                     ),
