@@ -36,13 +36,16 @@ class PeriodizationModelUtils {
   static final Map<String, List<int>> exercisePreviousTopSetReps = {};
   static Map<String, PeriodizationModelType> exercisePeriodizationModels = {};
   static Map<String, dynamic> plannedExerciseDetails = {}; // ✅ Add this line
-  static final Map<String, String> nameToId = {};
+  static Map<String, String> nameToId = {};
+
   static final Map<String, String> idToName = {};        // id → name ✅
   static final List<int> linearClassicDefaults = [10, 8, 6];
   static final List<int> linearExposureDefaults = [12, 10, 8, 6, 4, 2];
   static final List<int> dupSignatureDefaults = [6, 10];
   static Map<String, Map<String, dynamic>> bb2DailyData = {};
   static List<Map<String, dynamic>> savedWorkoutsList = [];
+
+  static Map<String, dynamic> get exerciseSettings => _exerciseSettings;
 
 
   static double calculateE1RM(double? weight, double? reps, double? rir) {
@@ -745,25 +748,14 @@ class PeriodizationModelUtils {
 
     switch (model) {
       case PeriodizationModelType.dailyUndulatingExposure:
-        return getSuggestedWeightFromRep(exerciseName, reps.toInt(), rir);
-
-
-      case PeriodizationModelType.dupSignature:
-        return getDupSignatureSet1SuggestedWeight(
-          exerciseName: exerciseName,
-          reps: reps,
-          rir: rir,
-        );
       case PeriodizationModelType.linearClassic:
-        return getSuggestedWeightFromRep(exerciseName, reps.toInt(), rir);
-
       case PeriodizationModelType.linearExposure:
-        return getSuggestedWeightFromRep(exerciseName, reps.toInt(), rir);
-
+      case PeriodizationModelType.dupSignature:
       case PeriodizationModelType.dailyUndulatingWeek:
-        return 45.0;
+        return getSuggestedWeightFromRep(exerciseName, reps.toInt(), rir);
     }
   }
+
 
 
   static double getDupSignatureSet2SuggestedWeight({
@@ -1868,16 +1860,17 @@ class PeriodizationModelUtils {
     return (suggestedWeight / 2.5).round() * 2.5;
   }
 
-  static Map<String, dynamic> _exerciseSettings = {};
+
 
   static void setExerciseSettings(Map<String, dynamic> settings) {
     _exerciseSettings = settings;
     print('✅ [PMU] setExerciseSettings called with keys: ${settings.keys}');
     final testId = 'AmfUWbF1DH3I7qPAdh5k';
     print('🔍 [PMU] Details for Bench ID ($testId): ${settings[testId]}');
+
   }
 
-
+  static Map<String, dynamic> _exerciseSettings = {};
 
   static double roundToNearestValidIncrement({
     required double targetWeight,

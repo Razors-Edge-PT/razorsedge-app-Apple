@@ -637,10 +637,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final reps = double.tryParse(repsText) ?? set1SuggestedReps(exerciseIndex);
     final rir = double.tryParse(rirText) ?? set1RIR(exerciseIndex);
 
-    return PeriodizationModelUtils.getSuggestedSet1WeightByModel(
-      exerciseName: exerciseName,
-      reps: reps,
-      rir: rir,
+    return PeriodizationModelUtils.getSuggestedWeightFromRep(
+      exerciseName,
+      reps.toInt(),
+      rir,
     );
   }
 
@@ -695,9 +695,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
   Future<void> _loadInitialData() async {
 
-    await _loadPlannedExerciseDetails(); // 🧠 Ensures blockStartDate is set
-    await loadSavedWorkoutsForInstanceCount(); // 🧠 Fills savedWorkoutsList
+    _injectIdToNameFromSelectedExercises();
+    await loadExercisesFromFirestoreForWES(); // ✅ BEFORE using name↔id anywhere
+    await _buildNameToIdMapsFromFirestore(); // Replaces _loadPlannedExerciseDetails()
 
+
+    await loadSavedWorkoutsForInstanceCount(); // 📅 Prepares savedWorkoutsList
+
+    await _loadPlannedExerciseDetails(); // Only sets exerciseSettings and blockStartDate
 // ✅ Define test exercise (must exist in workouts)
     final testExercise = "Bench Press, Barbell";
 
@@ -748,6 +753,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       _selectedExercisesWithCircuits.addAll(
           List<Map<String, dynamic>>.from(widget.prefilledExercisesWithCircuits!)
       );
+
+
+      _injectIdToNameFromSelectedExercises();
 
       _workoutSets.clear();
       _repsControllers.clear();
@@ -923,9 +931,124 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     return 10.0;
   }
 
+  Future<void> loadExercisesFromFirestoreForWES() async {
+    final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
+
+    for (final doc in snapshot.docs) {
+      final id = doc.id;
+      final name = doc['name']?.toString()?.trim();
+      if (name != null && name.isNotEmpty) {
+        PeriodizationModelUtils.nameToId[name] = id;
+        PeriodizationModelUtils.idToName[id] = name;
+        print('✅ [WES] Mapped "$name" → $id');
+      }
+    }
+  }
 
 
-  Future<void> _loadPlannedExerciseDetails() async {
+
+
+  Future<Map<String, dynamic>> _loadPlannedExerciseDetails() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return {};
+
+    final doc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('block_planner')
+        .doc('current_block')
+        .get();
+
+    final data = doc.data();
+    if (data == null) return {};
+
+    if (!data.containsKey('plannedExerciseDetails')) {
+      print('❌ [WES] No plannedExerciseDetails found in Firestore');
+      return {};
+    }
+
+    final details = Map<String, dynamic>.from(data['plannedExerciseDetails']);
+
+    // ✅ Inject into PMU first
+    PeriodizationModelUtils.setExerciseSettings(details);
+    print('✅ [WES] Injected exerciseSettings into PMU with keys: ${details.keys}');
+
+    // ✅ Handle blockMeta
+    if (data.containsKey('blockMeta')) {
+      details['blockMeta'] = Map<String, dynamic>.from(data['blockMeta']);
+      print('📎 [WES] Injected blockMeta into plannedExerciseDetails');
+    }
+
+    final meta = data['blockMeta'] as Map<String, dynamic>? ?? {};
+    _blockStartDate = DateTime.tryParse(meta['blockStartDate'] ?? '');
+    _blockEndDate = DateTime.tryParse(meta['blockEndDate'] ?? '');
+
+    print('📅 [WES] Loaded blockStartDate=$_blockStartDate, blockEndDate=$_blockEndDate');
+
+    // ✅ Clear and rebuild plannedExerciseDetails and periodization models
+    PeriodizationModelUtils.plannedExerciseDetails.clear();
+    PeriodizationModelUtils.exercisePeriodizationModels.clear();
+
+    details.forEach((exerciseId, entry) {
+      if (exerciseId == 'blockMeta') return;
+
+      if (entry is Map<String, dynamic>) {
+        PeriodizationModelUtils.plannedExerciseDetails[exerciseId] = entry;
+
+        final modelName = entry['periodizationModel'];
+        final modelEnum = PeriodizationModelUtils.stringToModel(modelName);
+        if (modelEnum != null) {
+          PeriodizationModelUtils.exercisePeriodizationModels[exerciseId] = modelEnum;
+          print('✅ [WES] Mapped model $modelName → $modelEnum for $exerciseId');
+        }
+
+        // ✅ Model-specific logic (DUP expansions, Linear Classic debug, etc.)
+        if (modelEnum == PeriodizationModelType.dailyUndulatingExposure ||
+            modelEnum == PeriodizationModelType.dailyUndulatingWeek) {
+          final repTargets = entry['repTargets'];
+          if (repTargets is Map<String, dynamic> &&
+              repTargets.length == 1 &&
+              repTargets.containsKey('week1')) {
+            final week1Map = repTargets['week1'];
+            if (week1Map is Map<String, dynamic> && week1Map.isNotEmpty) {
+              final expanded = PeriodizationModelUtils.expandDupDailyWeek1(
+                Map<String, String>.from(week1Map.map((k, v) => MapEntry(k, v.toString()))),
+                12,
+              );
+              PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets'] = expanded;
+              print('🔁 [WES] Expanded week1 → all weeks for $exerciseId');
+            }
+          }
+        }
+
+        if (modelEnum == PeriodizationModelType.linearClassic) {
+          final repTargets = entry['repTargets'];
+          if (repTargets is Map<String, dynamic>) {
+            print('🧪 [WES] Linear Classic repTargets for $exerciseId → ${jsonEncode(repTargets)}');
+
+            final start = _blockStartDate;
+            final end = _blockEndDate;
+            final blockLength = PeriodizationModelUtils.getBlockLength(
+              blockStartDate: start,
+              blockEndDate: end,
+            );
+            print('🧠 [WES] Linear Classic blockLength = $blockLength');
+
+            final week1 = repTargets['week1'];
+            final finalWeek = repTargets['week$blockLength'];
+            print('📅 [WES] week1: ${jsonEncode(week1)}');
+            print('📅 [WES] finalWeek: ${jsonEncode(finalWeek)}');
+          }
+        }
+      }
+    });
+
+    print('📄 [WES] Full plannedExerciseDetails loaded: ${jsonEncode(details)}');
+    return details; // ✅ Return the injected structure
+  }
+
+
+  Future<void> _buildNameToIdMapsFromFirestore() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
@@ -937,124 +1060,66 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         .get();
 
     final data = doc.data();
-    if (data == null) return;
-
-    if (data.containsKey('plannedExerciseDetails')) {
-      final details = Map<String, dynamic>.from(data['plannedExerciseDetails']);
-
-      if (data.containsKey('blockMeta')) {
-        details['blockMeta'] = Map<String, dynamic>.from(data['blockMeta']);
-        print('📎 [WES] Injected blockMeta into plannedExerciseDetails');
-      }
-      final meta = data['blockMeta'] as Map<String, dynamic>? ?? {};
-      _blockStartDate = DateTime.tryParse(meta['blockStartDate'] ?? '');
-      _blockEndDate = DateTime.tryParse(meta['blockEndDate'] ?? '');
-
-      print('📅 [WES] Loaded blockStartDate=$_blockStartDate, blockEndDate=$_blockEndDate');
-
-
-      PeriodizationModelUtils.plannedExerciseDetails.clear();
-      PeriodizationModelUtils.exercisePeriodizationModels.clear();
-
-      details.forEach((exerciseId, entry) {
-        if (exerciseId == 'blockMeta') return;
-
-        if (entry is Map<String, dynamic>) {
-          PeriodizationModelUtils.plannedExerciseDetails[exerciseId] = entry;
-
-          final modelName = entry['periodizationModel'];
-          final modelEnum = PeriodizationModelUtils.stringToModel(modelName);
-          if (modelEnum != null) {
-            PeriodizationModelUtils.exercisePeriodizationModels[exerciseId] = modelEnum;
-            print('✅ [WES] Mapped model $modelName → $modelEnum for $exerciseId');
-          }
-          // ✅ If model is DUP Exposure and only has week1, expand it across block
-          if (modelEnum == PeriodizationModelType.dailyUndulatingExposure) {
-            final repTargets = entry['repTargets'];
-            if (repTargets is Map<String, dynamic> &&
-                repTargets.length == 1 &&
-                repTargets.containsKey('week1')) {
-              final week1Map = repTargets['week1'];
-              if (week1Map is Map<String, dynamic> && week1Map.isNotEmpty) {
-                final expanded = PeriodizationModelUtils.expandDupDailyWeek1(
-                  Map<String, String>.from(week1Map.map((k, v) => MapEntry(k, v.toString()))),
-                  12, // Or replace with block length if dynamically available
-                );
-                PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets'] = expanded;
-                print('🔁 [WES] Expanded DUP Exposure week1 → all weeks for $exerciseId');
-                final rep = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets'];
-                print('🧪 [WES] Final repTargets after expansion for $exerciseId: ${jsonEncode(rep)}');
-                print('🧪 [Final WES] repTargets for $exerciseId → ${jsonEncode(PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets'])}');
-
-
-              }
-            }
-          }
-          if (modelEnum == PeriodizationModelType.dailyUndulatingWeek) {
-            final repTargets = entry['repTargets'];
-
-            // 🔍 Debug output
-            if (repTargets is Map<String, dynamic>) {
-              print('🧪 [WES] DUP Weekly raw repTargets for $exerciseId → ${jsonEncode(repTargets)}');
-
-              for (final weekKey in repTargets.keys) {
-                final weekMap = repTargets[weekKey];
-                if (weekMap is Map<String, dynamic>) {
-                  final instanceKeys = weekMap.keys.join(', ');
-                  print('📅 [WES] $exerciseId → $weekKey contains: $instanceKeys');
-                }
-              }
-            }
-
-            // 🔁 Expand week1 to all weeks if it's the only key
-            if (repTargets is Map<String, dynamic> &&
-                repTargets.length == 1 &&
-                repTargets.containsKey('week1')) {
-              final week1Map = repTargets['week1'];
-              if (week1Map is Map<String, dynamic> && week1Map.isNotEmpty) {
-                final expanded = PeriodizationModelUtils.expandDupDailyWeek1(
-                  Map<String, String>.from(week1Map.map((k, v) => MapEntry(k, v.toString()))),
-                  12,
-                );
-                PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets'] = expanded;
-                print('🔁 [WES] Expanded DUP Weekly week1 → all weeks for $exerciseId');
-                print('🧪 [Final WES] repTargets for $exerciseId → ${jsonEncode(expanded)}');
-              }
-            }
-          }
-
-          if (modelEnum == PeriodizationModelType.linearClassic) {
-            final repTargets = entry['repTargets'];
-            if (repTargets is Map<String, dynamic>) {
-              print('🧪 [WES] Linear Classic repTargets for $exerciseId → ${jsonEncode(repTargets)}');
-
-              final blockMeta = details['blockMeta'] as Map<String, dynamic>? ?? {};
-              final start = DateTime.tryParse(blockMeta['blockStartDate'] ?? '');
-              final end = DateTime.tryParse(blockMeta['blockEndDate'] ?? '');
-              final blockLength = PeriodizationModelUtils.getBlockLength(
-                blockStartDate: start,
-                blockEndDate: end,
-              );
-              print('🧠 [WES] Linear Classic blockLength = $blockLength');
-
-              final week1 = repTargets['week1'];
-              final finalWeek = repTargets['week$blockLength'];
-
-              print('📅 [WES] week1: ${jsonEncode(week1)}');
-              print('📅 [WES] finalWeek: ${jsonEncode(finalWeek)}');
-            }
-          }
-
-
-
-        }
-      });
-
-      print('📄 [WES] Full plannedExerciseDetails loaded: ${jsonEncode(details)}');
-    } else {
+    if (data == null || !data.containsKey('plannedExerciseDetails')) {
       print('❌ [WES] No plannedExerciseDetails found in Firestore');
+      return;
+    }
+
+    final rawDetails = Map<String, dynamic>.from(data['plannedExerciseDetails']);
+    print('📦 [WES] [Firestore Function] Full raw Firestore data: ${jsonEncode(data)}');
+    print('📦 [WES] Extracted plannedExerciseDetails: ${jsonEncode(rawDetails)}');
+
+
+    // ✅ Inject into PMU
+    PeriodizationModelUtils.setExerciseSettings(rawDetails);
+    print('✅ [WES] Injected exerciseSettings into PMU with keys: ${rawDetails.keys}');
+
+    // ✅ Build name ↔ ID maps
+    final nameToIdMap = <String, String>{};
+    final idToNameMap = <String, String>{};
+
+    rawDetails.forEach((id, entry) {
+      if (entry is Map<String, dynamic>) {
+        // ✅ Try to get name directly from Firestore entry
+        String? name = entry['name'];
+
+        // ✅ Fallback: try to get it from injected _selectedExercisesWithCircuits
+        if ((name == null || name.trim().isEmpty) && PeriodizationModelUtils.idToName.containsKey(id)) {
+          name = PeriodizationModelUtils.idToName[id];
+          print('🔁 [WES] Using fallback name from idToName for $id → $name');
+        }
+
+        if (name != null && name.trim().isNotEmpty) {
+          nameToIdMap[name.trim()] = id;
+          idToNameMap[id] = name.trim();
+          print('✅ [WES] Mapped name "$name" ↔ id $id');
+        } else {
+          print('❌ [WES] Still missing name for exerciseId: $id');
+        }
+      }
+    });
+
+
+    PeriodizationModelUtils.nameToId = nameToIdMap;
+    PeriodizationModelUtils.idToName.clear();
+    PeriodizationModelUtils.idToName.addAll(idToNameMap);
+
+    print('✅ [WES] nameToIdMap injected with ${nameToIdMap.length} entries');
+    print('✅ [WES] idToNameMap injected with ${idToNameMap.length} entries');
+  }
+
+
+  void _injectIdToNameFromSelectedExercises() {
+    for (final ex in _selectedExercisesWithCircuits) {
+      final id = ex['id'];
+      final name = ex['name'];
+      if (id != null && name != null) {
+        PeriodizationModelUtils.idToName[id] = name;
+        print("🧩 [WES inject] id=$id → name=$name"); // ✅ Debug print
+      }
     }
   }
+
 
   Future<void> loadSavedWorkoutsForInstanceCount() async {
     final user = FirebaseAuth.instance.currentUser;
