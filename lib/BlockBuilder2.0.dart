@@ -1539,16 +1539,22 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         );
 
 // 🚀 Progression logic (only triggers if model is explicitly selected)
-        final double progressedWeight = (progressionModel == ProgressionModelType.linearWeightIncrease)
+        final Map<String, dynamic> progressionResult =
+        (progressionModel == ProgressionModelType.linearWeightIncrease)
             ? PeriodizationModelUtils.getProgressedWeight(
           exerciseName: exerciseName,
           repTarget: repsValue.toInt(),
           defaultWeight: historyWeight,
-          topSetHistory: topSetsByExercise[exerciseId] ?? [],
           increments: PeriodizationModelUtils.getIncrementsForExercise(exerciseId ?? ''),
           maxWeightByReps: plannedExerciseDetails[exerciseId]?['maxWeightByReps'],
+
+          weekIndex: weekIndex,
         )
-            : historyWeight;
+            : {'weight': historyWeight, 'reps': repsValue.toInt()};
+
+        final double progressedWeight = progressionResult['weight'];
+        final int adjustedReps = progressionResult['reps'];
+
 
         print('🧠 Progression model "$progressionModelName" → using weight ${progressedWeight.toStringAsFixed(1)} (base: $historyWeight)');
 
@@ -1557,8 +1563,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             ? progressedWeight.toStringAsFixed(1)
             : '';
 
-        final String hintReps = (repsController.text.isEmpty && isExerciseNamed && plannedRep != null)
-            ? RegExp(r'^\d+').firstMatch(plannedRep)?.group(0) ?? ''
+        final String hintReps = (repsController.text.isEmpty && isExerciseNamed)
+            ? adjustedReps.toString()
             : '';
 
 

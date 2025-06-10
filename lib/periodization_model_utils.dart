@@ -685,51 +685,132 @@ class PeriodizationModelUtils {
         .toList();
   }
 
-
-  // Progression model logic
-
-  static double getProgressedWeight({
+  static List<double> roundToAllValidIncrements({
+    required double baseWeight,
     required String exerciseName,
-    required int repTarget,
-    required double defaultWeight,
-    required List<Map<String, dynamic>> topSetHistory,
-    required List<double> increments,
-    Map<String, dynamic>? maxWeightByReps,
   }) {
-    // 🔍 Find most recent entry with this rep target
-    final match = topSetHistory.firstWhere(
-          (entry) => entry['reps'] == repTarget,
-      orElse: () => {},
-    );
+    final increments = getIncrementsForExercise(exerciseName);
+    final Set<double> options = {};
 
-    if (match.isNotEmpty) {
-      final double lastWeight = (match['weight'] as num?)?.toDouble() ?? defaultWeight;
-      final int lastReps = match['reps'];
-
-      if (lastReps >= repTarget) {
-        print('✅ Rep target $repTarget met at $lastWeight kg. Increasing by ${increments.first}');
-        return lastWeight + increments.first;
-      } else if ((repTarget - lastReps) <= 1) {
-        print('➕ Close miss ($lastReps/$repTarget), keep weight $lastWeight');
-        return lastWeight;
-      } else {
-        print('⚠️ Missed rep target badly ($lastReps/$repTarget), retry with rep += 1 at $lastWeight');
-        return lastWeight; // Later: add separate rep suggestion
+    for (int i = 0; i < 100; i++) {
+      for (final inc in increments) {
+        options.add(20 + i * inc);
       }
     }
 
-    // 🛠️ Fallback to Max Weight by Reps from BP
+    return options.toList()..sort();
+  }
+
+
+
+  // Progression model logic
+
+  static Map<String, dynamic> getProgressedWeight({
+    required String exerciseName,
+    required int repTarget,
+    required double defaultWeight,
+    required List<double> increments,
+    Map<String, dynamic>? maxWeightByReps,
+    List<Map<String, dynamic>>? topSetHistory,
+    int weekIndex = 0,
+  }) {
+    if (weekIndex == 0) {
+      print('🕓 Week 1 detected → progression disabled, using base weight: $defaultWeight');
+      return {'weight': defaultWeight, 'reps': repTarget};
+    }
+
+    final previousReps = PeriodizationModelUtils.exercisePreviousTopSetReps[exerciseName];
+    if (previousReps == null || previousReps.isEmpty) {
+      print('🚫 No top set rep history found for $exerciseName');
+      return {'weight': defaultWeight, 'reps': repTarget};
+    }
+
+    print('📦 [Progression] Stored top set reps for $exerciseName: $previousReps');
+    print('🔍 Looking for a match on repTarget = $repTarget');
+
+    final matchIndex = previousReps.indexWhere((r) => r == repTarget);
+
+    final incrementMap = _exerciseSettings[exerciseName]?['increments'] ??
+        _exerciseSettings[nameToId[exerciseName]]?['increments'];
+
+    final double increment = (incrementMap?['primary'] as num?)?.toDouble() ?? 2.5;
+
+    if (matchIndex != -1) {
+      final matchedReps = previousReps[matchIndex];
+      double weightUsed = defaultWeight;
+
+      if (topSetHistory != null && topSetHistory.isNotEmpty) {
+        final matchEntry = topSetHistory.firstWhere(
+              (entry) => entry['reps'] == repTarget,
+          orElse: () => {},
+        );
+        if (matchEntry.isNotEmpty && matchEntry['weight'] != null) {
+          weightUsed = (matchEntry['weight'] as num).toDouble();
+          print('📊 [Progression] Using actual weight from history: $weightUsed');
+        }
+      }
+
+      if (matchedReps >= repTarget) {
+        final validOptions = roundToAllValidIncrements(
+          baseWeight: weightUsed,
+          exerciseName: exerciseName,
+        );
+        final nextHigher = validOptions.firstWhere(
+              (w) => w > weightUsed,
+          orElse: () => weightUsed,
+        );
+
+        if (topSetHistory != null) {
+          final higherAttempts = topSetHistory
+              .where((entry) => (entry['weight'] as num).toDouble() == nextHigher)
+              .toList();
+
+          if (higherAttempts.isNotEmpty) {
+            final bestRepsAtHigher = higherAttempts
+                .map((e) => (e['reps'] as num?)?.toInt() ?? 0)
+                .reduce((a, b) => a > b ? a : b);
+
+            if (bestRepsAtHigher < repTarget) {
+              final newReps = bestRepsAtHigher + 1;
+              print('🔁 Progressing reps at $nextHigher: $bestRepsAtHigher → $newReps');
+              return {'weight': nextHigher, 'reps': newReps};
+            } else {
+              final nextNextHigher = validOptions.firstWhere(
+                    (w) => w > nextHigher,
+                orElse: () => nextHigher,
+              );
+              print('⬆️ Target met at $nextHigher → progressing to $nextNextHigher');
+              return {'weight': nextNextHigher, 'reps': repTarget};
+            }
+          }
+        }
+
+        print('✅ Rep target $repTarget met. Progressing from $weightUsed → next valid increment: $nextHigher');
+        return {'weight': nextHigher, 'reps': repTarget};
+      } else if ((repTarget - matchedReps) <= 1) {
+        print('➕ Close miss ($matchedReps/$repTarget), keep weight $weightUsed');
+        return {'weight': weightUsed, 'reps': repTarget};
+      } else {
+        print('⚠️ Missed badly ($matchedReps/$repTarget), retry at same weight $weightUsed');
+        return {'weight': weightUsed, 'reps': repTarget};
+      }
+    }
+
     if (maxWeightByReps != null &&
         (maxWeightByReps['reps'] == repTarget || maxWeightByReps['reps'].toString() == repTarget.toString())) {
       final fallbackWeight = (maxWeightByReps['weight'] as num?)?.toDouble() ?? defaultWeight;
       print('🪂 Using maxWeightByReps fallback → $fallbackWeight');
-      return fallbackWeight;
+      return {'weight': fallbackWeight, 'reps': repTarget};
     }
 
-    // 🛡️ Fallback to default if no match
     print('🚨 No match found for $repTarget reps, using defaultWeight → $defaultWeight');
-    return defaultWeight;
+    return {'weight': defaultWeight, 'reps': repTarget};
   }
+
+
+
+
+
 
 
 
