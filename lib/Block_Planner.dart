@@ -3691,6 +3691,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                       value: _selectedProgressionModel[widget.exerciseName],
                       isExpanded: true,
                       items: [
+
                         DropdownMenuItem<String>(
                           value: 'Linear Weight Increase',
                           child: Text(
@@ -3700,10 +3701,30 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                             softWrap: false,
                           ),
                         ),
+                        DropdownMenuItem<String>(
+                          value: 'Smart Progression',
+                          child: Text(
+                            'Smart Progression',
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                            softWrap: false,
+                          ),
+                        ),
+                        DropdownMenuItem<String>(
+                          value: 'None',
+                          child: Text(
+                            'None',
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                            softWrap: false,
+                          ),
+                        ),
                       ],
                       selectedItemBuilder: (context) {
                         return [
                           'Linear Weight Increase',
+                          'Smart Progression',
+                          'None',
                         ].map((label) {
                           return Container(
                             alignment: Alignment.centerLeft,
@@ -3737,6 +3758,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                       ),
                     ),
+
+
 
                   ),
                 ),

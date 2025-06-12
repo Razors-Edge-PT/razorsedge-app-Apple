@@ -151,7 +151,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
   Future<void> loadAllData() async {
     print("🧪 [BB2] Starting loadAllData()...");
-
+    // 🧠 Ensure full top set history is loaded before progression model logic
+    await PeriodizationModelUtils.fetchFullTopSetHistory();
     // ✅ Load top sets from workout history (PMU global fetch)
     await PeriodizationModelUtils.fetchLastWorkoutTopSetReps();
     print('🧪 [BB2] Top set reps loaded: ${PeriodizationModelUtils.exercisePreviousTopSetReps.keys.length} exercises');
@@ -1527,9 +1528,9 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
         // 🔍 Check for selected progression model (optional per-exercise)
         final String? progressionModelName = plannedExerciseDetails[exerciseId]?['progressionModel'];
-        final ProgressionModelType progressionModel = progressionModelName == 'Linear Weight Increase'
-            ? ProgressionModelType.linearWeightIncrease
-            : ProgressionModelType.none;
+        final ProgressionModelType progressionModel =
+        PeriodizationModelUtils.parseProgressionModel(progressionModelName);
+
 
 // 🧠 Calculate default E1RM-based suggested weight
         final double historyWeight = PeriodizationModelUtils.getSuggestedWeightFromRep(
@@ -1538,22 +1539,17 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           rirValue,
         );
 
-// 🚀 Progression logic (only triggers if model is explicitly selected)
-        final Map<String, dynamic> progressionResult =
-        (progressionModel == ProgressionModelType.linearWeightIncrease)
-            ? PeriodizationModelUtils.getProgressedWeight(
+        // 🚀 Progression logic (only triggers if model is explicitly selected)
+        final double progressedWeight = PeriodizationModelUtils.getWeightByProgressionModel(
+          model: progressionModel,
           exerciseName: exerciseName,
           repTarget: repsValue.toInt(),
           defaultWeight: historyWeight,
           increments: PeriodizationModelUtils.getIncrementsForExercise(exerciseId ?? ''),
           maxWeightByReps: plannedExerciseDetails[exerciseId]?['maxWeightByReps'],
-
+          topSetHistory: PeriodizationModelUtils.topSetsByExercise[exerciseName],
           weekIndex: weekIndex,
-        )
-            : {'weight': historyWeight, 'reps': repsValue.toInt()};
-
-        final double progressedWeight = progressionResult['weight'];
-        final int adjustedReps = progressionResult['reps'];
+        );
 
 
         print('🧠 Progression model "$progressionModelName" → using weight ${progressedWeight.toStringAsFixed(1)} (base: $historyWeight)');
@@ -1563,8 +1559,18 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             ? progressedWeight.toStringAsFixed(1)
             : '';
 
-        final String hintReps = (repsController.text.isEmpty && isExerciseNamed)
-            ? adjustedReps.toString()
+        final actual = PeriodizationModelUtils.getActualRepsAndRir(
+          repsController: repsController,
+          rirController: rirController,
+          plannedRep: plannedRep,
+          plannedRir: hintRir,
+        );
+        final double actualReps = actual['reps']!;
+        final double actualRir = actual['rir']!;
+
+
+        final String hintReps = (repsController.text.isEmpty && isExerciseNamed && plannedRep != null)
+            ? RegExp(r'^\d+').firstMatch(plannedRep)?.group(0) ?? ''
             : '';
 
 
