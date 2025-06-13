@@ -676,17 +676,35 @@ class PeriodizationModelUtils {
   }
 
   static List<double> getIncrementsForExercise(String exerciseNameOrId) {
-    final raw = _exerciseSettings[exerciseNameOrId]?['increments'];
-    if (raw == null || raw.toString().isEmpty) return [2.5]; // fallback
+    final byName = _exerciseSettings[exerciseNameOrId]?['increments'];
 
-    return raw
-        .toString()
-        .split(',')
-        .map((e) => double.tryParse(e.trim()))
-        .whereType<double>()
-        .where((v) => v > 0)
-        .toList();
+    Map<String, dynamic>? byId;
+    final id = nameToId[exerciseNameOrId];
+    if (id != null && _exerciseSettings.containsKey(id)) {
+      byId = _exerciseSettings[id]?['increments'];
+    }
+
+    final increments = byName ?? byId;
+
+    if (increments == null) {
+      print('❌ [PMU] No increments found for $exerciseNameOrId by name or ID');
+      return [2.5]; // fallback
+    }
+
+    final double primary = (increments['primary'] as num?)?.toDouble() ?? 2.5;
+    final double secondary = (increments['secondary'] as num?)?.toDouble() ?? 0.0;
+
+    final Set<double> result = {primary};
+    if (secondary > 0 && secondary != primary) {
+      result.add(secondary);
+    }
+
+    final list = result.toList()..sort();
+    print('✅ [PMU] getIncrementsForExercise($exerciseNameOrId) → $list');
+    return list;
   }
+
+
 
   static List<double> roundToAllValidIncrements({
     required double baseWeight,
@@ -757,14 +775,39 @@ class PeriodizationModelUtils {
       }
 
       if (matchedReps >= repTarget) {
-        final validOptions = roundToAllValidIncrements(
-          baseWeight: weightUsed,
-          exerciseName: exerciseName,
-        );
-        final nextHigher = validOptions.firstWhere(
-              (w) => w > weightUsed,
-          orElse: () => weightUsed,
-        );
+        // ✅ Use roundToNearestValidIncrement to determine next progression step
+        // Rebuild the same options used inside roundToNearestValidIncrement
+        final id = nameToId[exerciseName];
+        final increments = _exerciseSettings[exerciseName]?['increments'] ??
+            _exerciseSettings[id]?['increments'];
+
+        final double primary = (increments?['primary'] as num?)?.toDouble() ?? 2.5;
+        final double secondary = (increments?['secondary'] as num?)?.toDouble() ?? 0.0;
+
+        final Set<double> options = {};
+
+// Build legal weight options
+        for (int i = 0; i < 150; i++) {
+          final base = 20 + i * primary;
+          options.add(double.parse(base.toStringAsFixed(1)));
+          if (secondary > 0 && secondary != primary) {
+            options.add(double.parse((base + secondary).toStringAsFixed(1)));
+          }
+        }
+
+        final sorted = options.toList()..sort();
+
+// Find the next higher weight from weightUsed
+        double nextHigher = weightUsed;
+        for (final option in sorted) {
+          if (option > weightUsed) {
+            nextHigher = option;
+            break;
+          }
+        }
+
+        print('🎯 [Progression] From $weightUsed → next available: $nextHigher');
+
 
         if (topSetHistory != null) {
           final higherAttempts = topSetHistory
@@ -780,11 +823,11 @@ class PeriodizationModelUtils {
             if (bestRepsAtHigher < repTarget) {
               final newReps = bestRepsAtHigher + 1;
               print('🔁 Progressing reps at $nextHigher: $bestRepsAtHigher → $newReps');
-              return nextHigher; // you may return the same weight and handle reps separately
+              return nextHigher;
             } else {
-              final nextNextHigher = validOptions.firstWhere(
-                    (w) => w > nextHigher,
-                orElse: () => nextHigher,
+              final nextNextHigher = roundToNearestValidIncrement(
+                targetWeight: nextHigher + 0.1,
+                exerciseName: exerciseName,
               );
               print('⬆️ Target met at $nextHigher → progressing to $nextNextHigher');
               return nextNextHigher;
@@ -802,7 +845,9 @@ class PeriodizationModelUtils {
         print('⚠️ Missed badly ($matchedReps/$repTarget), retry at same weight $weightUsed');
         return weightUsed;
       }
+
     }
+
 
     if (maxWeightByReps != null &&
         (maxWeightByReps['reps'] == repTarget || maxWeightByReps['reps'].toString() == repTarget.toString())) {
@@ -905,7 +950,14 @@ class PeriodizationModelUtils {
 
 
     // Step 4: Try to find smallest possible increase in E1RM
-    final validWeights = roundToAllValidIncrements(baseWeight: defaultWeight, exerciseName: exerciseName);
+    final validWeights = roundToAllValidIncrements(
+      baseWeight: defaultWeight,
+      exerciseName: exerciseName,
+    );
+
+// ✅ Debug print
+    print('🔍 [SmartProgression] Valid weights for $exerciseName from roundToAllValidIncrements:\n$validWeights');
+
     double bestWeight = defaultWeight;
     double? actualRIR = topSetHistory?.firstWhere(
           (entry) =>
@@ -913,6 +965,7 @@ class PeriodizationModelUtils {
           (entry['rir'] != null),
       orElse: () => {},
     )['rir'] as double?;
+
 
     double fallbackRIR = actualRIR ?? 0.5;
 
