@@ -311,12 +311,18 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     // ✅ Custom logic for dailyUndulatingExposure
     if (model == PeriodizationModelType.dailyUndulatingExposure) {
+      if (_blockStartDate == null || _blockEndDate == null) {
+        print('❌ [WES] _blockStartDate or _blockEndDate is null for $exerciseName');
+        return 10.0; // fallback reps
+      }
+
       final count = PeriodizationModelUtils.getInstanceCountForExerciseInBlock(
         exerciseName: exerciseName,
         savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
         blockStartDate: _blockStartDate!,
         blockEndDate: _blockEndDate!,
       );
+
 
       print('📊 [WES] Instance count for "$exerciseName" in block = $count');
 
@@ -344,12 +350,18 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
 
     if (model == PeriodizationModelType.dailyUndulatingWeek) {
+      if (_blockStartDate == null) {
+        print('❌ [WES] _blockStartDate is null when calculating reps for $exerciseName');
+        return 10.0; // fallback reps value
+      }
+
       final count = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
         exerciseName: exerciseName,
         savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
         blockStartDate: _blockStartDate!,
         weekIndex: weekIndex ?? 0,
       );
+
 
       print('📊 [WES] Weekly instance count for "$exerciseName" in week ${weekIndex ?? 0} = $count');
 
@@ -381,11 +393,17 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       final weekKeyStart = 'week1';
       final weekStart = repTargets?[weekKeyStart];
 
+      if (_blockStartDate == null || _blockEndDate == null) {
+        print('❌ [WES] _blockStartDate or _blockEndDate is null for $exerciseName in linearClassic');
+        return 10.0; // fallback value
+      }
+
       final week = weekIndex ?? 0;
       final blockLength = PeriodizationModelUtils.getBlockLength(
         blockStartDate: _blockStartDate!,
         blockEndDate: _blockEndDate!,
       );
+
 
       if (weekStart is Map<String, dynamic>) {
         final instanceCount = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
@@ -548,12 +566,18 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final weekIndex = _getApplicableWeekIndex(exerciseId);
     if (weekIndex == null) return setNumber == 1 ? 0.5 : 1.5;
 
+    if (_blockStartDate == null) {
+      print('❌ [WES] _blockStartDate is null in getRirFromPlanOrInput for $exerciseName');
+      return 2.0; // fallback RIR value
+    }
+
     final sessionIndex = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
       exerciseName: exerciseName,
       savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
       blockStartDate: _blockStartDate!,
       weekIndex: weekIndex,
     );
+
 
     final rirPlan = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['rirPlan'];
     final weekKey = 'week${weekIndex + 1}';
@@ -1913,7 +1937,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       'userId': user.uid,
       'exercises': _selectedExercisesWithCircuits.asMap().entries.map((entry) {
         int exerciseIndex = entry.key;
-        String exerciseName = entry.value['name'] ?? 'Unnamed';
+        String exerciseName = (entry.value['name'] is String && entry.value['name'].toString().trim().isNotEmpty)
+            ? entry.value['name']
+            : 'Unnamed';
+
         int circuitIndex = entry.value['circuitIndex'] ?? 0;
 
         List<Map<String, dynamic>> validSets = [];
@@ -1946,15 +1973,31 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     try {
       print("🧠 Saving to Firestore: ${jsonEncode(workoutData)}");
       print("📍 Writing to /users/${user.uid}/workouts/");
+
+      // 🔍 Debug each key in the workoutData map
+      workoutData.forEach((key, value) {
+        if (value == null) {
+          print('⚠️ workoutData["$key"] is null!');
+        } else {
+          print('✅ workoutData["$key"] = ${value.runtimeType} → $value');
+        }
+      });
+
       await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
           .collection('workouts')
           .add(workoutData);
+
       print("✅ Workout saved to Firestore successfully.");
 
+      Navigator.pop(context); // ✅ Restores the old behavior
+    } catch (e) {
+      print("❌ Failed to save workout: $e");
 
-      ScaffoldMessenger.of(context).showSnackBar(
+
+
+    ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Workout saved successfully.')),
       );
 
