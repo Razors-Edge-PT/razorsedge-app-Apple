@@ -735,6 +735,7 @@ class PeriodizationModelUtils {
 
   // Progression model logic
 
+  //LinearWeightAdded Model
   static double getProgressedWeight({
     required String exerciseName,
     required int repTarget,

@@ -83,6 +83,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   DateTime? _blockEndDate;
   Map<String, Map<String, dynamic>> _bb2DataByExercise = {};
   Map<String, Map<String, dynamic>> _resolvedBB2Values = {};
+  Map<String, String> _progressionModelsByExercise = {}; // top of WES
+
+
+
 
 
 
@@ -289,7 +293,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     print('🧪 [WES DEBUG] Looking up key "${exerciseName.toLowerCase()}" in BB2 map');
     print('🧪 [WES DEBUG] Available keys in _resolvedBB2Values: ${_resolvedBB2Values.keys.join(', ')}');
 
-
     if (bb2Entry != null) {
       final reps = bb2Entry['reps'];
       if (reps != null && reps > 0) {
@@ -309,12 +312,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final weekIndex = _getApplicableWeekIndex(exerciseId);
     final model = PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
 
-    // ✅ Custom logic for dailyUndulatingExposure
+    // ✅ Rep target from model-specific logic
+    double repTarget = 10.0;
+
     if (model == PeriodizationModelType.dailyUndulatingExposure) {
-      if (_blockStartDate == null || _blockEndDate == null) {
-        print('❌ [WES] _blockStartDate or _blockEndDate is null for $exerciseName');
-        return 10.0; // fallback reps
-      }
+      if (_blockStartDate == null || _blockEndDate == null) return 10.0;
 
       final count = PeriodizationModelUtils.getInstanceCountForExerciseInBlock(
         exerciseName: exerciseName,
@@ -323,37 +325,20 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         blockEndDate: _blockEndDate!,
       );
 
-
-      print('📊 [WES] Instance count for "$exerciseName" in block = $count');
-
-      final week1 = PeriodizationModelUtils
-          .plannedExerciseDetails[exerciseId]?['repTargets']?['week1'];
-
+      final week1 = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets']?['week1'];
       if (week1 is Map<String, dynamic>) {
-        final sorted = week1.entries
-            .where((e) => e.key.startsWith('instance'))
-            .toList()
+        final sorted = week1.entries.where((e) => e.key.startsWith('instance')).toList()
           ..sort((a, b) => a.key.compareTo(b.key));
-
-        final frequency = sorted.length;
-        if (frequency == 0) return 10;
-
-        final index = count % frequency;
-        final raw = sorted[index].value?.toString() ?? '';
-
-        final match = RegExp(r'^(\d+)').firstMatch(raw);
-        final parsed = match != null ? int.tryParse(match.group(1)!) ?? 10 : 10;
-
-        print('🎯 [WES] Using instance${index + 1} → $parsed reps');
-        return parsed.toDouble();
+        if (sorted.isNotEmpty) {
+          final index = count % sorted.length;
+          final raw = sorted[index].value?.toString() ?? '';
+          final match = RegExp(r'^(\d+)').firstMatch(raw);
+          repTarget = match != null ? int.tryParse(match.group(1)!)?.toDouble() ?? 10.0 : 10.0;
+          print('🎯 [WES] Using instance${index + 1} → $repTarget reps');
+        }
       }
-    }
-
-    if (model == PeriodizationModelType.dailyUndulatingWeek) {
-      if (_blockStartDate == null) {
-        print('❌ [WES] _blockStartDate is null when calculating reps for $exerciseName');
-        return 10.0; // fallback reps value
-      }
+    } else if (model == PeriodizationModelType.dailyUndulatingWeek) {
+      if (_blockStartDate == null) return 10.0;
 
       final count = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
         exerciseName: exerciseName,
@@ -362,48 +347,29 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         weekIndex: weekIndex ?? 0,
       );
 
-
-      print('📊 [WES] Weekly instance count for "$exerciseName" in week ${weekIndex ?? 0} = $count');
-
-      final repTargets = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets'];
       final weekKey = 'week${(weekIndex ?? 0) + 1}';
-      final weekMap = repTargets?[weekKey];
-
+      final weekMap = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets']?[weekKey];
       if (weekMap is Map<String, dynamic>) {
-        print('📦 [WES] $exerciseName → $weekKey repTargets = ${jsonEncode(weekMap)}');
-        final sorted = weekMap.entries
-            .where((e) => e.key.startsWith('instance'))
-            .toList()
+        final sorted = weekMap.entries.where((e) => e.key.startsWith('instance')).toList()
           ..sort((a, b) => a.key.compareTo(b.key));
-
-        final frequency = sorted.length;
-        if (frequency == 0) return 10;
-
-        final index = count % frequency;
-        final raw = sorted[index].value?.toString() ?? '';
-        final match = RegExp(r'^(\d+)').firstMatch(raw);
-        final parsed = match != null ? int.tryParse(match.group(1)!) ?? 10 : 10;
-
-        print('🎯 [WES] DU Weekly: $weekKey → instance${index + 1} → $parsed reps');
-        return parsed.toDouble();
+        if (sorted.isNotEmpty) {
+          final index = count % sorted.length;
+          final raw = sorted[index].value?.toString() ?? '';
+          final match = RegExp(r'^(\d+)').firstMatch(raw);
+          repTarget = match != null ? int.tryParse(match.group(1)!)?.toDouble() ?? 10.0 : 10.0;
+          print('🎯 [WES] DU Weekly: $weekKey → instance${index + 1} → $repTarget reps');
+        }
       }
-    }
-    if (model == PeriodizationModelType.linearClassic) {
+    } else if (model == PeriodizationModelType.linearClassic) {
+      if (_blockStartDate == null || _blockEndDate == null) return 10.0;
+
       final repTargets = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets'];
-      final weekKeyStart = 'week1';
-      final weekStart = repTargets?[weekKeyStart];
-
-      if (_blockStartDate == null || _blockEndDate == null) {
-        print('❌ [WES] _blockStartDate or _blockEndDate is null for $exerciseName in linearClassic');
-        return 10.0; // fallback value
-      }
-
+      final weekStart = repTargets?['week1'];
       final week = weekIndex ?? 0;
       final blockLength = PeriodizationModelUtils.getBlockLength(
         blockStartDate: _blockStartDate!,
         blockEndDate: _blockEndDate!,
       );
-
 
       if (weekStart is Map<String, dynamic>) {
         final instanceCount = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
@@ -413,48 +379,55 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           weekIndex: week,
         );
 
-        print('📊 [WES] LC → weekIndex = $week | instanceCount = $instanceCount');
+        final sortedKeys = weekStart.keys.where((k) => k.startsWith('instance')).toList()..sort();
+        if (sortedKeys.isNotEmpty) {
+          final instanceKey = sortedKeys[instanceCount % sortedKeys.length];
+          final startRaw = weekStart[instanceKey]?.toString() ?? '10 x 3';
+          final startMatch = RegExp(r'^(\d+)').firstMatch(startRaw);
+          final startReps = startMatch != null ? int.tryParse(startMatch.group(1)!) ?? 10 : 10;
+          const endReps = 1;
 
-        final sortedKeys = weekStart.keys
-            .where((k) => k.startsWith('instance'))
-            .toList()
-          ..sort();
-
-        final frequency = sortedKeys.length;
-        if (frequency == 0) return 10;
-
-        final index = instanceCount % frequency;
-        final instanceKey = sortedKeys[index];
-
-        final startRaw = weekStart[instanceKey]?.toString() ?? '10 x 3';
-        final startMatch = RegExp(r'^(\d+)').firstMatch(startRaw);
-        final setMatch = RegExp(r'x\s*(\d+)').firstMatch(startRaw);
-
-        final startReps = startMatch != null ? int.tryParse(startMatch.group(1)!) ?? 10 : 10;
-        final sets = setMatch != null ? setMatch.group(1)! : '3';
-
-        // ✅ Default final reps to 1 x same sets
-        final endReps = 1;
-
-        final reps = (startReps + ((endReps - startReps) * (week / (blockLength - 1)))).round();
-
-        print('🎯 [WES] LC → week${week + 1} → $instanceKey → $reps reps (from $startReps → $endReps)');
-
-        return reps.toDouble();
+          repTarget = (startReps + ((endReps - startReps) * (week / (blockLength - 1)))).roundToDouble();
+          print('🎯 [WES] LC → week${week + 1} → $instanceKey → $repTarget reps');
+        }
       }
+    } else {
+      // Default model-based rep estimate
+      repTarget = PeriodizationModelUtils.getSuggestedRepTargetByModel(
+        exerciseName: exerciseId,
+        plannedIndex: plannedCountBefore,
+        weightText: _weightControllers[exerciseIndex][0].text,
+        rirText: _rirControllers[exerciseIndex][0].text,
+        weekIndex: weekIndex,
+      ).toDouble();
     }
 
-    // 🔁 Fallback to default model logic
-    final reps = PeriodizationModelUtils.getSuggestedRepTargetByModel(
-      exerciseName: exerciseId,
-      plannedIndex: plannedCountBefore,
-      weightText: _weightControllers[exerciseIndex][0].text,
-      rirText: _rirControllers[exerciseIndex][0].text,
-      weekIndex: weekIndex,
+    // 🚀 Apply progression model as overlay
+    final progressionModelName = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['progressionModel'];
+    final progressionModel = PeriodizationModelUtils.parseProgressionModel(progressionModelName);
+
+    final defaultWeight = PeriodizationModelUtils.getSuggestedWeightFromRep(
+      exerciseName,
+      repTarget.toInt(),
+      set1RIR(exerciseIndex),
     );
 
-    return reps.toDouble();
+    final progressed = PeriodizationModelUtils.getWeightByProgressionModel(
+      model: progressionModel,
+      exerciseName: exerciseName,
+      repTarget: repTarget.toInt(),
+      defaultWeight: defaultWeight,
+      rirValue: set1RIR(exerciseIndex),
+      increments: PeriodizationModelUtils.getIncrementsForExercise(exerciseId),
+      maxWeightByReps: PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['maxWeightByReps'],
+      topSetHistory: PeriodizationModelUtils.topSetsByExercise[exerciseName],
+      weekIndex: weekIndex ?? 0,
+    );
+    print('🧠 [WES] Progression model "$progressionModelName" → using ${progressed['reps']} reps (base: $repTarget)');
+
+    return progressed['reps']?.toDouble() ?? repTarget;
   }
+
 
 
 
@@ -653,7 +626,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   double set8RIR(int i) => getRirFromPlanOrInput(i, 8);
 
   double set1SuggestedWeight(int exerciseIndex) {
-    final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
+    final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
+    final exerciseId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
+    final weekIndex = _getApplicableWeekIndex(exerciseId);
 
     final repsText = _repsControllers[exerciseIndex][0].text;
     final rirText = _rirControllers[exerciseIndex][0].text;
@@ -661,12 +636,34 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final reps = double.tryParse(repsText) ?? set1SuggestedReps(exerciseIndex);
     final rir = double.tryParse(rirText) ?? set1RIR(exerciseIndex);
 
-    return PeriodizationModelUtils.getSuggestedWeightFromRep(
+    final defaultWeight = PeriodizationModelUtils.getSuggestedWeightFromRep(
       exerciseName,
       reps.toInt(),
       rir,
     );
+
+    final progressionModelName = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['progressionModel'];
+    final progressionModel = PeriodizationModelUtils.parseProgressionModel(progressionModelName);
+
+    print('🧪 [WES] Progression model for $exerciseName → $progressionModel');
+
+    final progressed = PeriodizationModelUtils.getWeightByProgressionModel(
+      model: progressionModel,
+      exerciseName: exerciseName,
+      repTarget: reps.toInt(),
+      defaultWeight: defaultWeight,
+      rirValue: rir,
+      increments: PeriodizationModelUtils.getIncrementsForExercise(exerciseId),
+      maxWeightByReps: PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['maxWeightByReps'],
+      topSetHistory: PeriodizationModelUtils.topSetsByExercise[exerciseName],
+      weekIndex: weekIndex ?? 0,
+    );
+
+    final result = progressed['weight']?.toDouble() ?? defaultWeight;
+    print('🎯 [WES] Final set1 weight for $exerciseName = $result kg');
+    return result;
   }
+
 
   double set2SuggestedWeight(int exerciseIndex) {
     final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
@@ -722,6 +719,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     _injectIdToNameFromSelectedExercises();
     await loadExercisesFromFirestoreForWES(); // ✅ BEFORE using name↔id anywhere
     await _buildNameToIdMapsFromFirestore(); // Replaces _loadPlannedExerciseDetails()
+    await PeriodizationModelUtils.fetchFullTopSetHistory();
 
 
     await loadSavedWorkoutsForInstanceCount(); // 📅 Prepares savedWorkoutsList
@@ -1025,6 +1023,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           PeriodizationModelUtils.exercisePeriodizationModels[exerciseId] = modelEnum;
           print('✅ [WES] Mapped model $modelName → $modelEnum for $exerciseId');
         }
+
+        final progressionModel = entry['progressionModel'] ?? 'none';
+        _progressionModelsByExercise[exerciseId] = progressionModel;
+        print('🏗️ [WES] Progression model for $exerciseId: $progressionModel');
+
 
         // ✅ Model-specific logic (DUP expansions, Linear Classic debug, etc.)
         if (modelEnum == PeriodizationModelType.dailyUndulatingExposure ||
