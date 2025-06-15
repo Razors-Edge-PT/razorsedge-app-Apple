@@ -1563,8 +1563,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         final double progressedWeight = progressed['weight'];
         final int progressedReps = progressed['reps'];
 
-
-
         print('🧠 Progression model "$progressionModelName" → using weight ${progressedWeight.toStringAsFixed(1)} (base: $historyWeight)');
 
 
@@ -1576,16 +1574,31 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             ? progressedReps.toString()
             : '';
 
-
-
         print('📋 repsController: "${repsController.text}", plannedRep: "$plannedRep", hintReps: "$hintReps"');
 
 
+        final double? effectiveWeight = weightController.text.isNotEmpty
+            ? double.tryParse(weightController.text)
+            : (weight ?? double.tryParse(hintWeight) ?? historyWeight);
+
+        final double? effectiveReps = repsController.text.isNotEmpty
+            ? double.tryParse(repsController.text)
+            : double.tryParse(hintReps);
+
+
+        final double effectiveRir = rirController.text.isNotEmpty
+            ? double.tryParse(rirController.text) ?? double.tryParse(hintRir) ?? 0.5
+            : double.tryParse(hintRir) ?? 0.5;
+
+
         final double? e1rm = PeriodizationModelUtils.calculateE1RM(
-          weight ?? (weightController.text.isEmpty ? historyWeight : null),
-          repsValue,
-          rirValue,
+          effectiveWeight,
+          effectiveReps,
+          effectiveRir,
         );
+
+        print("🧠 [BB2 UI] Calculating E1RM from weight=$effectiveWeight, reps=$effectiveReps, rir=$effectiveRir → E1RM=$e1rm");
+
 
 
         return Container(
