@@ -1524,7 +1524,14 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             ? double.tryParse(rirController.text) ?? 0.5
             : double.tryParse(hintRir) ?? 0.5;
 
-
+        final actual = PeriodizationModelUtils.getActualRepsAndRir(
+          repsController: repsController,
+          rirController: rirController,
+          plannedRep: plannedRep,
+          plannedRir: hintRir,
+        );
+        final double actualReps = actual['reps']!;
+        final double actualRir = actual['rir']!;
 
         // 🔍 Check for selected progression model (optional per-exercise)
         final String? progressionModelName = plannedExerciseDetails[exerciseId]?['progressionModel'];
@@ -1540,7 +1547,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         );
 
         // 🚀 Progression logic (only triggers if model is explicitly selected)
-        final double progressedWeight = PeriodizationModelUtils.getWeightByProgressionModel(
+        final Map<String, dynamic> progressed = PeriodizationModelUtils.getWeightByProgressionModel(
           model: progressionModel,
           exerciseName: exerciseName,
           repTarget: repsValue.toInt(),
@@ -1549,7 +1556,13 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           maxWeightByReps: plannedExerciseDetails[exerciseId]?['maxWeightByReps'],
           topSetHistory: PeriodizationModelUtils.topSetsByExercise[exerciseName],
           weekIndex: weekIndex,
+          rirValue: rirValue, // ✅ Pass the existing BB2-calculated RIR here
         );
+
+
+        final double progressedWeight = progressed['weight'];
+        final int progressedReps = progressed['reps'];
+
 
 
         print('🧠 Progression model "$progressionModelName" → using weight ${progressedWeight.toStringAsFixed(1)} (base: $historyWeight)');
@@ -1559,19 +1572,10 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             ? progressedWeight.toStringAsFixed(1)
             : '';
 
-        final actual = PeriodizationModelUtils.getActualRepsAndRir(
-          repsController: repsController,
-          rirController: rirController,
-          plannedRep: plannedRep,
-          plannedRir: hintRir,
-        );
-        final double actualReps = actual['reps']!;
-        final double actualRir = actual['rir']!;
-
-
-        final String hintReps = (repsController.text.isEmpty && isExerciseNamed && plannedRep != null)
-            ? RegExp(r'^\d+').firstMatch(plannedRep)?.group(0) ?? ''
+        final String hintReps = (repsController.text.isEmpty && isExerciseNamed)
+            ? progressedReps.toString()
             : '';
+
 
 
         print('📋 repsController: "${repsController.text}", plannedRep: "$plannedRep", hintReps: "$hintReps"');

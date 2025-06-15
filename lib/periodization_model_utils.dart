@@ -657,8 +657,9 @@ class PeriodizationModelUtils {
     final Set<double> options = {};
 
     for (int i = 0; i < 100; i++) {
-      options.add(20 + i * primary);
+      options.add(i * primary); // ✅ Start from 0
     }
+
 
     if (secondary > 0) {
       for (final base in options.toList()) {
@@ -688,21 +689,29 @@ class PeriodizationModelUtils {
 
     if (increments == null) {
       print('❌ [PMU] No increments found for $exerciseNameOrId by name or ID');
-      return [2.5]; // fallback
+      return List.generate(100, (i) => 20 + i * 2.5); // fallback: standard 2.5kg plates
     }
 
     final double primary = (increments['primary'] as num?)?.toDouble() ?? 2.5;
     final double secondary = (increments['secondary'] as num?)?.toDouble() ?? 0.0;
 
-    final Set<double> result = {primary};
-    if (secondary > 0 && secondary != primary) {
-      result.add(secondary);
+    final Set<double> weightOptions = {};
+
+    for (int i = 0; i < 100; i++) {
+      weightOptions.add(i * primary);
     }
 
-    final list = result.toList()..sort();
+    if (secondary > 0 && secondary != primary) {
+      for (final base in weightOptions.toList()) {
+        weightOptions.add(base + secondary);
+      }
+    }
+
+    final list = weightOptions.toList()..sort();
     print('✅ [PMU] getIncrementsForExercise($exerciseNameOrId) → $list');
     return list;
   }
+
 
 
 
@@ -730,6 +739,7 @@ class PeriodizationModelUtils {
     required String exerciseName,
     required int repTarget,
     required double defaultWeight,
+    double rirValue = 0, // ✅ optional with default
     required List<double> increments,
     Map<String, dynamic>? maxWeightByReps,
     List<Map<String, dynamic>>? topSetHistory, // optional
@@ -862,10 +872,11 @@ class PeriodizationModelUtils {
 
 
 
-  static double smartProgressionModel({
+  static Map<String, dynamic> smartProgressionModel({
     required String exerciseName,
     required int repTarget,
     required double defaultWeight,
+    double rirValue = 0, // ✅ optional with default fallback
     required List<double> increments,
     Map<String, dynamic>? maxWeightByReps,
     List<Map<String, dynamic>>? topSetHistory, // optional
@@ -875,19 +886,25 @@ class PeriodizationModelUtils {
 
     if (weekIndex == 0) {
       print('🕓 Week 1 detected → progression disabled, using base weight: $defaultWeight');
-      return defaultWeight;
+      return {
+        'weight': defaultWeight,
+        'reps': repTarget,
+      };
     }
 
     if (topSetHistory == null || topSetHistory.isEmpty) {
       print('🚫 No top set history available.');
-      return defaultWeight;
+      return {
+        'weight': defaultWeight,
+        'reps': repTarget,
+      };
     }
 
     // Calculate effective reps for each historical set (reps + RIR)
     final List<Map<String, dynamic>> historyWithE1RM = topSetHistory.map((entry) {
       final double weight = (entry['weight'] as num?)?.toDouble() ?? 0.0;
       final double reps = (entry['reps'] as num?)?.toDouble() ?? 0.0;
-      final double rir = (entry['rir'] as num?)?.toDouble() ?? 0.5;
+      final double rir = (entry['rir'] as num?)?.toDouble() ?? 0;
       final double e1rm = calculateE1RM(weight, reps, rir);
       final double effectiveReps = reps + rir;
       final DateTime? date = entry['date'] is DateTime
@@ -905,7 +922,7 @@ class PeriodizationModelUtils {
     }).toList();
 
     final DateTime now = DateTime.now();
-    final double targetEffectiveReps = repTarget + 0.0; // We'll override this below if actual data found
+    final double targetEffectiveReps = repTarget + 0.0;
 
     // Step 1: Try to find exact or near match within 4 weeks
     final recentMatch = historyWithE1RM.firstWhere(
@@ -935,7 +952,6 @@ class PeriodizationModelUtils {
         baseE1RM = recentTwoWeeks.map((e) => e['e1rm'] as double).reduce((a, b) => a + b) / recentTwoWeeks.length;
         print('📆 Averaged E1RM from past 2 weeks → $baseE1RM');
       } else if (historyWithE1RM.length >= 4) {
-        // Step 3: Average last 4 entries
         final lastFour = historyWithE1RM.take(4).toList();
         baseE1RM = lastFour.map((e) => e['e1rm'] as double).reduce((a, b) => a + b) / lastFour.length;
         print('📊 Using average of last 4 E1RMs → $baseE1RM');
@@ -944,56 +960,103 @@ class PeriodizationModelUtils {
         print('🪂 Using fallback maxWeightByReps → $baseE1RM');
       } else {
         print('🚨 No viable E1RM source. Using default weight → $defaultWeight');
-        return defaultWeight;
+        return {
+          'weight': defaultWeight,
+          'reps': repTarget,
+        };
       }
     }
 
-
-    // Step 4: Try to find smallest possible increase in E1RM
     final validWeights = roundToAllValidIncrements(
       baseWeight: defaultWeight,
       exerciseName: exerciseName,
     );
 
-// ✅ Debug print
-    print('🔍 [SmartProgression] Valid weights for $exerciseName from roundToAllValidIncrements:\n$validWeights');
+    print('🔍 [SmartProgression] Valid weights for $exerciseName:\n$validWeights');
 
     double bestWeight = defaultWeight;
-    double? actualRIR = topSetHistory?.firstWhere(
-          (entry) =>
-      (entry['reps'] as num?)?.toInt() == repTarget &&
-          (entry['rir'] != null),
-      orElse: () => {},
-    )['rir'] as double?;
+    int bestReps = repTarget;
+    double bestE1RM = baseE1RM;
+    double bestScore = double.infinity;
 
-
-    double fallbackRIR = actualRIR ?? 0.5;
-
-    double bestE1RM = calculateE1RM(defaultWeight, repTarget.toDouble(), fallbackRIR);
-
-    double smallestDiff = (bestE1RM - baseE1RM).abs();
+    final double minProgressionPercent = 0.01; // 1% increase
+    final double maxProgressionPercent = 0.03; // 3% cap
+    final double minTargetE1RM = baseE1RM * (1 + minProgressionPercent);
+    final double maxTargetE1RM = baseE1RM * (1 + maxProgressionPercent);
 
     for (final w in validWeights) {
-      for (int delta = -2; delta <= 6; delta++) {
-        final tryReps = (repTarget + delta).clamp(1, 25);
-        final tryE1RM = calculateE1RM(w, tryReps.toDouble(), 0.5);
-        final diff = (tryE1RM - baseE1RM);
+      final Set<int> repTrials = {
+        for (int d = -2; d <= 6; d++) (repTarget + d).clamp(1, 25),
+        repTarget + 1, // ✅ Force include +1 rep
+      };
 
-        if (diff > 0 && diff < smallestDiff) {
+      for (final tryReps in repTrials) {
+
+        final double tryE1RM = calculateE1RM(w, tryReps.toDouble(), rirValue);
+
+
+        if (tryE1RM < minTargetE1RM || tryE1RM > maxTargetE1RM) continue;
+
+        final double e1rmOverage = tryE1RM - baseE1RM; // ✅ actual gain
+        final double repDistance = (tryReps - repTarget).abs().toDouble();
+        final double weightDistance = (w - defaultWeight).abs();
+
+        // ✅ Prefer smallest valid E1RM increase + staying close to weight/reps
+        final double score = (e1rmOverage * 1.0) + (repDistance * 1.5) + (weightDistance * 1.0);
+
+        if (score < bestScore) {
+          bestScore = score;
           bestWeight = w;
+          bestReps = tryReps;
           bestE1RM = tryE1RM;
-          smallestDiff = diff;
         }
+        print('🔍 Trying: $w kg × $tryReps → E1RM = ${tryE1RM.toStringAsFixed(2)}');
+
+        print('🔬 Trial: $w kg × $tryReps → E1RM = ${tryE1RM.toStringAsFixed(1)} (score = ${score.toStringAsFixed(2)})');
+      }
+
+    }
+
+// After bestWeight, bestReps, bestE1RM are selected...
+    final usedCombos = PeriodizationModelUtils.getUsedWeightRepsRirTripletsForExercise(
+      exerciseName: exerciseName,
+      savedWorkouts: PeriodizationModelUtils.savedWorkoutsList, // ✅ reference static list
+    );
+
+// Convert current best to string key format for easy comparison
+    final comboKey = '${bestWeight.toStringAsFixed(1)}_${bestReps}_${rirValue.toStringAsFixed(1)}';
+    print('🔍 Final comboKey = $comboKey');
+    print('📘 Used combos: $usedCombos');
+
+// Check for duplication
+    if (usedCombos.contains(comboKey)) {
+      print('⚠️ [SmartProgression] Duplicate found for $comboKey → increasing reps to ensure novelty');
+
+      // Bump reps by 1 if possible
+      if (bestReps < 25) {
+        bestReps += 1;
+        bestE1RM = calculateE1RM(bestWeight, bestReps.toDouble(), rirValue);
+        print('🔁 New recommendation: ${bestWeight}kg × $bestReps @ RIR $rirValue → E1RM = ${bestE1RM.toStringAsFixed(2)}');
+      } else {
+        print('❌ Cannot increase reps beyond 25 — keeping original suggestion.');
       }
     }
 
-    print('🎯 Chosen smart progression: weight = $bestWeight, projected E1RM = $bestE1RM (base = $baseE1RM)');
-    return bestWeight;
+
+
+    print('🎯 Smart progression chosen: weight = $bestWeight, reps = $bestReps, RIR = $rirValue, projected E1RM = $bestE1RM (base = $baseE1RM)');
+
+    return {
+      'weight': bestWeight,
+      'reps': bestReps,
+    };
+
   }
 
 
 
-  static double getWeightByProgressionModel({
+
+  static Map<String, dynamic> getWeightByProgressionModel({
     required ProgressionModelType model,
     required String exerciseName,
     required int repTarget,
@@ -1002,20 +1065,27 @@ class PeriodizationModelUtils {
     Map<String, dynamic>? maxWeightByReps,
     List<Map<String, dynamic>>? topSetHistory,
     int weekIndex = 0,
-  }) {
+    // 👇 You need to add this:
+    double rirValue = 0,
+  })
+  {
     print("🧪 [Routing] About to run model logic: $model");
 
     switch (model) {
       case ProgressionModelType.linearWeightIncrease:
-        return getProgressedWeight(
-          exerciseName: exerciseName,
-          repTarget: repTarget,
-          defaultWeight: defaultWeight,
-          increments: increments,
-          maxWeightByReps: maxWeightByReps,
-          topSetHistory: topSetHistory,
-          weekIndex: weekIndex,
-        );
+        return {
+          'weight': getProgressedWeight(
+            exerciseName: exerciseName,
+            repTarget: repTarget,
+            defaultWeight: defaultWeight,
+            increments: increments,
+            maxWeightByReps: maxWeightByReps,
+            topSetHistory: topSetHistory,
+            weekIndex: weekIndex,
+          ),
+          'reps': repTarget, // ← preserve original repTarget for now
+        };
+
       case ProgressionModelType.smartProgression:
         return smartProgressionModel(
           exerciseName: exerciseName,
@@ -1025,9 +1095,15 @@ class PeriodizationModelUtils {
           maxWeightByReps: maxWeightByReps,
           topSetHistory: topSetHistory,
           weekIndex: weekIndex,
+          rirValue: rirValue, // ✅ add this
         );
+
+
       case ProgressionModelType.none:
-        return defaultWeight;
+        return {
+          'weight': defaultWeight,
+          'reps': repTarget,
+        };
     }
   }
 
@@ -1653,6 +1729,50 @@ class PeriodizationModelUtils {
     final weekIndex = (daysSinceStart / 7).floor();
     return weekIndex.clamp(0, 11); // assuming max 12 weeks
   }
+
+  // WES and bb2 function
+
+  static Set<String> getUsedWeightRepsRirTripletsForExercise({
+    required String exerciseName,
+    required List<Map<String, dynamic>> savedWorkouts,
+  }) {
+    final Set<String> used = {};
+
+    for (final workout in savedWorkouts) {
+      final List<dynamic>? exercises = workout['exercises'];
+      if (exercises == null) {
+        print('❌ No exercises found in workout');
+        continue;
+      }
+
+      for (final ex in exercises) {
+        if (ex['name'] != exerciseName) continue;
+
+        final sets = ex['sets'] as List<dynamic>? ?? [];
+        if (sets.isEmpty) {
+          print('⚠️ No sets in ${ex['name']}');
+          continue;
+        }
+
+        // Take the best set (assume first = top set)
+        final top = sets.first;
+
+        final double? w = top['weight']?.toDouble();
+        final int? r = top['reps'];
+        final double? rir = top['rir']?.toDouble();
+
+        if (w != null && r != null && rir != null) {
+          final key = '${w.toStringAsFixed(1)}_${r}_${rir.toStringAsFixed(1)}';
+          print('✅ Used combo added from exercises: $key');
+          used.add(key);
+        }
+      }
+    }
+
+    return used;
+  }
+
+
 
 
 
