@@ -381,21 +381,24 @@ class _BlockPlannerState extends State<Block_Planner> {
       },
     ) ?? [];
 
-    setState(() {
-      exercises = selected;
+    // ✅ Only apply changes if user selected at least one item
+    if (selected.isNotEmpty) {
+      setState(() {
+        exercises = selected;
 
-      for (final id in selected) {
-        final match = exercisesFromFirestore.firstWhere(
-              (ex) => ex['id'] == id,
-          orElse: () => {},
-        );
+        for (final id in selected) {
+          final match = exercisesFromFirestore.firstWhere(
+                (ex) => ex['id'] == id,
+            orElse: () => {}, // ✅ Works with match.isNotEmpty
+          );
 
-        if (match.isNotEmpty) {
-          _exerciseIdToName[id] = match['name']!;
-          exerciseSettings.putIfAbsent(id, () => {});
+          if (match.isNotEmpty) {
+            _exerciseIdToName[id] = match['name']!;
+            exerciseSettings.putIfAbsent(id, () => {});
+          }
         }
-      }
-    });
+      });
+    }
 
   }
 
@@ -727,7 +730,7 @@ class _BlockPlannerState extends State<Block_Planner> {
 
             const SizedBox(height: 12),
             SizedBox(
-              height: exercises.length * 100, // 👈 Tweak if your cards are taller/shorter
+              height: exercises.length * 240, // 👈 Tweak if your cards are taller/shorter
               child: ReorderableListView.builder(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(), // Prevent internal scrolling
