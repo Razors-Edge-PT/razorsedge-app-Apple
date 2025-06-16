@@ -32,6 +32,7 @@ enum ProgressionModelType {
   none,
   linearWeightIncrease,
   smartProgression,
+  addRepsProgressionModel, // ✅ New
 }
 
 
@@ -1054,6 +1055,124 @@ class PeriodizationModelUtils {
 
   }
 
+  static Map<String, dynamic> addRepsProgressionModel({
+    required String exerciseName,
+    required int repTarget,
+    required double defaultWeight,
+    double rirValue = 0,
+    required List<double> increments,
+    Map<String, dynamic>? maxWeightByReps,
+    List<Map<String, dynamic>>? topSetHistory,
+    int weekIndex = 0,
+  }) {
+    print('🧠 [AddRepsProgression] Entered model for $exerciseName, week $weekIndex, OG reps = $repTarget');
+
+    if (weekIndex == 0) {
+      print('🕓 Week 1 detected → base weight and rep target used');
+      return {
+        'weight': defaultWeight,
+        'reps': repTarget,
+      };
+    }
+
+    // Load top set history
+    final recentSets = PeriodizationModelUtils.topSetsByExercise[exerciseName] ?? [];
+
+    if (recentSets.isEmpty) {
+      print('🚫 No previous top sets found → using default weight and reps');
+      return {
+        'weight': defaultWeight,
+        'reps': repTarget,
+      };
+    }
+
+// 🐞 DEBUG: Show the most recent 4 entries
+    print('🧾 [DEBUG] Top 4 sets for $exerciseName:');
+    for (int i = 0; i < recentSets.length.clamp(0, 4); i++) {
+      final set = recentSets[i];
+      final w = (set['weight'] as num?)?.toDouble() ?? 0;
+      final r = (set['reps'] as num?)?.toInt() ?? 0;
+      final rir = (set['rir'] as num?)?.toDouble() ?? 0;
+      final d = set['date'] ?? 'No Date';
+      print('  #${i + 1} → $w kg × $r @ RIR $rir on $d');
+    }
+
+    recentSets.sort((a, b) {
+      final aDate = a['date'] is DateTime ? a['date'] as DateTime : DateTime.tryParse(a['date']?.toString() ?? '') ?? DateTime(2000);
+      final bDate = b['date'] is DateTime ? b['date'] as DateTime : DateTime.tryParse(b['date']?.toString() ?? '') ?? DateTime(2000);
+      return bDate.compareTo(aDate); // descending
+    });
+
+    final latest = recentSets.first;
+
+    final double lastWeight = (latest['weight'] as num?)?.toDouble() ?? defaultWeight;
+    final int lastReps = (latest['reps'] as num?)?.toInt() ?? repTarget;
+
+    print('📦 [AddRepsProgression] Last top set: $lastWeight × $lastReps');
+
+
+    final currentE1RM = calculateE1RM(lastWeight, lastReps.toDouble(), rirValue);
+
+    print('📈 Current E1RM = ${currentE1RM.toStringAsFixed(2)} from $lastWeight × $lastReps');
+
+    // Build valid weight options
+    final validWeights = roundToAllValidIncrements(
+      baseWeight: defaultWeight,
+      exerciseName: exerciseName,
+    );
+    validWeights.sort();
+    final int weightIndex = validWeights.indexOf(lastWeight);
+    final double? nextWeight = (weightIndex >= 0 && weightIndex + 1 < validWeights.length)
+        ? validWeights[weightIndex + 1]
+        : null;
+
+    if (nextWeight == null) {
+      print('🚧 No next weight found → staying at current');
+      return {
+        'weight': lastWeight,
+        'reps': lastReps + 1,
+      };
+    }
+
+    // Gating logic
+    final int repsAboveOG = lastReps - repTarget;
+    List<int> allowedNextWeightRepOptions = [];
+    if (repsAboveOG >= 2) allowedNextWeightRepOptions.add(repTarget);       // OG
+    if (repsAboveOG >= 3) allowedNextWeightRepOptions.add(repTarget - 1);   // OG -1
+    if (repsAboveOG >= 4) allowedNextWeightRepOptions.add(repTarget - 2);   // OG -2
+
+    double? promotedWeight;
+    int? promotedReps;
+
+    for (final reps in allowedNextWeightRepOptions) {
+      if (reps < 1) continue;
+
+      final double tryE1RM = calculateE1RM(nextWeight, reps.toDouble(), rirValue);
+      final double threshold = tryE1RM * 1.040;
+
+      print('🔍 Try $nextWeight × $reps → E1RM = ${tryE1RM.toStringAsFixed(2)}, threshold = ${threshold.toStringAsFixed(2)}');
+
+      if (currentE1RM >= threshold) {
+        print('✅ Threshold met → move to $nextWeight × $reps');
+        promotedWeight = nextWeight;
+        promotedReps = reps;
+        break; // prefer higher reps (OG > OG-1 > OG-2)
+      }
+    }
+
+    if (promotedWeight != null && promotedReps != null) {
+      return {
+        'weight': promotedWeight,
+        'reps': promotedReps,
+      };
+    }
+
+    print('➕ Staying at $lastWeight → increase reps to ${lastReps + 1}');
+    return {
+      'weight': lastWeight,
+      'reps': lastReps + 1,
+    };
+  }
 
 
 
@@ -1099,6 +1218,19 @@ class PeriodizationModelUtils {
           rirValue: rirValue, // ✅ add this
         );
 
+      case ProgressionModelType.addRepsProgressionModel:
+        return addRepsProgressionModel(
+          exerciseName: exerciseName,
+          repTarget: repTarget,
+          defaultWeight: defaultWeight,
+          increments: increments,
+          maxWeightByReps: maxWeightByReps,
+          topSetHistory: topSetHistory,
+          weekIndex: weekIndex,
+          rirValue: rirValue,
+        );
+
+
 
       case ProgressionModelType.none:
         return {
@@ -1114,11 +1246,14 @@ class PeriodizationModelUtils {
         return ProgressionModelType.linearWeightIncrease;
       case 'Smart Progression':
         return ProgressionModelType.smartProgression;
+      case 'Add Reps': // ✅ Add label here
+        return ProgressionModelType.addRepsProgressionModel;
       case 'None':
       default:
         return ProgressionModelType.none;
     }
   }
+
 
 
 
