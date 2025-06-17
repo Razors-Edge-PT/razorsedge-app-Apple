@@ -68,6 +68,23 @@ class PeriodizationModelUtils {
       return w * (1 + (0.0333 * totalReps));
     }
   }
+
+  static double reverseCalculateWeight({
+    required double targetE1RM,
+    required int reps,
+    double rir = 0.5,
+  }) {
+    final double totalReps = reps + rir;
+
+    if (totalReps <= 6) {
+      // Invert: E1RM = W * (36 / (37 - reps))
+      return targetE1RM * ((37 - totalReps) / 36);
+    } else {
+      // Invert: E1RM = W * (1 + 0.0333 * reps)
+      return targetE1RM / (1 + 0.0333 * totalReps);
+    }
+  }
+
   static String resolveExerciseName(String key) {
     return idToName[key] ?? key;
   }
@@ -725,7 +742,7 @@ class PeriodizationModelUtils {
 
     for (int i = 0; i < 100; i++) {
       for (final inc in increments) {
-        options.add(20 + i * inc);
+        options.add(i * inc);
       }
     }
 
@@ -1086,6 +1103,7 @@ class PeriodizationModelUtils {
       };
     }
 
+
 // 🐞 DEBUG: Show the most recent 4 entries
     print('🧾 [DEBUG] Top 4 sets for $exerciseName:');
     for (int i = 0; i < recentSets.length.clamp(0, 4); i++) {
@@ -1115,6 +1133,77 @@ class PeriodizationModelUtils {
 
     print('📈 Current E1RM = ${currentE1RM.toStringAsFixed(2)} from $lastWeight × $lastReps');
 
+    // 🧠 Determine if we have top set history for the current repTarget
+    final hasMatchingReps = recentSets.any((entry) {
+      final reps = (entry['reps'] as num?)?.toInt();
+      return reps == repTarget;
+    });
+
+    if (!hasMatchingReps) {
+      // 🔍 Reverse-calculate weight from E1RM
+      final bool isNewTargetHigher = repTarget > lastReps;
+      final double adjustedE1RM = isNewTargetHigher
+          ? currentE1RM
+          : currentE1RM * 0.96; // conservative if going to lower rep target
+
+      final double estimatedWeight = reverseCalculateWeight(
+        targetE1RM: adjustedE1RM,
+        reps: repTarget,
+        rir: rirValue,
+      );
+
+      final validWeights = roundToAllValidIncrements(
+        baseWeight: estimatedWeight,
+        exerciseName: exerciseName,
+      )..sort();
+
+      final List<double> weightsBelow = validWeights.where((w) => w <= estimatedWeight).toList();
+      final List<double> weightsAbove = validWeights.where((w) => w > estimatedWeight).toList();
+
+      double chosenWeight;
+
+// Decide how to round
+      if (weightsAbove.isNotEmpty && (weightsAbove.first - estimatedWeight) < 0.3) {
+        // very close to next increment, allow rounding up
+        chosenWeight = weightsAbove.first;
+        print('🧮 Rounding up to nearest weight due to proximity → $chosenWeight');
+      } else if (weightsBelow.isNotEmpty) {
+        // round down
+        chosenWeight = weightsBelow.last;
+        print('🧮 Rounding down to $chosenWeight');
+      } else {
+        // fallback to exact estimate if no valid match
+        chosenWeight = estimatedWeight;
+        print('⚠️ No valid rounded match, using estimated weight → $chosenWeight');
+      }
+
+// Now adjust reps to match targetE1RM without going over
+      // Start from the original target reps
+      int adjustedReps = repTarget;
+      double finalE1RM = calculateE1RM(chosenWeight, adjustedReps.toDouble(), rirValue);
+
+// Increase reps until E1RM meets or slightly approaches target without exceeding
+      while (finalE1RM < adjustedE1RM && adjustedReps < 20) {
+        adjustedReps += 1;
+        finalE1RM = calculateE1RM(chosenWeight, adjustedReps.toDouble(), rirValue);
+      }
+
+// Step back if we overshot
+      if (finalE1RM > adjustedE1RM && adjustedReps > 1) {
+        adjustedReps -= 1;
+        finalE1RM = calculateE1RM(chosenWeight, adjustedReps.toDouble(), rirValue);
+      }
+
+
+      print('🎯 Final reverse-assigned: $chosenWeight kg × $adjustedReps → E1RM = ${finalE1RM.toStringAsFixed(2)} (target = ${adjustedE1RM.toStringAsFixed(2)})');
+
+      return {
+        'weight': chosenWeight,
+        'reps': adjustedReps,
+      };
+
+    }
+
     // Build valid weight options
     final validWeights = roundToAllValidIncrements(
       baseWeight: defaultWeight,
@@ -1126,6 +1215,7 @@ class PeriodizationModelUtils {
         ? validWeights[weightIndex + 1]
         : null;
 
+
     if (nextWeight == null) {
       print('🚧 No next weight found → staying at current');
       return {
@@ -1134,8 +1224,11 @@ class PeriodizationModelUtils {
       };
     }
 
+
+
     // Gating logic
     final int repsAboveOG = lastReps - repTarget;
+
     List<int> allowedNextWeightRepOptions = [];
     if (repsAboveOG >= 2) allowedNextWeightRepOptions.add(repTarget);       // OG
     if (repsAboveOG >= 3) allowedNextWeightRepOptions.add(repTarget - 1);   // OG -1
@@ -1144,11 +1237,15 @@ class PeriodizationModelUtils {
     double? promotedWeight;
     int? promotedReps;
 
+
+
     for (final reps in allowedNextWeightRepOptions) {
       if (reps < 1) continue;
 
       final double tryE1RM = calculateE1RM(nextWeight, reps.toDouble(), rirValue);
       final double threshold = tryE1RM * 1.040;
+
+      print('🧪 Trying: $nextWeight × $reps → E1RM = $tryE1RM vs current = $currentE1RM, threshold = $threshold');
 
       print('🔍 Try $nextWeight × $reps → E1RM = ${tryE1RM.toStringAsFixed(2)}, threshold = ${threshold.toStringAsFixed(2)}');
 
