@@ -895,10 +895,10 @@ class PeriodizationModelUtils {
     required String exerciseName,
     required int repTarget,
     required double defaultWeight,
-    double rirValue = 0, // ✅ optional with default fallback
+    double rirValue = 0,
     required List<double> increments,
     Map<String, dynamic>? maxWeightByReps,
-    List<Map<String, dynamic>>? topSetHistory, // optional
+    List<Map<String, dynamic>>? topSetHistory,
     int weekIndex = 0,
   }) {
     print('🧠 [SmartProgression] Entered smartProgressionModel for $exerciseName (week $weekIndex, repTarget: $repTarget)');
@@ -919,7 +919,6 @@ class PeriodizationModelUtils {
       };
     }
 
-    // Calculate effective reps for each historical set (reps + RIR)
     final List<Map<String, dynamic>> historyWithE1RM = topSetHistory.map((entry) {
       final double weight = (entry['weight'] as num?)?.toDouble() ?? 0.0;
       final double reps = (entry['reps'] as num?)?.toDouble() ?? 0.0;
@@ -943,7 +942,6 @@ class PeriodizationModelUtils {
     final DateTime now = DateTime.now();
     final double targetEffectiveReps = repTarget + 0.0;
 
-    // Step 1: Try to find exact or near match within 4 weeks
     final recentMatch = historyWithE1RM.firstWhere(
           (entry) {
         final date = entry['date'] as DateTime?;
@@ -961,7 +959,6 @@ class PeriodizationModelUtils {
       baseE1RM = recentMatch['e1rm'];
       print('✅ Using recent match for base E1RM → $baseE1RM');
     } else {
-      // Step 2: Try average of entries within past 2 weeks
       final recentTwoWeeks = historyWithE1RM.where((entry) {
         final date = entry['date'] as DateTime?;
         return date != null && now.difference(date).inDays <= 14;
@@ -993,84 +990,110 @@ class PeriodizationModelUtils {
 
     print('🔍 [SmartProgression] Valid weights for $exerciseName:\n$validWeights');
 
+    final usedCombos = PeriodizationModelUtils.getUsedWeightRepsRirTripletsForExercise(
+      exerciseName: exerciseName,
+      savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+    );
+
     double bestWeight = defaultWeight;
     int bestReps = repTarget;
     double bestE1RM = baseE1RM;
     double bestScore = double.infinity;
 
-    final double minProgressionPercent = 0.01; // 1% increase
-    final double maxProgressionPercent = 0.03; // 3% cap
-    final double minTargetE1RM = baseE1RM * (1 + minProgressionPercent);
-    final double maxTargetE1RM = baseE1RM * (1 + maxProgressionPercent);
+    final sortedWeights = validWeights
+        .where((w) => (w - defaultWeight).abs() <= increments[0])
+        .toList()
+      ..sort((a, b) => (a - defaultWeight).abs().compareTo((b - defaultWeight).abs()));
 
-    for (final w in validWeights) {
+
+    final double base = defaultWeight;
+    final double delta = increments.firstWhere((v) => v > 0.0, orElse: () => 0);
+
+
+    final List<double> trialWeights = [
+      base - delta,
+      base,
+      base + delta,
+    ];
+
+    final List<int> trialReps = [
+      for (int d = -2; d <= 8; d++) (repTarget + d).clamp(1, 25),
+    ];
+
+    print('🧪 Diagnostic: Testing rep possibilities for weights around $defaultWeight ± $delta');
+
+    for (final w in trialWeights) {
+      print('🔍 Weight: $w');
+      for (final r in trialReps) {
+        final double trialE1RM = calculateE1RM(w, r.toDouble(), rirValue);
+        final String comboKey = '${w.toStringAsFixed(1)}_${r}_${rirValue.toStringAsFixed(1)}';
+        final bool isUsed = usedCombos.contains(comboKey);
+        final String tag = isUsed ? '⛔ used' : (trialE1RM < baseE1RM ? '⬇️ regressive' : '✅ valid');
+        print('  → $w × $r = E1RM ${trialE1RM.toStringAsFixed(2)} → $tag');
+      }
+    }
+
+
+    for (final w in trialWeights) {
+
+      print('⚖️ Testing weight: $w');
+
+
       final Set<int> repTrials = {
-        for (int d = -2; d <= 6; d++) (repTarget + d).clamp(1, 25),
-        repTarget + 1, // ✅ Force include +1 rep
+        for (int d = -2; d <= 8; d++) (repTarget + d).clamp(1, 25),
       };
 
-      for (final tryReps in repTrials) {
+      for (final r in repTrials) {
+        final comboKey = '${w.toStringAsFixed(1)}_${r}_${rirValue.toStringAsFixed(1)}';
+        if (usedCombos.contains(comboKey)) {
+          print('⛔ Skipping used combo: $comboKey');
+          continue;
+        }
 
-        final double tryE1RM = calculateE1RM(w, tryReps.toDouble(), rirValue);
+        final double tryE1RM = calculateE1RM(w, r.toDouble(), rirValue);
+        if (tryE1RM < baseE1RM) {
+          print('⛔ Skipping combo: $w × $r (E1RM regression)');
+          continue;
+        }
 
-
-        if (tryE1RM < minTargetE1RM || tryE1RM > maxTargetE1RM) continue;
-
-        final double e1rmOverage = tryE1RM - baseE1RM; // ✅ actual gain
-        final double repDistance = (tryReps - repTarget).abs().toDouble();
+        final double e1rmIncrease = tryE1RM - baseE1RM;
+        final double repDistance = (r - repTarget).abs().toDouble();
         final double weightDistance = (w - defaultWeight).abs();
 
-        // ✅ Prefer smallest valid E1RM increase + staying close to weight/reps
-        final double score = (e1rmOverage * 1.0) + (repDistance * 1.5) + (weightDistance * 1.0);
+        // ✅ Hybrid scoring: prioritize smallest E1RM increase, but stay close to planned reps and weight
+        final double score =
+            (e1rmIncrease * 1.0) +       // primary: smallest valid increase
+                (repDistance * 0.4) +        // valued: stay close to target reps
+                (weightDistance * 0.05);     // slight preference for staying near defaultWeight
+
+
+        print('🔬 Trial: $w × $r → E1RM = ${tryE1RM.toStringAsFixed(2)} (score = ${score.toStringAsFixed(2)})');
 
         if (score < bestScore) {
           bestScore = score;
           bestWeight = w;
-          bestReps = tryReps;
+          bestReps = r;
           bestE1RM = tryE1RM;
         }
-        print('🔍 Trying: $w kg × $tryReps → E1RM = ${tryE1RM.toStringAsFixed(2)}');
-
-        print('🔬 Trial: $w kg × $tryReps → E1RM = ${tryE1RM.toStringAsFixed(1)} (score = ${score.toStringAsFixed(2)})');
       }
-
     }
 
-// After bestWeight, bestReps, bestE1RM are selected...
-    final usedCombos = PeriodizationModelUtils.getUsedWeightRepsRirTripletsForExercise(
-      exerciseName: exerciseName,
-      savedWorkouts: PeriodizationModelUtils.savedWorkoutsList, // ✅ reference static list
-    );
-
-// Convert current best to string key format for easy comparison
     final comboKey = '${bestWeight.toStringAsFixed(1)}_${bestReps}_${rirValue.toStringAsFixed(1)}';
     print('🔍 Final comboKey = $comboKey');
     print('📘 Used combos: $usedCombos');
 
-// Check for duplication
-    if (usedCombos.contains(comboKey)) {
-      print('⚠️ [SmartProgression] Duplicate found for $comboKey → increasing reps to ensure novelty');
-
-      // Bump reps by 1 if possible
-      if (bestReps < 25) {
-        bestReps += 1;
-        bestE1RM = calculateE1RM(bestWeight, bestReps.toDouble(), rirValue);
-        print('🔁 New recommendation: ${bestWeight}kg × $bestReps @ RIR $rirValue → E1RM = ${bestE1RM.toStringAsFixed(2)}');
-      } else {
-        print('❌ Cannot increase reps beyond 25 — keeping original suggestion.');
-      }
-    }
-
-
-
     print('🎯 Smart progression chosen: weight = $bestWeight, reps = $bestReps, RIR = $rirValue, projected E1RM = $bestE1RM (base = $baseE1RM)');
+    print('🏁 Final decision: $bestWeight × $bestReps @ RIR $rirValue');
+    print('📈 E1RM = ${bestE1RM.toStringAsFixed(2)} (Base = ${baseE1RM.toStringAsFixed(2)})');
+    print('🧮 E1RM increase = ${(bestE1RM - baseE1RM).toStringAsFixed(2)}');
 
     return {
       'weight': bestWeight,
       'reps': bestReps,
     };
-
   }
+
+
 
   static Map<String, dynamic> addRepsProgressionModel({
     required String exerciseName,
