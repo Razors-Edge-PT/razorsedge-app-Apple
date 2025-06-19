@@ -125,6 +125,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   List<String> plannedExercises = []; // 💡 Selected in BlockPlanner
   List<int> weekIndices = [];
   Map<int, List<ExerciseRow>> latestEditedWeekdayTemplates = {};
+  final Map<String, Map<String, dynamic>> _cachedProgressedValues = {};
+
 // Key = weekday index (0=Mon...6=Sun), Value = latest edited structure
   VoidCallback? _lastUndoAction;
 
@@ -552,6 +554,60 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     print("✅ [BB2] exercisePeriodizationModels mapped: ${PeriodizationModelUtils.exercisePeriodizationModels.length}");
     print('📄 Full plannedExerciseDetails: ${jsonEncode(plannedExerciseDetails)}');
   }
+
+  Map<String, dynamic> _getCachedProgressedValues({
+    required String exerciseName,
+    required String? exerciseId,
+    required int weekIndex,
+    required int dayIndex,
+    required int rowIndex,
+    required int repTarget,
+    required double defaultWeight,
+    required double rir,
+  }) {
+    print('📞 [BB2] _getCachedProgressedValues called for $exerciseName');
+
+    final String cacheKey = '$exerciseId-$weekIndex-$dayIndex-$rowIndex';
+
+    if (_cachedProgressedValues.containsKey(cacheKey)) {
+      print('⚡ [BB2] Cache HIT for $exerciseName → skipping new progression model calculation');
+      return _cachedProgressedValues[cacheKey]!;
+    }
+
+    final progressionModelName = plannedExerciseDetails[exerciseId]?['progressionModel'];
+    final progressionModel = PeriodizationModelUtils.parseProgressionModel(progressionModelName);
+
+    final progressed = PeriodizationModelUtils.getWeightByProgressionModel(
+      model: progressionModel,
+      exerciseName: exerciseName,
+      repTarget: repTarget,
+      defaultWeight: defaultWeight,
+      rirValue: rir,
+      increments: PeriodizationModelUtils.getIncrementsForExercise(exerciseId ?? ''),
+      maxWeightByReps: plannedExerciseDetails[exerciseId]?['maxWeightByReps'],
+      topSetHistory: PeriodizationModelUtils.topSetsByExercise[exerciseName],
+      weekIndex: weekIndex,
+    );
+
+    final double? weight = progressed['weight'];
+    final int? reps = progressed['reps'];
+
+    print('🔍 [DEBUG] progressed["weight"] = $weight');
+    print('🔍 [DEBUG] progressed["reps"] = $reps');
+
+    final double? e1rm = (weight != null && reps != null)
+        ? PeriodizationModelUtils.calculateE1RM(weight, reps.toDouble(), rir)
+        : null;
+
+    print('📦 [BB2] Caching progression E1RM for $exerciseName → $e1rm');
+
+    progressed['e1rm'] = e1rm;
+    _cachedProgressedValues[cacheKey] = progressed;
+
+    return progressed;
+  }
+
+
 
 
 
@@ -1539,36 +1595,36 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           rirValue,
         );
 
-        // 🚀 Progression logic (only triggers if model is explicitly selected)
-        final Map<String, dynamic> progressed = PeriodizationModelUtils.getWeightByProgressionModel(
-          model: progressionModel,
+        final bool userTypedRir = rirController.text.isNotEmpty;
+        final bool userTypedWeight = weightController.text.isNotEmpty;
+
+// 🚀 Progression logic (only triggers if model is explicitly selected)
+        final Map<String, dynamic> progressed = _getCachedProgressedValues(
           exerciseName: exerciseName,
+          exerciseId: exerciseId,
+          weekIndex: weekIndex,
+          dayIndex: dayIndex,
+          rowIndex: rowIndex,
           repTarget: repsValue.toInt(),
           defaultWeight: historyWeight,
-          increments: PeriodizationModelUtils.getIncrementsForExercise(exerciseId ?? ''),
-          maxWeightByReps: plannedExerciseDetails[exerciseId]?['maxWeightByReps'],
-          topSetHistory: PeriodizationModelUtils.topSetsByExercise[exerciseName],
-          weekIndex: weekIndex,
-          rirValue: rirValue, // ✅ Pass the existing BB2-calculated RIR here
+          rir: rirValue,
         );
-
-
-        final double progressedWeight = progressed['weight'];
-        final int progressedReps = progressed['reps'];
-
-        print('🧠 Progression model "$progressionModelName" → using weight ${progressedWeight.toStringAsFixed(1)} (base: $historyWeight)');
-
-
-        final String hintWeight = (weightController.text.isEmpty && isExerciseNamed)
-            ? progressedWeight.toStringAsFixed(1)
-            : '';
 
         final double progressedWeightRaw = progressed['weight'];
         final int progressedRepsRaw = progressed['reps'];
 
+        final double? cachedE1RM = progressed['e1rm']; // ← if your function returns this
+
+        print('📦 [BB2] Cached progression E1RM for $exerciseName → ${cachedE1RM?.toStringAsFixed(2)}');
+
+        print('🧠 Progression model "$progressionModelName" → using weight ${progressedWeightRaw.toStringAsFixed(1)} (base: $historyWeight)');
+
         double? effectiveReps;
 
-
+// ✅ Use hintRir first to ensure effectiveRir is valid
+        final double effectiveRir = rirController.text.isNotEmpty
+            ? double.tryParse(rirController.text) ?? double.tryParse(hintRir) ?? 0.5
+            : double.tryParse(hintRir) ?? 0.5;
 
         if (repsController.text.isNotEmpty) {
           print('[TRACE] Using manually entered reps');
@@ -1593,12 +1649,10 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             effectiveReps = PeriodizationModelUtils.reverseCalculateReps(
               targetE1RM: baseE1RM,
               weight: newWeight,
-              baseWeight: baseWeight,      // 👈 pass from progressedWeightRaw
-              rir: rirValue,
+              baseWeight: baseWeight,
+              rir: effectiveRir,
               minReps: baseReps,
             );
-
-
 
             print('🔁 [BB2] Recalculated reps = ${effectiveReps.toStringAsFixed(1)} at new weight = $newWeight to preserve E1RM ≈ ${baseE1RM.toStringAsFixed(1)}');
           } else {
@@ -1608,6 +1662,71 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         } else {
           print('[TRACE] No weight entered or exercise unnamed — using fallback');
           effectiveReps = progressedRepsRaw.toDouble();
+        }
+
+        double? effectiveWeight;
+
+        if (userTypedWeight) {
+          effectiveWeight = double.tryParse(weightController.text);
+        } else if (userTypedRir && effectiveReps != null) {
+          // 🧠 Recalculate weight to preserve E1RM with new RIR at same reps
+          final double baseWeight = progressedWeightRaw;
+          final double baseReps = progressedRepsRaw.toDouble();
+
+          final double? baseE1RM = progressed['e1rm']; // ✅ Use cached base E1RM
+          final List<double> increments = PeriodizationModelUtils.getIncrementsForExercise(exerciseId ?? '');
+
+
+          if (baseE1RM == null) {
+            print('❌ [BB2] No cached baseE1RM found — falling back to original weight');
+            effectiveWeight = progressedWeightRaw;
+          } else {
+            // 🔁 Calculate trial weight to maintain E1RM
+            double trialWeight = PeriodizationModelUtils.reverseCalculateWeight(
+              targetE1RM: baseE1RM,
+              reps: effectiveReps.toInt(),
+              rir: effectiveRir,
+            );
+
+            // 🎯 Round to nearest valid increment
+            trialWeight = PeriodizationModelUtils.roundToNearestValidIncrement(
+              targetWeight: trialWeight,
+              exerciseName: exerciseName,
+            );
+
+
+            print('🎯 [BB2] Rounded weight to nearest valid increment → $trialWeight');
+
+            // 🧠 Recalculate E1RM using rounded weight
+            final double actualE1RM = PeriodizationModelUtils.calculateE1RM(
+              trialWeight,
+              effectiveReps.toDouble(),
+              effectiveRir,
+            );
+
+            final double minE1RM = baseE1RM * 0.85;
+            final double maxE1RM = baseE1RM * 1.02;
+
+            const double epsilon = 0.01;
+            if ((actualE1RM < minE1RM - epsilon) || (actualE1RM > maxE1RM + epsilon))
+            {
+              print('⚠️ [BB2] Adjusted weight = ${trialWeight.toStringAsFixed(1)} '
+                  'would cause E1RM = ${actualE1RM.toStringAsFixed(1)} '
+                  '(outside range ${minE1RM.toStringAsFixed(1)}–${maxE1RM.toStringAsFixed(1)}) '
+                  '→ falling back to cache weight = ${progressedWeightRaw.toStringAsFixed(1)}');
+              effectiveWeight = progressedWeightRaw;
+            } else {
+              effectiveWeight = trialWeight;
+              print('✅ [BB2] Accepted adjusted weight = ${trialWeight.toStringAsFixed(1)} '
+                  'for E1RM = ${actualE1RM.toStringAsFixed(1)} (base = ${baseE1RM.toStringAsFixed(1)})');
+            }
+            print('📏 [BB2] Comparing actual E1RM = ${actualE1RM.toStringAsFixed(4)} with range ${minE1RM.toStringAsFixed(4)} – ${maxE1RM.toStringAsFixed(4)}');
+
+          }
+
+        } else {
+          // 🧠 Default fallback
+          effectiveWeight = weight ?? progressedWeightRaw;
         }
 
 // ✅ Now that effectiveReps is defined, compute hintReps from it
@@ -1621,20 +1740,16 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             ? roundedReps.toString()
             : '';
 
-
+        final String hintWeight = (weightController.text.isEmpty && isExerciseNamed)
+            ? (userTypedRir && effectiveWeight != null
+            ? effectiveWeight.toStringAsFixed(1)
+            : progressedWeightRaw.toStringAsFixed(1))
+            : '';
 
         print('[TRACE] Checking effectiveReps: reps="${repsController.text}", weight="${weightController.text}", hintWeight="$hintWeight", hintReps="$hintReps"');
         print('📋 repsController: "${repsController.text}", plannedRep: "$plannedRep", hintReps: "$hintReps"');
 
-        final double? effectiveWeight = weightController.text.isNotEmpty
-            ? double.tryParse(weightController.text)
-            : (weight ?? double.tryParse(hintWeight) ?? historyWeight);
 
-
-
-        final double effectiveRir = rirController.text.isNotEmpty
-            ? double.tryParse(rirController.text) ?? double.tryParse(hintRir) ?? 0.5
-            : double.tryParse(hintRir) ?? 0.5;
 
 
         final double? e1rm = PeriodizationModelUtils.calculateE1RM(
