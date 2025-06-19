@@ -577,13 +577,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     setState(() {});
   }
 
-  bool isWorkoutCompleted(int weekIndex, int dayIndex) {
-    final rows = exerciseRows[weekIndex][dayIndex];
-    return rows.any((row) =>
-    row.exerciseController.text.trim().isNotEmpty &&
-        row.weightController.text.trim().isNotEmpty &&
-        row.repsController.text.trim().isNotEmpty);
-  }
 
 
   @override
@@ -2018,12 +2011,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                           const SizedBox(width: 6),
 
                           // ✅ Tick icon to indicate completed workout
-                          if (isWorkoutCompleted(weekIndex, dayIndex))
-                            const Icon(
-                              Icons.check_circle,
-                              size: 16,
-                              color: Colors.lightGreenAccent,
-                            ),
+
 
                           const SizedBox(width: 2),
 

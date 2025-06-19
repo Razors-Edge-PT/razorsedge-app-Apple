@@ -88,13 +88,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   final Map<int, Map<String, dynamic>> _cachedProgressedValues = {};
 
 
-
-
-
-
-
-
-
   bool _isLoadingData = true; // Tracks whether data is still loading
 
   Future<void> loadPreviousWorkoutData() async {
@@ -879,7 +872,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     );
 
     // ...continue with your original logic
-    await loadPlannedExercisesFromFirestore();
     await loadPlannedExercisesFromFirestore();
     await loadPreviousWorkoutData();
 
@@ -2591,20 +2583,32 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     print('[WES] Attempting to merge BB2 exercises into draft for $_selectedDate');
 
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    if (user == null) {
+      print('[WES] No user signed in');
+      return;
+    }
 
     final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
     final blockDoc = await userDoc.collection('block_planner').doc('current_block').get();
-    final blockStartStr = blockDoc.data()?['blockStartDate'];
+    final blockStartStr = blockDoc.data()?['blockMeta']?['blockStartDate'];
 
-    if (blockStartStr == null) return;
+
+    if (blockStartStr == null) {
+      print('[WES] blockStartDate is null');
+      return;
+    }
 
     final blockStart = DateTime.parse(blockStartStr);
     final daysSinceStart = _selectedDate.difference(blockStart).inDays;
-    if (daysSinceStart < 0) return;
+    if (daysSinceStart < 0) {
+      print('[WES] selectedDate is before block start');
+      return;
+    }
 
     final weekIndex = (daysSinceStart / 7).floor();
     final dayIndex = daysSinceStart % 7;
+
+    print('[WES] Fetching week_$weekIndex, day_$dayIndex');
 
     final dayDoc = await userDoc
         .collection('block_data')
@@ -2615,13 +2619,24 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         .doc('day_$dayIndex')
         .get();
 
-    if (!dayDoc.exists) return;
+    if (!dayDoc.exists) {
+      print('[WES] No BB2 day doc found');
+      return;
+    }
 
-    final bb2Exercises = List<Map<String, dynamic>>.from(dayDoc.data()?['exercises'] ?? []);
-    if (bb2Exercises.isEmpty) return;
+    final data = dayDoc.data();
+    print('[WES] BB2 day doc data: $data');
+
+    final bb2Exercises = List<Map<String, dynamic>>.from(data?['exercises'] ?? []);
+    if (bb2Exercises.isEmpty) {
+      print('[WES] No exercises in BB2 day doc');
+      return;
+    }
 
     final existingNames = _selectedExercisesWithCircuits.map((e) => e['name']).toSet();
     final newOnes = bb2Exercises.where((ex) => !existingNames.contains(ex['name'])).toList();
+
+    print('[WES] Found ${newOnes.length} new BB2 exercises');
 
     if (newOnes.isNotEmpty) {
       _selectedExercisesWithCircuits.addAll(
@@ -2631,12 +2646,18 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         }),
       );
 
-      _workoutSets.addAll(List.generate(newOnes.length, (_) => List.generate(_defaultSets, (_) => SetDetails())));
+      _workoutSets.addAll(
+        List.generate(newOnes.length, (_) => List.generate(_defaultSets, (_) => SetDetails())),
+      );
+
       print('[WES] _mergeNewBB2ExercisesIntoDraft() called');
       print("[WES] Merged ${newOnes.length} new BB2 exercises into draft");
       await _saveWorkoutDraftToCache();
+    } else {
+      print('[WES] No new exercises to merge');
     }
   }
+
 
 
 
