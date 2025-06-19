@@ -939,6 +939,18 @@ class PeriodizationModelUtils {
       };
     }).toList();
 
+    final List<String> lastFourCombos = historyWithE1RM
+        .take(4)
+        .map((entry) {
+      final w = (entry['weight'] as num).toStringAsFixed(1);
+      final r = (entry['reps'] as num).toString();
+      final rir = (entry['rir'] as num).toStringAsFixed(1);
+      return '$w${r}_$rir';
+    })
+        .toList();
+
+    print('🧾 [SmartProgression] Last 4 combos: $lastFourCombos');
+
     final DateTime now = DateTime.now();
     final double targetEffectiveReps = repTarget + 0.0;
 
@@ -1027,6 +1039,11 @@ class PeriodizationModelUtils {
       for (final r in trialReps) {
         final double trialE1RM = calculateE1RM(w, r.toDouble(), rirValue);
         final String comboKey = '${w.toStringAsFixed(1)}_${r}_${rirValue.toStringAsFixed(1)}';
+        final double tryE1RM = calculateE1RM(w, r.toDouble(), rirValue);
+        if (tryE1RM < baseE1RM) {
+          print('⛔ Skipping combo: $w × $r (E1RM regression)');
+          continue;
+        }
         final bool isUsed = usedCombos.contains(comboKey);
         final String tag = isUsed ? '⛔ used' : (trialE1RM < baseE1RM ? '⬇️ regressive' : '✅ valid');
         print('  → $w × $r = E1RM ${trialE1RM.toStringAsFixed(2)} → $tag');
@@ -1086,6 +1103,8 @@ class PeriodizationModelUtils {
     print('🏁 Final decision: $bestWeight × $bestReps @ RIR $rirValue');
     print('📈 E1RM = ${bestE1RM.toStringAsFixed(2)} (Base = ${baseE1RM.toStringAsFixed(2)})');
     print('🧮 E1RM increase = ${(bestE1RM - baseE1RM).toStringAsFixed(2)}');
+
+    print('🏁 ✅ [FINAL RETURN] Returning weight = $bestWeight × $bestReps');
 
     return {
       'weight': bestWeight,
@@ -1309,6 +1328,7 @@ class PeriodizationModelUtils {
     double rirValue = 0,
   })
   {
+
     print("🧪 [Routing] About to run model logic: $model");
 
     switch (model) {
@@ -1336,6 +1356,7 @@ class PeriodizationModelUtils {
           topSetHistory: topSetHistory,
           weekIndex: weekIndex,
           rirValue: rirValue, // ✅ add this
+
         );
 
       case ProgressionModelType.addRepsProgressionModel:
@@ -1358,6 +1379,8 @@ class PeriodizationModelUtils {
           'reps': repTarget,
         };
     }
+
+
   }
 
   static ProgressionModelType parseProgressionModel(String? value) {
