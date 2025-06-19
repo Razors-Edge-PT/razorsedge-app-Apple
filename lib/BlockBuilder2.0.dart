@@ -1563,20 +1563,73 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             ? progressedWeight.toStringAsFixed(1)
             : '';
 
+        final double progressedWeightRaw = progressed['weight'];
+        final int progressedRepsRaw = progressed['reps'];
+
+        double? effectiveReps;
+
+
+
+        if (repsController.text.isNotEmpty) {
+          print('[TRACE] Using manually entered reps');
+          effectiveReps = double.tryParse(repsController.text);
+        } else if (weightController.text.isNotEmpty && isExerciseNamed) {
+          print('[TRACE] Trying reverse calculation because weight was typed but reps is empty');
+
+          final double? baseWeight = progressedWeightRaw;
+          final double? baseReps = progressedRepsRaw.toDouble();
+
+          print('[DEBUG] Parsed baseWeight = $baseWeight, baseReps = $baseReps');
+
+          if (baseWeight != null && baseReps != null) {
+            final double baseE1RM = PeriodizationModelUtils.calculateE1RM(
+              baseWeight,
+              baseReps,
+              rirValue,
+            );
+
+            final double newWeight = double.tryParse(weightController.text) ?? baseWeight;
+
+            effectiveReps = PeriodizationModelUtils.reverseCalculateReps(
+              targetE1RM: baseE1RM,
+              weight: newWeight,
+              baseWeight: baseWeight,      // 👈 pass from progressedWeightRaw
+              rir: rirValue,
+              minReps: baseReps,
+            );
+
+
+
+            print('🔁 [BB2] Recalculated reps = ${effectiveReps.toStringAsFixed(1)} at new weight = $newWeight to preserve E1RM ≈ ${baseE1RM.toStringAsFixed(1)}');
+          } else {
+            print('[DEBUG] Could not parse baseWeight or baseReps — falling back');
+            effectiveReps = progressedRepsRaw.toDouble();
+          }
+        } else {
+          print('[TRACE] No weight entered or exercise unnamed — using fallback');
+          effectiveReps = progressedRepsRaw.toDouble();
+        }
+
+// ✅ Now that effectiveReps is defined, compute hintReps from it
+        final int roundedReps = effectiveReps != null
+            ? (effectiveReps % 1 >= 0.85
+            ? effectiveReps.ceil()
+            : effectiveReps.floor())
+            : progressedRepsRaw;
+
         final String hintReps = (repsController.text.isEmpty && isExerciseNamed)
-            ? progressedReps.toString()
+            ? roundedReps.toString()
             : '';
 
-        print('📋 repsController: "${repsController.text}", plannedRep: "$plannedRep", hintReps: "$hintReps"');
 
+
+        print('[TRACE] Checking effectiveReps: reps="${repsController.text}", weight="${weightController.text}", hintWeight="$hintWeight", hintReps="$hintReps"');
+        print('📋 repsController: "${repsController.text}", plannedRep: "$plannedRep", hintReps: "$hintReps"');
 
         final double? effectiveWeight = weightController.text.isNotEmpty
             ? double.tryParse(weightController.text)
             : (weight ?? double.tryParse(hintWeight) ?? historyWeight);
 
-        final double? effectiveReps = repsController.text.isNotEmpty
-            ? double.tryParse(repsController.text)
-            : double.tryParse(hintReps);
 
 
         final double effectiveRir = rirController.text.isNotEmpty

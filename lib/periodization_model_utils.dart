@@ -60,14 +60,21 @@ class PeriodizationModelUtils {
     double w = weight ?? 0.0;
     double r = reps ?? 0.0;
     double rValue = rir ?? 0.5;
+
     double totalReps = r + rValue;
 
-    if (totalReps <= 6) {
+    // Round to avoid floating point edge cases like 6.000000003
+    totalReps = double.parse(totalReps.toStringAsFixed(4));
+
+    if (totalReps <= 6.0) {
+      // Brzycki
       return w * (36 / (37 - totalReps));
     } else {
-      return w * (1 + (0.0333 * totalReps));
+      // Epley
+      return w * (1 + 0.0333 * totalReps);
     }
   }
+
 
   static double reverseCalculateWeight({
     required double targetE1RM,
@@ -84,6 +91,37 @@ class PeriodizationModelUtils {
       return targetE1RM / (1 + 0.0333 * totalReps);
     }
   }
+
+  static double reverseCalculateReps({
+    required double targetE1RM,
+    required double weight,
+    required double baseWeight,   // 👈 new param
+    double rir = 0.5,
+    double? minReps,
+  }) {
+    if (weight <= 0) return 0;
+
+    double totalReps;
+
+    if (targetE1RM / weight < 1.1667) {
+      totalReps = 37 - (36 * weight / targetE1RM);
+    } else {
+      totalReps = (targetE1RM / weight - 1) / 0.0333;
+    }
+
+    double reps = totalReps - rir;
+
+    // ✅ Only clamp to minReps if weight DECREASED
+    if (minReps != null && weight < baseWeight && reps < minReps) {
+      print('⚠️ [BB2] Reps would drop below planned ($reps < $minReps) after weight decreased ($weight < $baseWeight). Locking to $minReps.');
+      reps = minReps;
+    }
+
+    return reps.clamp(1.0, 30.0);
+  }
+
+
+
 
   static String resolveExerciseName(String key) {
     return idToName[key] ?? key;
