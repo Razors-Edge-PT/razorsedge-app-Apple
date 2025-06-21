@@ -557,14 +557,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       return bb2Rir;
     }
 
-    // ✅ Check WES controller override
-    final controllerText = _rirControllers[exerciseIndex].length > (setNumber - 1)
-        ? _rirControllers[exerciseIndex][setNumber - 1].text
-        : '';
-    if (controllerText.isNotEmpty) {
-      return double.tryParse(controllerText) ?? (setNumber == 1 ? 0.5 : 1.5);
-    }
-
     final exerciseId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
     final weekIndex = _getApplicableWeekIndex(exerciseId);
     if (weekIndex == null) return setNumber == 1 ? 0.5 : 1.5;
@@ -580,7 +572,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       blockStartDate: _blockStartDate!,
       weekIndex: weekIndex,
     );
-
 
     final rirPlan = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['rirPlan'];
     final weekKey = 'week${weekIndex + 1}';
@@ -600,6 +591,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     return plannedRir ?? (setNumber == 1 ? 0.5 : 1.5);
   }
+
 
 
 
@@ -644,59 +636,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
    */
 
-  double set1RIR(int exerciseIndex) {
-    print('🚀 [WES] set1RIR() called for index $exerciseIndex');
+  double set1RIR(int i) => getRirFromPlanOrInput(i, 1);
 
-    final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
-    final userRir = double.tryParse(_rirControllers[exerciseIndex][0].text);
-    final userWeight = double.tryParse(_weightControllers[exerciseIndex][0].text);
-    final userReps = double.tryParse(_repsControllers[exerciseIndex][0].text);
-
-    final plannedRir = getRirFromPlanOrInput(exerciseIndex, 1);
-    final baseRir = plannedRir;
-
-    // ✅ Step 2: If user hasn't entered RIR, just return planned
-    if (userRir == null) return baseRir;
-
-    // ✅ Step 3: Get progression model baseline
-    final progressed = _getProgressedValues(exerciseIndex);
-    final baseWeight = (progressed['weight'] ?? 20.0).toDouble();
-    final baseReps = (progressed['reps'] ?? 10.0).toDouble();
-
-    // ✅ Use original RIR to get the "correct" E1RM baseline
-    final baseE1RM = PeriodizationModelUtils.calculateE1RM(baseWeight, baseReps, baseRir);
-
-    // ✅ Use new user RIR to see if E1RM drifts
-    final currentE1RM = PeriodizationModelUtils.calculateE1RM(
-      userWeight ?? baseWeight,
-      userReps ?? baseReps,
-      userRir,
-    );
-
-    print('🔹 Original: $baseWeight × $baseReps @ RIR $baseRir → E1RM = ${baseE1RM.toStringAsFixed(2)}');
-    print('🔸 Modified: ${userWeight ?? baseWeight} × ${userReps ?? baseReps} @ RIR $userRir → E1RM = ${currentE1RM.toStringAsFixed(2)}');
-
-    // ✅ Only adjust if E1RM is >2% outside baseline
-    final double upperLimit = baseE1RM * 1.02;
-    final double lowerLimit = baseE1RM * 0.98;
-
-    if (currentE1RM > upperLimit || currentE1RM < lowerLimit) {
-      final adjustedWeight = PeriodizationModelUtils.reverseCalculateWeight(
-        targetE1RM: baseE1RM,
-        reps: userReps?.toInt() ?? baseReps.toInt(),
-        rir: userRir,
-      );
-      final rounded = PeriodizationModelUtils.roundToNearestValidIncrement(
-        targetWeight: adjustedWeight,
-        exerciseName: exerciseName,
-      );
-
-      _weightControllers[exerciseIndex][0].text = rounded.toStringAsFixed(1);
-      print('⚠️ [WES] Set1RIR changed → adjusted weight to $rounded to stay near E1RM = ${baseE1RM.toStringAsFixed(2)}');
-    }
-
-    return userRir;
-  }
 
 
 
@@ -721,106 +662,74 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       return bb2Weight;
     }
 
-    // ✅ Step 2: Use stable rep value from BB2 or model, not from progression
-    final double repTarget = set1SuggestedReps(exerciseIndex);
-    print('📌 [WES] Calculating smart progression for $exerciseName → repTarget: $repTarget');
-
-
-    // ✅ Step 3: Parse fallback RIR (may come from controller or model)
-    final String rirText = _rirControllers[exerciseIndex][0].text;
-    final double? userRir = double.tryParse(rirText);
-    final double plannedRir = getRirFromPlanOrInput(exerciseIndex, 1); // from BB2/model
-    final double rirUsed = userRir ?? plannedRir; // used later for logic
-
-    print('🧪 [WES] RIR values → planned=$plannedRir | user=${userRir ?? "∅"} | using=$rirUsed');
-
-    // ✅ Step 4: Calculate default weight
-    final double defaultWeight = PeriodizationModelUtils.getSuggestedWeightFromRep(
-      exerciseName,
-      repTarget.toInt(),
-      rirUsed,
-    );
-
-    // ✅ Step 5: Apply progression model
-    final progressed = _getProgressedValues(exerciseIndex);
-    final double baseWeight = progressed['weight']?.toDouble() ?? 20.0;
-    final double baseReps = progressed['reps']?.toDouble() ?? 10.0;
-    final double baseE1RM = PeriodizationModelUtils.calculateE1RM(baseWeight, baseReps, rirUsed);
-
-    // ✅ Step 6: Handle user overrides and round
+    // ✅ Step 2: Pull user-entered text fields
     final String weightText = _weightControllers[exerciseIndex][0].text;
     final String repsText = _repsControllers[exerciseIndex][0].text;
+    final String rirText = _rirControllers[exerciseIndex][0].text;
 
     final double? userWeight = double.tryParse(weightText);
     final double? userReps = double.tryParse(repsText);
+    final double? userRir = double.tryParse(rirText);
 
-    final increments = PeriodizationModelUtils.getIncrementsForExercise(
-      PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName,
-    );
-
-    if (userWeight != null) return userWeight;
-
-    if (userReps != null) {
-      final derived = PeriodizationModelUtils.reverseCalculateWeight(
-        targetE1RM: baseE1RM * 1.02,
-        reps: userReps.toInt(),
-        rir: rirUsed,
-      );
-      final rounded = PeriodizationModelUtils.roundToNearestValidIncrement(
-        targetWeight: derived,
-        exerciseName: exerciseName,
-      );
-      print('🔁 [WES] User-entered reps $userReps → derived weight $derived → rounded to $rounded');
-      return rounded;
+    // 🛑 Step 3: Respect user-entered weight
+    if (userWeight != null) {
+      print('✍️ [WES] User-entered weight for $exerciseName = $userWeight');
+      return userWeight;
     }
 
-    print('🧪 [DEBUG] userRir=$userRir, userWeight=$userWeight, condition=${userRir != null && userWeight == null}');
+    // ✅ Step 4: Pull model progression values
+    final progressed = _getProgressedValues(exerciseIndex);
+    final double baseWeight = progressed['weight']?.toDouble() ?? 20.0;
+    final double baseReps = progressed['reps']?.toDouble() ?? 10.0;
+    final double modelRir = getRirFromPlanOrInput(exerciseIndex, 1);
 
-    if (userRir != null && userWeight == null) {
-      // ✅ Step 5.5: Print hint-based E1RM before any user input
-      final double hintWeight = baseWeight;
-      final double hintReps = baseReps;
-      final double hintRir = plannedRir; // this ensures it's the true hint, not overridden
+    // ✅ Step 5: Calculate base E1RM using progression model only
+    final double baseE1RM = PeriodizationModelUtils.calculateE1RM(baseWeight, baseReps, modelRir);
+    print('🧠 [WES] Base progression E1RM = ${baseE1RM.toStringAsFixed(2)} '
+        '(from $baseWeight × $baseReps @ RIR $modelRir)');
 
-      final double hintE1RM = PeriodizationModelUtils.calculateE1RM(
-        hintWeight,
-        hintReps,
-        hintRir,
-      );
-      print('📌 [WES] userRir=$userRir, plannedRir=$plannedRir, using=$rirUsed');
+    // ✅ Step 6: Use user RIR and/or reps if available
+    if (userReps != null || userRir != null) {
+      final double repsToUse = userReps ?? set1SuggestedReps(exerciseIndex);
+      final double rirToUse = userRir ?? modelRir;
 
-      print('🧠 [WES] Hint E1RM for $exerciseName → $hintWeight × $hintReps @ RIR $hintRir → E1RM = $hintE1RM');
-
-      // ✅ Compute effective reps based on base + RIR
-      final double baseEffectiveReps = baseReps + plannedRir;
-
-      final derived = PeriodizationModelUtils.reverseCalculateWeight(
+      final double derived = PeriodizationModelUtils.reverseCalculateWeight(
         targetE1RM: baseE1RM,
-        reps: baseEffectiveReps.round(),
-        rir: 0.0, // ✅ prevent RIR from being re-added inside
+        reps: repsToUse.toInt(),
+        rir: rirToUse,
       );
 
-      final rounded = PeriodizationModelUtils.roundToNearestValidIncrement(
+      final double rounded = PeriodizationModelUtils.roundToNearestValidIncrement(
         targetWeight: derived,
         exerciseName: exerciseName,
       );
 
-      print('🔁 [WES] User RIR $userRir → baseEffReps=$baseEffectiveReps → derivedWeight=$derived → rounded=$rounded');
+      final double newE1RM = PeriodizationModelUtils.calculateE1RM(rounded, repsToUse, rirToUse);
+
+      if (userReps != null && userRir == null) {
+        print('📊 [WES] User reps = $userReps → updated weight = $rounded → new E1RM = ${newE1RM.toStringAsFixed(2)}');
+      } else if (userRir != null && userReps == null) {
+        print('📈 [WES] User RIR = $userRir → updated weight = $rounded → new E1RM = ${newE1RM.toStringAsFixed(2)}');
+      } else {
+        print('📊 [WES] User reps = $userReps & RIR = $userRir → updated weight = $rounded → new E1RM = ${newE1RM.toStringAsFixed(2)}');
+      }
+
       return rounded;
     }
 
-
-
-
-
-
-    final roundedDefault = PeriodizationModelUtils.roundToNearestValidIncrement(
+    // ✅ Step 7: No overrides — fallback to rounded base weight
+    final double fallbackRounded = PeriodizationModelUtils.roundToNearestValidIncrement(
       targetWeight: baseWeight,
       exerciseName: exerciseName,
     );
-    print('🎯 [WES] Final progressed weight (rounded) for $exerciseName → $roundedDefault kg');
-    return roundedDefault;
+    print('🎯 [WES] Final progression for $exerciseName using default RIR $modelRir → $fallbackRounded kg');
+    return fallbackRounded;
   }
+
+
+
+
+
 
 
 
