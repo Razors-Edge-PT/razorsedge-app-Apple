@@ -117,7 +117,7 @@ class PeriodizationModelUtils {
       reps = minReps;
     }
 
-    return reps.clamp(1.0, 30.0);
+    return reps.clamp(1.0, 45.0);
   }
 
 
