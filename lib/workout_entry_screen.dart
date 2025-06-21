@@ -434,6 +434,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final rir = double.tryParse(rirText) ?? set1RIR(exerciseIndex);
     final weight = double.tryParse(weightText);
     final reps = double.tryParse(repsText);
+    final normalizedKey = exerciseName.toLowerCase();
+    final bb2Entry = _resolvedBB2Values[normalizedKey];
+    final double? bb2Reps = bb2Entry?['reps']?.toDouble();
+
 
     final progressed = _getProgressedValues(exerciseIndex);
     final baseWeight = (progressed['weight'] ?? 20.0).toDouble();
@@ -442,6 +446,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     // CASE 1: Reps already entered by user → use that
     if (reps != null) return reps;
+    // CASE 1.5: Use BB2-entered reps if available
+    if (bb2Reps != null && bb2Reps > 0) {
+      print('🔁 [WES] Using BB2-entered reps for $exerciseName = $bb2Reps');
+      return bb2Reps;
+    }
+
 
     // CASE 2: Weight is user-entered → derive reps
     if (weight != null) {
@@ -725,15 +735,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     print('🎯 [WES] Final progression for $exerciseName using default RIR $modelRir → $fallbackRounded kg');
     return fallbackRounded;
   }
-
-
-
-
-
-
-
-
-
 
 
   double set2SuggestedWeight(int exerciseIndex) {

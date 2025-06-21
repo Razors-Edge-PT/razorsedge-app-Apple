@@ -1668,7 +1668,13 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
         if (userTypedWeight) {
           effectiveWeight = double.tryParse(weightController.text);
-        } else if (userTypedRir && effectiveReps != null) {
+          print('🧠 [BB2] Original progressed weight for $exerciseName = ${progressedWeightRaw.toStringAsFixed(1)} '
+              'at ${progressedRepsRaw} reps, RIR $rirValue');
+
+        } else if ((userTypedRir || repsController.text.isNotEmpty) && effectiveReps != null) {
+          print('🔁 [BB2] Triggered weight recalculation due to ${userTypedRir ? "RIR" : ""}${(userTypedRir && repsController.text.isNotEmpty) ? " + " : ""}${repsController.text.isNotEmpty ? "reps" : ""}');
+
+
           // 🧠 Recalculate weight to preserve E1RM with new RIR at same reps
           final double baseWeight = progressedWeightRaw;
           final double baseReps = progressedRepsRaw.toDouble();
@@ -1717,8 +1723,14 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
               effectiveWeight = progressedWeightRaw;
             } else {
               effectiveWeight = trialWeight;
+
+              print('🎯 [BB2] Updated weight for $exerciseName = ${trialWeight.toStringAsFixed(1)} '
+                  '(to preserve E1RM ${baseE1RM.toStringAsFixed(2)} '
+                  'using reps = ${effectiveReps?.toStringAsFixed(1)}, RIR = $effectiveRir)');
+
               print('✅ [BB2] Accepted adjusted weight = ${trialWeight.toStringAsFixed(1)} '
                   'for E1RM = ${actualE1RM.toStringAsFixed(1)} (base = ${baseE1RM.toStringAsFixed(1)})');
+
             }
             print('📏 [BB2] Comparing actual E1RM = ${actualE1RM.toStringAsFixed(4)} with range ${minE1RM.toStringAsFixed(4)} – ${maxE1RM.toStringAsFixed(4)}');
 
@@ -1741,7 +1753,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             : '';
 
         final String hintWeight = (weightController.text.isEmpty && isExerciseNamed)
-            ? (userTypedRir && effectiveWeight != null
+            ? ((userTypedRir || repsController.text.isNotEmpty) && effectiveWeight != null
+
             ? effectiveWeight.toStringAsFixed(1)
             : progressedWeightRaw.toStringAsFixed(1))
             : '';
