@@ -131,6 +131,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
   final GlobalKey cardKey = GlobalKey();
   final GlobalKey contentKey = GlobalKey();
+  Map<String, bool> wesExpansionStates = {};
+
 
 
 // Key = weekday index (0=Mon...6=Sun), Value = latest edited structure
@@ -155,6 +157,27 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     }
     return grouped;
   }
+
+  double getTotalWesHeight(List<Map<String, dynamic>> savedWesExercises) {
+    const baseHeightPerCard = 60.0;
+    const setHeight = 28.0;
+    const minHeight = 1.0;
+    const maxHeight = 300.0;
+
+    double total = 0;
+
+    for (final ex in savedWesExercises) {
+      final name = ex['name'] ?? 'Unnamed';
+      final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? []);
+      final expanded = wesExpansionStates[name] ?? false;
+      final extraSetCount = expanded ? (sets.length - 1).clamp(0, 10) : 0;
+
+      total += baseHeightPerCard + (extraSetCount * setHeight);
+    }
+
+    return total.clamp(minHeight, maxHeight);
+  }
+
 
 
   Future<void> loadAllData() async {
@@ -2538,14 +2561,20 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
               // 🟣 Scrollable Exercise Table (~6.5 visible rows)
               const SizedBox(height: 6),
                   SizedBox(
-                    height: 295,
+                    height: 395,
                     child: Column(
                       children: [
                         // ✅ Always show read-only WES-saved exercises
-                        Expanded(
-                          child: SingleChildScrollView(
-                            child: Column(
-                              children: savedWesExercises.map((exercise) {
+                        AnimatedSize(
+                          duration: const Duration(milliseconds: 200),
+                          curve: Curves.easeInOut,
+                          child: SizedBox(
+                            height: getTotalWesHeight(savedWesExercises),
+                            // ✅ now dynamic based on expanded sets
+                            child: Scrollbar(
+                              child: SingleChildScrollView(
+                                child: Column(
+                                  children: savedWesExercises.map((exercise) {
                                 final sets = List<Map<String, dynamic>>.from(exercise['sets'] ?? []);
                                 if (sets.isEmpty) return const SizedBox.shrink();
 
@@ -2596,17 +2625,22 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                                         tilePadding: EdgeInsets.zero,
                                         collapsedIconColor: Colors.grey.shade400,
                                         iconColor: Colors.lightBlueAccent,
-                                        trailing: const SizedBox.shrink(), // 👈 removes the arrow
+                                        trailing: const SizedBox.shrink(),
                                         childrenPadding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
+                                        initiallyExpanded: wesExpansionStates[name] ?? false, // ✅ restore expansion state
+                                        onExpansionChanged: (isExpanded) {
+                                          setState(() {
+                                            wesExpansionStates[name] = isExpanded; // ✅ track per exercise
+                                          });
+                                        },
                                         title: Row(
                                           crossAxisAlignment: CrossAxisAlignment.center,
                                           children: [
-
                                             Expanded(
-                                              flex: 8, // ⬅️ slightly increased from 7 to reclaim space
+                                              flex: 8,
                                               child: Container(
                                                 alignment: Alignment.centerLeft,
-                                                padding: const EdgeInsets.symmetric(horizontal: 3),
+                                                padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 0),
                                                 child: Text(
                                                   name,
                                                   overflow: TextOverflow.ellipsis,
@@ -2619,12 +2653,11 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                                                 ),
                                               ),
                                             ),
-// Removed SizedBox(width: 14),
                                             Expanded(
                                               flex: 3,
                                               child: Container(
-                                                alignment: Alignment.centerLeft, // ⬅️ push weight to the right edge of its cell
-                                                padding: const EdgeInsets.only(left: 8), // ⬅️ simulate spacing from name
+                                                alignment: Alignment.centerLeft,
+                                                padding: const EdgeInsets.only(left: 8),
                                                 child: Text(
                                                   weight.toStringAsFixed(1),
                                                   textAlign: TextAlign.center,
@@ -2632,12 +2665,11 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                                                 ),
                                               ),
                                             ),
-
                                             const SizedBox(width: 6),
                                             Expanded(
                                               flex: 2,
                                               child: Padding(
-                                                padding: const EdgeInsets.only(left: 8), // 👈 Push reps right
+                                                padding: const EdgeInsets.only(left: 8),
                                                 child: Text(
                                                   reps.toStringAsFixed(0),
                                                   textAlign: TextAlign.center,
@@ -2648,7 +2680,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                                             Expanded(
                                               flex: 2,
                                               child: Padding(
-                                                padding: const EdgeInsets.only(left: 6), // 👈 Push rir right
+                                                padding: const EdgeInsets.only(left: 6),
                                                 child: Text(
                                                   rir.toStringAsFixed(1),
                                                   textAlign: TextAlign.center,
@@ -2659,7 +2691,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                                             Expanded(
                                               flex: 3,
                                               child: Padding(
-                                                padding: const EdgeInsets.only(left: 10), // 👈 Push e1rm right
+                                                padding: const EdgeInsets.only(left: 10),
                                                 child: Align(
                                                   alignment: Alignment.centerRight,
                                                   child: Text(
@@ -2673,100 +2705,102 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                                                 ),
                                               ),
                                             ),
-
                                           ],
                                         ),
+                                        children: remainingSets.asMap().entries.map((entry) {
+                                          final i = entry.key;
+                                          final set = entry.value;
 
-                                      children: remainingSets.asMap().entries.map((entry) {
-                                        final i = entry.key;
-                                        final set = entry.value;
+                                          final setWeight = (set['weight'] ?? 0).toDouble();
+                                          final setReps = (set['reps'] ?? 0).toDouble();
+                                          final setRir = (set['rir'] ?? 0).toDouble();
+                                          final setE1RM = PeriodizationModelUtils.calculateE1RM(setWeight, setReps, setRir);
 
-                                        final setWeight = (set['weight'] ?? 0).toDouble();
-                                        final setReps = (set['reps'] ?? 0).toDouble();
-                                        final setRir = (set['rir'] ?? 0).toDouble();
-                                        final setE1RM = PeriodizationModelUtils.calculateE1RM(setWeight, setReps, setRir);
-
-                                        return Container(
-                                          height: 28,
-                                          padding: const EdgeInsets.symmetric(horizontal: 2),
-                                          decoration: BoxDecoration(
-                                            color: Colors.blueGrey[200]!.withOpacity(0.10),
-                                            border: Border(bottom: BorderSide(color: Colors.blueGrey[500]!, width: 0.25)),
-                                          ),
-                                          child: Row(
-                                            crossAxisAlignment: CrossAxisAlignment.center,
-                                            children: [
-                                              Expanded(
-                                                flex: 4,
-                                                child: Container(
-                                                  alignment: Alignment.centerLeft,
-                                                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                                                  child: Text(
-                                                    'Set ${i + 2}',
-                                                    overflow: TextOverflow.ellipsis,
-                                                    style: const TextStyle(
-                                                      color: Colors.white,
-                                                      fontSize: 11,
-                                                      fontWeight: FontWeight.w600,
-                                                      fontStyle: FontStyle.italic,
+                                          return Container(
+                                            height: 28,
+                                            padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 0),
+                                            decoration: BoxDecoration(
+                                              color: Colors.blueGrey[200]!.withOpacity(0.10),
+                                              border: Border(bottom: BorderSide(color: Colors.blueGrey[500]!, width: 0.25)),
+                                            ),
+                                            child: Row(
+                                              crossAxisAlignment: CrossAxisAlignment.center,
+                                              children: [
+                                                Expanded(
+                                                  flex: 4,
+                                                  child: Container(
+                                                    alignment: Alignment.centerLeft,
+                                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
+                                                    child: Text(
+                                                      'Set ${i + 2}',
+                                                      overflow: TextOverflow.ellipsis,
+                                                      style: const TextStyle(
+                                                        color: Colors.white,
+                                                        fontSize: 11,
+                                                        fontWeight: FontWeight.w600,
+                                                        fontStyle: FontStyle.italic,
+                                                      ),
                                                     ),
                                                   ),
                                                 ),
-                                              ),
-                                              Expanded(
-                                                flex: 2,
-                                                child: Text(
-                                                  setWeight.toStringAsFixed(1),
-                                                  textAlign: TextAlign.center,
-                                                  style: const TextStyle(fontSize: 12, color: Colors.white, fontStyle: FontStyle.italic),
+                                                Expanded(
+                                                  flex: 2,
+                                                  child: Text(
+                                                    setWeight.toStringAsFixed(1),
+                                                    textAlign: TextAlign.center,
+                                                    style: const TextStyle(fontSize: 12, color: Colors.white, fontStyle: FontStyle.italic),
+                                                  ),
                                                 ),
-                                              ),
-                                              Expanded(
-                                                flex: 1,
-                                                child: Text(
-                                                  setReps.toStringAsFixed(0),
-                                                  textAlign: TextAlign.center,
-                                                  style: const TextStyle(fontSize: 12, color: Colors.white, fontStyle: FontStyle.italic),
+                                                Expanded(
+                                                  flex: 1,
+                                                  child: Text(
+                                                    setReps.toStringAsFixed(0),
+                                                    textAlign: TextAlign.center,
+                                                    style: const TextStyle(fontSize: 12, color: Colors.white, fontStyle: FontStyle.italic),
+                                                  ),
                                                 ),
-                                              ),
-                                              Expanded(
-                                                flex: 1,
-                                                child: Text(
-                                                  setRir.toStringAsFixed(1),
-                                                  textAlign: TextAlign.center,
-                                                  style: const TextStyle(fontSize: 12, color: Colors.white, fontStyle: FontStyle.italic),
+                                                Expanded(
+                                                  flex: 1,
+                                                  child: Text(
+                                                    setRir.toStringAsFixed(1),
+                                                    textAlign: TextAlign.center,
+                                                    style: const TextStyle(fontSize: 12, color: Colors.white, fontStyle: FontStyle.italic),
+                                                  ),
                                                 ),
-                                              ),
-                                              Expanded(
-                                                flex: 2,
-                                                child: Text(
-                                                  setE1RM.toStringAsFixed(1),
-                                                  textAlign: TextAlign.center,
-                                                  style: const TextStyle(fontSize: 12, color: Colors.white70, fontStyle: FontStyle.italic),
+                                                Expanded(
+                                                  flex: 2,
+                                                  child: Text(
+                                                    setE1RM.toStringAsFixed(1),
+                                                    textAlign: TextAlign.center,
+                                                    style: const TextStyle(fontSize: 12, color: Colors.white70, fontStyle: FontStyle.italic),
+                                                  ),
                                                 ),
-                                              ),
-                                            ],
-                                          ),
-                                        );
-                                      }).toList(),
+                                              ],
+                                            ),
+                                          );
+                                        }).toList(),
+                                      ),
+
                                     ),
                                   ),
-                                  ),
                                 );
-                              }).toList(),
+                                    }).toList(),
+                                  ),
+                                ),
+                              ),
                             ),
-                          ),
                         ),
 
 
 
 
 
+                        const SizedBox(height: 0), // ⬅️ reduce vertical space here
 
                         // ✅ Show "Add First Exercise" button if day is empty
                         if (exerciseRows[weekIndex][dayIndex].isEmpty)
                           Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 12.0),
+                            padding: const EdgeInsets.symmetric(vertical: 4.0),
                             child: Center(
                               child: TextButton.icon(
                                 onPressed: () {
