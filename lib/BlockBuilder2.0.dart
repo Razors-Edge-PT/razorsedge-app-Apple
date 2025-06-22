@@ -2879,17 +2879,20 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     if (isFirstInCircuit)
-                          Padding(
-                            padding: const EdgeInsets.only(left: 8, bottom: 1, top: 6),
-                            child: Text(
-                              'Circuit ${row.circuitIndex + 1}',
-                              style: const TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.lightBlueAccent,
-                              ),
-                            ),
-                          ),
+                                      Transform.translate(
+                                        offset: const Offset(0, -10), // 👈 Shift upward by 6 pixels
+                                        child: Padding(
+                                          padding: const EdgeInsets.only(left: 2, bottom: 1), // no top needed now
+                                          child: Text(
+                                            'Circuit ${row.circuitIndex + 1}',
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.lightBlueAccent,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
 
                         Dismissible(
                           key: ValueKey(row.id),
@@ -2977,19 +2980,24 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                             );
                           },
 
-                          child: Row(
-
-                            children: [
-                              const Padding(padding: EdgeInsets.only(left: 6, right: 4)),
-
-                              Expanded(child: _buildExerciseRow(weekIndex, dayIndex, rowIndex, repTargetsByExercise)),
-
-                            ],
+                          child: Transform.translate(
+                            offset: const Offset(0, -8), // 👈 shift upward by 6 pixels
+                            child: Row(
+                              children: [
+                                const Padding(
+                                  padding: EdgeInsets.only(left: 0, right: 2), // ✅ removed `top: 0`, not needed
+                                ),
+                                Expanded(
+                                  child: _buildExerciseRow(weekIndex, dayIndex, rowIndex, repTargetsByExercise),
+                                ),
+                              ],
+                            ),
                           ),
+
                         ),
                         if (isLastInCircuit)
                           Padding(
-                            padding: const EdgeInsets.only(top: 4, right: 8),
+                            padding: const EdgeInsets.only(top: 0, right: 4),
                             child: Row(
                               mainAxisAlignment: MainAxisAlignment.end,
                               children: [
