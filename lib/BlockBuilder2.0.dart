@@ -215,12 +215,15 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     ]);
 
     selectedTemplateIds = List.generate(totalWeeks, (_) => List.generate(7, (_) => null));
-    await _loadPersistedSavedFields();
+    Future.delayed(Duration(milliseconds: 100), () {
+      _loadPersistedSavedFields();
+    });
     await loadVisibleWeeksOnly();
 
 
     print("✅ All data loaded for BB2.");
-    print('⏱️ loadBlockDataFromFirestore took ${stopwatch.elapsedMilliseconds}ms');
+    print('⏱️ BB2 loadAllData + loadVisibleWeeksOnly took ${stopwatch.elapsedMilliseconds}ms');
+
   }
 
 
@@ -684,6 +687,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   void initState() {
     super.initState();
 
+    final pageLoadTimer = Stopwatch()..start(); // ⏱️ Start full page load time
     // ✅ Initialize block start/end early
     blockStartDate = DateTime(2024, 6, 3); // ⬅️ Use actual block start date here
     blockEndDate = blockStartDate.add(Duration(days: totalWeeks * 7));
@@ -700,15 +704,24 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
         // 🧠 Load the newly exposed weeks
         final newWeekIndices = List.generate(newCount, (i) => i);
-        for (final i in newWeekIndices) {
-          if (!loadedWeekIndices.contains(i)) {
-            loadBlockDataForWeek(i).then((_) {
-              setState(() {
-                loadedWeekIndices.add(i);
-              });
-            });
-          }
+        final weeksToLoad = newWeekIndices.where((i) => !loadedWeekIndices.contains(i)).toList();
+
+        if (weeksToLoad.isNotEmpty) {
+          print('⚡ [BB2] Loading weeks in parallel: $weeksToLoad');
+
+          final scrollLoadTimer = Stopwatch()..start();
+
+          Future.wait(
+            weeksToLoad.map((i) async {
+              await loadBlockDataForWeek(i);
+              loadedWeekIndices.add(i);
+            }),
+          ).then((_) {
+            print('⏱️ [BB2] Scroll-loaded weeks $weeksToLoad in ${scrollLoadTimer.elapsedMilliseconds}ms');
+            setState(() {});
+          });
         }
+
       }
     });
 
@@ -725,6 +738,9 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
       // STEP 2: Load all remaining data
       await loadAllData();
+// ✅ Stop timer here
+      pageLoadTimer.stop();
+      print('✅ [BB2] Total page load (data only) completed in ${pageLoadTimer.elapsedMilliseconds}ms');
 
       // STEP 3: Scroll to initial week
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -732,6 +748,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         _horizontalScrollController.jumpTo(weekWidth * initialWeekIndex.toDouble());
       });
     });
+
 
     Future.microtask(() async {
       final prefs = await SharedPreferences.getInstance();
@@ -742,6 +759,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         });
       }
     });
+
+
   }
 
 
@@ -1094,6 +1113,10 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     }
 
     final daySnapshots = await weekRef.collection('days').get();
+
+
+
+
     print('📆 Week $weekIndex → ${daySnapshots.docs.length} day docs [${stopwatch.elapsedMilliseconds}ms]');
 
     for (final dayDoc in daySnapshots.docs) {
@@ -1257,10 +1280,10 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     final today = DateTime.now();
     final currentWeekIndex = today.difference(blockStartDate).inDays ~/ 7;
 
+
+    // CHANGE here to load more weeks on open
     final weeksToLoad = {
-      currentWeekIndex - 1,
       currentWeekIndex,
-      currentWeekIndex + 1,
     };
     print('⏳ [BB2] Loading visible weeks: $weeksToLoad');
 
