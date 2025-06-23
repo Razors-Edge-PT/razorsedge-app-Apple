@@ -6,6 +6,8 @@ import 'periodization_model_utils.dart';
 import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'week_planner.dart';
+import 'package:uuid/uuid.dart';
 
 class Block_Planner extends StatefulWidget {
   const Block_Planner({super.key});
@@ -15,13 +17,66 @@ class Block_Planner extends StatefulWidget {
 }
 
 class _BlockPlannerState extends State<Block_Planner> {
-  // Example list of tracked exercises
+  final TextEditingController _blockNameController = TextEditingController();
   List<String> exercises = [];
   final Map<String, String> _exerciseIdToName = {}; // id ➔ name
   Map<String, String> nameToId = {}; // ✅ global map for name → ID
   final TextEditingController _historyInputController = TextEditingController();
   List<String> selectedDays = []; // e.g., ['Mon', 'Wed', 'Fri']
+  List<Map<String, dynamic>> weekPlans = [];
+  String? blockIdToUse;
+  bool _isSavedBlock = false;
+  bool _didRunInitOnce = false;
 
+  @override
+  void dispose() {
+    _blockNameController.dispose();
+    _historyInputController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_didRunInitOnce) return;
+
+    final args = ModalRoute.of(context)?.settings.arguments as Map?;
+    blockIdToUse = args?['blockId'];
+
+    if (blockIdToUse != null) {
+      _loadExistingBlock(blockIdToUse!);
+    }
+
+    _didRunInitOnce = true;
+  }
+
+  Future<void> _loadExistingBlock(String blockId) async {
+    final userId = FirebaseAuth.instance.currentUser?.uid;
+    if (userId == null) return;
+
+    final doc = await FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(userId)
+        .collection('blocks')
+        .doc(blockId)
+        .get();
+
+    if (!doc.exists) return;
+    final data = doc.data()!;
+
+    setState(() {
+      _blockNameController.text = data['name'] ?? '';
+      _blockStartDate = (data['startDate'] as Timestamp).toDate();
+      _blockEndDate = (data['endDate'] as Timestamp).toDate();
+      selectedDays = List<String>.from(data['selectedDays'] ?? []);
+      exercises = List<String>.from(data['exercises'] ?? []);
+      exerciseSettings = Map<String, Map<String, dynamic>>.from(
+        (data['exerciseSettings'] ?? {})
+            .map((key, val) => MapEntry(key, Map<String, dynamic>.from(val))),
+      );
+      _isSavedBlock = true;
+    });
+  }
 
   String _repsText = '';
 
@@ -33,11 +88,9 @@ class _BlockPlannerState extends State<Block_Planner> {
 
   Map<String, Map<String, dynamic>> exerciseSettings = {};
 
-  bool _isSavedBlock = false;
   bool _isNewBlock = true;
   bool _didLoadData = false;
   bool _discardDraft = false;
-  bool _didRunInitOnce = false;
 
 // 🔁 AUTO-SAVE & SAVE BLOCK FEATURES INTEGRATED
 // Add this inside your _BlockPlannerState class:
@@ -48,7 +101,7 @@ class _BlockPlannerState extends State<Block_Planner> {
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final args =
-      ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+          ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
 
       await loadExercisesFromFirestore(); // ✅ Always load this first
 
@@ -96,6 +149,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       _blockStartDate = (data['startDate'] as Timestamp).toDate();
       _blockEndDate = (data['endDate'] as Timestamp).toDate();
       exercises = List<String>.from(data['exercises'] ?? []);
+      selectedDays = List<String>.from(data['selectedDays'] ?? []);
 
       exerciseSettings = Map<String, Map<String, dynamic>>.from(
         (data['exerciseSettings'] ?? {}).map(
@@ -109,38 +163,39 @@ class _BlockPlannerState extends State<Block_Planner> {
 // e.g. in setState blocks in _showExercisePickerDialog and onUpdateSetting
 
 // Call this when user wants to save the block permanently
-  Future<void> _savePlannedBlock({bool setActive = false}) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+  Future<void> _savePlannedBlock({required bool setActive}) async {
+    final userId = FirebaseAuth.instance.currentUser?.uid;
+    if (userId == null) return;
 
     final userBlocksRef = FirebaseFirestore.instance
         .collection('planned_blocks')
-        .doc(user.uid)
+        .doc(userId)
         .collection('blocks');
 
-    // ✅ Deactivate any other active blocks
-    if (setActive) {
-      final snapshot =
-          await userBlocksRef.where('isActive', isEqualTo: true).get();
+    final blockDocRef = blockIdToUse != null
+        ? userBlocksRef.doc(blockIdToUse)
+        : userBlocksRef.doc();
 
-      for (final doc in snapshot.docs) {
-        await doc.reference.update({'isActive': false});
-      }
+    if (blockIdToUse == null) {
+      blockIdToUse = blockDocRef.id;
     }
 
-    final newDocRef = userBlocksRef.doc(); // Auto-ID
-    await newDocRef.set({
-      'blockName': 'My Training Block',
+    final blockName = _blockNameController.text.trim();
+
+    await blockDocRef.set({
+      'name': blockName.isEmpty ? 'Unnamed Block' : blockName,
       'startDate': _blockStartDate,
       'endDate': _blockEndDate,
       'exercises': exercises,
       'exerciseSettings': exerciseSettings,
+      'selectedDays': selectedDays,
       'isActive': setActive,
       'createdAt': FieldValue.serverTimestamp(),
     });
 
-    final prefs = await SharedPreferences.getInstance();
-    _isSavedBlock = true;
+    setState(() {
+      _isSavedBlock = true;
+    });
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -715,6 +770,40 @@ class _BlockPlannerState extends State<Block_Planner> {
     }, SetOptions(merge: true));
   }
 
+  Future<void> _onPlanWeeklySchedule() async {
+    try {
+      final userId = FirebaseAuth.instance.currentUser?.uid;
+      if (userId == null) return;
+
+      final blockId = blockIdToUse ?? const Uuid().v4();
+      final blockName = _blockNameController.text.trim();
+
+      final blockData = {
+        'name': blockName.isEmpty ? 'Unnamed Block' : blockName,
+        'isActive': false,
+        'createdAt': Timestamp.now(),
+        'daysOfWeek': selectedDays,
+        'weeks': weekPlans,
+      };
+
+      await FirebaseFirestore.instance
+          .collection('planned_blocks')
+          .doc(userId)
+          .collection('blocks')
+          .doc(blockId)
+          .set(blockData);
+
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => WeekPlanner(blockId: blockId),
+        ),
+      );
+    } catch (e) {
+      print('Failed to save and navigate: $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -728,112 +817,161 @@ class _BlockPlannerState extends State<Block_Planner> {
             icon: const Icon(Icons.save),
             tooltip: 'Save Block',
             onPressed: () async {
+              final name = _blockNameController.text.trim();
+
+              if (name.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Please enter a block name.")),
+                );
+                return;
+              }
+
+              if (_blockStartDate == null || _blockEndDate == null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Please select block dates.")),
+                );
+                return;
+              }
+
+              if (exercises.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Add at least one exercise.")),
+                );
+                return;
+              }
+
+              // Use StatefulBuilder to capture checkbox value
+              bool tempActive = false;
               final confirm = await showDialog<bool>(
                 context: context,
-                builder: (ctx) => AlertDialog(
-                  title: const Text("Save Block?"),
-                  content: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text(
-                          "Do you want to save this block to your plans?"),
-                      Row(
-                        children: [
-                          const Text("Set as Active?"),
-                          const SizedBox(width: 12),
-                          StatefulBuilder(
-                            builder: (context, setState) {
-                              bool tempActive = false;
-                              return Checkbox(
-                                value: tempActive,
-                                onChanged: (val) => setState(() {
-                                  tempActive = val ?? false;
-                                }),
-                              );
-                            },
-                          )
+                builder: (ctx) {
+                  return StatefulBuilder(
+                    builder: (context, setState) {
+                      return AlertDialog(
+                        title: const Text("Save Block?"),
+                        content: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Text(
+                                "Do you want to save this block to your plans?"),
+                            Row(
+                              children: [
+                                const Text("Set as Active?"),
+                                const SizedBox(width: 12),
+                                Checkbox(
+                                  value: tempActive,
+                                  onChanged: (val) => setState(() {
+                                    tempActive = val ?? false;
+                                  }),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx, null),
+                            child: const Text("Cancel"),
+                          ),
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx, true),
+                            child: const Text("Save"),
+                          ),
                         ],
-                      )
-                    ],
-                  ),
-                  actions: [
-                    TextButton(
-                        onPressed: () => Navigator.pop(ctx, false),
-                        child: const Text("Cancel")),
-                    TextButton(
-                        onPressed: () => Navigator.pop(ctx, true),
-                        child: const Text("Save")),
-                  ],
-                ),
+                      );
+                    },
+                  );
+                },
               );
 
               if (confirm == true) {
                 await _savePlannedBlock(
-                    setActive: true); // or false if not selected
+                    setActive: tempActive); // ✅ correct state passed
               }
             },
           ),
         ],
       ),
+
+      // 🔽 Floating button shows conditionally
+      floatingActionButton: _isSavedBlock
+          ? FloatingActionButton.extended(
+              onPressed: () {
+                if (blockIdToUse == null) return;
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => WeekPlanner(blockId: blockIdToUse!),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.calendar_today),
+              label: const Text("Plan Weekly Schedule"),
+            )
+          : null,
+
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(12),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _buildGlobalBlockInputs(),
-            const SizedBox(height: 20),
+            const FittedBox(),
             Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                ElevatedButton.icon(
-                  icon: const Icon(Icons.add, size: 16),
-                  label: const Text(
-                    "Add Exercises",
-                    style: TextStyle(color: Colors.pink),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.add),
+                    label: const Text(
+                      "Add Exercises",
+                      style: TextStyle(color: Colors.pink),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blueGrey.shade700,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
+                    ),
+                    onPressed: _showExercisePickerDialog,
                   ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blueGrey.shade700,
-                    foregroundColor: Colors.white,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  ),
-                  onPressed: _showExercisePickerDialog,
                 ),
-                const SizedBox(width: 8),
-                ElevatedButton.icon(
-                  icon: const Icon(Icons.clear, size: 16),
-                  label: const Text("Clear Exercises"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blueGrey.shade700,
-                    foregroundColor: Colors.white,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.clear),
+                    label: const Text("Clear Exercises"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blueGrey.shade700,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
+                    ),
+                    onPressed: () async {
+                      final confirm = await showDialog<bool>(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          title: const Text("Clear All Exercises?"),
+                          content: const Text(
+                              "This will remove all selected exercises from the planner."),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(ctx, false),
+                              child: const Text("Cancel"),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.pop(ctx, true),
+                              child: const Text("Yes, Clear"),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirm == true) {
+                        setState(() {
+                          exercises.clear();
+                        });
+                      }
+                    },
                   ),
-                  onPressed: () async {
-                    final confirm = await showDialog<bool>(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        title: const Text("Clear All Exercises?"),
-                        content: const Text(
-                            "This will remove all selected exercises from the planner."),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx, false),
-                            child: const Text("Cancel"),
-                          ),
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx, true),
-                            child: const Text("Yes, Clear"),
-                          ),
-                        ],
-                      ),
-                    );
-
-                    if (confirm == true) {
-                      setState(() {
-                        exercises.clear();
-                      });
-                    }
-                  },
                 ),
               ],
             ),
@@ -922,6 +1060,17 @@ class _BlockPlannerState extends State<Block_Planner> {
   Widget _buildGlobalBlockInputs() {
     return Column(
       children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: TextField(
+            controller: _blockNameController,
+            decoration: InputDecoration(
+              labelText: 'Block Name',
+              border:
+                  OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+        ),
         Row(
           children: [
             Expanded(
@@ -1015,58 +1164,6 @@ class _BlockPlannerState extends State<Block_Planner> {
 //             _buildInputBox("Planned calories surplus/deficit", multiline: true),
           ],
         ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(
-              child: Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                child: TextField(
-                  controller: _historyInputController,
-                  maxLines: 3,
-                  style: const TextStyle(color: Colors.white, fontSize: 13),
-
-                  decoration: InputDecoration(
-                    labelText: "Rep History (comma-separated)",
-                    labelStyle:
-                        const TextStyle(color: Colors.white70, fontSize: 12),
-                    filled: true,
-                    fillColor: Colors.blueGrey.shade800,
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(6)),
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 10),
-                  ),
-
-                 onChanged: (_) async {
-                    final prefs = await SharedPreferences.getInstance();
-                    await prefs.setString(
-                        'repHistoryInput', _historyInputController.text);
-
-                    setState(() {
-                      final parsedHistory =
-                          _parseHistoryInput(_historyInputController.text);
-                      final reps =
-                          PeriodizationModelUtils.REsignatureRepTargets(
-                        min: 5,
-                        max: 11,
-                        history: parsedHistory,
-                      );
-                      _repsText = reps.join(', ');
-                    });
-                  },
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            _buildInputBox(
-              "Signature Rep Targets",
-              multiline: true,
-              initialText: _repsText,
-              readOnly: true,
-            ),
-          ],
-        ),
       ],
     );
   }
@@ -1110,9 +1207,8 @@ class _BlockPlannerState extends State<Block_Planner> {
               },
               child: CircleAvatar(
                 radius: 16,
-                backgroundColor: isSelected
-                    ? Colors.pinkAccent
-                    : Colors.blueGrey.shade700,
+                backgroundColor:
+                    isSelected ? Colors.pinkAccent : Colors.blueGrey.shade700,
                 child: Text(
                   initials[index],
                   style: TextStyle(

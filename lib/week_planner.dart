@@ -6,8 +6,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'workout_entry_screen.dart';
 import 'periodization_model_utils.dart';
 import 'package:uuid/uuid.dart';
-// if you're navigating directly to TemplateDetailsScreen
-// ✅ this is the one that defines TemplatesScreen
 import 'WorkoutSummaryScreen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
@@ -83,13 +81,15 @@ class ExerciseRow {
 }
 
 class WeekPlanner extends StatefulWidget {
-  const WeekPlanner({super.key});
+  final String? blockId;
+  const WeekPlanner({this.blockId, Key? key}) : super(key:key);
 
   @override
   State<WeekPlanner> createState() => _WeekPlannerState();
 }
 
 class _WeekPlannerState extends State<WeekPlanner> {
+
   final int initialWeeks = 12;
   int visibleWeekCount = 2; // Initially load 3 weeks
   int totalWeeks = 12;
@@ -566,9 +566,13 @@ class _WeekPlannerState extends State<WeekPlanner> {
         row.repsController.text.trim().isNotEmpty);
   }
 
+  Map<String, dynamic>? blockData;
+  bool _loading = true;
+
   @override
   void initState() {
     super.initState();
+    _loadBlockData();
 
     _horizontalScrollController.addListener(() {
       final maxScroll = _horizontalScrollController.position.maxScrollExtent;
@@ -593,6 +597,25 @@ class _WeekPlannerState extends State<WeekPlanner> {
         });
       }
     });
+  }
+
+  Future<void> _loadBlockData() async {
+    final userId = FirebaseAuth.instance.currentUser?.uid;
+    if (userId == null) return;
+
+    final doc = await FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(userId)
+        .collection('blocks')
+        .doc(widget.blockId)
+        .get();
+
+    if (doc.exists) {
+      setState(() {
+        blockData = doc.data();
+        _loading = false;
+      });
+    }
   }
 
   @override

@@ -36,7 +36,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _fetchRecentData();
-    _fetchTrainingDays();
+    _fetchTrainingDaysForMonth(_focusedDay); // 👈 here
   }
 
   Future<void> _fetchTrainingDays() async {
@@ -59,6 +59,46 @@ class _HomeScreenState extends State<HomeScreen> {
 
     setState(() => _trainingDays = days);
   }
+
+  Future<void> _fetchTrainingDaysForMonth(DateTime month) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    try {
+      final blockDoc = await _fetchActiveBlock();
+      final data = blockDoc.data() as Map<String, dynamic>;
+      final List<dynamic> blockDays = data['daysOfWeek'] ?? [];
+
+      final firstDay = DateTime(month.year, month.month, 1);
+      final lastDay = DateTime(month.year, month.month + 1, 0);
+
+      final daysOfWeekMap = {
+        'Mon': DateTime.monday,
+        'Tue': DateTime.tuesday,
+        'Wed': DateTime.wednesday,
+        'Thu': DateTime.thursday,
+        'Fri': DateTime.friday,
+        'Sat': DateTime.saturday,
+        'Sun': DateTime.sunday,
+      };
+
+      final trainingDays = <DateTime>{};
+
+      for (DateTime day = firstDay;
+      day.isBefore(lastDay.add(const Duration(days: 1)));
+      day = day.add(const Duration(days: 1))) {
+        final weekday = day.weekday;
+        if (blockDays.any((d) => daysOfWeekMap[d] == weekday)) {
+          trainingDays.add(DateTime(day.year, day.month, day.day));
+        }
+      }
+
+      setState(() => _trainingDays = trainingDays);
+    } catch (e) {
+      print('Error fetching training days: $e');
+    }
+  }
+
 
   Future<void> _fetchRecentData() async {
     await Future.wait([
@@ -251,13 +291,43 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Today Summary Card
             const SizedBox(height: 20),
-            const Text('Training Calendar', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+
+            // Quick Access Section
+            const Text('Quick Access',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            SizedBox(
+              height: 120,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                children: [
+                  _buildFeatureCard(Icons.fitness_center, 'Workout Entry', '/workout_entry'),
+                  _buildFeatureCard(Icons.monitor_weight, 'Progress', '/body_weight'),
+                  _buildFeatureCard(Icons.calendar_month, 'Planner', '/block_planner'),
+                  _buildFeatureCard(Icons.history, 'Saved Workouts', '/saved_workouts'),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 20),
+
+            // Training Calendar
+            const Text('Training Calendar',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             TableCalendar(
               firstDay: DateTime.utc(2020, 1, 1),
               lastDay: DateTime.utc(2100, 12, 31),
               focusedDay: _focusedDay,
-              calendarFormat: _calendarFormat,
+              calendarFormat: CalendarFormat.month,
+              availableCalendarFormats: const {
+                CalendarFormat.month: 'Month',
+              }, // 🚫 disables switching format
+              headerStyle: const HeaderStyle(
+                formatButtonVisible: false, // ❌ hides the format toggle
+                titleCentered: true,
+              ),
               selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
               eventLoader: (day) {
                 final normalized = DateTime(day.year, day.month, day.day);
@@ -271,41 +341,52 @@ class _HomeScreenState extends State<HomeScreen> {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (context) => WorkoutPage(initialDate: selectedDay), // 👈 you'll need to support this
+                    builder: (context) => WorkoutPage(initialDate: selectedDay),
                   ),
                 );
               },
-              onFormatChanged: (format) {
-                setState(() {
-                  _calendarFormat = format;
-                });
-              },
               onPageChanged: (focusedDay) {
-                _focusedDay = focusedDay;
+                setState(() {
+                  _focusedDay = focusedDay;
+                });
+                _fetchTrainingDaysForMonth(focusedDay); // 🔄 refresh for new month
               },
               calendarStyle: CalendarStyle(
-                todayDecoration: BoxDecoration(color: Colors.blue.shade100, shape: BoxShape.circle),
-                selectedDecoration: const BoxDecoration(color: Colors.blueAccent, shape: BoxShape.circle),
-                markerDecoration: const BoxDecoration(color: Colors.deepOrange, shape: BoxShape.circle),
+                markerDecoration: BoxDecoration(
+                  color: Colors.green, // brighter color
+                  shape: BoxShape.circle,
+                ),
               ),
+
             ),
 
             const SizedBox(height: 20),
-            const Text('Top Lifts', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            FutureBuilder<List<Map<String, dynamic>>>(
-              future: _fetchTopLifts(),
-              builder: (context, snapshot) {
-                if (!snapshot.hasData) return const CircularProgressIndicator();
-                final lifts = snapshot.data!;
-                return Column(
-                  children: lifts
-                      .map((e) => ListTile(
-                    title: Text(e['exercise']),
-                    trailing: Text('${e['weight'].toStringAsFixed(1)} kg'),
-                  ))
-                      .toList(),
-                );
-              },
+
+            // Top Lifts
+            const Text('Top Lifts',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            Card(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              elevation: 2,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: FutureBuilder<List<Map<String, dynamic>>>(
+                  future: _fetchTopLifts(),
+                  builder: (context, snapshot) {
+                    if (!snapshot.hasData) return const CircularProgressIndicator();
+                    final lifts = snapshot.data!;
+                    return Column(
+                      children: lifts
+                          .map((e) => ListTile(
+                        title: Text(e['exercise']),
+                        trailing: Text('${e['weight'].toStringAsFixed(1)} kg'),
+                      ))
+                          .toList(),
+                    );
+                  },
+                ),
+              ),
             ),
           ],
         ),

@@ -114,7 +114,8 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
               final block = blocks[index];
               final blockId = block['id'];
 
-              final blockName = block['blockName'] ?? 'Untitled Block';
+              final blockName = block['name'] ?? 'Untitled Block';
+
               final isActive = block['isActive'] ?? false;
 
               String dateRange = 'No dates';
