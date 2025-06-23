@@ -133,7 +133,9 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   final GlobalKey contentKey = GlobalKey();
   Map<String, bool> wesExpansionStates = {};
 
+// UI Timing bits
 
+  DateTime _bb2StartTime = DateTime.now();
 
 // Key = weekday index (0=Mon...6=Sun), Value = latest edited structure
   VoidCallback? _lastUndoAction;
@@ -150,6 +152,11 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     return _focusNodes.putIfAbsent(key, () => FocusNode());
   }
 
+  void bb2Debug(String label) {
+    final elapsed = DateTime.now().difference(_bb2StartTime).inMilliseconds;
+    print('⏱️ [$elapsed ms] $label');
+  }
+
   Map<int, List<ExerciseRow>> groupByCircuitIndex(List<ExerciseRow> rows) {
     final Map<int, List<ExerciseRow>> grouped = {};
     for (final row in rows) {
@@ -161,7 +168,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   double getTotalWesHeight(List<Map<String, dynamic>> savedWesExercises) {
     const baseHeightPerCard = 60.0;
     const setHeight = 28.0;
-    const minHeight = 1.0;
+    const minHeight = 5.0;
     const maxHeight = 300.0;
 
     double total = 0;
@@ -668,17 +675,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   void initState() {
     super.initState();
 //ui thing
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final cardBox = cardKey.currentContext?.findRenderObject() as RenderBox?;
-      final contentBox = contentKey.currentContext?.findRenderObject() as RenderBox?;
 
-      if (cardBox != null && contentBox != null) {
-        print("📏 Card total height: ${cardBox.size.height}");
-        print("📏 Content row height: ${contentBox.size.height}");
-      } else {
-        print("⚠️ Could not measure heights.");
-      }
-    });
 //ui thing above ^
 
 
@@ -817,7 +814,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     // Rotate through your preferred circuit colors
     final circuitColors = [
       Colors.blueGrey.shade800,
-      Colors.blueGrey.shade900,
+      Colors.blueGrey.shade800,
       Colors.blueGrey.shade800,
     ];
 
@@ -2132,11 +2129,11 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           );
 
           return Card(
-            margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+            margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 3),
             color: Colors.blueGrey.shade900,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -2156,7 +2153,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                 children: [
                                   Text(
-                                    "Week ${weekIndex + 1} • $blockLength weeks",
+                                    "  Week ${weekIndex + 1} • $blockLength weeks",
                                     style: const TextStyle(
                                       fontSize: 11,
                                       height: 0.9,
@@ -2230,7 +2227,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                       Row(
                         children: [
                           Text(
-                            dayLabel,
+                           '  $dayLabel',
                             style: const TextStyle(
                               fontSize: 12,
                               height: 0.5,
@@ -2695,7 +2692,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                                                 child: Align(
                                                   alignment: Alignment.centerRight,
                                                   child: Text(
-                                                    e1rm.toStringAsFixed(1),
+                                                    ' ${e1rm.toStringAsFixed(1)}', // 👈 added space before the value
                                                     style: const TextStyle(
                                                       fontSize: 12,
                                                       color: Colors.white70,
@@ -2799,31 +2796,40 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
                         // ✅ Show "Add First Exercise" button if day is empty
                         if (exerciseRows[weekIndex][dayIndex].isEmpty)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 4.0),
-                            child: Center(
-                              child: TextButton.icon(
-                                onPressed: () {
-                                  setState(() {
-                                    _ensureCircuitStartIndicesInitialized(weekIndex, dayIndex);
-                                    if (circuitStartIndices[weekIndex][dayIndex].isEmpty) {
-                                      circuitStartIndices[weekIndex][dayIndex].add(0);
-                                    }
-                                    exerciseRows[weekIndex][dayIndex].add(
-                                      ExerciseRow(circuitIndex: 0),
-                                    );
-                                  });
-                                  updateFutureDaysWithEditedDay(weekIndex, dayIndex);
-                                },
-                                icon: const Icon(Icons.add),
-                                label: const Text('Add First Exercise'),
-                                style: TextButton.styleFrom(
-                                  foregroundColor: Colors.lightBlueAccent,
-                                  textStyle: const TextStyle(fontSize: 13),
+                          Transform.translate(
+                            offset: const Offset(0, -2), // 👈 Raise the button up by 8 pixels
+                            child: Padding(
+                              padding: const EdgeInsets.only(left: 8.0), // 👈 Align to left instead of center
+                              child: Align(
+                                alignment: Alignment.centerLeft, // 👈 Pin it to the left side
+                                child: TextButton.icon(
+                                  onPressed: () {
+                                    setState(() {
+                                      _ensureCircuitStartIndicesInitialized(weekIndex, dayIndex);
+                                      if (circuitStartIndices[weekIndex][dayIndex].isEmpty) {
+                                        circuitStartIndices[weekIndex][dayIndex].add(0);
+                                      }
+                                      exerciseRows[weekIndex][dayIndex].add(
+                                        ExerciseRow(circuitIndex: 0),
+                                      );
+                                    });
+                                    updateFutureDaysWithEditedDay(weekIndex, dayIndex);
+                                  },
+                                  icon: const Icon(Icons.add),
+                                  label: const Text('Add Exercise'),
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: Colors.lightBlueAccent,
+                                    textStyle: const TextStyle(fontSize: 13),
+                                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                                    minimumSize: Size.zero,
+                                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                    visualDensity: VisualDensity.compact,
+                                  ),
                                 ),
                               ),
                             ),
                           ),
+
 
 
                         // ✅ Show planned exercises only if any exist
@@ -2880,11 +2886,11 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                                   children: [
                                     if (isFirstInCircuit)
                                       Transform.translate(
-                                        offset: const Offset(0, -10), // 👈 Shift upward by 6 pixels
+                                        offset: const Offset(0, -6), // 👈 Shift upward by 6 pixels
                                         child: Padding(
                                           padding: const EdgeInsets.only(left: 2, bottom: 1), // no top needed now
                                           child: Text(
-                                            'Circuit ${row.circuitIndex + 1}',
+                                            '  Circuit ${row.circuitIndex + 1}',
                                             style: const TextStyle(
                                               fontSize: 12,
                                               fontWeight: FontWeight.bold,
@@ -2996,35 +3002,39 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
                         ),
                         if (isLastInCircuit)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 0, right: 4),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.end,
-                              children: [
-                                TextButton.icon(
-                                  onPressed: () {
-                                    setState(() {
-                                      exerciseRows[weekIndex][dayIndex].insert(
-                                        rowIndex + 1,
-                                        ExerciseRow(circuitIndex: currentCircuit),
-                                      );
-                                    });
-                                    updateFutureDaysWithEditedDay(weekIndex, dayIndex);
-                                  },
-                                  icon: const Icon(Icons.add, size: 16),
-                                  label: const Text('Add Exercise', style: TextStyle(fontSize: 12)),
-                                  style: TextButton.styleFrom(
-                                    foregroundColor: Colors.lightBlueAccent,
-                                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                                    minimumSize: Size.zero,
-                                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                    visualDensity: VisualDensity.compact,
+                          Transform.translate(
+                            offset: const Offset(0, -6), // 👈 shift upward by 6 pixels
+                            child: Padding(
+                              padding: const EdgeInsets.only(right: 4), // ⬅️ removed top padding since we're shifting manually
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  TextButton.icon(
+                                    onPressed: () {
+                                      setState(() {
+                                        exerciseRows[weekIndex][dayIndex].insert(
+                                          rowIndex + 1,
+                                          ExerciseRow(circuitIndex: currentCircuit),
+                                        );
+                                      });
+                                      updateFutureDaysWithEditedDay(weekIndex, dayIndex);
+                                    },
+                                    icon: const Icon(Icons.add, size: 16),
+                                    label: const Text('Add Exercise', style: TextStyle(fontSize: 12)),
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: Colors.lightBlueAccent,
+                                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                                      minimumSize: Size.zero,
+                                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                      visualDensity: VisualDensity.compact,
+                                    ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
                           ),
-                      ],
+
+                                  ],
                     );
 
                   },
@@ -3057,7 +3067,19 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                     });
                   },
                   icon: const Icon(Icons.add, size: 16, color: Colors.white70),
-                  label: const Text("Add New Circuit", style: TextStyle(color: Colors.white70, fontSize: 11)),
+                  label: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: const [
+                      Text(
+                        "Add New Circuit",
+                        style: TextStyle(color: Colors.lightBlueAccent, fontSize: 11),
+                      ),
+                      Text(
+                        "Scroll to next week →",
+                        style: TextStyle(color: Colors.white70, fontSize: 11, fontStyle: FontStyle.italic),
+                      ),
+                    ],
+                  ),
                   style: TextButton.styleFrom(
                     padding: const EdgeInsets.symmetric(horizontal: 8),
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -3082,7 +3104,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
   Widget _buildWeek(int weekIndex, Map<String, dynamic> repTargetsByExercise) {
     return SizedBox(
-      width: MediaQuery.of(context).size.width * 0.95,
+      width: MediaQuery.of(context).size.width * 0.99,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: List.generate(
