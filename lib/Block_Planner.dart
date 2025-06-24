@@ -163,7 +163,7 @@ class _BlockPlannerState extends State<Block_Planner> {
 // e.g. in setState blocks in _showExercisePickerDialog and onUpdateSetting
 
 // Call this when user wants to save the block permanently
-  Future<void> _savePlannedBlock({required bool setActive}) async {
+  Future<void> _savePlannedBlock({ required bool setActive }) async {
     final userId = FirebaseAuth.instance.currentUser?.uid;
     if (userId == null) return;
 
@@ -172,18 +172,57 @@ class _BlockPlannerState extends State<Block_Planner> {
         .doc(userId)
         .collection('blocks');
 
+    // ─── 1) If we're turning this block on, look for any other active one ───
+    if (setActive) {
+      final activeQuery = await userBlocksRef
+          .where('isActive', isEqualTo: true)
+          .get();
+
+      // Exclude our own doc if we're editing
+      final others = activeQuery.docs.where((d) => d.id != blockIdToUse).toList();
+
+      if (others.isNotEmpty) {
+        // 2) Ask the user if they want to override:
+        final otherName = others.first.data()['name'] ?? 'Unnamed';
+        final override = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Override Active Block?'),
+            content: Text(
+                "You already have an active block “$otherName”.\n\n"
+                    "If you continue this one will become active and the old one will be deactivated."
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+              TextButton(onPressed: () => Navigator.pop(ctx, true),  child: const Text('OK')),
+            ],
+          ),
+        );
+
+        if (override != true) {
+          // user backed out—don’t save as active
+          return;
+        }
+
+        // 3) Deactivate the others in Firestore:
+        final batch = FirebaseFirestore.instance.batch();
+        for (final doc in others) {
+          batch.update(doc.reference, {'isActive': false});
+        }
+        await batch.commit();
+      }
+    }
+
+    // ─── Now your existing save logic ───
     final blockDocRef = blockIdToUse != null
         ? userBlocksRef.doc(blockIdToUse)
         : userBlocksRef.doc();
-
-    if (blockIdToUse == null) {
-      blockIdToUse = blockDocRef.id;
-    }
-
-    final blockName = _blockNameController.text.trim();
+    if (blockIdToUse == null) blockIdToUse = blockDocRef.id;
 
     await blockDocRef.set({
-      'name': blockName.isEmpty ? 'Unnamed Block' : blockName,
+      'name': _blockNameController.text.trim().isEmpty
+          ? 'Unnamed Block'
+          : _blockNameController.text.trim(),
       'startDate': _blockStartDate,
       'endDate': _blockEndDate,
       'exercises': exercises,
@@ -191,17 +230,12 @@ class _BlockPlannerState extends State<Block_Planner> {
       'selectedDays': selectedDays,
       'isActive': setActive,
       'createdAt': FieldValue.serverTimestamp(),
-    });
+    }, SetOptions(merge: true));
 
-    setState(() {
-      _isSavedBlock = true;
-    });
-
+    setState(() => _isSavedBlock = true);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-            content:
-                Text('✅ Block saved${setActive ? ' and activated' : ''}.')),
+        SnackBar(content: Text('✅ Block saved${setActive ? ' and activated' : ''}.')),
       );
     }
   }
@@ -796,7 +830,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (context) => WeekPlanner(blockId: blockId),
+          builder: (context) => WeekPlanner(blockId: blockIdToUse!),
         ),
       );
     } catch (e) {
@@ -1081,19 +1115,13 @@ class _BlockPlannerState extends State<Block_Planner> {
                     context: context,
                     firstDate: now.subtract(const Duration(days: 365)),
                     lastDate: now.add(const Duration(days: 365 * 2)),
-                    initialDateRange:
-                        _blockStartDate != null && _blockEndDate != null
-                            ? DateTimeRange(
-                                start: _blockStartDate!, end: _blockEndDate!)
-                            : null,
+                    initialDateRange: (_blockStartDate != null && _blockEndDate != null)
+                        ? DateTimeRange(start: _blockStartDate!, end: _blockEndDate!)
+                        : null,
                     builder: (context, child) {
-                      return Theme(
-                        data: ThemeData.dark().copyWith(
-                          colorScheme: ColorScheme.dark(
-                            primary: Colors.blueGrey.shade300,
-                            surface: Colors.blueGrey.shade800,
-                          ),
-                        ),
+                      return Localizations.override(
+                        context: context,
+                        locale: const Locale('en', 'GB'),  // Monday-first weeks
                         child: child!,
                       );
                     },

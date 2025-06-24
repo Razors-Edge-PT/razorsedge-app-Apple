@@ -77,9 +77,6 @@ class AppDrawer extends StatelessWidget {
 
           // 🕓 History section
           const DrawerSectionHeader(title: "History"),
-          _drawerTile(context, Icons.history, 'Workout History', () {
-            Navigator.pushNamed(context, '/workouts_list');
-          }),
           _drawerTile(context, Icons.bookmark, 'Saved Workouts', () {
             Navigator.push(context, MaterialPageRoute(builder: (context) => const SavedWorkoutsScreen()));
           }),

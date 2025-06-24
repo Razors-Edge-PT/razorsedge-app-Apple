@@ -1,6 +1,7 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'dart:io'; // 👈 Needed for Platform check
 import 'package:firebase_auth/firebase_auth.dart';
 import 'body_weight_tracker.dart'; // Import the new file
@@ -13,7 +14,7 @@ import 'workout_history_screen.dart';
 import 'week_planner.dart'; // Update path if needed
 import 'planned_blocks_screen.dart';
 import 'Block_Planner.dart';
-
+import 'SavedWorkoutsScreen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -65,6 +66,18 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Re App',
+
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [
+        Locale('en', 'US'),
+        Locale('en', 'GB'), // Monday-first week
+        // add any others you need…
+      ],
+
       theme: ThemeData(
         brightness: Brightness.dark,
         scaffoldBackgroundColor: Colors.blueGrey.shade900,
@@ -101,12 +114,14 @@ class MyApp extends StatelessWidget {
         '/exercises': (context) => const ExercisesScreen(),
         '/templates': (context) => const TemplatesScreen(),
         '/workouts': (context) => const WorkoutPage(),
-        '/workouts_list': (context) => const WorkoutHistoryScreen(),
         '/body_weight_tracker': (context) => const BodyWeightTracker(),
         '/block_builder_2': (context) => const WeekPlanner(),
         '/planned_blocks': (context) => const PlannedBlocksScreen(),
         '/block_builder': (context) => const Block_Planner(),
-
+        '/workout_entry':   (c) => const WorkoutPage(),                // new workout
+        '/week_planner':   (c) => const WeekPlanner(),              // training schedule
+        '/saved_workouts':  (c) => const SavedWorkoutsScreen(),        // saved workouts
+        '/body_weight':     (c) => const BodyWeightTracker(),          // weight tracker
       },
     );
   }

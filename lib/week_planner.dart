@@ -82,14 +82,13 @@ class ExerciseRow {
 
 class WeekPlanner extends StatefulWidget {
   final String? blockId;
-  const WeekPlanner({this.blockId, Key? key}) : super(key:key);
+  const WeekPlanner({this.blockId, Key? key}) : super(key: key);
 
   @override
   State<WeekPlanner> createState() => _WeekPlannerState();
 }
 
 class _WeekPlannerState extends State<WeekPlanner> {
-
   final int initialWeeks = 12;
   int visibleWeekCount = 2; // Initially load 3 weeks
   int totalWeeks = 12;
@@ -143,16 +142,8 @@ class _WeekPlannerState extends State<WeekPlanner> {
   }
 
   Future<void> loadAllData() async {
-    print("🧪 [BB2] Starting loadAllData()...");
-
     // ✅ Load top sets from workout history (PMU global fetch)
     await PeriodizationModelUtils.fetchLastWorkoutTopSetReps();
-    print(
-        '🧪 [BB2] Top set reps loaded: ${PeriodizationModelUtils.exercisePreviousTopSetReps.keys.length} exercises');
-    print(
-        '🧪 [BB2] Top set reps loaded: ${PeriodizationModelUtils.exercisePreviousTopSetReps.keys.toList()}');
-
-    await loadBlockDateRange();
 
     await Future.wait([
       _fetchTemplates(),
@@ -167,54 +158,6 @@ class _WeekPlannerState extends State<WeekPlanner> {
         List.generate(totalWeeks, (_) => List.generate(7, (_) => null));
     await _loadPersistedSavedFields();
     await loadBlockDataFromFirestore();
-
-    print("✅ All data loaded for BB2.");
-  }
-
-  Future<void> loadBlockDateRange() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    final doc = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .collection('block_planner')
-        .doc('current_block')
-        .get();
-
-    if (doc.exists) {
-      final data = doc.data();
-
-      // ✅ Read from blockMeta instead of top-level fields
-      final meta = data?['blockMeta'] as Map<String, dynamic>? ?? {};
-      final startDateStr = meta['blockStartDate'];
-      final endDateStr = meta['blockEndDate'];
-
-      if (startDateStr != null && endDateStr != null) {
-        final start = DateTime.parse(startDateStr);
-        final end = DateTime.parse(endDateStr);
-
-        setState(() {
-          blockStartDate = start;
-          blockEndDate = end;
-          selectedWeekMonday = _getMostRecentMonday(start);
-          totalWeeks = ((end.difference(start).inDays) / 7).ceil();
-          visibleWeekCount = 2;
-          weekIndices = List.generate(totalWeeks, (i) => i);
-
-          exerciseRows = List.generate(
-            totalWeeks,
-            (_) => List.generate(
-              7,
-              (_) => [
-                ExerciseRow(id: const Uuid().v4(), circuitIndex: 0),
-                ExerciseRow(id: const Uuid().v4(), circuitIndex: 0),
-              ],
-            ),
-          );
-        });
-      }
-    }
   }
 
   Future<void> _fetchTemplates() async {
@@ -246,15 +189,12 @@ class _WeekPlannerState extends State<WeekPlanner> {
       }).toList();
 
       setState(() {});
-      print("✅ Templates loaded: ${templates.map((t) => t.name).toList()}");
     }
   }
 
   Map<String, List<String>> groupedExercises = {};
 
   Future<void> loadExercisesFromFirestore() async {
-    print('🚀 [BB2] Starting loadExercisesFromFirestore');
-
     final snapshot =
         await FirebaseFirestore.instance.collection('exercises').get();
 
@@ -279,12 +219,7 @@ class _WeekPlannerState extends State<WeekPlanner> {
       nameToIdMap[name] = id;
       PeriodizationModelUtils.nameToId[name.trim()] = id;
       PeriodizationModelUtils.idToName[id] = name; // ✅ Add this line
-
-      print('✅ [BB2] Mapped "$name" → $id'); // 🔍 Confirm mapping
     }
-
-    print(
-        '📦 [BB2] nameToId map now contains: ${PeriodizationModelUtils.nameToId.length} entries');
 
     setState(() {
       groupedExercises = groupExercisesByCategory(allExercisesFromFirestore);
@@ -305,7 +240,6 @@ class _WeekPlannerState extends State<WeekPlanner> {
 
     final model =
         PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
-    print('🔍 Model for $exerciseId → $model');
     try {
       switch (model) {
         case PeriodizationModelType.linearExposure:
@@ -319,7 +253,6 @@ class _WeekPlannerState extends State<WeekPlanner> {
             },
             plannedExerciseDetails: plannedExerciseDetails,
           );
-          print('📊 LinearExposure rep → $reps for $exerciseId');
           return reps.toString();
 
         case PeriodizationModelType.linearClassic:
@@ -334,8 +267,7 @@ class _WeekPlannerState extends State<WeekPlanner> {
             blockStartDate: blockStartDate,
             blockEndDate: blockEndDate,
           );
-          print(
-              '📈 LinearClassic rep → $rep for $exerciseId (week $week, instance $plannedIndex)');
+
           return rep.toString();
 
         case PeriodizationModelType.dailyUndulatingWeek:
@@ -347,8 +279,7 @@ class _WeekPlannerState extends State<WeekPlanner> {
             weekIndex: week,
             plannedExerciseDetails: plannedExerciseDetails,
           );
-          print(
-              '🔁 DUP by Week rep: $rep for $exerciseId (week $week, index $indexInWeek)');
+
           return rep.toString();
 
         case PeriodizationModelType.dupSignature:
@@ -375,19 +306,14 @@ class _WeekPlannerState extends State<WeekPlanner> {
             },
             plannedExerciseDetails: plannedExerciseDetails,
           );
-          print(
-              '🔁 Model-based rep: $rep for $exerciseId using $model (index $globalIndex)');
+
           return rep.toString();
 
         default:
-          print('❌ Unknown model type for $exerciseId: $model');
           return null;
       }
-    } catch (e) {
-      print('⚠️ Error getting rep target for $exerciseName [$exerciseId]: $e');
-    }
+    } catch (e) {}
 
-    print('! No matching rep target found for "$exerciseName" (model: $model)');
     return null;
   }
 
@@ -403,16 +329,11 @@ class _WeekPlannerState extends State<WeekPlanner> {
         final thisName = (rows[r].exercise ?? '').trim();
         if (thisName == exerciseName.trim()) {
           count++;
-          print(
-              '🔎 Match: "$thisName" == "$exerciseName" (week $week, day $d, row $r)');
         }
       }
     }
 
     final result = count - 1; // ✅ zero-based index
-    print('📊 getExerciseCountInWeek → "$exerciseName" → index $result');
-    print(
-        '🧠 getExerciseCountInWeek("$exerciseName", week: $week, day: $day, row: $row) = $result');
 
     return result;
   }
@@ -462,11 +383,7 @@ class _WeekPlannerState extends State<WeekPlanner> {
         if (data.containsKey('blockMeta')) {
           plannedExerciseDetails['blockMeta'] =
               Map<String, dynamic>.from(data['blockMeta']);
-          print('📎 Injected blockMeta into plannedExerciseDetails');
         }
-
-        print(
-            '✅ PlannedExerciseDetails loaded: ${plannedExerciseDetails.length} items');
 
         // ✅ Preload repTargets into _repTargetsByExercise
         plannedExerciseDetails.forEach((exerciseId, details) {
@@ -476,19 +393,11 @@ class _WeekPlannerState extends State<WeekPlanner> {
             _repTargetsByExercise[exerciseId] = {
               'repTargets': details['repTargets']
             };
-            print(
-                '🧩 [BB2] Injected repTargets for $exerciseId from plannedExerciseDetails');
           }
           PeriodizationModelUtils.plannedExerciseDetails[exerciseId] = details;
-          print(
-              '✅ [BB2] Assigned full details to plannedExerciseDetails[$exerciseId]');
         });
-      } else {
-        print('❌ [BB2] No plannedExerciseDetails found.');
-      }
+      } else {}
     });
-
-    print("✅ Rep targets map size: ${_repTargetsByExercise.length}");
 
     plannedExerciseDetails.forEach((exerciseId, details) {
       if (exerciseId == 'blockMeta') return;
@@ -513,28 +422,16 @@ class _WeekPlannerState extends State<WeekPlanner> {
             12,
           );
           _repTargetsByExercise[exerciseId]['repTargets'] = expanded;
-          print('🔁 Expanded DUP Daily week1 for $exerciseId');
         }
       }
 
       final updatedEntry = _repTargetsByExercise[exerciseId];
       if (updatedEntry is Map && updatedEntry.containsKey('repTargets')) {
-        print('📦 repTargets structure valid for $exerciseId');
-      } else {
-        print('⚠️ Malformed repTargets entry for $exerciseId: $updatedEntry');
-      }
+      } else {}
 
       if (updatedEntry != null) {
-        print('🧠 [BB2] Rep targets found for $exerciseId → $updatedEntry');
-      } else {
-        print('⚠️ [BB2] repTargets entry missing for $exerciseId');
-      }
+      } else {}
     });
-
-    print(
-        "✅ [BB2] exercisePeriodizationModels mapped: ${PeriodizationModelUtils.exercisePeriodizationModels.length}");
-    print(
-        '📄 Full plannedExerciseDetails: ${jsonEncode(plannedExerciseDetails)}');
   }
 
   Future<void> loadPlannedExercisesFromFirestore() async {
@@ -567,7 +464,15 @@ class _WeekPlannerState extends State<WeekPlanner> {
   }
 
   Map<String, dynamic>? blockData;
+
   bool _loading = true;
+
+  List<String> _selectedDays = [];
+  List<int> trainingWeekdays = [];
+
+  DateTime? _blockStart;
+  DateTime? _blockEnd;
+  List<DateTime> _trainingDates = [];
 
   @override
   void initState() {
@@ -592,16 +497,14 @@ class _WeekPlannerState extends State<WeekPlanner> {
       final prefs = await SharedPreferences.getInstance();
       if (prefs.getBool('wasSavedFromWES') == true) {
         prefs.remove('wasSavedFromWES');
-        setState(() {
-          print("🟣 Triggered UI update due to save from WES");
-        });
+        setState(() {});
       }
     });
   }
 
   Future<void> _loadBlockData() async {
     final userId = FirebaseAuth.instance.currentUser?.uid;
-    if (userId == null) return;
+    if (userId == null || widget.blockId == null) return;
 
     final doc = await FirebaseFirestore.instance
         .collection('planned_blocks')
@@ -610,12 +513,64 @@ class _WeekPlannerState extends State<WeekPlanner> {
         .doc(widget.blockId)
         .get();
 
-    if (doc.exists) {
-      setState(() {
-        blockData = doc.data();
-        _loading = false;
-      });
+    if (!doc.exists) return;
+
+    final data = doc.data()!;
+    final selectedDays = List<String>.from(data['selectedDays'] ?? []);
+    final startDate = (data['startDate'] as Timestamp).toDate();
+    final endDate = (data['endDate'] as Timestamp).toDate();
+
+    final matchingDates =
+        _generateMatchingDates(startDate, endDate, selectedDays);
+
+    setState(() {
+      // 1) official range for the week‐planner UI:
+      blockStartDate = startDate;
+      blockEndDate = endDate;
+      selectedWeekMonday = _getMostRecentMonday(startDate);
+      _selectedDays  = selectedDays;
+      totalWeeks =
+          ((blockEndDate.difference(blockStartDate).inDays) / 7).ceil();
+      weekIndices = List.generate(totalWeeks, (i) => i);
+
+      // 2) initialize your rows/templates/circuits arrays:
+      exerciseRows = List.generate(
+        totalWeeks,
+        (_) => List.generate(
+          7,
+          (_) => [
+            ExerciseRow(circuitIndex: 0),
+            ExerciseRow(circuitIndex: 0),
+          ],
+        ),
+      );
+      selectedTemplateIds = List.generate(
+        totalWeeks,
+        (_) => List<String?>.filled(7, null),
+      );
+      circuitStartIndices = List.generate(
+        totalWeeks,
+        (_) => List.generate(7, (_) => <int>[0]),
+      );
+    });
+  }
+
+  List<DateTime> _generateMatchingDates(
+      DateTime start, DateTime end, List<String> days) {
+    final shortDays =
+        days.map((d) => d.substring(0, 3)).toSet(); // e.g., "Mon", "Wed"
+    final result = <DateTime>[];
+
+    for (var date = start;
+        !date.isAfter(end);
+        date = date.add(const Duration(days: 1))) {
+      final dayAbbrev = DateFormat('E').format(date); // e.g., "Mon"
+      if (shortDays.contains(dayAbbrev)) {
+        result.add(date);
+      }
     }
+
+    return result;
   }
 
   @override
@@ -625,14 +580,12 @@ class _WeekPlannerState extends State<WeekPlanner> {
       for (int week = 0; week < weekIndices.length; week++) {
         final weekStartDate = blockStartDate.add(Duration(days: week * 7));
         if (weekStartDate.isAfter(blockEndDate)) {
-          print('⛔ Skipping week_$week — outside block range.');
           continue;
         }
 
         for (int day = 0; day < 7; day++) {
           final thisDate = weekStartDate.add(Duration(days: day));
           if (thisDate.isAfter(blockEndDate)) {
-            print('⛔ Skipping day $day in week_$week — beyond block end.');
             continue;
           }
 
@@ -756,7 +709,6 @@ class _WeekPlannerState extends State<WeekPlanner> {
         .doc('current_block')
         .collection('weeks')
         .get();
-    print('🧩 Found ${weekSnapshots.docs.length} week documents');
 
     for (final weekDoc in weekSnapshots.docs) {
       final weekIndex = int.tryParse(weekDoc.id.replaceAll('week_', '')) ?? 0;
@@ -830,21 +782,11 @@ class _WeekPlannerState extends State<WeekPlanner> {
           }
 
           loadedRows.add(row);
-
-          print("Loaded: ${row.exercise}, "
-              "${row.weightController.text}, "
-              "${row.repsController.text}, "
-              "${row.rirController.text}");
         }
 
         exerciseRows[weekIndex][dayIndex] = loadedRows;
-        print(
-            '[BLOCK LOAD] Week $weekIndex, Day $dayIndex loaded ${loadedRows.length} rows from block_data');
 
-        for (final row in loadedRows) {
-          print(
-              '  • ${row.exercise} | weight: ${row.weightController.text} | reps: ${row.repsController.text} | RIR: ${row.rirController.text}');
-        }
+        for (final row in loadedRows) {}
 
         final List<int> newStarts = [];
         int? lastCircuit;
@@ -864,10 +806,6 @@ class _WeekPlannerState extends State<WeekPlanner> {
             blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
         final String dateKey = DateFormat('yyyy-MM-dd').format(date);
 
-        print('[WES Check] Checking for saved workout on $dateKey...');
-        print('[WES OVERRIDE] blockStartDate = $blockStartDate');
-        print('[WES OVERRIDE] dateKey = $dateKey');
-
         final workoutDoc = await FirebaseFirestore.instance
             .collection('users')
             .doc(user.uid)
@@ -876,19 +814,12 @@ class _WeekPlannerState extends State<WeekPlanner> {
             .get();
 
         if (!workoutDoc.exists) {
-          print('[WES Check] No saved workout for $dateKey.');
-        } else {
-          print(
-              '[WES Check] Found saved WES workout. Attempting to override...');
-        }
+        } else {}
 
         if (workoutDoc.exists) {
           final workoutData = workoutDoc.data();
           final savedExercises =
               List<Map<String, dynamic>>.from(workoutData?['exercises'] ?? []);
-
-          print(
-              '[WES OVERRIDE] Overriding Week $weekIndex, Day $dayIndex with ${savedExercises.length} WES exercises');
 
           for (int i = 0; i < savedExercises.length; i++) {
             final ex = savedExercises[i];
@@ -918,13 +849,6 @@ class _WeekPlannerState extends State<WeekPlanner> {
             _savedFields['${baseKey}_weight'] = true;
             _savedFields['${baseKey}_reps'] = true;
             _savedFields['${baseKey}_rir'] = true;
-
-            print("Overrode with WES: ${matchingRow.exercise}, "
-                "${matchingRow.weightController.text}, "
-                "${matchingRow.repsController.text}, "
-                "${matchingRow.rirController.text}");
-            print(
-                '[Override Attempt] Exercise: $name, Circuit: $circuit, Sets: $sets');
           }
         }
       }
@@ -1033,13 +957,7 @@ class _WeekPlannerState extends State<WeekPlanner> {
         if (id != null) {
           PeriodizationModelUtils.exercisePreviousTopSetReps[id] = reps;
         }
-
-        print(
-            '🧠 [TopSetLoader] Stored ${reps.length} reps for "$name" and ID=$id');
       }
-
-      print(
-          "✅ Top sets loaded (max 4 per exercise): ${topSetsByExercise.length} exercises.");
     });
   }
 
@@ -1142,12 +1060,7 @@ class _WeekPlannerState extends State<WeekPlanner> {
       });
     }
 
-    print(
-        '📝 [SAVE] Week $weekIndex, Day $dayIndex → Saving ${exercises.length} exercises:');
-    for (final ex in exercises) {
-      print(
-          '  • ${ex['name']} | weight: ${ex['weight']} | reps: ${ex['reps']} | RIR: ${ex['rir']} | circuit: ${ex['circuitIndex']}');
-    }
+    for (final ex in exercises) {}
 
     final weekDocRef = FirebaseFirestore.instance
         .collection('users')
@@ -1175,7 +1088,6 @@ class _WeekPlannerState extends State<WeekPlanner> {
 
     if (!mounted) return;
     setState(() {});
-    print("✅ Saved day: week $weekIndex, day $dayIndex");
   }
 
   void _trimEmptyExerciseRows(int weekIndex, int dayIndex) {
@@ -1218,7 +1130,6 @@ class _WeekPlannerState extends State<WeekPlanner> {
     for (final doc in workoutsSnapshot.docs) {
       await doc.reference.delete();
     }
-    print("🗑️ All workouts deleted.");
 
     // 🧹 2. Delete block_data > current_block > weeks > days
     final currentBlockDoc =
@@ -1234,7 +1145,6 @@ class _WeekPlannerState extends State<WeekPlanner> {
     }
 
     await currentBlockDoc.delete();
-    print("🧼 All block data deleted.");
   }
 
   Future<void> deleteBlockBuilderDataOnly() async {
@@ -1259,7 +1169,6 @@ class _WeekPlannerState extends State<WeekPlanner> {
 
     await currentBlockDoc
         .delete(); // Optional: keep this if you want to remove the doc shell
-    print("🧼 BlockBuilder-only data deleted.");
   }
 
   void clearDay(int weekIndex, int dayIndex) {
@@ -1453,24 +1362,16 @@ class _WeekPlannerState extends State<WeekPlanner> {
     return StatefulBuilder(
       builder: (context, localSetState) {
         final exerciseName = exerciseController.text;
-        print(
-            '🧠 Building row for exercise: "$exerciseName" (w$weekIndex d$dayIndex r$rowIndex)');
 
         final exerciseId = nameToIdMap[exerciseName];
-        print('🔍 ID for $exerciseName: $exerciseId');
 
-        if (exerciseId != null) {
-          print(
-              '🔍 repTargets entry for $exerciseId: ${jsonEncode(repTargetsByExercise[exerciseId])}');
-        }
+        if (exerciseId != null) {}
         final String? plannedRep = getRepTargetForExercise(
           exerciseName,
           weekIndex,
           dayIndex,
           rowIndex,
         );
-
-        print('🔢 plannedRep returned: $plannedRep');
 
         final double? weight = double.tryParse(weightController.text);
         final int? reps = int.tryParse(repsController.text);
@@ -1484,9 +1385,6 @@ class _WeekPlannerState extends State<WeekPlanner> {
                 plannedRep != null)
             ? RegExp(r'^\d+').firstMatch(plannedRep)?.group(0) ?? ''
             : '';
-
-        print(
-            '📋 repsController: "${repsController.text}", plannedRep: "$plannedRep", hintReps: "$hintReps"');
 
         final double e1rm = PeriodizationModelUtils.calculateE1RM(
           weight ?? (weightController.text.isEmpty ? 25.0 : null),
@@ -1535,12 +1433,6 @@ class _WeekPlannerState extends State<WeekPlanner> {
                             rirController.clear();
 
                             if (isPlanned) {
-                              print(
-                                  '🧾 [BB2] repTargetsByExercise contains: ${repTargetsByExercise.keys}');
-                              print('🧾 [BB2] looking for: $exerciseId');
-                              print(
-                                  '🧾 [BB2] entry for $exerciseId: ${repTargetsByExercise[exerciseId]}');
-
                               // ✅ Normalize repTargets (flat → nested) for safety
                               if (repTargetsByExercise[exerciseId]
                                   ?['repTargets'] is List) {
@@ -1551,8 +1443,6 @@ class _WeekPlannerState extends State<WeekPlanner> {
                                       ?['repTargets'] = [
                                     List<String>.from(reps)
                                   ];
-                                  print(
-                                      '🔄 [BB2] Normalized flat repTargets → nested for $exerciseId');
                                 }
                               }
 
@@ -1659,9 +1549,6 @@ class _WeekPlannerState extends State<WeekPlanner> {
     final bool wasManuallyEntered = value.isNotEmpty;
     final String state = wasManuallyEntered ? 'user' : 'hint';
     final color = _getFieldColor(state);
-
-    print(
-        '📝 hint="$hint" | controller="${controller.text}" for field: $fieldKey');
 
     return Expanded(
       flex: fieldKey == "weight" ? 2 : 1,
@@ -1828,43 +1715,53 @@ class _WeekPlannerState extends State<WeekPlanner> {
                               ),
                               Builder(builder: (_) {
                                 final rows = exerciseRows[weekIndex][dayIndex];
-                                final firstExercise =
-                                    rows.isNotEmpty ? rows[0].exercise : null;
-                                if (firstExercise == null ||
-                                    !PeriodizationModelUtils
-                                        .exercisePreviousTopSetReps
-                                        .containsKey(firstExercise)) {
+                                final firstExerciseName =
+                                rows.isNotEmpty ? rows[0].exercise : null;
+
+                                if (firstExerciseName == null) {
                                   return const Text(
                                     "Upcoming reps: None",
                                     style: TextStyle(
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w500,
-                                        color: Colors.orangeAccent),
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.orangeAccent,
+                                    ),
                                   );
                                 }
-                                final range = PeriodizationModelUtils
-                                    .getDupSignatureRepRange(firstExercise);
-                                final int min = range?['min'] ?? 2;
-                                final int max = range?['max'] ?? 10;
 
-                                final upcoming = PeriodizationModelUtils
-                                    .REsignatureRepsByExercise(
-                                  exerciseName: firstExercise,
+                                // → lookup the internal ID, not the display name
+                                final firstExerciseId = nameToIdMap[firstExerciseName];
+                                if (firstExerciseId == null ||
+                                    !PeriodizationModelUtils.exercisePreviousTopSetReps
+                                        .containsKey(firstExerciseId)) {
+                                  return const Text(
+                                    "Upcoming reps: None",
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.orangeAccent,
+                                    ),
+                                  );
+                                }
+
+                                final range = PeriodizationModelUtils.getDupSignatureRepRange(firstExerciseId);
+                                final min = range?['min'] ?? 0;
+                                final max = range?['max'] ?? 0;
+
+                                final upcoming = PeriodizationModelUtils.REsignatureRepsByExercise(
+                                  exerciseName: firstExerciseId,
                                   min: min,
                                   max: max,
                                   count: 5,
                                 );
 
-                                // 🧾 Print the 5 reps that will appear in the UI
-                                print(
-                                    '🔮 [BB2 UI] Upcoming 5 reps for $firstExercise → ${upcoming.join(', ')}');
-
                                 return Text(
                                   "Upcoming reps: ${upcoming.join(', ')}",
                                   style: const TextStyle(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w500,
-                                      color: Colors.orangeAccent),
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.orangeAccent,
+                                  ),
                                 );
                               }),
                             ],
@@ -1891,10 +1788,6 @@ class _WeekPlannerState extends State<WeekPlanner> {
 
                               final history = PeriodizationModelUtils
                                   .exercisePreviousTopSetReps[firstExercise]!;
-
-                              // 🔍 Print to console
-                              print(
-                                  '🧠 [BB2 UI] Top set history for $firstExercise → ${history.join(', ')}');
 
                               return Text(
                                 "Top set history: ${history.reversed.join(', ')}",
@@ -2089,11 +1982,7 @@ class _WeekPlannerState extends State<WeekPlanner> {
                             final rows = exerciseRows[weekIndex][dayIndex];
                             final List<Map<String, dynamic>> prefilled = [];
 
-                            print(
-                                '[BB2] exerciseRows for week $weekIndex, day $dayIndex:');
                             for (final row in rows) {
-                              print(
-                                  '• ${row.exercise} | weight: ${row.weightController.text} | reps: ${row.repsController.text}');
                               final name = row.exerciseController.text.trim();
                               if (name.isNotEmpty) {
                                 prefilled.add({
@@ -2184,17 +2073,9 @@ class _WeekPlannerState extends State<WeekPlanner> {
                               await saveDayToFirestore(weekIndex, dayIndex);
                               setState(() {});
                             }
-                            print('[BB2] Passing to WES:');
-                            for (var ex in prefilled) {
-                              print(
-                                  '→ ${ex['name']} (circuit: ${ex['circuitIndex']})');
-                            }
+                            for (var ex in prefilled) {}
 
-                            print('[BB2 → WES] Prefilled from BB2:');
-                            for (final ex in prefilled) {
-                              print(
-                                  '• ${ex['name']} (circuitIndex: ${ex['circuitIndex']})');
-                            }
+                            for (final ex in prefilled) {}
                           },
                           child: const Text(
                             "Go to\nWorkout",
@@ -2551,14 +2432,21 @@ class _WeekPlannerState extends State<WeekPlanner> {
   }
 
   Widget _buildWeek(int weekIndex, Map<String, dynamic> repTargetsByExercise) {
+    final daysToShow = List.generate(7, (d) => d).where((d) {
+      final dt = blockStartDate.add(Duration(days: weekIndex * 7 + d));
+      final abbrev =
+          DateFormat('E').format(dt).substring(0, 3); // "Mon","Tue",…
+      return _selectedDays.contains(abbrev);
+    }).toList();
+
     return SizedBox(
       width: MediaQuery.of(context).size.width * 0.95,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: List.generate(
-            7,
-            (dayIndex) =>
-                _buildDayView(weekIndex, dayIndex, repTargetsByExercise)),
+        children: daysToShow
+            .map((dayIndex) =>
+                _buildDayView(weekIndex, dayIndex, repTargetsByExercise))
+            .toList(),
       ),
     );
   }

@@ -19,13 +19,41 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
         .doc(userId)
         .collection('blocks');
 
-    final activeBlocks =
-        await blocksRef.where('isActive', isEqualTo: true).get();
-    for (var doc in activeBlocks.docs) {
-      await doc.reference.update({'isActive': false});
+    // load the block you want to activate
+    final newActiveSnap = await blocksRef.doc(blockId).get();
+    final newName = (newActiveSnap.data()?['name'] as String?) ?? 'Unnamed Block';
+
+    // find any other active ones
+    final activeQuery = await blocksRef.where('isActive', isEqualTo: true).get();
+    final others = activeQuery.docs.where((d) => d.id != blockId).toList();
+
+    if (others.isNotEmpty) {
+      final oldName = (others.first.data()['name'] as String?) ?? 'Unnamed Block';
+      final shouldOverride = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Override Active Block?'),
+          content: Text(
+              '“$oldName” is currently active.\n\n'
+                  'Activate “$newName” instead?'
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('No')),
+            TextButton(onPressed: () => Navigator.pop(ctx, true),  child: const Text('Yes')),
+          ],
+        ),
+      );
+      if (shouldOverride != true) return;
+
+      // batch‐deactivate the old one(s)
+      final batch = FirebaseFirestore.instance.batch();
+      for (final doc in others) batch.update(doc.reference, {'isActive': false});
+      await batch.commit();
     }
 
+    // now activate the new one
     await blocksRef.doc(blockId).update({'isActive': true});
+    setState(() { /* so your UI re‐reads the stream */ });
   }
 
   Future<void> _deleteBlock(String blockId) async {
