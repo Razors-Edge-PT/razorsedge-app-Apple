@@ -559,13 +559,18 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
     final bb2Entry = _resolvedBB2Values[exerciseName.toLowerCase()];
-    final bb2Rir = bb2Entry != null ? double.tryParse(bb2Entry['rir']?.toString() ?? '') : null;
+    final rawBB2Rir = bb2Entry?['rir'];
+    final bb2Rir = (rawBB2Rir != null && rawBB2Rir.toString().trim().isNotEmpty)
+        ? double.tryParse(rawBB2Rir.toString())
+        : null;
+
 
     // ✅ Set 1: Use BB2 if available
-    if (setNumber == 1 && bb2Rir != null) {
+    if (setNumber == 1 && bb2Rir != null && bb2Rir != 0.0) {
       print('🔁 [WES] Using BB2-entered RIR for "$exerciseName" Set 1: $bb2Rir');
       return bb2Rir;
     }
+
 
     final exerciseId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
     final weekIndex = _getApplicableWeekIndex(exerciseId);
@@ -599,7 +604,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       return chosen;
     }
 
-    return plannedRir ?? (setNumber == 1 ? 0.5 : 1.5);
+
+    final fallback = (setNumber == 1 ? 0.5 : 1.5);
+    final finalRir = plannedRir ?? fallback;
+    print('📦 [WES] Final RIR used for "$exerciseName" set $setNumber → $finalRir');
+    return finalRir;
+
   }
 
 
@@ -1979,41 +1989,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   }
 
 
-  void _navigateToExerciseSelection() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => ExerciseSelectionScreen(
-          selectedExercises: _selectedExercisesWithCircuits.map((e) => e['name'] as String).toList(),
-        ),
-      ),
-    ).then((selectedExercises) {
-      if (selectedExercises != null && selectedExercises is List<String>) {
-        setState(() {
-          _selectedExercisesWithCircuits.clear();
-          _selectedExercisesWithCircuits.addAll(
-            selectedExercises.map((name) => {
-              'name': name,
-              'circuitIndex': 0, // ✅ Default for new selection
-            }),
-          );
-
-          _workoutSets.clear();
-          _workoutSets.addAll(
-            List.generate(
-              _selectedExercisesWithCircuits.length,
-                  (_) => List.generate(_defaultSets, (_) => SetDetails()),
-            ),
-          );
-
-          _initializeControllers();
-        });
-      }
-    });
-  }
-
-
-
   Future<void> _saveWorkout() async {
     if (_workoutNameController.text.isEmpty || _selectedExercisesWithCircuits.isEmpty) {
 
@@ -3304,9 +3279,34 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                                       children: [
                                         Text(
                                               () {
-                                            final reps = exercisePreviousTopSetReps[_selectedExercisesWithCircuits[i]['name'] ?? ''] ?? [];
-                                            final recent = reps.take(7).join(", ");
-                                            return 'Previous Rep Targets: ${recent.isEmpty ? "None" : recent}';
+                                            final exerciseName = _selectedExercisesWithCircuits[i]['name']?.trim() ?? '';
+                                            final targetWeight = set1SuggestedWeight(i);
+                                            final history = PeriodizationModelUtils.topSetsByExercise[exerciseName] ?? [];
+
+                                            // Filter to sets at this exact weight
+                                            final matchingSets = history
+                                                .where((s) => (s['weight'] as double).toStringAsFixed(1) == targetWeight.toStringAsFixed(1))
+                                                .toList();
+
+                                            if (matchingSets.isEmpty) return 'No previous sets at ${targetWeight.toStringAsFixed(1)} kg';
+
+                                            // Sort by reps descending, then lowest RIR
+                                            matchingSets.sort((a, b) {
+                                              final repsA = a['reps'] ?? 0.0;
+                                              final repsB = b['reps'] ?? 0.0;
+                                              final rirA = a['rir'] ?? 99.0;
+                                              final rirB = b['rir'] ?? 99.0;
+
+                                              // Prefer more reps, then lower RIR
+                                              if (repsB.compareTo(repsA) != 0) return repsB.compareTo(repsA);
+                                              return rirA.compareTo(rirB);
+                                            });
+
+                                            final best = matchingSets.first;
+                                            final reps = best['reps'];
+                                            final rir = best['rir'];
+
+                                            return 'Best at ${targetWeight.toStringAsFixed(1)} kg: $reps reps @ RIR $rir';
                                           }(),
                                           style: const TextStyle(
                                             fontSize: 10.0,
@@ -3314,15 +3314,44 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                                             color: Colors.white24,
                                           ),
                                         ),
+
                                         const SizedBox(height: 0),
                                         Builder(
                                           builder: (context) {
-                                            final exerciseName = _selectedExercisesWithCircuits[i]['name'] ?? '';
-                                            final reps = PeriodizationModelUtils.getAvailableRepTargets(exerciseName);
+                                            final exerciseName = _selectedExercisesWithCircuits[i]['name']?.trim() ?? '';
+                                            final repTarget = set1SuggestedReps(i).round();
+                                            final history = PeriodizationModelUtils.topSetsByExercise[exerciseName] ?? [];
 
-                                            final displayText = reps.length >= 11 ? 'All (1–12)' : reps.join(", ");
+                                            // Filter sets that exactly match the rep target
+                                            final matchingSets = history.where((s) {
+                                              final reps = (s['reps'] as num?)?.round();
+                                              return reps == repTarget;
+                                            }).toList();
+
+                                            if (matchingSets.isEmpty) {
+                                              return Text(
+                                                'No previous sets at $repTarget reps',
+                                                style: const TextStyle(
+                                                  fontSize: 10.0,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: Colors.white54,
+                                                ),
+                                              );
+                                            }
+
+                                            // Sort by weight descending
+                                            matchingSets.sort((a, b) {
+                                              final wa = a['weight'] ?? 0.0;
+                                              final wb = b['weight'] ?? 0.0;
+                                              return (wb as num).compareTo(wa as num);
+                                            });
+
+                                            final best = matchingSets.first;
+                                            final weight = best['weight'];
+                                            final rir = best['rir'];
+
                                             return Text(
-                                              'Available Rep Targets: $displayText',
+                                              'Best at $repTarget reps: ${weight.toStringAsFixed(1)} kg @ RIR ${rir.toString()}',
                                               style: const TextStyle(
                                                 fontSize: 10.0,
                                                 fontWeight: FontWeight.bold,
@@ -3331,6 +3360,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                                             );
                                           },
                                         ),
+
                                       ],
                                     ),
 
@@ -3505,29 +3535,41 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
                                 // ✅ Updated UI for RIR Input Field
                                 Expanded(
-                                  child: TextField(
-                                    controller: _rirControllers[i][j],
-                                    keyboardType: TextInputType.number,
-                                    decoration: InputDecoration(
-                                      hintText: (j == 0) ? set1RIR(i).toString()
-                                          : (j == 1) ? set2RIR(i).toString()
-                                          : (j == 2) ? set3RIR(i).toString()
-                                          : '1', // Default for other sets
-                                      hintStyle: const TextStyle(
-                                        color: Colors.grey,
-                                        fontStyle: FontStyle.italic,
-                                        fontSize: 14,
-                                      ),
-                                    ),
-                                    onChanged: (value) {
+                                  child: Builder(
+                                    builder: (context) {
+                                      final rirText = _rirControllers[i][j].text;
+                                      final hint = (j == 0)
+                                          ? set1RIR(i).toString()
+                                          : (j == 1)
+                                          ? set2RIR(i).toString()
+                                          : (j == 2)
+                                          ? set3RIR(i).toString()
+                                          : '1';
 
-                                      setState(() {});
+                                      print('🧪 [WES RIR Field] Set $j for exercise $i → controller="$rirText", hint="$hint"');
+
+                                      return TextField(
+                                        controller: _rirControllers[i][j],
+                                        keyboardType: TextInputType.number,
+                                        decoration: InputDecoration(
+                                          hintText: hint,
+                                          hintStyle: const TextStyle(
+                                            color: Colors.grey,
+                                            fontStyle: FontStyle.italic,
+                                            fontSize: 14,
+                                          ),
+                                        ),
+                                        onChanged: (value) {
+                                          setState(() {});
+                                        },
+                                        style: TextStyle(
+                                          color: rirText.isEmpty ? Colors.grey : Colors.white,
+                                        ),
+                                      );
                                     },
-                                    style: TextStyle(
-                                      color: _rirControllers[i][j].text.isEmpty ? Colors.grey : Colors.white,
-                                    ),
                                   ),
                                 ),
+
 
 
                                 const SizedBox(width: 4.0),
