@@ -1378,6 +1378,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                 final template = templates[index];
                 return ListTile(
                   title: Text(template.name, style: const TextStyle(color: Colors.white)),
+                  dense: true, // ✅ THIS is what reduces vertical space
                   onTap: () => Navigator.pop(context, template),
                 );
               },
@@ -1519,11 +1520,23 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       context: context,
       builder: (ctx) {
         List<String> tempSelected = _selectedExercisesWithCircuits.map((e) => e['name'] as String).toList();
+        String searchQuery = "";
+
 
         return StatefulBuilder(builder: (context, setLocalState) {
-          final filteredExercises = (showPlannedOnly && plannedModeAvailable)
+          List<Map<String, String>> filteredExercises = (showPlannedOnly && plannedModeAvailable)
               ? allExercises.where((ex) => plannedExercises.contains(ex['id'])).toList()
               : allExercises;
+
+// 🔍 Apply case-insensitive name filter
+          if (searchQuery.trim().isNotEmpty) {
+            final query = searchQuery.toLowerCase();
+            filteredExercises = filteredExercises.where((ex) {
+              final name = ex['name']?.toLowerCase() ?? "";
+              return name.contains(query);
+            }).toList();
+          }
+
 
 
           print('Planned Exercise IDs: $plannedExercises');
@@ -1577,6 +1590,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
           return AlertDialog(
             backgroundColor: Colors.blueGrey.shade900,
+            insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 2), // 🔧 reduce horizontal margin
+            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12), // 🔧 reduce internal padding
             title: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -1602,54 +1617,105 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
             ),
             content: SizedBox(
               width: double.maxFinite,
-              child: ListView(
-                children: orderedGrouped.entries.map((entry) {
-                  final category = entry.key;
-                  final exercises = entry.value;
-                  final isExpanded = expandedGroups[category] ?? false;
-
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      ListTile(
-                        tileColor: Colors.blueGrey.shade800,
-                        title: Text(category, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                        trailing: Icon(
-                          isExpanded ? Icons.expand_less : Icons.expand_more,
-                          color: Colors.white70,
-                        ),
-                        onTap: () {
-                          setLocalState(() {
-                            expandedGroups[category] = !isExpanded;
-                          });
-                        },
+              child: Column(
+                children: [
+                  // 🔍 Search bar
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8.0),
+                    child: TextField(
+                      onChanged: (value) => setLocalState(() => searchQuery = value),
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        hintText: "Search exercises...",
+                        hintStyle: const TextStyle(color: Colors.white54),
+                        filled: true,
+                        fillColor: Colors.blueGrey.shade800,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.0)),
+                        prefixIcon: const Icon(Icons.search, color: Colors.white70),
                       ),
-                      if (isExpanded)
-                        ...exercises.map((name) {
-                          final isChecked = tempSelected.contains(name);
-                          return CheckboxListTile(
-                            value: isChecked,
-                            title: Text(name, style: const TextStyle(color: Colors.white)),
-                            controlAffinity: ListTileControlAffinity.leading,
-                            activeColor: Colors.lightBlueAccent,
-                            checkColor: Colors.black,
-                            onChanged: (checked) {
-                              setLocalState(() {
-                                if (checked == true) {
-                                  tempSelected.add(name);
-                                } else {
-                                  tempSelected.remove(name);
-                                }
-                              });
-                            },
-                          );
-                        }),
-                      const Divider(height: 10, color: Colors.grey),
-                    ],
-                  );
-                }).toList(),
+                    ),
+                  ),
+
+                  // 🔍 Filtered exercise list
+                  Expanded(
+                    child: searchQuery.trim().isNotEmpty
+                        ? ListView(
+                      children: filteredExercises.map((ex) {
+                        final name = ex['name']!;
+                        final isChecked = tempSelected.contains(name);
+                        return CheckboxListTile(
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 10), // 🔧 tighter spacing
+                          dense: true, // ✅ less vertical space
+                          value: isChecked,
+                          title: Text(name, style: const TextStyle(color: Colors.white, fontSize: 18),),
+                          controlAffinity: ListTileControlAffinity.leading,
+                          activeColor: Colors.lightBlueAccent,
+                          checkColor: Colors.black,
+
+                          onChanged: (checked) {
+                            setLocalState(() {
+                              if (checked == true) {
+                                tempSelected.add(name);
+                              } else {
+                                tempSelected.remove(name);
+                              }
+                            });
+                          },
+                        );
+                      }).toList(),
+                    )
+                        : ListView(
+                      children: orderedGrouped.entries.map((entry) {
+                        final category = entry.key;
+                        final exercises = entry.value;
+                        final isExpanded = expandedGroups[category] ?? false;
+
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            ListTile(
+                              tileColor: Colors.blueGrey.shade800,
+                              title: Text(category, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                              trailing: Icon(
+                                isExpanded ? Icons.expand_less : Icons.expand_more,
+                                color: Colors.white70,
+                              ),
+                              onTap: () {
+                                setLocalState(() {
+                                  expandedGroups[category] = !isExpanded;
+                                });
+                              },
+                            ),
+                            if (isExpanded)
+                              ...exercises.map((name) {
+                                final isChecked = tempSelected.contains(name);
+                                return CheckboxListTile(
+                                  value: isChecked,
+                                  title: Text(name, style: const TextStyle(color: Colors.white)),
+                                  controlAffinity: ListTileControlAffinity.leading,
+                                  activeColor: Colors.lightBlueAccent,
+                                  checkColor: Colors.black,
+                                  onChanged: (checked) {
+                                    setLocalState(() {
+                                      if (checked == true) {
+                                        tempSelected.add(name);
+                                      } else {
+                                        tempSelected.remove(name);
+                                      }
+                                    });
+                                  },
+                                );
+                              }),
+                            const Divider(height: 10, color: Colors.grey),
+                          ],
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ],
               ),
             ),
+
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx),
@@ -1696,6 +1762,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     bool plannedModeAvailable = plannedExercises.isNotEmpty;
     final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
 
+
     final allExercises = snapshot.docs.map((doc) => {
       'id': doc.id,
       'name': doc['name'] as String,
@@ -1708,61 +1775,112 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     bool showPlannedOnly = true;
     final Map<String, bool> expandedGroups = {};
+    String searchQuery = '';
 
     final selected = await showDialog<String>(
       context: context,
       builder: (ctx) {
         return StatefulBuilder(builder: (context, setLocalState) {
-          final filteredExercises = (showPlannedOnly && plannedModeAvailable)
-              ? allExercises.where((ex) => plannedExercises.contains(ex['id'])).toList()
-              : allExercises;
+          List<Widget> _buildExerciseList() {
+            final filteredExercises = (showPlannedOnly && plannedModeAvailable)
+                ? allExercises.where((ex) => plannedExercises.contains(ex['id'])).toList()
+                : allExercises;
 
-          final Map<String, List<String>> grouped = {};
-          for (final exercise in filteredExercises) {
-            final category = exercise['category'] ?? 'Other';
-            final name = exercise['name'] ?? 'Unnamed';
-            grouped.putIfAbsent(category, () => []).add(name);
-          }
+            final searched = searchQuery.isNotEmpty
+                ? filteredExercises
+                .where((ex) => ex['name']!.toLowerCase().contains(searchQuery))
+                .toList()
+                : filteredExercises;
 
-          for (final group in grouped.values) {
-            group.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-          }
-
-          const categoryOrder = [
-            'Horizontal Press',
-            'Horizontal Pull',
-            'Vertical Press',
-            'Vertical Pull',
-            'Lateral Raise',
-            'Arm Extension',
-            'Arm Curl',
-            'Squat Pattern',
-            'Hip Hinge',
-            'Leg Extension',
-            'Leg Curl',
-            'Hip Abduction/adduction',
-            'Calf Raise',
-            'Core',
-          ];
-
-          final Map<String, List<String>> orderedGrouped = {};
-          for (final cat in categoryOrder) {
-            if (grouped.containsKey(cat)) {
-              orderedGrouped[cat] = grouped[cat]!;
+            if (searchQuery.isNotEmpty) {
+              return searched
+                  .map((ex) => ListTile(
+                title: Text(ex['name']!, style: const TextStyle(color: Colors.white70)),
+                onTap: () => Navigator.pop(ctx, ex['name']!),
+                dense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+              ))
+                  .toList();
             }
-          }
-          for (final entry in grouped.entries) {
-            if (!orderedGrouped.containsKey(entry.key)) {
-              orderedGrouped[entry.key] = entry.value;
-            }
-          }
 
-          for (final category in orderedGrouped.keys) {
-            expandedGroups.putIfAbsent(category, () => false);
+            final Map<String, List<String>> grouped = {};
+            for (final exercise in filteredExercises) {
+              final category = exercise['category'] ?? 'Other';
+              final name = exercise['name'] ?? 'Unnamed';
+              grouped.putIfAbsent(category, () => []).add(name);
+            }
+
+            for (final group in grouped.values) {
+              group.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+            }
+
+            const categoryOrder = [
+              'Horizontal Press',
+              'Horizontal Pull',
+              'Vertical Press',
+              'Vertical Pull',
+              'Lateral Raise',
+              'Arm Extension',
+              'Arm Curl',
+              'Squat Pattern',
+              'Hip Hinge',
+              'Leg Extension',
+              'Leg Curl',
+              'Hip Abduction/adduction',
+              'Calf Raise',
+              'Core',
+            ];
+
+            final Map<String, List<String>> orderedGrouped = {};
+            for (final cat in categoryOrder) {
+              if (grouped.containsKey(cat)) {
+                orderedGrouped[cat] = grouped[cat]!;
+              }
+            }
+            for (final entry in grouped.entries) {
+              if (!orderedGrouped.containsKey(entry.key)) {
+                orderedGrouped[entry.key] = entry.value;
+              }
+            }
+
+            for (final category in orderedGrouped.keys) {
+              expandedGroups.putIfAbsent(category, () => false);
+            }
+
+            return orderedGrouped.entries.map((entry) {
+              final category = entry.key;
+              final exercises = entry.value;
+              final isExpanded = expandedGroups[category] ?? false;
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ListTile(
+                    tileColor: Colors.blueGrey.shade800,
+                    title: Text(category, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    trailing: Icon(
+                      isExpanded ? Icons.expand_less : Icons.expand_more,
+                      color: Colors.white70,
+                    ),
+                    onTap: () => setLocalState(() => expandedGroups[category] = !isExpanded),
+                  ),
+                  if (isExpanded)
+                    ...exercises.map((name) => ListTile(
+                      title: Text(name, style: const TextStyle(color: Colors.white70)),
+                      onTap: () => Navigator.pop(ctx, name),
+                      dense: true,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+                    )),
+                  const Divider(height: 10, color: Colors.grey),
+                ],
+              );
+            }).toList();
           }
 
           return AlertDialog(
             backgroundColor: Colors.blueGrey.shade900,
+            insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 2), // 🔧 reduce horizontal margin
+            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12), // 🔧 reduce internal padding
             title: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -1783,47 +1901,37 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                   )
                 else
                   const SizedBox(),
-
               ],
             ),
             content: SizedBox(
               width: double.maxFinite,
               height: 400,
-              child: ListView(
-                children: orderedGrouped.entries.map((entry) {
-                  final category = entry.key;
-                  final exercises = entry.value;
-                  final isExpanded = expandedGroups[category] ?? false;
-
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      ListTile(
-                        tileColor: Colors.blueGrey.shade800,
-                        title: Text(category, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                        trailing: Icon(
-                          isExpanded ? Icons.expand_less : Icons.expand_more,
-                          color: Colors.white70,
-                        ),
-                        onTap: () {
-                          setLocalState(() {
-                            expandedGroups[category] = !isExpanded;
-                          });
-                        },
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10.0),
+                    child: TextField(
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        hintText: 'Search exercises...',
+                        hintStyle: const TextStyle(color: Colors.white54),
+                        filled: true,
+                        fillColor: Colors.blueGrey.shade800,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.0)),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 10.0),
                       ),
-                      if (isExpanded)
-                        ...exercises.map((name) {
-                          return ListTile(
-                            title: Text(name, style: const TextStyle(color: Colors.white70)),
-                            onTap: () => Navigator.pop(ctx, name),
-                          );
-                        }),
-                      const Divider(height: 10, color: Colors.grey),
-                    ],
-                  );
-                }).toList(),
+                      onChanged: (val) => setLocalState(() => searchQuery = val.toLowerCase()),
+                    ),
+                  ),
+                  Expanded(
+                    child: ListView(
+                      children: _buildExerciseList(),
+                    ),
+                  ),
+                ],
               ),
             ),
+
           );
         });
       },
@@ -2877,6 +2985,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    print('🔁 [WES] Full page build() called');
     return Scaffold(
       backgroundColor: Colors.blueGrey.shade900,
       appBar: AppBar(
@@ -3497,11 +3606,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _navigateToExerciseSelection,
-        child: const Icon(Icons.add),
-      ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+
     );
   }
 }
