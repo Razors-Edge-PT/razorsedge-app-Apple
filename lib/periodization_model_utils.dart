@@ -1,10 +1,16 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-// Import for date formatting
+import 'package:intl/intl.dart'; // Import for date formatting
 import 'package:localtest222/workout_model.dart';
-// Import your exercise details screen
+import 'exercise_selection_screen.dart';
+import 'template_model.dart';
+import 'templates.dart';
+import 'exercise_details_screen.dart'; // Import your exercise details screen
+import 'top_sets_screen.dart';
+import 'Block_Planner.dart';
 import 'dart:convert';
+import 'WorkoutSummaryScreen.dart';
 
 
 enum PeriodizationModelType {
@@ -15,14 +21,31 @@ enum PeriodizationModelType {
   linearExposure,
 }
 
+enum RirModelType {
+  linearTaper,
+  waveUndulation,
+  sessionBased,
+  static,
+}
+
+enum ProgressionModelType {
+  none,
+  linearWeightIncrease,
+  smartProgression,
+  addRepsProgressionModel, // ✅ New
+}
+
+
 
 
 class PeriodizationModelUtils {
   static final Map<String, List<double>> exercisePreviousE1RMs = {};
   static final Map<String, List<int>> exercisePreviousTopSetReps = {};
+  static final Map<String, List<Map<String, dynamic>>> topSetsByExercise = {};
   static Map<String, PeriodizationModelType> exercisePeriodizationModels = {};
   static Map<String, dynamic> plannedExerciseDetails = {}; // ✅ Add this line
-  static final Map<String, String> nameToId = {};
+  static Map<String, String> nameToId = {};
+
   static final Map<String, String> idToName = {};        // id → name ✅
   static final List<int> linearClassicDefaults = [10, 8, 6];
   static final List<int> linearExposureDefaults = [12, 10, 8, 6, 4, 2];
@@ -30,19 +53,76 @@ class PeriodizationModelUtils {
   static Map<String, Map<String, dynamic>> bb2DailyData = {};
   static List<Map<String, dynamic>> savedWorkoutsList = [];
 
+  static Map<String, dynamic> get exerciseSettings => _exerciseSettings;
+
 
   static double calculateE1RM(double? weight, double? reps, double? rir) {
     double w = weight ?? 0.0;
     double r = reps ?? 0.0;
     double rValue = rir ?? 0.5;
+
     double totalReps = r + rValue;
 
-    if (totalReps <= 6) {
+    // Round to avoid floating point edge cases like 6.000000003
+    totalReps = double.parse(totalReps.toStringAsFixed(4));
+
+    if (totalReps <= 6.0) {
+      // Brzycki
       return w * (36 / (37 - totalReps));
     } else {
-      return w * (1 + (0.0333 * totalReps));
+      // Epley
+      return w * (1 + 0.0333 * totalReps);
     }
   }
+
+
+  static double reverseCalculateWeight({
+    required double targetE1RM,
+    required int reps,
+    double rir = 0.5,
+  }) {
+    final double totalReps = reps + rir;
+
+    if (totalReps <= 6) {
+      // Invert: E1RM = W * (36 / (37 - reps))
+      return targetE1RM * ((37 - totalReps) / 36);
+    } else {
+      // Invert: E1RM = W * (1 + 0.0333 * reps)
+      return targetE1RM / (1 + 0.0333 * totalReps);
+    }
+  }
+
+  static double reverseCalculateReps({
+    required double targetE1RM,
+    required double weight,
+    required double baseWeight,   // 👈 new param
+    double rir = 0.5,
+    double? minReps,
+  }) {
+    if (weight <= 0) return 0;
+
+    double totalReps;
+
+    if (targetE1RM / weight < 1.1667) {
+      totalReps = 37 - (36 * weight / targetE1RM);
+    } else {
+      totalReps = (targetE1RM / weight - 1) / 0.0333;
+    }
+
+    double reps = totalReps - rir;
+
+    // ✅ Only clamp to minReps if weight DECREASED
+    if (minReps != null && weight < baseWeight && reps < minReps) {
+      print('⚠️ [BB2] Reps would drop below planned ($reps < $minReps) after weight decreased ($weight < $baseWeight). Locking to $minReps.');
+      reps = minReps;
+    }
+
+    return reps.clamp(1.0, 45.0);
+  }
+
+
+
+
   static String resolveExerciseName(String key) {
     return idToName[key] ?? key;
   }
@@ -179,7 +259,7 @@ class PeriodizationModelUtils {
     return result;
   }
 
-
+// Rep Target Logic
 
   static PeriodizationModelType stringToModel(String modelName) {
     switch (modelName) {
@@ -447,7 +527,7 @@ class PeriodizationModelUtils {
           print('🧪 week1Val = $week1Val');
           print('🧪 finalVal = $finalVal');
 
-          if (week1Val == null) {
+          if (week1Val == null || finalVal == null) {
             print('❌ Missing instance data for $exerciseName → $instanceKey');
             return 10;
           }
@@ -526,6 +606,836 @@ class PeriodizationModelUtils {
     // 🛡️ Fallback to default
     return 10;
   }
+
+
+  // RIR LOGIC
+
+  static String? getSet1RirForExercise({
+    required String exerciseId,
+    required int weekNumber,
+    required int sessionNumber,
+  }) {
+    final rirPlan = plannedExerciseDetails[exerciseId]?['rirPlan'];
+    if (rirPlan == null) return null;
+
+    final weekKey = 'week$weekNumber';
+    final sessionKey = 'session$sessionNumber';
+    final setKey = 'set1';
+
+    return rirPlan[weekKey]?[sessionKey]?[setKey]?['rir'];
+  }
+
+  static String getSet1RirByModel({
+    required String exerciseId,
+    required int weekIndex,
+    required int sessionIndex,
+    required Map<String, dynamic> plannedExerciseDetails,
+  }) {
+    final rirPlan = plannedExerciseDetails[exerciseId]?['rirPlan'];
+    if (rirPlan == null) return '0.5';
+
+    final weekKey = 'week${weekIndex + 1}';
+    final sessionKey = 'session${sessionIndex + 1}';
+    final setKey = 'set1';
+
+    final rir = rirPlan[weekKey]?[sessionKey]?[setKey]?['rir'];
+    return rir?.toString() ?? '0.5';
+  }
+
+  // Weight Logic
+
+  static double getSuggestedWeightFromRep(String exerciseName, int reps, double rir) {
+    final e1rms = exercisePreviousE1RMs[exerciseName];
+    if (e1rms == null || e1rms.isEmpty) return 20.0;
+
+    final recent = e1rms.take(4).toList();
+    final avgE1RM = recent.reduce((a, b) => a + b) / recent.length;
+    final effectiveReps = reps + rir;
+
+    double suggestedWeight;
+
+    if (effectiveReps <= 6) {
+      suggestedWeight = avgE1RM * (37 - effectiveReps) / 36;
+    } else {
+      suggestedWeight = avgE1RM / (1 + 0.0333 * effectiveReps);
+    }
+
+    final rounded = roundToNearestValidIncrement(
+      targetWeight: suggestedWeight,
+      exerciseName: exerciseName,
+    );
+
+
+    print('🧪 [BB2] Top set E1RM history for $exerciseName → $e1rms');
+    print('🎯 [BB2] Rounded $suggestedWeight → $rounded using custom increments');
+    print('🧩 [BB2] Increments for $exerciseName: ${_exerciseSettings[exerciseName]?['increments']}');
+
+
+    return rounded;
+  }
+
+  static void setExerciseSettings(Map<String, dynamic> settings) {
+    _exerciseSettings = settings;
+    print('✅ [PMU] setExerciseSettings called with keys: ${settings.keys}');
+    final testId = 'AmfUWbF1DH3I7qPAdh5k';
+    print('🔍 [PMU] Details for Bench ID ($testId): ${settings[testId]}');
+
+  }
+
+  static Map<String, dynamic> _exerciseSettings = {};
+
+  static double roundToNearestValidIncrement({
+    required double targetWeight,
+    required String exerciseName,
+  }) {
+    // Try name first, then fallback to ID
+    final byName = _exerciseSettings[exerciseName]?['increments'];
+    final id = nameToId[exerciseName];
+
+    print('🧠 [BB2] nameToId lookup for "$exerciseName" → $id');
+    print('🧾 [BB2] Details for ID $id → ${_exerciseSettings[id]}');
+
+    Map<String, dynamic>? byId;
+    if (id != null && _exerciseSettings.containsKey(id)) {
+      byId = _exerciseSettings[id]?['increments'];
+    }
+
+    final increments = byName ?? byId;
+
+    if (increments == null) {
+      print('❌ [BB2] No increments found for $exerciseName by name or ID');
+      return (targetWeight / 2.5).round() * 2.5;
+    }
+
+    final double primary = increments['primary']?.toDouble() ?? 2.5;
+    final double secondary = increments['secondary']?.toDouble() ?? 0.0;
+
+    final Set<double> options = {};
+
+    for (int i = 0; i < 100; i++) {
+      options.add(i * primary); // ✅ Start from 0
+    }
+
+
+    if (secondary > 0) {
+      for (final base in options.toList()) {
+        options.add(base + secondary);
+      }
+    }
+
+    final rounded = options.reduce((a, b) =>
+    (a - targetWeight).abs() < (b - targetWeight).abs() ? a : b);
+
+    print('📏 [BB2] Valid options for $exerciseName: ${options.toList()..toSet().toList()..sort()}');
+    print('🎯 [BB2] Chose: $rounded from target: $targetWeight');
+
+    return rounded;
+  }
+
+  static List<double> getIncrementsForExercise(String exerciseNameOrId) {
+    final byName = _exerciseSettings[exerciseNameOrId]?['increments'];
+
+    Map<String, dynamic>? byId;
+    final id = nameToId[exerciseNameOrId];
+    if (id != null && _exerciseSettings.containsKey(id)) {
+      byId = _exerciseSettings[id]?['increments'];
+    }
+
+    final increments = byName ?? byId;
+
+    if (increments == null) {
+      print('❌ [PMU] No increments found for $exerciseNameOrId by name or ID');
+      return List.generate(100, (i) => 20 + i * 2.5); // fallback: standard 2.5kg plates
+    }
+
+    final double primary = (increments['primary'] as num?)?.toDouble() ?? 2.5;
+    final double secondary = (increments['secondary'] as num?)?.toDouble() ?? 0.0;
+
+    final Set<double> weightOptions = {};
+
+    for (int i = 0; i < 100; i++) {
+      weightOptions.add(i * primary);
+    }
+
+    if (secondary > 0 && secondary != primary) {
+      for (final base in weightOptions.toList()) {
+        weightOptions.add(base + secondary);
+      }
+    }
+
+    final list = weightOptions.toList()..sort();
+    print('✅ [PMU] getIncrementsForExercise($exerciseNameOrId) → $list');
+    return list;
+  }
+
+
+
+
+  static List<double> roundToAllValidIncrements({
+    required double baseWeight,
+    required String exerciseName,
+  }) {
+    final increments = getIncrementsForExercise(exerciseName);
+    final Set<double> options = {};
+
+    for (int i = 0; i < 100; i++) {
+      for (final inc in increments) {
+        options.add(i * inc);
+      }
+    }
+
+    return options.toList()..sort();
+  }
+
+
+
+  // Progression model logic
+
+  //LinearWeightAdded Model
+  static double getProgressedWeight({
+    required String exerciseName,
+    required int repTarget,
+    required double defaultWeight,
+    double rirValue = 0, // ✅ optional with default
+    required List<double> increments,
+    Map<String, dynamic>? maxWeightByReps,
+    List<Map<String, dynamic>>? topSetHistory, // optional
+    int weekIndex = 0,
+  }) {
+    if (weekIndex == 0) {
+      print('🕓 Week 1 detected → progression disabled, using base weight: $defaultWeight');
+      return defaultWeight;
+    }
+
+    final previousReps = PeriodizationModelUtils.exercisePreviousTopSetReps[exerciseName];
+    if (previousReps == null || previousReps.isEmpty) {
+      print('🚫 No top set rep history found for $exerciseName');
+      return defaultWeight;
+    }
+
+    print('📦 [Progression] Stored top set reps for $exerciseName: $previousReps');
+    print('🔍 Looking for a match on repTarget = $repTarget');
+
+    final matchIndex = previousReps.indexWhere((r) => r == repTarget);
+
+    // 🧠 Extract increment properly like in roundToNearestValidIncrement
+    final incrementMap = _exerciseSettings[exerciseName]?['increments'] ??
+        _exerciseSettings[nameToId[exerciseName]]?['increments'];
+
+    final double increment = (incrementMap?['primary'] as num?)?.toDouble() ?? 2.5;
+
+    if (matchIndex == -1) {
+      print('🚫 No matching rep target found in history.');
+    } else {
+      final matchedReps = previousReps[matchIndex];
+      double weightUsed = defaultWeight;
+
+      if (topSetHistory != null && topSetHistory.isNotEmpty) {
+        final matchEntry = topSetHistory.firstWhere(
+              (entry) => entry['reps'] == repTarget,
+          orElse: () => {},
+        );
+        if (matchEntry.isNotEmpty && matchEntry['weight'] != null) {
+          weightUsed = (matchEntry['weight'] as num).toDouble();
+          print('📊 [Progression] Using actual weight from history: $weightUsed');
+        }
+      }
+
+      if (matchedReps >= repTarget) {
+        // ✅ Use roundToNearestValidIncrement to determine next progression step
+        // Rebuild the same options used inside roundToNearestValidIncrement
+        final id = nameToId[exerciseName];
+        final increments = _exerciseSettings[exerciseName]?['increments'] ??
+            _exerciseSettings[id]?['increments'];
+
+        final double primary = (increments?['primary'] as num?)?.toDouble() ?? 2.5;
+        final double secondary = (increments?['secondary'] as num?)?.toDouble() ?? 0.0;
+
+        final Set<double> options = {};
+
+// Build legal weight options
+        for (int i = 0; i < 150; i++) {
+          final base = 20 + i * primary;
+          options.add(double.parse(base.toStringAsFixed(1)));
+          if (secondary > 0 && secondary != primary) {
+            options.add(double.parse((base + secondary).toStringAsFixed(1)));
+          }
+        }
+
+        final sorted = options.toList()..sort();
+
+// Find the next higher weight from weightUsed
+        double nextHigher = weightUsed;
+        for (final option in sorted) {
+          if (option > weightUsed) {
+            nextHigher = option;
+            break;
+          }
+        }
+
+        print('🎯 [Progression] From $weightUsed → next available: $nextHigher');
+
+
+        if (topSetHistory != null) {
+          final higherAttempts = topSetHistory
+              .where((entry) =>
+          (entry['weight'] as num).toDouble() == nextHigher)
+              .toList();
+
+          if (higherAttempts.isNotEmpty) {
+            final bestRepsAtHigher = higherAttempts
+                .map((e) => (e['reps'] as num?)?.toInt() ?? 0)
+                .reduce((a, b) => a > b ? a : b);
+
+            if (bestRepsAtHigher < repTarget) {
+              final newReps = bestRepsAtHigher + 1;
+              print('🔁 Progressing reps at $nextHigher: $bestRepsAtHigher → $newReps');
+              return nextHigher;
+            } else {
+              final nextNextHigher = roundToNearestValidIncrement(
+                targetWeight: nextHigher + 0.1,
+                exerciseName: exerciseName,
+              );
+              print('⬆️ Target met at $nextHigher → progressing to $nextNextHigher');
+              return nextNextHigher;
+            }
+          }
+        }
+
+        print('✅ Rep target $repTarget met. Progressing from $weightUsed → next valid increment: $nextHigher');
+        return nextHigher;
+
+      } else if ((repTarget - matchedReps) <= 1) {
+        print('➕ Close miss ($matchedReps/$repTarget), keep weight $weightUsed');
+        return weightUsed;
+      } else {
+        print('⚠️ Missed badly ($matchedReps/$repTarget), retry at same weight $weightUsed');
+        return weightUsed;
+      }
+
+    }
+
+
+    if (maxWeightByReps != null &&
+        (maxWeightByReps['reps'] == repTarget || maxWeightByReps['reps'].toString() == repTarget.toString())) {
+      final fallbackWeight = (maxWeightByReps['weight'] as num?)?.toDouble() ?? defaultWeight;
+      print('🪂 Using maxWeightByReps fallback → $fallbackWeight');
+      return fallbackWeight;
+    }
+
+    print('🚨 No match found for $repTarget reps, using defaultWeight → $defaultWeight');
+    return defaultWeight;
+  }
+
+
+
+  static Map<String, dynamic> smartProgressionModel({
+    required String exerciseName,
+    required int repTarget,
+    required double defaultWeight,
+    double rirValue = 0,
+    required List<double> increments,
+    Map<String, dynamic>? maxWeightByReps,
+    List<Map<String, dynamic>>? topSetHistory,
+    int weekIndex = 0,
+  }) {
+    print('🧠 [SmartProgression] Entered smartProgressionModel for $exerciseName (week $weekIndex, repTarget: $repTarget)');
+
+    if (weekIndex == 0) {
+      print('🕓 Week 1 detected → progression disabled, using base weight: $defaultWeight');
+      return {
+        'weight': defaultWeight,
+        'reps': repTarget,
+      };
+    }
+
+    if (topSetHistory == null || topSetHistory.isEmpty) {
+      print('🚫 No top set history available.');
+      return {
+        'weight': defaultWeight,
+        'reps': repTarget,
+      };
+    }
+
+    final List<Map<String, dynamic>> historyWithE1RM = topSetHistory.map((entry) {
+      final double weight = (entry['weight'] as num?)?.toDouble() ?? 0.0;
+      final double reps = (entry['reps'] as num?)?.toDouble() ?? 0.0;
+      final double rir = (entry['rir'] as num?)?.toDouble() ?? 0;
+      final double e1rm = calculateE1RM(weight, reps, rir);
+      final double effectiveReps = reps + rir;
+      final DateTime? date = entry['date'] is DateTime
+          ? entry['date'] as DateTime
+          : DateTime.tryParse(entry['date']?.toString() ?? '');
+
+      return {
+        'weight': weight,
+        'reps': reps,
+        'rir': rir,
+        'e1rm': e1rm,
+        'effectiveReps': effectiveReps,
+        'date': date,
+      };
+    }).toList();
+
+    final List<String> lastFourCombos = historyWithE1RM
+        .take(4)
+        .map((entry) {
+      final w = (entry['weight'] as num).toStringAsFixed(1);
+      final r = (entry['reps'] as num).toString();
+      final rir = (entry['rir'] as num).toStringAsFixed(1);
+      return '$w${r}_$rir';
+    })
+        .toList();
+
+    print('🧾 [SmartProgression] Last 4 combos: $lastFourCombos');
+
+    final DateTime now = DateTime.now();
+    final double targetEffectiveReps = repTarget + 0.0;
+
+    final recentMatch = historyWithE1RM.firstWhere(
+          (entry) {
+        final date = entry['date'] as DateTime?;
+        final eReps = entry['effectiveReps'] as double;
+        return date != null &&
+            now.difference(date).inDays <= 28 &&
+            (eReps - targetEffectiveReps).abs() <= 0.5;
+      },
+      orElse: () => {},
+    );
+
+    double baseE1RM;
+
+    if (recentMatch.isNotEmpty) {
+      baseE1RM = recentMatch['e1rm'];
+      print('✅ Using recent match for base E1RM → $baseE1RM');
+    } else {
+      final recentTwoWeeks = historyWithE1RM.where((entry) {
+        final date = entry['date'] as DateTime?;
+        return date != null && now.difference(date).inDays <= 14;
+      }).toList();
+
+      if (recentTwoWeeks.isNotEmpty) {
+        baseE1RM = recentTwoWeeks.map((e) => e['e1rm'] as double).reduce((a, b) => a + b) / recentTwoWeeks.length;
+        print('📆 Averaged E1RM from past 2 weeks → $baseE1RM');
+      } else if (historyWithE1RM.length >= 4) {
+        final lastFour = historyWithE1RM.take(4).toList();
+        baseE1RM = lastFour.map((e) => e['e1rm'] as double).reduce((a, b) => a + b) / lastFour.length;
+        print('📊 Using average of last 4 E1RMs → $baseE1RM');
+      } else if (maxWeightByReps != null) {
+        baseE1RM = (maxWeightByReps['weight'] as num?)?.toDouble() ?? defaultWeight;
+        print('🪂 Using fallback maxWeightByReps → $baseE1RM');
+      } else {
+        print('🚨 No viable E1RM source. Using default weight → $defaultWeight');
+        return {
+          'weight': defaultWeight,
+          'reps': repTarget,
+        };
+      }
+    }
+
+    final validWeights = roundToAllValidIncrements(
+      baseWeight: defaultWeight,
+      exerciseName: exerciseName,
+    );
+
+    print('🔍 [SmartProgression] Valid weights for $exerciseName:\n$validWeights');
+
+    final usedCombos = PeriodizationModelUtils.getUsedWeightRepsRirTripletsForExercise(
+      exerciseName: exerciseName,
+      savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+    );
+
+    double bestWeight = defaultWeight;
+    int bestReps = repTarget;
+    double bestE1RM = baseE1RM;
+    double bestScore = double.infinity;
+
+    final sortedWeights = validWeights
+        .where((w) => (w - defaultWeight).abs() <= increments[0])
+        .toList()
+      ..sort((a, b) => (a - defaultWeight).abs().compareTo((b - defaultWeight).abs()));
+
+
+    final double base = defaultWeight;
+    final double delta = increments.firstWhere((v) => v > 0.0, orElse: () => 0);
+
+
+    final List<double> trialWeights = [
+      base - delta,
+      base,
+      base + delta,
+    ];
+
+    final List<int> trialReps = [
+      for (int d = -2; d <= 8; d++) (repTarget + d).clamp(1, 25),
+    ];
+
+    print('🧪 Diagnostic: Testing rep possibilities for weights around $defaultWeight ± $delta');
+
+    for (final w in trialWeights) {
+      print('🔍 Weight: $w');
+      for (final r in trialReps) {
+        final double trialE1RM = calculateE1RM(w, r.toDouble(), rirValue);
+        final String comboKey = '${w.toStringAsFixed(1)}_${r}_${rirValue.toStringAsFixed(1)}';
+        final double tryE1RM = calculateE1RM(w, r.toDouble(), rirValue);
+        if (tryE1RM < baseE1RM) {
+          print('⛔ Skipping combo: $w × $r (E1RM regression)');
+          continue;
+        }
+        final bool isUsed = usedCombos.contains(comboKey);
+        final String tag = isUsed ? '⛔ used' : (trialE1RM < baseE1RM ? '⬇️ regressive' : '✅ valid');
+        print('  → $w × $r = E1RM ${trialE1RM.toStringAsFixed(2)} → $tag');
+      }
+    }
+
+
+    for (final w in trialWeights) {
+
+      print('⚖️ Testing weight: $w');
+
+
+      final Set<int> repTrials = {
+        for (int d = -2; d <= 8; d++) (repTarget + d).clamp(1, 25),
+      };
+
+      for (final r in repTrials) {
+        final comboKey = '${w.toStringAsFixed(1)}_${r}_${rirValue.toStringAsFixed(1)}';
+        if (usedCombos.contains(comboKey)) {
+          print('⛔ Skipping used combo: $comboKey');
+          continue;
+        }
+
+        final double tryE1RM = calculateE1RM(w, r.toDouble(), rirValue);
+        if (tryE1RM < baseE1RM) {
+          print('⛔ Skipping combo: $w × $r (E1RM regression)');
+          continue;
+        }
+
+        final double e1rmIncrease = tryE1RM - baseE1RM;
+        final double repDistance = (r - repTarget).abs().toDouble();
+        final double weightDistance = (w - defaultWeight).abs();
+
+        // ✅ Hybrid scoring: prioritize smallest E1RM increase, but stay close to planned reps and weight
+        final double score =
+            (e1rmIncrease * 1.0) +       // primary: smallest valid increase
+                (repDistance * 0.4) +        // valued: stay close to target reps
+                (weightDistance * 0.05);     // slight preference for staying near defaultWeight
+
+
+        print('🔬 Trial: $w × $r → E1RM = ${tryE1RM.toStringAsFixed(2)} (score = ${score.toStringAsFixed(2)})');
+
+        if (score < bestScore) {
+          bestScore = score;
+          bestWeight = w;
+          bestReps = r;
+          bestE1RM = tryE1RM;
+        }
+      }
+    }
+
+    final comboKey = '${bestWeight.toStringAsFixed(1)}_${bestReps}_${rirValue.toStringAsFixed(1)}';
+    print('🔍 Final comboKey = $comboKey');
+    print('📘 Used combos: $usedCombos');
+
+    print('🎯 Smart progression chosen: weight = $bestWeight, reps = $bestReps, RIR = $rirValue, projected E1RM = $bestE1RM (base = $baseE1RM)');
+    print('🏁 Final decision: $bestWeight × $bestReps @ RIR $rirValue');
+    print('📈 E1RM = ${bestE1RM.toStringAsFixed(2)} (Base = ${baseE1RM.toStringAsFixed(2)})');
+    print('🧮 E1RM increase = ${(bestE1RM - baseE1RM).toStringAsFixed(2)}');
+
+    print('🏁 ✅ [FINAL RETURN] Returning weight = $bestWeight × $bestReps');
+
+    return {
+      'weight': bestWeight,
+      'reps': bestReps,
+    };
+  }
+
+
+
+  static Map<String, dynamic> addRepsProgressionModel({
+    required String exerciseName,
+    required int repTarget,
+    required double defaultWeight,
+    double rirValue = 0,
+    required List<double> increments,
+    Map<String, dynamic>? maxWeightByReps,
+    List<Map<String, dynamic>>? topSetHistory,
+    int weekIndex = 0,
+  }) {
+    print('🧠 [AddRepsProgression] Entered model for $exerciseName, week $weekIndex, OG reps = $repTarget');
+
+    if (weekIndex == 0) {
+      print('🕓 Week 1 detected → base weight and rep target used');
+      return {
+        'weight': defaultWeight,
+        'reps': repTarget,
+      };
+    }
+
+    // Load top set history
+    final recentSets = PeriodizationModelUtils.topSetsByExercise[exerciseName] ?? [];
+
+    if (recentSets.isEmpty) {
+      print('🚫 No previous top sets found → using default weight and reps');
+      return {
+        'weight': defaultWeight,
+        'reps': repTarget,
+      };
+    }
+
+
+// 🐞 DEBUG: Show the most recent 4 entries
+    print('🧾 [DEBUG] Top 4 sets for $exerciseName:');
+    for (int i = 0; i < recentSets.length.clamp(0, 4); i++) {
+      final set = recentSets[i];
+      final w = (set['weight'] as num?)?.toDouble() ?? 0;
+      final r = (set['reps'] as num?)?.toInt() ?? 0;
+      final rir = (set['rir'] as num?)?.toDouble() ?? 0;
+      final d = set['date'] ?? 'No Date';
+      print('  #${i + 1} → $w kg × $r @ RIR $rir on $d');
+    }
+
+    recentSets.sort((a, b) {
+      final aDate = a['date'] is DateTime ? a['date'] as DateTime : DateTime.tryParse(a['date']?.toString() ?? '') ?? DateTime(2000);
+      final bDate = b['date'] is DateTime ? b['date'] as DateTime : DateTime.tryParse(b['date']?.toString() ?? '') ?? DateTime(2000);
+      return bDate.compareTo(aDate); // descending
+    });
+
+    final latest = recentSets.first;
+
+    final double lastWeight = (latest['weight'] as num?)?.toDouble() ?? defaultWeight;
+    final int lastReps = (latest['reps'] as num?)?.toInt() ?? repTarget;
+
+    print('📦 [AddRepsProgression] Last top set: $lastWeight × $lastReps');
+
+
+    final currentE1RM = calculateE1RM(lastWeight, lastReps.toDouble(), rirValue);
+
+    print('📈 Current E1RM = ${currentE1RM.toStringAsFixed(2)} from $lastWeight × $lastReps');
+
+    // 🧠 Determine if we have top set history for the current repTarget
+    final hasMatchingReps = recentSets.any((entry) {
+      final reps = (entry['reps'] as num?)?.toInt();
+      return reps == repTarget;
+    });
+
+    if (!hasMatchingReps) {
+      // 🔍 Reverse-calculate weight from E1RM
+      final bool isNewTargetHigher = repTarget > lastReps;
+      final double adjustedE1RM = isNewTargetHigher
+          ? currentE1RM
+          : currentE1RM * 0.96; // conservative if going to lower rep target
+
+      final double estimatedWeight = reverseCalculateWeight(
+        targetE1RM: adjustedE1RM,
+        reps: repTarget,
+        rir: rirValue,
+      );
+
+      final validWeights = roundToAllValidIncrements(
+        baseWeight: estimatedWeight,
+        exerciseName: exerciseName,
+      )..sort();
+
+      final List<double> weightsBelow = validWeights.where((w) => w <= estimatedWeight).toList();
+      final List<double> weightsAbove = validWeights.where((w) => w > estimatedWeight).toList();
+
+      double chosenWeight;
+
+// Decide how to round
+      if (weightsAbove.isNotEmpty && (weightsAbove.first - estimatedWeight) < 0.3) {
+        // very close to next increment, allow rounding up
+        chosenWeight = weightsAbove.first;
+        print('🧮 Rounding up to nearest weight due to proximity → $chosenWeight');
+      } else if (weightsBelow.isNotEmpty) {
+        // round down
+        chosenWeight = weightsBelow.last;
+        print('🧮 Rounding down to $chosenWeight');
+      } else {
+        // fallback to exact estimate if no valid match
+        chosenWeight = estimatedWeight;
+        print('⚠️ No valid rounded match, using estimated weight → $chosenWeight');
+      }
+
+// Now adjust reps to match targetE1RM without going over
+      // Start from the original target reps
+      int adjustedReps = repTarget;
+      double finalE1RM = calculateE1RM(chosenWeight, adjustedReps.toDouble(), rirValue);
+
+// Increase reps until E1RM meets or slightly approaches target without exceeding
+      while (finalE1RM < adjustedE1RM && adjustedReps < 20) {
+        adjustedReps += 1;
+        finalE1RM = calculateE1RM(chosenWeight, adjustedReps.toDouble(), rirValue);
+      }
+
+// Step back if we overshot
+      if (finalE1RM > adjustedE1RM && adjustedReps > 1) {
+        adjustedReps -= 1;
+        finalE1RM = calculateE1RM(chosenWeight, adjustedReps.toDouble(), rirValue);
+      }
+
+
+      print('🎯 Final reverse-assigned: $chosenWeight kg × $adjustedReps → E1RM = ${finalE1RM.toStringAsFixed(2)} (target = ${adjustedE1RM.toStringAsFixed(2)})');
+
+      return {
+        'weight': chosenWeight,
+        'reps': adjustedReps,
+      };
+
+    }
+
+    // Build valid weight options
+    final validWeights = roundToAllValidIncrements(
+      baseWeight: defaultWeight,
+      exerciseName: exerciseName,
+    );
+    validWeights.sort();
+    final int weightIndex = validWeights.indexOf(lastWeight);
+    final double? nextWeight = (weightIndex >= 0 && weightIndex + 1 < validWeights.length)
+        ? validWeights[weightIndex + 1]
+        : null;
+
+
+    if (nextWeight == null) {
+      print('🚧 No next weight found → staying at current');
+      return {
+        'weight': lastWeight,
+        'reps': lastReps + 1,
+      };
+    }
+
+
+
+    // Gating logic
+    final int repsAboveOG = lastReps - repTarget;
+
+    List<int> allowedNextWeightRepOptions = [];
+    if (repsAboveOG >= 2) allowedNextWeightRepOptions.add(repTarget);       // OG
+    if (repsAboveOG >= 3) allowedNextWeightRepOptions.add(repTarget - 1);   // OG -1
+    if (repsAboveOG >= 4) allowedNextWeightRepOptions.add(repTarget - 2);   // OG -2
+
+    double? promotedWeight;
+    int? promotedReps;
+
+
+
+    for (final reps in allowedNextWeightRepOptions) {
+      if (reps < 1) continue;
+
+      final double tryE1RM = calculateE1RM(nextWeight, reps.toDouble(), rirValue);
+      final double threshold = tryE1RM * 1.040;
+
+      print('🧪 Trying: $nextWeight × $reps → E1RM = $tryE1RM vs current = $currentE1RM, threshold = $threshold');
+
+      print('🔍 Try $nextWeight × $reps → E1RM = ${tryE1RM.toStringAsFixed(2)}, threshold = ${threshold.toStringAsFixed(2)}');
+
+      if (currentE1RM >= threshold) {
+        print('✅ Threshold met → move to $nextWeight × $reps');
+        promotedWeight = nextWeight;
+        promotedReps = reps;
+        break; // prefer higher reps (OG > OG-1 > OG-2)
+      }
+    }
+
+    if (promotedWeight != null && promotedReps != null) {
+      return {
+        'weight': promotedWeight,
+        'reps': promotedReps,
+      };
+    }
+
+    print('➕ Staying at $lastWeight → increase reps to ${lastReps + 1}');
+    return {
+      'weight': lastWeight,
+      'reps': lastReps + 1,
+    };
+  }
+
+
+
+  static Map<String, dynamic> getWeightByProgressionModel({
+    required ProgressionModelType model,
+    required String exerciseName,
+    required int repTarget,
+    required double defaultWeight,
+    required List<double> increments,
+    Map<String, dynamic>? maxWeightByReps,
+    List<Map<String, dynamic>>? topSetHistory,
+    int weekIndex = 0,
+    // 👇 You need to add this:
+    double rirValue = 0,
+  })
+  {
+
+    print("🧪 [Routing] About to run model logic: $model");
+
+    switch (model) {
+      case ProgressionModelType.linearWeightIncrease:
+        return {
+          'weight': getProgressedWeight(
+            exerciseName: exerciseName,
+            repTarget: repTarget,
+            defaultWeight: defaultWeight,
+            increments: increments,
+            maxWeightByReps: maxWeightByReps,
+            topSetHistory: topSetHistory,
+            weekIndex: weekIndex,
+          ),
+          'reps': repTarget, // ← preserve original repTarget for now
+        };
+
+      case ProgressionModelType.smartProgression:
+        return smartProgressionModel(
+          exerciseName: exerciseName,
+          repTarget: repTarget,
+          defaultWeight: defaultWeight,
+          increments: increments,
+          maxWeightByReps: maxWeightByReps,
+          topSetHistory: topSetHistory,
+          weekIndex: weekIndex,
+          rirValue: rirValue, // ✅ add this
+
+        );
+
+      case ProgressionModelType.addRepsProgressionModel:
+        return addRepsProgressionModel(
+          exerciseName: exerciseName,
+          repTarget: repTarget,
+          defaultWeight: defaultWeight,
+          increments: increments,
+          maxWeightByReps: maxWeightByReps,
+          topSetHistory: topSetHistory,
+          weekIndex: weekIndex,
+          rirValue: rirValue,
+        );
+
+
+
+      case ProgressionModelType.none:
+        return {
+          'weight': defaultWeight,
+          'reps': repTarget,
+        };
+    }
+
+
+  }
+
+  static ProgressionModelType parseProgressionModel(String? value) {
+    switch (value?.trim()) {
+      case 'Linear Weight Increase':
+        return ProgressionModelType.linearWeightIncrease;
+      case 'Smart Progression':
+        return ProgressionModelType.smartProgression;
+      case 'Add Reps': // ✅ Add label here
+        return ProgressionModelType.addRepsProgressionModel;
+      case 'None':
+      default:
+        return ProgressionModelType.none;
+    }
+  }
+
+
 
 
   static Map<String, Map<String, String>> expandDupDailyWeek1(
@@ -696,25 +1606,14 @@ class PeriodizationModelUtils {
 
     switch (model) {
       case PeriodizationModelType.dailyUndulatingExposure:
-        return getSuggestedWeightFromRep(exerciseName, reps.toInt(), rir);
-
-
-      case PeriodizationModelType.dupSignature:
-        return getDupSignatureSet1SuggestedWeight(
-          exerciseName: exerciseName,
-          reps: reps,
-          rir: rir,
-        );
       case PeriodizationModelType.linearClassic:
-        return getSuggestedWeightFromRep(exerciseName, reps.toInt(), rir);
-
       case PeriodizationModelType.linearExposure:
-        return getSuggestedWeightFromRep(exerciseName, reps.toInt(), rir);
-
+      case PeriodizationModelType.dupSignature:
       case PeriodizationModelType.dailyUndulatingWeek:
-        return 45.0;
+        return getSuggestedWeightFromRep(exerciseName, reps.toInt(), rir);
     }
   }
+
 
 
   static double getDupSignatureSet2SuggestedWeight({
@@ -871,6 +1770,48 @@ class PeriodizationModelUtils {
     return exercisePreviousTopSetReps[exerciseName]!; // ✅ Return full list of stored reps
   }
 
+  static Future<void> fetchFullTopSetHistory() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    print('🧠 [SmartProgression] Fetching full top set history...');
+    final snapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('workouts')
+        .orderBy('date', descending: true)
+        .limit(20)
+        .get();
+
+    topSetsByExercise.clear();
+
+    for (var doc in snapshot.docs) {
+      final workout = Workout.fromFirestore(doc);
+
+      for (var exercise in workout.exercises) {
+        final String name = exercise.name;
+
+        for (var set in exercise.sets) {
+          final double weight = _parseToDouble(set.weight);
+          final double reps = _parseToDouble(set.reps);
+          final double rir = _parseToDouble(set.rir);
+
+          // Only store top sets (you can apply your own filtering logic here)
+          if (reps > 0 && weight > 0) {
+            topSetsByExercise.putIfAbsent(name, () => []);
+            topSetsByExercise[name]!.add({
+              'weight': weight,
+              'reps': reps,
+              'rir': rir,
+              'date': workout.date,
+            });
+          }
+        }
+      }
+    }
+
+    print('✅ [SmartProgression] Loaded sets for: ${topSetsByExercise.keys}');
+  }
 
   static Future<void> fetchLastWorkoutTopSetReps() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -999,6 +1940,35 @@ class PeriodizationModelUtils {
     return availableReps;
   }
 
+  //BB2 Function
+  static int getExercisePlannedCountInWeek({
+    required String exerciseName,
+    required int week,
+    required int day,
+    required int row,
+    required List<List<List<Map<String, dynamic>>>> exerciseGrid,
+  }) {
+    int count = 0;
+
+    for (int d = 0; d <= day; d++) {
+      final rows = exerciseGrid[week][d];
+      final lastRow = (d == day) ? row + 1 : rows.length; // ✅ include current row only to that point
+
+      for (int r = 0; r < lastRow; r++) {
+        final thisName = (rows[r]['exercise'] ?? '').toString().trim();
+        if (thisName == exerciseName.trim()) {
+          count++;
+          print('🔎 Match: "$thisName" == "$exerciseName" (week $week, day $d, row $r)');
+        }
+      }
+    }
+
+    final result = count - 1; // ✅ zero-based index
+    print('📊 getExercisePlannedCountInWeek → "$exerciseName" → index $result');
+    return result;
+  }
+
+
   //WES Function
   static int getInstanceCountForExerciseInBlock({
     required String exerciseName,
@@ -1043,6 +2013,8 @@ class PeriodizationModelUtils {
 
     final usedDates = <String>{};
 
+
+
     for (final workout in savedWorkouts) {
       final dateStr = workout['date'] ?? '';
       final date = DateTime.tryParse(dateStr);
@@ -1051,10 +2023,12 @@ class PeriodizationModelUtils {
       final exercises = workout['exercises'];
       if (exercises is! List) continue;
 
+      final targetId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
       final hasExercise = exercises.any((ex) {
-        final exName = ex['name']?.toString().trim();
-        return exName == exerciseName;
+        final exId = ex['exerciseId']?.toString();
+        return exId == targetId;
       });
+
 
       if (hasExercise) {
         usedDates.add(dateStr); // Count once per day
@@ -1072,6 +2046,50 @@ class PeriodizationModelUtils {
     final weekIndex = (daysSinceStart / 7).floor();
     return weekIndex.clamp(0, 11); // assuming max 12 weeks
   }
+
+  // WES and bb2 function
+
+  static Set<String> getUsedWeightRepsRirTripletsForExercise({
+    required String exerciseName,
+    required List<Map<String, dynamic>> savedWorkouts,
+  }) {
+    final Set<String> used = {};
+
+    for (final workout in savedWorkouts) {
+      final List<dynamic>? exercises = workout['exercises'];
+      if (exercises == null) {
+        print('❌ No exercises found in workout');
+        continue;
+      }
+
+      for (final ex in exercises) {
+        if (ex['name'] != exerciseName) continue;
+
+        final sets = ex['sets'] as List<dynamic>? ?? [];
+        if (sets.isEmpty) {
+          print('⚠️ No sets in ${ex['name']}');
+          continue;
+        }
+
+        // Take the best set (assume first = top set)
+        final top = sets.first;
+
+        final double? w = top['weight']?.toDouble();
+        final int? r = top['reps'];
+        final double? rir = top['rir']?.toDouble();
+
+        if (w != null && r != null && rir != null) {
+          final key = '${w.toStringAsFixed(1)}_${r}_${rir.toStringAsFixed(1)}';
+          print('✅ Used combo added from exercises: $key');
+          used.add(key);
+        }
+      }
+    }
+
+    return used;
+  }
+
+
 
 
 
@@ -1182,7 +2200,7 @@ class PeriodizationModelUtils {
     }
 
     // ✅ Step 7: Pick the Least Recently Used Rep Within That Group (Only from Available Reps)
-    List<int> candidates = repGroups[bestGroupIndex].where((rep) => availableReps.contains(rep)).toList();
+    List<int> candidates = repGroups[bestGroupIndex!].where((rep) => availableReps.contains(rep)).toList();
     candidates.sort((a, b) => pastReps.contains(a) ? 1 : -1); // ✅ Prioritize least recently used
 
     // ✅ Ensure there's at least one candidate before calling `.first`
@@ -1269,7 +2287,7 @@ class PeriodizationModelUtils {
     }
 
     // ✅ Step 7: Pick the Least Recently Used Rep Within That Group (Only from Available Reps)
-    List<int> candidates = repGroups[bestGroupIndex].where((rep) => availableReps.contains(rep)).toList();
+    List<int> candidates = repGroups[bestGroupIndex!].where((rep) => availableReps.contains(rep)).toList();
     candidates.sort((a, b) => pastReps.contains(a) ? 1 : -1); // ✅ Prioritize least recently used
 
     // ✅ Ensure there's at least one candidate before calling `.first`
@@ -1572,7 +2590,7 @@ class PeriodizationModelUtils {
       // Step 2: Apply recency constraints
       final Set<int> forbidden = {};
 
-      if (recent.isNotEmpty) {
+      if (recent.length >= 1) {
         final r = recent[0];
         forbidden.addAll([r - 2, r - 1, r, r + 1, r + 2]);
       }
@@ -1603,9 +2621,11 @@ class PeriodizationModelUtils {
         chosen = _repWithMaxDistance(valid, recent);
       }
 
-      result.add(chosen);
-      usedInCycle.add(chosen);
-    
+      if (chosen != null) {
+        result.add(chosen);
+        usedInCycle.add(chosen);
+      }
+
       // Reset cycle if all reps used once
       if (usedInCycle.length == allReps.length) {
         usedInCycle.clear();
@@ -1667,7 +2687,7 @@ class PeriodizationModelUtils {
       final candidates = List<int>.from(allReps);
       final Set<int> forbidden = {};
 
-      if (recent.isNotEmpty) {
+      if (recent.length >= 1) {
         final r = recent[0];
         forbidden.addAll([r - 2, r - 1, r, r + 1, r + 2]);
       }
@@ -1696,9 +2716,11 @@ class PeriodizationModelUtils {
         chosen = _repWithMaxDistance(valid, recent);
       }
 
-      result.add(chosen);
-      usedInCycle.add(chosen);
-    
+      if (chosen != null) {
+        result.add(chosen);
+        usedInCycle.add(chosen);
+      }
+
       if (usedInCycle.length == allReps.length) {
         usedInCycle.clear();
       }
@@ -1751,9 +2773,6 @@ class PeriodizationModelUtils {
   }
 
 
-
-
-
   static double getSuggestedWeight(
       String exerciseName,
       TextEditingController repsController,
@@ -1785,24 +2804,28 @@ class PeriodizationModelUtils {
     return (suggestedWeight / 2.5).round() * 2.5;
   }
 
+// ⬇️ Retrieves reps and RIR for progression logic
+  static Map<String, double> getActualRepsAndRir({
+    required TextEditingController repsController,
+    required TextEditingController rirController,
+    required String? plannedRep,
+    required String? plannedRir,
+  }) {
+    final repsText = repsController.text.trim();
+    final rirText = rirController.text.trim();
 
-  static double getSuggestedWeightFromRep(String exerciseName, int reps, double rir) {
-    final e1rms = exercisePreviousE1RMs[exerciseName];
-    if (e1rms == null || e1rms.isEmpty) return 20.0;
+    final reps = double.tryParse(repsText.isNotEmpty
+        ? repsText
+        : RegExp(r'^\d+').firstMatch(plannedRep ?? '')?.group(0) ?? '') ?? 0.0;
 
-    final recent = e1rms.take(4).toList();
-    final avgE1RM = recent.reduce((a, b) => a + b) / recent.length;
-    final effectiveReps = reps + rir;
+    final rir = double.tryParse(rirText.isNotEmpty
+        ? rirText
+        : plannedRir?.trim() ?? '') ?? 0.5;
 
-    double suggestedWeight;
-
-    if (effectiveReps <= 6) {
-      suggestedWeight = avgE1RM * (37 - effectiveReps) / 36;
-    } else {
-      suggestedWeight = avgE1RM / (1 + 0.0333 * effectiveReps);
-    }
-
-    return (suggestedWeight / 2.5).round() * 2.5; // round to nearest 2.5kg
+    return {
+      'reps': reps,
+      'rir': rir,
+    };
   }
 
 

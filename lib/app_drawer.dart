@@ -59,7 +59,7 @@ class AppDrawer extends StatelessWidget {
             );
           }),
           _drawerTile(context, Icons.schedule, 'Week Planner', () {
-            Navigator.pushNamed(context, '/block_builder_2');
+            Navigator.pushNamed(context, '/week_planner');
           }),
           _drawerTile(context, Icons.auto_graph, 'Workout Planner', () {
             Navigator.pushNamed(context, '/templates');
@@ -88,6 +88,12 @@ class AppDrawer extends StatelessWidget {
           _drawerTile(context, Icons.logout, 'Logout', () async {
             await FirebaseAuth.instance.signOut();
             Navigator.pushReplacementNamed(context, '/login');
+          }),
+
+          // ⚙️ Utilities section
+          const DrawerSectionHeader(title: "Testing"),
+          _drawerTile(context, Icons.adb, 'BB2 Test', () {
+            Navigator.pushNamed(context, '/BB2');
           }),
 
           const CustomDivider(),

@@ -351,7 +351,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 child: _buildFeatureCard(
                                   Icons.calendar_month,
                                   'Training\nSchedule',
-                                  '/week_planner',
+                                  '/week_planner_b',
                                 ),
                               ),
                               SizedBox(

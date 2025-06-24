@@ -14,6 +14,7 @@ import 'week_planner.dart'; // Update path if needed
 import 'planned_blocks_screen.dart';
 import 'Block_Planner.dart';
 import 'SavedWorkoutsScreen.dart';
+import 'BlockBuilder2.0.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -113,12 +114,13 @@ class MyApp extends StatelessWidget {
         '/exercises': (context) => const ExercisesScreen(),
         '/templates': (context) => const TemplatesScreen(),
         '/workouts': (context) => const WorkoutPage(),
+        '/BB2': (context) => const BlockBuilder2(),
         '/body_weight_tracker': (context) => const BodyWeightTracker(),
-        '/block_builder_2': (context) => const WeekPlanner(),
+        '/week_planner': (context) => const WeekPlanner(),
         '/planned_blocks': (context) => const PlannedBlocksScreen(),
         '/block_builder': (context) => const Block_Planner(),
         '/workout_entry':   (c) => const WorkoutPage(),                // new workout
-        '/week_planner':   (c) => const WeekPlanner(),              // training schedule
+        '/week_planner_b':   (c) => const WeekPlanner(),              // training schedule
         '/saved_workouts':  (c) => const SavedWorkoutsScreen(),        // saved workouts
         '/body_weight':     (c) => const BodyWeightTracker(),          // weight tracker
       },
