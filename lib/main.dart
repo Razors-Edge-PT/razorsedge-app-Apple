@@ -10,7 +10,6 @@ import 'home_screen.dart';
 import 'login_screen.dart';
 import 'templates.dart';
 import 'workout_entry_screen.dart';
-import 'workout_history_screen.dart';
 import 'week_planner.dart'; // Update path if needed
 import 'planned_blocks_screen.dart';
 import 'Block_Planner.dart';

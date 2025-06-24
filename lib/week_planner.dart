@@ -8,7 +8,6 @@ import 'periodization_model_utils.dart';
 import 'package:uuid/uuid.dart';
 import 'WorkoutSummaryScreen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'dart:convert';
 
 // 🧠 Group exercises by category for dropdown UI
 Map<String, List<String>> groupExercisesByCategory(
@@ -82,7 +81,7 @@ class ExerciseRow {
 
 class WeekPlanner extends StatefulWidget {
   final String? blockId;
-  const WeekPlanner({this.blockId, Key? key}) : super(key: key);
+  const WeekPlanner({this.blockId, super.key});
 
   @override
   State<WeekPlanner> createState() => _WeekPlannerState();
@@ -465,14 +464,14 @@ class _WeekPlannerState extends State<WeekPlanner> {
 
   Map<String, dynamic>? blockData;
 
-  bool _loading = true;
+  final bool _loading = true;
 
   List<String> _selectedDays = [];
   List<int> trainingWeekdays = [];
 
   DateTime? _blockStart;
   DateTime? _blockEnd;
-  List<DateTime> _trainingDates = [];
+  final List<DateTime> _trainingDates = [];
 
   @override
   void initState() {
@@ -1040,9 +1039,13 @@ class _WeekPlannerState extends State<WeekPlanner> {
 
     // 🛡️ Guard against index errors
     if (weekIndex >= exerciseRows.length ||
-        weekIndex >= circuitStartIndices.length) return;
+        weekIndex >= circuitStartIndices.length) {
+      return;
+    }
     if (dayIndex >= exerciseRows[weekIndex].length ||
-        dayIndex >= circuitStartIndices[weekIndex].length) return;
+        dayIndex >= circuitStartIndices[weekIndex].length) {
+      return;
+    }
 
     final rows = exerciseRows[weekIndex][dayIndex];
     final exercises = <Map<String, dynamic>>[];
@@ -1092,7 +1095,9 @@ class _WeekPlannerState extends State<WeekPlanner> {
 
   void _trimEmptyExerciseRows(int weekIndex, int dayIndex) {
     if (weekIndex >= exerciseRows.length ||
-        dayIndex >= exerciseRows[weekIndex].length) return;
+        dayIndex >= exerciseRows[weekIndex].length) {
+      return;
+    }
 
     final rows = exerciseRows[weekIndex][dayIndex];
 
@@ -1946,8 +1951,9 @@ class _WeekPlannerState extends State<WeekPlanner> {
 
                               final id =
                                   selectedTemplateIds[weekIndex][dayIndex];
-                              if (id == null || id.isEmpty)
+                              if (id == null || id.isEmpty) {
                                 return "Choose Workout";
+                              }
 
                               final match = templates.firstWhere(
                                 (t) => t.id == id,
@@ -2151,7 +2157,9 @@ class _WeekPlannerState extends State<WeekPlanner> {
                   onReorder: (oldIndex, newIndex) {
                     // Prevent reordering of read-only rows
                     if (oldIndex < savedWesExercises.length ||
-                        newIndex < savedWesExercises.length) return;
+                        newIndex < savedWesExercises.length) {
+                      return;
+                    }
 
                     setState(() {
                       final adjustedOld = oldIndex - savedWesExercises.length;
@@ -2249,8 +2257,9 @@ class _WeekPlannerState extends State<WeekPlanner> {
                                 starts.removeWhere((start) =>
                                     start >=
                                     exerciseRows[weekIndex][dayIndex].length);
-                                if (starts.isEmpty || starts.first != 0)
+                                if (starts.isEmpty || starts.first != 0) {
                                   starts.insert(0, 0);
+                                }
                                 circuitStartIndices[weekIndex][dayIndex] =
                                     starts.toSet().toList()..sort();
 
@@ -2258,7 +2267,9 @@ class _WeekPlannerState extends State<WeekPlanner> {
                                     futureWeek < exerciseRows.length;
                                     futureWeek++) {
                                   if (dayIndex >=
-                                      exerciseRows[futureWeek].length) continue;
+                                      exerciseRows[futureWeek].length) {
+                                    continue;
+                                  }
                                   final futureRows =
                                       exerciseRows[futureWeek][dayIndex];
                                   for (int i = futureRows.length - 1;

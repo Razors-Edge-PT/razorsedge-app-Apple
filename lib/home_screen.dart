@@ -1,13 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
-import 'body_weight_tracker.dart';
-import 'workout_details_screen.dart';
 import 'workout_entry_screen.dart';
 import 'workout_model.dart';
-import 'block_planner.dart';
-import 'SavedWorkoutsScreen.dart';
 import 'app_drawer.dart';
 import 'package:table_calendar/table_calendar.dart';
 
@@ -29,7 +24,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool isLoading = true;
   String errorMessage = '';
 
-  CalendarFormat _calendarFormat = CalendarFormat.month;
+  final CalendarFormat _calendarFormat = CalendarFormat.month;
   DateTime _focusedDay = DateTime.now();
   DateTime? _selectedDay;
   Set<DateTime> _trainingDays = {};
@@ -533,8 +528,9 @@ class _HomeScreenState extends State<HomeScreen> {
                             child: FutureBuilder<List<Map<String, dynamic>>>(
                               future: _fetchTopLifts(),
                               builder: (context, snapshot) {
-                                if (!snapshot.hasData)
+                                if (!snapshot.hasData) {
                                   return const CircularProgressIndicator();
+                                }
                                 final lifts = snapshot.data!;
                                 return Column(
                                   children: lifts

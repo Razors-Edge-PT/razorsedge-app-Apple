@@ -4,7 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 
 class PlannedBlocksScreen extends StatefulWidget {
-  const PlannedBlocksScreen({Key? key}) : super(key: key);
+  const PlannedBlocksScreen({super.key});
 
   @override
   State<PlannedBlocksScreen> createState() => _PlannedBlocksScreenState();
@@ -47,7 +47,9 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
 
       // batch‐deactivate the old one(s)
       final batch = FirebaseFirestore.instance.batch();
-      for (final doc in others) batch.update(doc.reference, {'isActive': false});
+      for (final doc in others) {
+        batch.update(doc.reference, {'isActive': false});
+      }
       await batch.commit();
     }
 

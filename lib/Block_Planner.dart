@@ -89,8 +89,8 @@ class _BlockPlannerState extends State<Block_Planner> {
   Map<String, Map<String, dynamic>> exerciseSettings = {};
 
   bool _isNewBlock = true;
-  bool _didLoadData = false;
-  bool _discardDraft = false;
+  final bool _didLoadData = false;
+  final bool _discardDraft = false;
 
 // 🔁 AUTO-SAVE & SAVE BLOCK FEATURES INTEGRATED
 // Add this inside your _BlockPlannerState class:
@@ -217,7 +217,7 @@ class _BlockPlannerState extends State<Block_Planner> {
     final blockDocRef = blockIdToUse != null
         ? userBlocksRef.doc(blockIdToUse)
         : userBlocksRef.doc();
-    if (blockIdToUse == null) blockIdToUse = blockDocRef.id;
+    blockIdToUse ??= blockDocRef.id;
 
     await blockDocRef.set({
       'name': _blockNameController.text.trim().isEmpty
@@ -1553,14 +1553,18 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
     if (parsedIncrements.isNotEmpty) {
       final Map<String, double> incrementsMap = {};
-      if (parsedIncrements.isNotEmpty)
+      if (parsedIncrements.isNotEmpty) {
         incrementsMap['primary'] = parsedIncrements[0];
-      if (parsedIncrements.length > 1)
+      }
+      if (parsedIncrements.length > 1) {
         incrementsMap['secondary'] = parsedIncrements[1];
-      if (parsedIncrements.length > 2)
+      }
+      if (parsedIncrements.length > 2) {
         incrementsMap['tertiary'] = parsedIncrements[2];
-      if (parsedIncrements.length > 3)
+      }
+      if (parsedIncrements.length > 3) {
         incrementsMap['quaternary'] = parsedIncrements[3];
+      }
 
       widget.onUpdateSetting(widget.exerciseId, 'increments', incrementsMap);
       print(
