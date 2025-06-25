@@ -1,3 +1,5 @@
+library block_builder2;
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -106,8 +108,7 @@ class BlockBuilder2 extends StatefulWidget {
   State<BlockBuilder2> createState() => _BlockBuilder2State();
 }
 
-class _BlockBuilder2State extends State<BlockBuilder2>
-    with BlockBuilderDataLoader {
+class _BlockBuilder2State extends State<BlockBuilder2> {
   late final BlockPlannerRepository _repo;
   List<String> _selectedDays = [];
   String? _activeBlockId;
@@ -2313,8 +2314,10 @@ class _BlockBuilder2State extends State<BlockBuilder2>
         DateFormat('E d MMM y').format(date); // e.g., "Mon 17 Mar 2025"
 
     return StatefulBuilder(builder: (context, localSetState) {
-      final meta =
-          (plannedExerciseDetails['blockMeta'] ?? {}) as Map<String, dynamic>;
+       final dynamic rawMeta = plannedExerciseDetails['blockMeta'];
+       final Map<String, dynamic> meta = rawMeta is Map
+           ? Map<String, dynamic>.from(rawMeta)
+           : <String, dynamic>{};
       final blockStart = DateTime.tryParse(meta['blockStartDate'] ?? '');
       final blockEnd = DateTime.tryParse(meta['blockEndDate'] ?? '');
       final blockLength = PeriodizationModelUtils.getBlockLength(
