@@ -3269,116 +3269,113 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                               const SizedBox(height: 2),
                               Padding(
                                 padding: const EdgeInsets.symmetric(horizontal: 1),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  crossAxisAlignment: CrossAxisAlignment.center, // ✅ Center vertically
-                                  children: [
-                                    // ➡️ Previous Rep Targets + Available Rep Targets (on the LEFT)
-                                    Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                              () {
-                                            final exerciseName = _selectedExercisesWithCircuits[i]['name']?.trim() ?? '';
-                                            final targetWeight = set1SuggestedWeight(i);
-                                            final history = PeriodizationModelUtils.topSetsByExercise[exerciseName] ?? [];
+                                child: SingleChildScrollView(
+                                  scrollDirection: Axis.horizontal,
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    crossAxisAlignment: CrossAxisAlignment.center, // ✅ Center vertically
+                                    children: [
+                                      // ➡️ Previous Rep Targets + Available Rep Targets (on the LEFT)
+                                      Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                                () {
+                                              final exerciseName = _selectedExercisesWithCircuits[i]['name']?.trim() ?? '';
+                                              final targetWeight = set1SuggestedWeight(i);
+                                              final history = PeriodizationModelUtils.topSetsByExercise[exerciseName] ?? [];
 
-                                            // Filter to sets at this exact weight
-                                            final matchingSets = history
-                                                .where((s) => (s['weight'] as double).toStringAsFixed(1) == targetWeight.toStringAsFixed(1))
-                                                .toList();
+                                              final matchingSets = history
+                                                  .where((s) => (s['weight'] as double).toStringAsFixed(1) == targetWeight.toStringAsFixed(1))
+                                                  .toList();
 
-                                            if (matchingSets.isEmpty) return 'No previous sets at ${targetWeight.toStringAsFixed(1)} kg';
+                                              if (matchingSets.isEmpty) return 'No previous sets at ${targetWeight.toStringAsFixed(1)} kg';
 
-                                            // Sort by reps descending, then lowest RIR
-                                            matchingSets.sort((a, b) {
-                                              final repsA = a['reps'] ?? 0.0;
-                                              final repsB = b['reps'] ?? 0.0;
-                                              final rirA = a['rir'] ?? 99.0;
-                                              final rirB = b['rir'] ?? 99.0;
+                                              matchingSets.sort((a, b) {
+                                                final repsA = a['reps'] ?? 0.0;
+                                                final repsB = b['reps'] ?? 0.0;
+                                                final rirA = a['rir'] ?? 99.0;
+                                                final rirB = b['rir'] ?? 99.0;
 
-                                              // Prefer more reps, then lower RIR
-                                              if (repsB.compareTo(repsA) != 0) return repsB.compareTo(repsA);
-                                              return rirA.compareTo(rirB);
-                                            });
+                                                if (repsB.compareTo(repsA) != 0) return repsB.compareTo(repsA);
+                                                return rirA.compareTo(rirB);
+                                              });
 
-                                            final best = matchingSets.first;
-                                            final reps = best['reps'];
-                                            final rir = best['rir'];
+                                              final best = matchingSets.first;
+                                              final reps = best['reps'];
+                                              final rir = best['rir'];
 
-                                            return 'Best at ${targetWeight.toStringAsFixed(1)} kg: $reps reps @ RIR $rir';
-                                          }(),
-                                          style: const TextStyle(
-                                            fontSize: 10.0,
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.white24,
+                                              return 'Best at ${targetWeight.toStringAsFixed(1)} kg: $reps reps @ RIR $rir';
+                                            }(),
+                                            style: const TextStyle(
+                                              fontSize: 10.0,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.white24,
+                                            ),
                                           ),
-                                        ),
 
-                                        const SizedBox(height: 0),
-                                        Builder(
-                                          builder: (context) {
-                                            final exerciseName = _selectedExercisesWithCircuits[i]['name']?.trim() ?? '';
-                                            final repTarget = set1SuggestedReps(i).round();
-                                            final history = PeriodizationModelUtils.topSetsByExercise[exerciseName] ?? [];
+                                          const SizedBox(height: 0),
+                                          Builder(
+                                            builder: (context) {
+                                              final exerciseName = _selectedExercisesWithCircuits[i]['name']?.trim() ?? '';
+                                              final repTarget = set1SuggestedReps(i).round();
+                                              final history = PeriodizationModelUtils.topSetsByExercise[exerciseName] ?? [];
 
-                                            // Filter sets that exactly match the rep target
-                                            final matchingSets = history.where((s) {
-                                              final reps = (s['reps'] as num?)?.round();
-                                              return reps == repTarget;
-                                            }).toList();
+                                              final matchingSets = history.where((s) {
+                                                final reps = (s['reps'] as num?)?.round();
+                                                return reps == repTarget;
+                                              }).toList();
 
-                                            if (matchingSets.isEmpty) {
+                                              if (matchingSets.isEmpty) {
+                                                return Text(
+                                                  'No previous sets at $repTarget reps',
+                                                  style: const TextStyle(
+                                                    fontSize: 10.0,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: Colors.white54,
+                                                  ),
+                                                );
+                                              }
+
+                                              matchingSets.sort((a, b) {
+                                                final wa = a['weight'] ?? 0.0;
+                                                final wb = b['weight'] ?? 0.0;
+                                                return (wb as num).compareTo(wa as num);
+                                              });
+
+                                              final best = matchingSets.first;
+                                              final weight = best['weight'];
+                                              final rir = best['rir'];
+
                                               return Text(
-                                                'No previous sets at $repTarget reps',
+                                                'Best at $repTarget reps: ${weight.toStringAsFixed(1)} kg @ RIR ${rir.toString()}',
                                                 style: const TextStyle(
                                                   fontSize: 10.0,
                                                   fontWeight: FontWeight.bold,
                                                   color: Colors.white54,
                                                 ),
                                               );
-                                            }
-
-                                            // Sort by weight descending
-                                            matchingSets.sort((a, b) {
-                                              final wa = a['weight'] ?? 0.0;
-                                              final wb = b['weight'] ?? 0.0;
-                                              return (wb as num).compareTo(wa as num);
-                                            });
-
-                                            final best = matchingSets.first;
-                                            final weight = best['weight'];
-                                            final rir = best['rir'];
-
-                                            return Text(
-                                              'Best at $repTarget reps: ${weight.toStringAsFixed(1)} kg @ RIR ${rir.toString()}',
-                                              style: const TextStyle(
-                                                fontSize: 10.0,
-                                                fontWeight: FontWeight.bold,
-                                                color: Colors.white54,
-                                              ),
-                                            );
-                                          },
-                                        ),
-
-                                      ],
-                                    ),
-
-                                    // ➡️ Spacer to push Avg E1RM to the right
-                                    const Spacer(),
-
-                                    // ➡️ Avg E1RM (on the RIGHT)
-                                    Text(
-                                      'Avg E1RM: ${getAverageE1RM(_selectedExercisesWithCircuits[i]['name'] ?? '').toStringAsFixed(1)}Kg',
-                                      style: const TextStyle(
-                                        fontSize: 12.0,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.blueGrey,
+                                            },
+                                          ),
+                                        ],
                                       ),
-                                    ),
-                                  ],
+
+                                      const SizedBox(width: 12), // ✅ Optional spacing between sections
+
+                                      // ➡️ Avg E1RM (on the RIGHT)
+                                      Text(
+                                        'Avg E1RM: ${getAverageE1RM(_selectedExercisesWithCircuits[i]['name'] ?? '').toStringAsFixed(1)}Kg',
+                                        style: const TextStyle(
+                                          fontSize: 12.0,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.blueGrey,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
+
                               const SizedBox(height: 1),
                             ],
 
