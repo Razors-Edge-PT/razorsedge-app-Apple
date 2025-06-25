@@ -1753,8 +1753,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
             'rir': bestSet.rir,
           };
         }).where((e) => e != null).toList(),
-
+        // ← collection-if: only include when date actually changed
+        if (_selectedDate != widget.initialDate)
+          'reschedule': {
+            'from': widget.initialDate!,
+            'to':   _selectedDate,
+          },
       });
+
       await clearWorkoutDraftCache(); // ✅ Clear saved draft once workout is committed
       print('Draft cache cleared after workout save.');
 

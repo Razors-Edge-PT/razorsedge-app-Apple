@@ -14,7 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'block_planner_repository.dart';
 import 'block_repository.dart';
-
+import 'package:collection/collection.dart';
 
 Map<String, List<String>> groupExercisesByCategory(
     List<Map<String, String>> allExercises) {
@@ -80,6 +80,22 @@ class ExerciseRow {
       : id = id ?? const Uuid().v4(); // <-- generate if not provided
 }
 
+class BlockMeta {
+  final String id;
+  final String name;
+  final DateTime startDate;
+  final DateTime endDate;
+  final List<String> selectedDays;
+
+  BlockMeta({
+    required this.id,
+    required this.name,
+    required this.startDate,
+    required this.endDate,
+    required this.selectedDays,
+  });
+}
+
 class BlockBuilder2 extends StatefulWidget {
   final String? blockId;
   const BlockBuilder2({this.blockId, Key? key}) : super(key: key);
@@ -93,6 +109,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   List<String> _selectedDays = [];
   String? _activeBlockId;
   bool _loading = true;
+  List<BlockMeta> _allBlocks = [];
+  String? _selectedBlockId;
 
   final int initialWeeks = 12;
   int visibleWeekCount = 2; // Initially load 3 weeks
@@ -191,10 +209,21 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   @override
   void initState() {
     super.initState();
-
     _repo = BlockPlannerRepository();
-
-    _initialLoad = _fetchActiveBlockThenMeta();
+    // Fetch the active block → then load the list of all blocks using that active ID
+    // Combine both futures into one that completes only after BOTH steps:
+    _initialLoad = Future.wait([
+      _fetchActiveBlockThenMeta(), // sets _activeBlockId, blockStart/end, etc.
+      _loadAllBlocks(), // then loads all BlockMetas into _allBlocks
+    ]).then((_) {
+      // after both have completed, pick a default selectedBlock
+      setState(() {
+        _selectedBlockId = _allBlocks
+            .firstWhere((b) => b.id == _activeBlockId,
+                orElse: () => _allBlocks.first)
+            .id;
+      });
+    });
 
     _horizontalScrollController.addListener(() {
       final maxScroll = _horizontalScrollController.position.maxScrollExtent;
@@ -244,10 +273,41 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
   Future<void> _loadActiveBlockId() async {
     final repo = BlockRepository();
-    final id   = await repo.fetchActiveBlockId();
+    final id = await repo.fetchActiveBlockId();
     setState(() {
       _activeBlockId = id;
-      _loading       = false;
+      _loading = false;
+    });
+  }
+
+  Future<void> _loadAllBlocks() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final snap = await FirebaseFirestore.instance
+        .collection('planned_blocks') // ✅ correct root
+        .doc(user.uid)
+        .collection('blocks')
+        .get();
+
+    print(
+        '🔍 Loaded ${snap.docs.length} blocks: ${snap.docs.map((d) => d.id)}');
+
+    final blocks = snap.docs
+        .map((d) => BlockMeta(
+              id: d.id,
+              name: d['name'],
+              startDate: (d['startDate'] as Timestamp).toDate(),
+              endDate: (d['endDate'] as Timestamp).toDate(),
+              selectedDays: List<String>.from(d['selectedDays'] ?? []),
+            ))
+        .toList();
+
+    setState(() {
+      _allBlocks = blocks;
+      _selectedBlockId = blocks
+          .firstWhere((b) => b.id == _activeBlockId, orElse: () => blocks.first)
+          .id;
     });
   }
 
@@ -268,8 +328,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
     // 4️⃣ stash the dates & selected days
     blockStartDate = meta.startDate;
-    blockEndDate   = meta.endDate;
-    _selectedDays  = meta.selectedDays;
+    blockEndDate = meta.endDate;
+    _selectedDays = meta.selectedDays;
 
     // ← compute your Mon→Sun bounds, totalWeeks and weekIndices
     _computeWeekBounds();
@@ -277,18 +337,20 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     // 5️⃣ initialize your per-week/day arrays using the now-correct totalWeeks
     exerciseRows = List.generate(
       totalWeeks,
-          (_) => List.generate(7, (_) => [
-        ExerciseRow(circuitIndex: 0),
-        ExerciseRow(circuitIndex: 0),
-      ]),
+      (_) => List.generate(
+          7,
+          (_) => [
+                ExerciseRow(circuitIndex: 0),
+                ExerciseRow(circuitIndex: 0),
+              ]),
     );
     selectedTemplateIds = List.generate(
       totalWeeks,
-          (_) => List.filled(7, null),
+      (_) => List.filled(7, null),
     );
     circuitStartIndices = List.generate(
       totalWeeks,
-          (_) => List.generate(7, (_) => [0]),
+      (_) => List.generate(7, (_) => [0]),
     );
 
     // 6️⃣ now load everything else
@@ -296,19 +358,57 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   }
 
   void _computeWeekBounds() {
-    // 1) find the Monday on or before blockStartDate
+    // 1) get Monday on-or-before blockStart
     final startOffset = (blockStartDate.weekday - DateTime.monday + 7) % 7;
     _displayStart = blockStartDate.subtract(Duration(days: startOffset));
 
-    // 2) find the Sunday on or after blockEndDate
+    // 2) get Sunday on-or-after blockEnd
     final endOffset = (DateTime.sunday - blockEndDate.weekday + 7) % 7;
     _displayEnd = blockEndDate.add(Duration(days: endOffset));
 
-    // 3) compute how many FULL weeks that spans
+    // 3) how many days total (inclusive)
     final totalDays = _displayEnd.difference(_displayStart).inDays + 1;
 
-    // 4) rebuild your index list
+    // ← MISSING ←
+    // 4) how many full weeks?
+    totalWeeks = totalDays ~/ 7;
+    // 5) build your index list
+    weekIndices = List.generate(totalWeeks, (i) => i);
   }
+
+  /// Moves everything you had on [from] to [to], and clears the original day.
+  // void _shiftTrainingDay({required DateTime from, required DateTime to}) {
+  //   // compute zero‐based day offsets relative to your display window
+  //   final int fromOffset = from.difference(_displayStart).inDays;
+  //   final int toOffset   = to.difference(_displayStart).inDays;
+  //
+  //   if (fromOffset < 0 ||
+  //       toOffset   < 0 ||
+  //       fromOffset >= totalWeeks * 7 ||
+  //       toOffset   >= totalWeeks * 7) return;
+  //
+  //   final int fromWeek = fromOffset ~/ 7;
+  //   final int fromDay  = fromOffset % 7;
+  //   final int toWeek   = toOffset ~/ 7;
+  //   final int toDay    = toOffset % 7;
+  //
+  //   setState(() {
+  //     // 1️⃣ grab all the data
+  //     final movedRows       = exerciseRows[fromWeek][fromDay];
+  //     final movedTemplateId = selectedTemplateIds[fromWeek][fromDay];
+  //     final movedCircuits   = circuitStartIndices[fromWeek][fromDay];
+  //
+  //     // 2️⃣ clear the original
+  //     exerciseRows[fromWeek][fromDay]       = <ExerciseRow>[];
+  //     selectedTemplateIds[fromWeek][fromDay] = null;
+  //     circuitStartIndices[fromWeek][fromDay] = [0];
+  //
+  //     // 3️⃣ inject into the new spot
+  //     exerciseRows[toWeek][toDay]       = movedRows;
+  //     selectedTemplateIds[toWeek][toDay] = movedTemplateId;
+  //     circuitStartIndices[toWeek][toDay] = movedCircuits;
+  //   });
+  // }
 
 // 1) New helper for days outside the block:
   Widget _buildOutsideDayRow(DateTime date) {
@@ -318,7 +418,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
-        color: Colors.grey.shade900,            // dark grey fill
+        color: Colors.grey.shade900, // dark grey fill
         border: Border.all(color: Colors.grey), // pale grey outline
         borderRadius: BorderRadius.circular(6),
       ),
@@ -332,11 +432,10 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     );
   }
 
-  Widget _buildWeek(int weekIndex, Map<String,dynamic> repTargets) {
+  Widget _buildWeek(int weekIndex, Map<String, dynamic> repTargets) {
     assert(_displayStart != null, "You must call _computeWeekBounds() first!");
 
-    final weekStart = _displayStart!
-        .add(Duration(days: weekIndex * 7));
+    final weekStart = _displayStart!.add(Duration(days: weekIndex * 7));
 
     // ─── now you will ALWAYS get Mon→Sun ───────────────────────────────
     return SizedBox(
@@ -344,8 +443,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: List.generate(7, (dow) {
-          final date    = weekStart.add(Duration(days: dow));
-          final dayAbbrev = DateFormat('E').format(date).substring(0,3);
+          final date = weekStart.add(Duration(days: dow));
+          final dayAbbrev = DateFormat('E').format(date).substring(0, 3);
 
           // ─── completely outside your block: just show the date box ─────
           if (date.isBefore(blockStartDate) || date.isAfter(blockEndDate)) {
@@ -649,12 +748,16 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
+    final blockId = _selectedBlockId!;
+
     final doc = await FirebaseFirestore.instance
-        .collection('users')
+        .collection('planned_blocks')
         .doc(user.uid)
-        .collection('block_planner')
-        .doc('current_block')
+        .collection('blocks')
+        .doc(blockId)
         .get();
+
+    if (!doc.exists) return;
 
     final data = doc.data();
     if (data == null) return;
@@ -806,19 +909,21 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    final doc = await FirebaseFirestore.instance
+    final docSnap = await FirebaseFirestore.instance
         .collection('users')
         .doc(user.uid)
         .collection('block_planner')
         .doc('current_block')
         .get();
 
-    if (doc.exists) {
-      final data = doc.data();
-      if (data != null && data['plannedExercises'] != null) {
-        plannedExercises = List<String>.from(data['plannedExercises']);
-      }
-    }
+    if (!docSnap.exists) return;
+
+    // 1) top-level cast
+    final data = Map<String, dynamic>.from(docSnap.data()!);
+
+    // 2) safely pull out your list of strings
+    final rawPlanned = data['plannedExercises'] as List<dynamic>? ?? [];
+    plannedExercises = rawPlanned.whereType<String>().toList();
 
     setState(() {});
   }
@@ -828,7 +933,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
       for (int week = 0; week < weekIndices.length; week++) {
-        final weekStartDate =  _displayStart.add(Duration(days: week * 7));
+        final weekStartDate = _displayStart.add(Duration(days: week * 7));
         if (weekStartDate.isAfter(blockEndDate)) {
           print('⛔ Skipping week_$week — outside block range.');
           continue;
@@ -951,203 +1056,70 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   }
 
   //Big function, calls full week
-
   Future<void> loadBlockDataFromFirestore() async {
-    final stopwatch = Stopwatch()..start();
-    print('⏳ [BB2] Starting loadBlockDataFromFirestore');
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    final weekSnapshots = await FirebaseFirestore.instance
+    // get all week docs
+    final weekSnaps = await FirebaseFirestore.instance
         .collection('users')
         .doc(user.uid)
         .collection('block_data')
         .doc('current_block')
         .collection('weeks')
         .get();
-    print('🧩 Found ${weekSnapshots.docs.length} week documents');
 
-    for (final weekDoc in weekSnapshots.docs) {
-      final weekIndex = int.tryParse(weekDoc.id.replaceAll('week_', '')) ?? 0;
-      final daySnapshots = await weekDoc.reference.collection('days').get();
-      print(
-          '📆 Week $weekIndex → ${daySnapshots.docs.length} day docs [${stopwatch.elapsedMilliseconds}ms]');
+    for (final weekDoc in weekSnaps.docs) {
+      final weekIndex = int.parse(weekDoc.id.replaceFirst('week_', ''));
 
-      for (final dayDoc in daySnapshots.docs) {
-        final dayIndex = int.tryParse(dayDoc.id.replaceAll('day_', '')) ?? 0;
-        final data = dayDoc.data();
+      // no need to cast weekDoc.data() here; you only need it if you treat it as a map of maps
+      final daysSnaps = await weekDoc.reference.collection('days').get();
+      for (final dayDoc in daysSnaps.docs) {
+        final dayIndex = int.parse(dayDoc.id.replaceFirst('day_', ''));
 
-        final parseStart = stopwatch.elapsedMilliseconds;
-        final exercises =
-            List<Map<String, dynamic>>.from(data['exercises'] ?? []);
-        final savedCircuitIndices =
-            List<int>.from(data['circuitStartIndices'] ?? [0]);
+        // 1) cast the top-level day data
+        final rawDay = Map<String, dynamic>.from(dayDoc.data());
 
-        final List<ExerciseRow> loadedRows = [];
+        // 2) cast your exercises list
+        final rawExercises = rawDay['exercises'] as List<dynamic>? ?? [];
+        final exercises = rawExercises.map((e) {
+          return Map<String, dynamic>.from(e as Map<dynamic, dynamic>);
+        }).toList();
 
-        for (int i = 0; i < exercises.length; i++) {
-          final ex = exercises[i];
-          final name = (ex['name'] ?? '').toString().trim();
-          if (name.isEmpty) continue;
+        // 3) cast your circuitStartIndices if you need them
+        final rawCircuits =
+            rawDay['circuitStartIndices'] as List<dynamic>? ?? [];
+        final circuits = rawCircuits.whereType<int>().toList();
+
+        // … now you can build your ExerciseRow list without errors:
+        final loadedRows = <ExerciseRow>[];
+        for (var ex in exercises) {
+          final name = ex['name'] as String? ?? '';
+          final weight = (ex['weight'] as num?)?.toDouble() ?? 0.0;
+          final reps = (ex['reps'] as num?)?.toInt() ?? 0;
+          final rir = (ex['rir'] as num?)?.toDouble() ?? 0.0;
+          final circuitIndex = ex['circuitIndex'] as int? ?? 0;
 
           final row = ExerciseRow(
-            id: const Uuid().v4(),
             exercise: name,
-            circuitIndex: ex.containsKey('circuitIndex')
-                ? ex['circuitIndex']
-                : _getCircuitIndexForRow(i, savedCircuitIndices),
+            circuitIndex: circuitIndex,
           );
-
-          row.exerciseController.text = name;
-          final dynamic rawWeight = ex['weight'];
-          final dynamic rawReps = ex['reps'];
-          final dynamic rawRIR = ex['rir'];
-
-          final double? weightVal =
-              rawWeight != null ? double.tryParse(rawWeight.toString()) : null;
-          final int? repsVal =
-              rawReps != null ? int.tryParse(rawReps.toString()) : null;
-          final double? rirVal =
-              rawRIR != null ? double.tryParse(rawRIR.toString()) : null;
-
-// ✅ Only populate if user likely typed something in (i.e., not default 0)
-          if (weightVal != null && weightVal != 0.0) {
-            row.weightController.text = weightVal.toString();
-          }
-          if (repsVal != null && repsVal != 0) {
-            row.repsController.text = repsVal.toString();
-          }
-          if (rirVal != null && rirVal != 0.0) {
-            row.rirController.text = rirVal.toString();
-          }
-
-          final rowIndex = loadedRows.length;
-          final baseKey = 'w${weekIndex}_d${dayIndex}_r$rowIndex';
-
-          if (row.weightController.text.trim().isNotEmpty &&
-              double.tryParse(row.weightController.text.trim()) != null &&
-              double.tryParse(row.weightController.text.trim()) != 0.0) {
-            _savedFields['${baseKey}_weight'] = true;
-          }
-
-          if (row.repsController.text.trim().isNotEmpty &&
-              int.tryParse(row.repsController.text.trim()) != null &&
-              int.tryParse(row.repsController.text.trim()) != 0) {
-            _savedFields['${baseKey}_reps'] = true;
-          }
-
-          if (row.rirController.text.trim().isNotEmpty &&
-              double.tryParse(row.rirController.text.trim()) != null) {
-            _savedFields['${baseKey}_rir'] = true;
-          }
+          row.weightController.text = weight > 0 ? weight.toString() : '';
+          row.repsController.text = reps > 0 ? reps.toString() : '';
+          row.rirController.text = rir > 0 ? rir.toString() : '';
 
           loadedRows.add(row);
         }
 
-        print(
-            '[Parse] Week $weekIndex Day $dayIndex parse time: ${stopwatch.elapsedMilliseconds - parseStart}ms');
-
-        // ⛓ Assign to map
-
         exerciseRows[weekIndex][dayIndex] = loadedRows;
-        print(
-            '[BLOCK LOAD] Week $weekIndex, Day $dayIndex loaded ${loadedRows.length} rows from block_data');
-
-        for (final row in loadedRows) {
-          print(
-              '  • ${row.exercise} | weight: ${row.weightController.text} | reps: ${row.repsController.text} | RIR: ${row.rirController.text}');
-        }
-
-        final List<int> newStarts = [];
-        int? lastCircuit;
-        for (int i = 0; i < loadedRows.length; i++) {
-          final currentCircuit = loadedRows[i].circuitIndex;
-          if (i == 0 || currentCircuit != lastCircuit) {
-            newStarts.add(i);
-            lastCircuit = currentCircuit;
-          }
-        }
-
-        _ensureCircuitStartIndicesInitialized(weekIndex, dayIndex);
-        circuitStartIndices[weekIndex][dayIndex] = newStarts;
-
-// 🔁 Inject saved WES workout override logic
-        final DateTime date =
-        _displayStart.add(Duration(days: weekIndex * 7 + dayIndex));
-        final String dateKey = DateFormat('yyyy-MM-dd').format(date);
-
-        final wesStart = stopwatch.elapsedMilliseconds;
-
-        print('[WES Check] Checking for saved workout on $dateKey...');
-        print('[WES OVERRIDE] blockStartDate = $blockStartDate');
-        print('[WES OVERRIDE] dateKey = $dateKey');
-
-        final workoutDoc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .collection('workouts')
-            .doc(dateKey)
-            .get();
-
-        if (!workoutDoc.exists) {
-          print('[WES Check] No saved workout for $dateKey.');
-        } else {
-          print(
-              '[WES Check] Found saved WES workout. Attempting to override...');
-        }
-
-// 🕓 Print how long this WES lookup took
-        print(
-            '[WES Check] Week $weekIndex Day $dayIndex override time: ${stopwatch.elapsedMilliseconds - wesStart}ms');
-
-        if (workoutDoc.exists) {
-          final workoutData = workoutDoc.data();
-          final savedExercises =
-              List<Map<String, dynamic>>.from(workoutData?['exercises'] ?? []);
-
-          print(
-              '[WES OVERRIDE] Overriding Week $weekIndex, Day $dayIndex with ${savedExercises.length} WES exercises');
-
-          for (int i = 0; i < savedExercises.length; i++) {
-            final ex = savedExercises[i];
-            final name = ex['name'] ?? '';
-            final circuit = ex['circuitIndex'] ?? 0;
-            final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? []);
-
-            ExerciseRow? matchingRow;
-            try {
-              matchingRow = loadedRows.firstWhere(
-                (r) => r.exercise == name && r.circuitIndex == circuit,
-              );
-            } catch (_) {
-              matchingRow = null;
-            }
-
-            if (matchingRow == null || sets.isEmpty) continue;
-
-            final rowIndex = loadedRows.indexOf(matchingRow);
-            final baseKey = 'w${weekIndex}_d${dayIndex}_r$rowIndex';
-
-            matchingRow.weightController.text =
-                sets[0]['weight']?.toString() ?? '';
-            matchingRow.repsController.text = sets[0]['reps']?.toString() ?? '';
-            matchingRow.rirController.text = sets[0]['rir']?.toString() ?? '';
-
-            _savedFields['${baseKey}_weight'] = true;
-            _savedFields['${baseKey}_reps'] = true;
-            _savedFields['${baseKey}_rir'] = true;
-          }
-        }
+        circuitStartIndices[weekIndex][dayIndex] = circuits;
       }
     }
 
-    print(
-        '✅ [BB2] loadBlockDataFromFirestore done in ${stopwatch.elapsedMilliseconds}ms');
     setState(() {});
   }
 
   // Week specific function, calls current week on start up and triggered by page scroll
-
   Future<void> loadBlockDataForWeek(int weekIndex) async {
     final stopwatch = Stopwatch()..start();
     print('⏳ [BB2] Starting loadBlockDataForWeek($weekIndex)');
@@ -1156,10 +1128,10 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     if (user == null) return;
 
     final weekRef = FirebaseFirestore.instance
-        .collection('users')
+        .collection('planned_blocks')
         .doc(user.uid)
-        .collection('block_data')
-        .doc('current_block')
+        .collection('blocks')
+        .doc(_selectedBlockId!)
         .collection('weeks')
         .doc('week_$weekIndex');
 
@@ -1273,72 +1245,57 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
       // 🔁 Inject saved WES workout override logic
       final DateTime date =
-      _displayStart.add(Duration(days: weekIndex * 7 + dayIndex));
+          _displayStart.add(Duration(days: weekIndex * 7 + dayIndex));
       final String dateKey = DateFormat('yyyy-MM-dd').format(date);
 
       final workoutDoc = await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
-          .collection('workouts')
-          .doc(dateKey)
+          .collection('block_data')
+          .doc('current_block')
+          .collection('weeks')
+          .doc('week_$weekIndex')
+          .collection('days')
+          .doc('day_$dayIndex')
           .get();
 
-      if (!workoutDoc.exists) {
-        print('[WES Check] No saved workout for $dateKey.');
-      } else {
-        print('[WES Check] Found saved WES workout. Attempting to override...');
-      }
+      if (!workoutDoc.exists) return;
 
-      if (workoutDoc.exists) {
-        final workoutData = workoutDoc.data();
-        final savedExercises =
-            List<Map<String, dynamic>>.from(workoutData?['exercises'] ?? []);
+      final workoutRaw = Map<String, dynamic>.from(workoutDoc.data()!);
+      final savedExercises =
+          List<Map<String, dynamic>>.from(workoutRaw['exercises'] ?? []);
 
-        print(
-            '[WES OVERRIDE] Overriding Week $weekIndex, Day $dayIndex with ${savedExercises.length} WES exercises');
+      for (final ex in savedExercises) {
+        final name = ex['name'] as String? ?? '';
+        final circuit = ex['circuitIndex'] as int? ?? 0;
+        final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? []);
 
-        for (int i = 0; i < savedExercises.length; i++) {
-          final ex = savedExercises[i];
-          final name = ex['name'] ?? '';
-          final circuit = ex['circuitIndex'] ?? 0;
-          final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? []);
-
-          ExerciseRow? matchingRow;
-          try {
-            matchingRow = loadedRows.firstWhere(
-              (r) => r.exercise == name && r.circuitIndex == circuit,
-            );
-          } catch (_) {
-            matchingRow = null;
-          }
-
-          if (matchingRow == null || sets.isEmpty) continue;
-
-          final rowIndex = loadedRows.indexOf(matchingRow);
-          final baseKey = 'w${weekIndex}_d${dayIndex}_r${rowIndex}';
-
-          matchingRow.weightController.text =
-              sets[0]['weight']?.toString() ?? '';
-          matchingRow.repsController.text = sets[0]['reps']?.toString() ?? '';
-          matchingRow.rirController.text = sets[0]['rir']?.toString() ?? '';
-
-          _savedFields['${baseKey}_weight'] = true;
-          _savedFields['${baseKey}_reps'] = true;
-          _savedFields['${baseKey}_rir'] = true;
-
-          print("Overrode with WES: ${matchingRow.exercise}, "
-              "${matchingRow.weightController.text}, "
-              "${matchingRow.repsController.text}, "
-              "${matchingRow.rirController.text}");
-          print(
-              '[Override Attempt] Exercise: $name, Circuit: $circuit, Sets: $sets');
+        // OPTION A: Use try/catch
+        ExerciseRow? matchingRow;
+        try {
+          matchingRow = loadedRows.firstWhere(
+            (r) => r.exercise == name && r.circuitIndex == circuit,
+          );
+        } catch (_) {
+          matchingRow = null;
         }
-      }
-    }
 
-    print(
-        '✅ [BB2] loadBlockDataForWeek($weekIndex) done in ${stopwatch.elapsedMilliseconds}ms');
-    setState(() {});
+        if (matchingRow == null || sets.isEmpty) continue;
+
+        final rowIndex = loadedRows.indexOf(matchingRow);
+        final baseKey = 'w${weekIndex}_d${dayIndex}_r${rowIndex}';
+
+        matchingRow.weightController.text = sets[0]['weight']?.toString() ?? '';
+        matchingRow.repsController.text = sets[0]['reps']?.toString() ?? '';
+        matchingRow.rirController.text = sets[0]['rir']?.toString() ?? '';
+
+        _savedFields['${baseKey}_weight'] = true;
+        _savedFields['${baseKey}_reps'] = true;
+        _savedFields['${baseKey}_rir'] = true;
+      }
+
+      setState(() {});
+    }
   }
 
   Future<void> loadVisibleWeeksOnly() async {
@@ -1524,6 +1481,60 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     }
   }
 
+  Future<void> _reloadForBlock(String blockId) async {
+    setState(() {
+      _loading = true;
+    });
+
+    // 1) clear out everything
+    exerciseRows.clear();
+    selectedTemplateIds.clear();
+    circuitStartIndices.clear();
+    loadedWeekIndices.clear();
+    _cachedProgressedValues.clear();
+    plannedExerciseDetails.clear();
+
+    // 2) load the new block’s meta
+    final meta = await _repo.loadBlockMeta(
+      userId: FirebaseAuth.instance.currentUser!.uid,
+      blockId: blockId,
+    );
+
+    blockStartDate = meta.startDate;
+    blockEndDate = meta.endDate;
+    _selectedDays = meta.selectedDays;
+
+    // 3) recompute how many weeks we now have
+    _computeWeekBounds();
+
+    // 4) **re‐initialize your per‐week/day arrays** for the new totalWeeks:
+    exerciseRows = List.generate(
+      totalWeeks,
+      (_) => List.generate(
+          7,
+          (_) => [
+                ExerciseRow(circuitIndex: 0),
+                ExerciseRow(circuitIndex: 0),
+              ]),
+    );
+    selectedTemplateIds = List.generate(
+      totalWeeks,
+      (_) => List.filled(7, null),
+    );
+    circuitStartIndices = List.generate(
+      totalWeeks,
+      (_) => List.generate(7, (_) => [0]),
+    );
+
+    // 5) now pull in all of your Firestore + template + WES + progression data
+    await loadAllData();
+
+    // 6) finally, turn off the loading spinner
+    setState(() {
+      _loading = false;
+    });
+  }
+
   Future<void> _persistSavedFieldKeysForDay(int week, int day) async {
     final prefs = await SharedPreferences.getInstance();
     final keysForDay = _savedFields.entries
@@ -1544,6 +1555,59 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         _savedFields[fk] = true;
       }
     }
+  }
+
+  /// Move one day’s plan from [from] → [to], bumping anything in the target
+  /// forward by one day if there’s a collision, then reload both weeks.
+  Future<void> _rescheduleWorkoutDay({
+    required DateTime from,
+    required DateTime to,
+  }) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    final blockId = _selectedBlockId!; // make sure this is set
+    final blockDoc = FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(user.uid)
+        .collection('blocks')
+        .doc(blockId);
+    final weeksCol = blockDoc.collection('weeks');
+
+    // compute old / new week/day indices
+    final oldOffset = from.difference(blockStartDate).inDays;
+    final oldW = oldOffset ~/ 7;
+    final oldD = oldOffset % 7;
+
+    final newOffset = to.difference(blockStartDate).inDays;
+    final newW = newOffset ~/ 7;
+    final newD = newOffset % 7;
+
+    // load & delete old
+    final oldRef =
+        weeksCol.doc('week_$oldW').collection('days').doc('day_$oldD');
+    final oldSnap = await oldRef.get();
+    if (!oldSnap.exists) return;
+    final data = oldSnap.data()!;
+    await oldRef.delete();
+
+    // if the new slot is already taken, bump *that* one forward recursively
+    final newRef =
+        weeksCol.doc('week_$newW').collection('days').doc('day_$newD');
+    if ((await newRef.get()).exists) {
+      final collided = blockStartDate.add(Duration(days: newW * 7 + newD));
+      await _rescheduleWorkoutDay(
+          from: collided, to: collided.add(const Duration(days: 1)));
+    }
+
+    // write your original payload into its new home
+    await newRef.set(data);
+
+    // reload both weeks in memory & UI
+    await Future.wait([
+      loadBlockDataForWeek(oldW),
+      loadBlockDataForWeek(newW),
+    ]);
+    setState(() {});
   }
 
   Future<void> saveDayToFirestore(int weekIndex, int dayIndex) async {
@@ -1580,16 +1644,16 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     }
 
     final weekDocRef = FirebaseFirestore.instance
-        .collection('users')
+        .collection('planned_blocks')
         .doc(user.uid)
-        .collection('block_data')
-        .doc('current_block')
+        .collection('blocks')
+        .doc(_selectedBlockId!)
         .collection('weeks')
         .doc('week_$weekIndex');
 
     await weekDocRef.set({'exists': true}, SetOptions(merge: true));
 
-    final date =  _displayStart.add(Duration(days: weekIndex * 7 + dayIndex));
+    final date = _displayStart.add(Duration(days: weekIndex * 7 + dayIndex));
     final workoutName =
         "${DateFormat('EEE d MMM').format(date)} - Week ${weekIndex + 1}";
 
@@ -1629,7 +1693,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       });
     }
 
-    final date =  _displayStart.add(Duration(days: weekIndex * 7 + dayIndex));
+    final date = _displayStart.add(Duration(days: weekIndex * 7 + dayIndex));
     final dateKey = DateFormat('yyyy-MM-dd').format(date);
 
     final dayData = {
@@ -1668,62 +1732,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       circuitStartIndices[weekIndex]
           [dayIndex] = starts.toSet().toList()..sort();
     }
-  }
-
-  Future<void> deleteAllBlockAndWorkoutData() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    final userDoc =
-        FirebaseFirestore.instance.collection('users').doc(user.uid);
-
-    // 🧹 1. Delete all workouts
-    final workoutsSnapshot = await userDoc.collection('workouts').get();
-    for (final doc in workoutsSnapshot.docs) {
-      await doc.reference.delete();
-    }
-    print("🗑️ All workouts deleted.");
-
-    // 🧹 2. Delete block_data > current_block > weeks > days
-    final currentBlockDoc =
-        userDoc.collection('block_data').doc('current_block');
-    final weeksSnapshot = await currentBlockDoc.collection('weeks').get();
-
-    for (final weekDoc in weeksSnapshot.docs) {
-      final daysSnapshot = await weekDoc.reference.collection('days').get();
-      for (final dayDoc in daysSnapshot.docs) {
-        await dayDoc.reference.delete();
-      }
-      await weekDoc.reference.delete();
-    }
-
-    await currentBlockDoc.delete();
-    print("🧼 All block data deleted.");
-  }
-
-  Future<void> deleteBlockBuilderDataOnly() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    final currentBlockDoc = FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .collection('block_data')
-        .doc('current_block');
-
-    final weeksSnapshot = await currentBlockDoc.collection('weeks').get();
-
-    for (final weekDoc in weeksSnapshot.docs) {
-      final daysSnapshot = await weekDoc.reference.collection('days').get();
-      for (final dayDoc in daysSnapshot.docs) {
-        await dayDoc.reference.delete();
-      }
-      await weekDoc.reference.delete();
-    }
-
-    await currentBlockDoc
-        .delete(); // Optional: keep this if you want to remove the doc shell
-    print("🧼 BlockBuilder-only data deleted.");
   }
 
   void clearDay(int weekIndex, int dayIndex) {
@@ -2509,10 +2517,10 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
   Widget _buildDayView(
       int weekIndex, int dayIndex, Map<String, dynamic> repTargetsByExercise) {
-
     // 1️⃣ Compute this day’s date and abbrev:
-    final date   =  _displayStart.add(Duration(days: weekIndex * 7 + dayIndex));
-    final abbrev = DateFormat('E').format(date).substring(0,3); // "Mon","Tue",…
+    final date = _displayStart.add(Duration(days: weekIndex * 7 + dayIndex));
+    final abbrev =
+        DateFormat('E').format(date).substring(0, 3); // "Mon","Tue",…
     final dateKey = DateFormat('yyyy-MM-dd').format(date);
 
     // 2️⃣ If this weekday isn’t selected, show a Rest-Day stub:
@@ -2591,6 +2599,27 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                       const SizedBox(height: 0),
                       Row(
                         children: [
+                          IconButton(
+                            icon: Icon(Icons.calendar_today,
+                                size: 18, color: Colors.white70),
+                            tooltip: "Reschedule this day",
+                            onPressed: () async {
+                              final newDate = await showDatePicker(
+                                context: context,
+                                initialDate: date,
+                                firstDate: blockStartDate
+                                    .subtract(const Duration(days: 7)),
+                                lastDate:
+                                    blockEndDate.add(const Duration(days: 7)),
+                              );
+                              if (newDate != null && newDate != date) {
+                                print("Rescheduling from $date to $newDate");
+                                await _rescheduleWorkoutDay(
+                                    from: date, to: newDate);
+                                // _rescheduleWorkoutDay already calls setState at the end
+                              }
+                            },
+                          ),
                           Text(
                             '  $dayLabel',
                             style: const TextStyle(
@@ -2795,13 +2824,14 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                                 workoutDate.isBefore(yesterday);
 
                             if (isOlderThanYesterday) {
-                              final user = FirebaseAuth.instance.currentUser;
-                              final userDoc = FirebaseFirestore.instance
-                                  .collection('users')
-                                  .doc(user!.uid);
-                              final dayDoc = await userDoc
-                                  .collection('block_data')
-                                  .doc('current_block')
+                              final user = FirebaseAuth.instance.currentUser!;
+                              final blockId =
+                                  _selectedBlockId!; // or however you’re storing the active block
+                              final dayDoc = await FirebaseFirestore.instance
+                                  .collection('planned_blocks')
+                                  .doc(user.uid)
+                                  .collection('blocks')
+                                  .doc(blockId)
                                   .collection('weeks')
                                   .doc('week_$weekIndex')
                                   .collection('days')
@@ -2859,6 +2889,14 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                               await saveDayToFirestore(weekIndex, dayIndex);
                               setState(() {});
                             }
+
+                            // 2) now check for a date move
+                            if (result.containsKey('reschedule')) {
+                              final from =
+                                  result['reschedule']['from'] as DateTime;
+                              final to = result['reschedule']['to'] as DateTime;
+                            }
+
                             print('[BB2] Passing to WES:');
                             for (var ex in prefilled) {
                               print(
@@ -3658,7 +3696,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     });
   }
 
-
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<void>(
@@ -3673,7 +3710,80 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
         return Scaffold(
           appBar: AppBar(
-            title: const Text("Block Builder 2.0"),
+            title: _allBlocks.isEmpty
+                ? const Text("Block Builder 2")
+                : Row(
+                    children: [
+                      Expanded(
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            // 1️⃣ make it fill the row
+                            isExpanded: true,
+
+                            // 2️⃣ current selection
+                            value: _selectedBlockId,
+                            style: const TextStyle(color: Colors.white),
+                            iconEnabledColor: Colors.white,
+                            dropdownColor: Colors.blueGrey.shade900,
+
+                            // 3️⃣ build each menu item, with a check icon on the active one
+                            items: _allBlocks.map((b) {
+                              return DropdownMenuItem<String>(
+                                value: b.id,
+                                child: Row(
+                                  children: [
+                                    if (b.id == _activeBlockId)
+                                      const Icon(
+                                        Icons.check_circle,
+                                        size: 16,
+                                        color: Colors.lightGreenAccent,
+                                      ),
+                                    if (b.id == _activeBlockId)
+                                      const SizedBox(width: 4),
+                                    Text(b.name,
+                                        style: const TextStyle(
+                                            color: Colors.white)),
+                                  ],
+                                ),
+                              );
+                            }).toList(),
+
+                            // 4️⃣ also show the check-icon in the closed header
+                            selectedItemBuilder: (context) {
+                              return _allBlocks.map((b) {
+                                return Row(
+                                  children: [
+                                    if (b.id == _activeBlockId)
+                                      const Icon(
+                                        Icons.check_circle,
+                                        size: 16,
+                                        color: Colors.lightGreenAccent,
+                                      ),
+                                    if (b.id == _activeBlockId)
+                                      const SizedBox(width: 4),
+                                    Text(b.name,
+                                        style: const TextStyle(
+                                            color: Colors.white)),
+                                  ],
+                                );
+                              }).toList();
+                            },
+
+                            // 5️⃣ on change remains the same
+                            onChanged: (newId) {
+                              if (newId == null || newId == _selectedBlockId)
+                                return;
+                              setState(() {
+                                _loading = true;
+                                _selectedBlockId = newId;
+                              });
+                              _reloadForBlock(newId);
+                            },
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
             actions: [
               IconButton(
                 icon: const Icon(Icons.undo),
@@ -3683,11 +3793,10 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                         _lastUndoAction?.call();
                         _lastUndoAction = null;
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                              content: Text("✅ Last action undone.")),
-                        );
+                            const SnackBar(
+                                content: Text("✅ Last action undone.")));
                       }
-                    : null, // Disable button if nothing to undo
+                    : null,
               ),
               IconButton(
                 icon: const Icon(Icons.delete_outline),
@@ -3709,38 +3818,10 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                       ],
                     ),
                   );
-
-                  if (confirm == true) {
-                    await deleteBlockBuilderDataOnly();
-
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                          content: Text('🧼 BlockBuilder data deleted.')),
-                    );
-
-                    setState(() {
-                      exerciseRows = List.generate(
-                        initialWeeks,
-                        (_) => List.generate(
-                            7,
-                            (_) => [
-                                  ExerciseRow(circuitIndex: 0),
-                                  ExerciseRow(circuitIndex: 0),
-                                ]),
-                      );
-
-                      selectedTemplateIds = List.generate(
-                          initialWeeks, (_) => List.generate(7, (_) => null));
-                      circuitStartIndices = List.generate(
-                          initialWeeks, (_) => List.generate(7, (_) => [0]));
-                      scheduledRepTargets.clear();
-                      _lastUndoAction = null;
-                    });
-                  }
                 },
               ),
             ],
-          ),
+          ), // ← end AppBar
           body: GestureDetector(
             onTap: () => FocusScope.of(context).unfocus(), // ✅ Dismiss keyboard
             child: SingleChildScrollView(
