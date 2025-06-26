@@ -1,0 +1,134 @@
+[33m505bfec[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mRichardVersion[m[33m, [m[1;31morigin/RichardVersion[m[33m)[m HEAD@{0}: reset: moving to 505bfecd274050d30e90f054694d7d26b6f6a521
+[33m505bfec[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mRichardVersion[m[33m, [m[1;31morigin/RichardVersion[m[33m)[m HEAD@{1}: reset: moving to 505bfecd274050d30e90f054694d7d26b6f6a521
+[33m505bfec[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mRichardVersion[m[33m, [m[1;31morigin/RichardVersion[m[33m)[m HEAD@{2}: checkout: moving from RichardVersion to RichardVersion
+[33m505bfec[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mRichardVersion[m[33m, [m[1;31morigin/RichardVersion[m[33m)[m HEAD@{3}: branch: Reset to origin/RichardVersion
+[33m505bfec[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mRichardVersion[m[33m, [m[1;31morigin/RichardVersion[m[33m)[m HEAD@{4}: commit: FINALLY Linear by week is working!
+[33m47dda6e[m HEAD@{5}: commit: Dailyundualting by exposure AND Daily undulating by week is working for good, across weeks
+[33m18a24bd[m HEAD@{6}: commit: Daily undulating by exposure working for good, across all weeks
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{7}: checkout: moving from RichardVersion to RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{8}: checkout: moving from 0f70b3997e43d0710ebb5a3aaeca79e4027d2485 to RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{9}: checkout: moving from RichardVersion to 0f70b3997e43d0710ebb5a3aaeca79e4027d2485
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{10}: checkout: moving from RE-Sandbox to RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{11}: checkout: moving from RichardVersion to RE-Sandbox
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{12}: checkout: moving from attemptfix to RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{13}: checkout: moving from RichardVersion to attemptfix
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{14}: checkout: moving from RichardVersion to RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{15}: branch: Reset to origin/RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{16}: checkout: moving from RichardVersion to RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{17}: branch: Reset to origin/RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{18}: reset: moving to 0f70b3997e43d0710ebb5a3aaeca79e4027d2485
+[33mcf09dd3[m HEAD@{19}: checkout: moving from workout-test-dev-backup to RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{20}: checkout: moving from RichardVersion to workout-test-dev-backup
+[33mcf09dd3[m HEAD@{21}: checkout: moving from RE-Sandbox to RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{22}: checkout: moving from RichardVersion to RE-Sandbox
+[33mcf09dd3[m HEAD@{23}: checkout: moving from workout-test-dev-backup to RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{24}: merge origin/RichardVersion: Fast-forward
+[33ma41fc55[m[33m ([m[1;31morigin/workout-test-dev-backup[m[33m)[m HEAD@{25}: checkout: moving from workout-test-dev to workout-test-dev-backup
+[33m5909920[m[33m ([m[1;31morigin/workout-test-dev[m[33m, [m[1;32mworkout-test-dev[m[33m)[m HEAD@{26}: checkout: moving from RichardVersion to workout-test-dev
+[33mcf09dd3[m HEAD@{27}: checkout: moving from cdd42b1034396a5ea289572fbefd71c0546101c2 to RichardVersion
+[33mcdd42b1[m HEAD@{28}: checkout: moving from RE-Sandbox to cdd42b1034396a5ea289572fbefd71c0546101c2
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{29}: checkout: moving from RichardVersion to RE-Sandbox
+[33mcf09dd3[m HEAD@{30}: reset: moving to cf09dd3e3213be469b97ab134220a7d0d0140679
+[33m99f9e71[m HEAD@{31}: reset: moving to 99f9e71b4626df05d4885d959801a67db2825ac2
+[33m99f9e71[m HEAD@{32}: checkout: moving from RE-Sandbox to RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{33}: checkout: moving from RichardVersion to RE-Sandbox
+[33m99f9e71[m HEAD@{34}: commit (merge): Merge remote-tracking branch 'origin/RichardVersion' into RichardVersion
+[33m3437cc1[m HEAD@{35}: commit: Test red save button body weight
+[33mcf09dd3[m HEAD@{36}: checkout: moving from RE-Sandbox to RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{37}: rebase (finish): returning to refs/heads/RE-Sandbox
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{38}: rebase (start): checkout origin/RichardVersion
+[33m86c9d30[m HEAD@{39}: checkout: moving from RichardVersion to RE-Sandbox
+[33mcf09dd3[m HEAD@{40}: checkout: moving from RE-Sandbox to RichardVersion
+[33m86c9d30[m HEAD@{41}: checkout: moving from RichardVersion to RE-Sandbox
+[33mcf09dd3[m HEAD@{42}: rebase (finish): returning to refs/heads/RichardVersion
+[33mcf09dd3[m HEAD@{43}: rebase (pick): Test pink
+[33mcdd42b1[m HEAD@{44}: rebase (pick): DUP custom, Linear Classic, Linear Exposure, all working across weeks in bb2.
+[33m9571d94[m HEAD@{45}: rebase (pick): Improvements to BP to show chosen rep target better in UI, effected firstorage. most models closer to working in bb2 now. audit to come next, then fixes for each
+[33m8adb342[m HEAD@{46}: rebase (pick): Got linear by classic working across instacnes
+[33mf816b8b[m HEAD@{47}: rebase (pick): Got linear by exposure updated and working, only first instance of an exercise however
+[33mf621540[m HEAD@{48}: rebase (pick): Exercise specific rep targets loading in bb2 according to periodization model utils and BP. DUP standard not using user entered values. linear classic not working, DUP custom not working.
+[33m2a3b226[m HEAD@{49}: rebase (pick): Blockplanner work to make exe3rcise details persist.
+[33m632dabc[m HEAD@{50}: rebase (pick): still problems with synching bb2 to wes. seems to resolved one way now, huge progess. tested in many different scenarios, seems robust. next step: get WES saved data to show in bb2, and be the appropriate color. great work today.
+[33m55ebb2b[m HEAD@{51}: rebase (pick): Fixed big problem with synching workouts from bb2 to WES, and keeping draft workouts from WES persist until end of day. working now yay
+[33m20e5e63[m HEAD@{52}: rebase (pick): DUP custom, Linear classic and linear exposure set up in blockplanner. need to finalise lay out. Then wire to WES and BB2.
+[33md688072[m HEAD@{53}: rebase (pick): Got linear classsisc and dup signature started
+[33m0ebdcd2[m HEAD@{54}: rebase (pick): Working on periodisation models and block planner. In the process of adding Linear, classic, linear, exposure, and DUP custom
+[33m0f15d43[m HEAD@{55}: rebase (pick): Working on globalising periodization logic to periodization_model_utils, all hint text logic succesfully moved there now and working. next to design different models to choose from per exercise. choosing in blockplanner
+[33m002356e[m HEAD@{56}: rebase (pick): Made a better version of workouthistory, called saved workouts. keeping workouthistory page still, still useful while coding. not sure of what to call this.
+[33m45e755f[m HEAD@{57}: rebase (pick): Tidied templates screen (workout planner screen)
+[33md16a57e[m HEAD@{58}: rebase (pick): More polish to workoutentry screen. Fixed exercises screen
+[33md4efc52[m HEAD@{59}: rebase (pick): Small UI tweaks to workout entry screen
+[33mdec9d12[m HEAD@{60}: rebase (pick): Bunch of work done. changes templates page, changed planned exercise storage to be via uniquie ID in firestore, updated blockplanner, blockbuilder2.0, and workoutentry screen accordingly
+[33m256d13f[m HEAD@{61}: rebase (pick): Fixed block builder: circuit labels working, future weeks reorganising based off current week selection. clear day fucntion fixed. add exercise to circuit fixed.
+[33m58fede2[m HEAD@{62}: rebase (pick): Persistent state added to workoutentryscreen. Working on persistent data per exercise next. when exiting and re-entering the page, previous unsaved exercise selection now persists. added global debounce function
+[33mf81a951[m HEAD@{63}: rebase (pick): Circuit logic in workoutentryscreen implemented. working.
+[33m7116e0c[m HEAD@{64}: rebase (pick): migrating workoutentry screen to circuit logic, at the moment no bugs, but not fully migrated
+[33m42d1fbd[m HEAD@{65}: rebase (pick): templates updated, (now showing as workout planner in UI) synched with blockbuilder, wokring nicely
+[33m7d0d8db[m HEAD@{66}: rebase (pick): Reorderable rows for exercises replaced drag and drop - cleaner
+[33m79d3e5e[m HEAD@{67}: rebase (pick): Everything a little tidier. undo button added to both pages
+[33m3001735[m HEAD@{68}: rebase (pick): Updated save to blockbuilder function from workout entry screen, working perfectly now
+[33m5f069ea[m HEAD@{69}: rebase (pick): improved workout entry layout. linked blockplanner to blockbuilder2.0.
+[33m9dea4e4[m HEAD@{70}: rebase (pick): Fixed log in
+[33m86ca275[m HEAD@{71}: rebase (pick): Changed overall color scheme across app, much better
+[33m4eb5c46[m HEAD@{72}: rebase (pick): exercise grouping added. most uptodate blockbuilder2.0
+[33mb72aaf1[m HEAD@{73}: rebase (pick): Blockbuilder2.0 faster
+[33m76b753d[m HEAD@{74}: rebase (pick): periodization_model_utils.dart a bit smarter and has rep target sequence generator built into it.
+[33m1a99ca0[m HEAD@{75}: rebase (pick): Blockbuilder2.0 rep rogression scheme over full 12 weeks in progress
+[33mac83729[m HEAD@{76}: rebase (pick): Remove google-services.json from version control
+[33m36f9398[m HEAD@{77}: rebase (pick): New blockbuilder2.0 working well.
+[33m86c9d30[m HEAD@{78}: rebase (start): checkout refs/remotes/origin/RE-Sandbox
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{79}: commit: Test pink
+[33m0dcc9ed[m HEAD@{80}: commit: DUP custom, Linear Classic, Linear Exposure, all working across weeks in bb2.
+[33m776c9ae[m HEAD@{81}: commit: Improvements to BP to show chosen rep target better in UI, effected firstorage. most models closer to working in bb2 now. audit to come next, then fixes for each
+[33m5146219[m HEAD@{82}: commit: Got linear by classic working across instacnes
+[33m4938b64[m HEAD@{83}: commit: Got linear by exposure updated and working, only first instance of an exercise however
+[33md1fb0e8[m HEAD@{84}: commit: Exercise specific rep targets loading in bb2 according to periodization model utils and BP. DUP standard not using user entered values. linear classic not working, DUP custom not working.
+[33md75b286[m HEAD@{85}: commit: Blockplanner work to make exe3rcise details persist.
+[33md924088[m HEAD@{86}: commit: still problems with synching bb2 to wes. seems to resolved one way now, huge progess. tested in many different scenarios, seems robust. next step: get WES saved data to show in bb2, and be the appropriate color. great work today.
+[33mcd9c468[m HEAD@{87}: commit: Fixed big problem with synching workouts from bb2 to WES, and keeping draft workouts from WES persist until end of day. working now yay
+[33mf68ae85[m HEAD@{88}: commit: DUP custom, Linear classic and linear exposure set up in blockplanner. need to finalise lay out. Then wire to WES and BB2.
+[33m057b266[m HEAD@{89}: commit: Got linear classsisc and dup signature started
+[33m3c397ec[m HEAD@{90}: commit: Working on periodisation models and block planner. In the process of adding Linear, classic, linear, exposure, and DUP custom
+[33m1816965[m HEAD@{91}: commit: Working on globalising periodization logic to periodization_model_utils, all hint text logic succesfully moved there now and working. next to design different models to choose from per exercise. choosing in blockplanner
+[33mb731a0e[m HEAD@{92}: commit: Made a better version of workouthistory, called saved workouts. keeping workouthistory page still, still useful while coding. not sure of what to call this.
+[33m47f3d6d[m HEAD@{93}: commit: Tidied templates screen (workout planner screen)
+[33m2201011[m HEAD@{94}: commit: More polish to workoutentry screen. Fixed exercises screen
+[33md2194ef[m HEAD@{95}: commit: Small UI tweaks to workout entry screen
+[33m8624a66[m HEAD@{96}: commit: Bunch of work done. changes templates page, changed planned exercise storage to be via uniquie ID in firestore, updated blockplanner, blockbuilder2.0, and workoutentry screen accordingly
+[33m1e97582[m HEAD@{97}: commit: Fixed block builder: circuit labels working, future weeks reorganising based off current week selection. clear day fucntion fixed. add exercise to circuit fixed.
+[33mf12d7d8[m HEAD@{98}: commit: Persistent state added to workoutentryscreen. Working on persistent data per exercise next. when exiting and re-entering the page, previous unsaved exercise selection now persists. added global debounce function
+[33m74dfbff[m HEAD@{99}: commit: Circuit logic in workoutentryscreen implemented. working.
+[33m3bfe872[m HEAD@{100}: commit: migrating workoutentry screen to circuit logic, at the moment no bugs, but not fully migrated
+[33mca629be[m HEAD@{101}: commit: templates updated, (now showing as workout planner in UI) synched with blockbuilder, wokring nicely
+[33m647a853[m HEAD@{102}: commit: Reorderable rows for exercises replaced drag and drop - cleaner
+[33mb075a3f[m HEAD@{103}: commit: Everything a little tidier. undo button added to both pages
+[33me28c9e9[m HEAD@{104}: commit: Updated save to blockbuilder function from workout entry screen, working perfectly now
+[33m0b35c08[m HEAD@{105}: commit: improved workout entry layout. linked blockplanner to blockbuilder2.0.
+[33m2b5c48b[m HEAD@{106}: commit (amend): Fixed log in
+[33m3082978[m HEAD@{107}: commit: Fixed log in
+[33m8b49315[m HEAD@{108}: commit: Changed overall color scheme across app, much better
+[33mf15d6b5[m HEAD@{109}: commit: exercise grouping added. most uptodate blockbuilder2.0
+[33m32e3251[m HEAD@{110}: commit: Blockbuilder2.0 faster
+[33m6fcab9a[m HEAD@{111}: commit: periodization_model_utils.dart a bit smarter and has rep target sequence generator built into it.
+[33m7f05f90[m HEAD@{112}: merge origin/RichardVersion: Merge made by the 'ort' strategy.
+[33m4f7aa2b[m HEAD@{113}: commit: Blockbuilder2.0 rep rogression scheme over full 12 weeks in progress
+[33m67cb455[m HEAD@{114}: commit: Remove google-services.json from version control
+[33m41cc5be[m HEAD@{115}: commit: New blockbuilder2.0 working well.
+[33mb9cd88f[m HEAD@{116}: commit: New blockbuilder2.0 improved a little, have used miro as a wireframe to work from
+[33md9dc3e2[m HEAD@{117}: commit: New blockbuilder2.0 page begun
+[33m196a581[m HEAD@{118}: commit: UI errors gone,
+[33m8ea254f[m HEAD@{119}: commit: Blockbuilderscreen added
+[33madff672[m HEAD@{120}: commit: New E1RM formula working. dynamic changes to weight based off user input in reps and/or RIR.
+[33m02a87e1[m HEAD@{121}: commit (merge): Merge remote-tracking branch 'origin/workout-test-dev-backup' into RichardVersion
+[33me9541b8[m HEAD@{122}: checkout: moving from RichardVersion to RichardVersion
+[33me9541b8[m HEAD@{123}: branch: Reset to origin/RichardVersion
+[33me9541b8[m HEAD@{124}: commit: New E1RM formula working. dynamic changes to weight based off user input in reps and/or RIR.
+[33maed29eb[m HEAD@{125}: merge origin/RichardVersion: Fast-forward
+[33m45d984a[m[33m ([m[1;32mmaster[m[33m)[m HEAD@{126}: checkout: moving from master to RichardVersion
+[33m45d984a[m[33m ([m[1;32mmaster[m[33m)[m HEAD@{127}: checkout: moving from RichardVersion to master
+[33m45d984a[m[33m ([m[1;32mmaster[m[33m)[m HEAD@{128}: checkout: moving from master to RichardVersion
+[33m45d984a[m[33m ([m[1;32mmaster[m[33m)[m HEAD@{129}: checkout: moving from RichardVersion to master
+[33m45d984a[m[33m ([m[1;32mmaster[m[33m)[m HEAD@{130}: checkout: moving from master to RichardVersion
+[33m45d984a[m[33m ([m[1;32mmaster[m[33m)[m HEAD@{131}: checkout: moving from RichardVersion to master
+[33m45d984a[m[33m ([m[1;32mmaster[m[33m)[m HEAD@{132}: checkout: moving from master to RichardVersion
+[33m45d984a[m[33m ([m[1;32mmaster[m[33m)[m HEAD@{133}: clone: from https://github.com/LobsangR/RE-test.git

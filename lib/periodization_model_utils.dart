@@ -1205,11 +1205,13 @@ class PeriodizationModelUtils {
 
     final double lastWeight = (latest['weight'] as num?)?.toDouble() ?? defaultWeight;
     final int lastReps = (latest['reps'] as num?)?.toInt() ?? repTarget;
+    final double lastRIR = (latest['rir'] as num?)?.toDouble() ?? rirValue; // ✅ fallback still respected
 
-    print('📦 [AddRepsProgression] Last top set: $lastWeight × $lastReps');
+
+    print('📦 [AddRepsProgression] Last top set: $lastWeight × $lastReps @ RIR $lastRIR');
 
 
-    final currentE1RM = calculateE1RM(lastWeight, lastReps.toDouble(), rirValue);
+    final currentE1RM = calculateE1RM(lastWeight, lastReps.toDouble(), lastRIR); // ✅ real RIR
 
     print('📈 Current E1RM = ${currentE1RM.toStringAsFixed(2)} from $lastWeight × $lastReps');
 

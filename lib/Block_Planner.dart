@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'template_model.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'workout_entry_screen.dart';
 import 'periodization_model_utils.dart';
+import 'core_exercises.dart';
 import 'dart:convert';
 import 'package:flutter/services.dart';
+import 'periodization_model_utils.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'week_planner.dart';
 import 'package:uuid/uuid.dart';
@@ -14,6 +18,8 @@ class Block_Planner extends StatefulWidget {
 
   @override
   State<Block_Planner> createState() => _BlockPlannerState();
+
+
 }
 
 class _BlockPlannerState extends State<Block_Planner> {
@@ -79,6 +85,7 @@ class _BlockPlannerState extends State<Block_Planner> {
   }
 
   String _repsText = '';
+
 
   DateTime? _blockStartDate;
   DateTime? _blockEndDate;
@@ -257,6 +264,9 @@ class _BlockPlannerState extends State<Block_Planner> {
       _repsText = reps.join(', ');
     });
   }
+
+
+
 
   List<int> _parseHistoryInput(String input) {
     return input
@@ -562,9 +572,25 @@ class _BlockPlannerState extends State<Block_Planner> {
         ) ??
         [];
 
-    setState(() {
-      exercises = selected; // 🧠 Now saving IDs
-    });
+    // ✅ Only apply changes if user selected at least one item
+    if (selected.isNotEmpty) {
+      setState(() {
+        exercises = selected;
+
+        for (final id in selected) {
+          final match = exercisesFromFirestore.firstWhere(
+                (ex) => ex['id'] == id,
+            orElse: () => {}, // ✅ Works with match.isNotEmpty
+          );
+
+          if (match.isNotEmpty) {
+            _exerciseIdToName[id] = match['name']!;
+            exerciseSettings.putIfAbsent(id, () => {});
+          }
+        }
+      });
+    }
+
   }
 
   Future<void> _savePlannedExercises() async {
@@ -639,22 +665,27 @@ class _BlockPlannerState extends State<Block_Planner> {
       }
 
       if (entry['periodizationModel'] == 'DUP, Signature') {
+
         existingDetails[exercise] = {
           'periodizationModel': 'DUP, Signature',
-          'repTargets':
-              entry['repTargets'], // ← include the correct full structure
-          'progressionModel': entry['progressionModel'] ?? 'linear',
+          'repTargets': entry['repTargets'], // ← include the correct full structure
+          'rirPlan': entry['rirPlan'], // ✅ Add this
+          'rirModel': entry['rirModel'], // ✅ add this line
+          'progressionModel': entry['progressionModel'] ?? 'Linear Weight Increase',
           'increments': entry['increments'] ?? {'week': 2.5, 'block': 5.0},
           'weeklyFrequency': entry['weeklyFrequency'] ?? 3,
           'maxWeightXReps': entry['maxWeightXReps'] ?? '',
           'notes': entry['notes'] ?? '',
         };
-      } else {
+      }
+      else {
         existingDetails[exercise] = {
           'periodizationModel':
               entry['periodizationModel'] ?? 'Linear Exposure',
           'repTargets': savedTargets,
-          'progressionModel': entry['progressionModel'] ?? 'linear',
+          'rirPlan': entry['rirPlan'], // ✅ Add this
+          'rirModel': entry['rirModel'], // ✅ add this line
+          'progressionModel': entry['progressionModel'] ?? 'Linear Weight Increase',
           'increments': entry['increments'] ?? {'week': 2.5, 'block': 5.0},
           'weeklyFrequency': entry['weeklyFrequency'] ?? 3,
           'maxWeightXReps': entry['maxWeightXReps'] ?? '',
@@ -750,6 +781,13 @@ class _BlockPlannerState extends State<Block_Planner> {
           setState(() {
             exerciseSettings = converted;
           });
+          final rir = exerciseSettings.entries.firstWhere(
+                (e) => e.value.containsKey('rirPlan'),
+            orElse: () => MapEntry('none', {}),
+          );
+
+          print('🧪 [DEBUG] Found rirPlan under: ${rir.key}');
+
 
           print(
               "📋 Loaded plannedExerciseDetails for ${converted.length} exercises");
@@ -787,9 +825,8 @@ class _BlockPlannerState extends State<Block_Planner> {
         'periodizationModel':
             existingEntry?['periodizationModel'] ?? 'Linear Exposure',
         'repTargets': reps,
-        'progressionModel': existingEntry?['progressionModel'] ?? 'linear',
-        'increments':
-            existingEntry?['increments'] ?? {'week': 2.5, 'block': 5.0},
+        'progressionModel': existingEntry?['progressionModel'] ?? "Linear Weight Increase",
+        'increments': existingEntry?['increments'] ?? {'week': 2.5, 'block': 5.0},
         'weeklyFrequency': existingEntry?['weeklyFrequency'] ?? 3,
         'maxWeightXReps': existingEntry?['maxWeightXReps'] ?? '',
         'notes': existingEntry?['notes'] ?? '',
@@ -954,21 +991,19 @@ class _BlockPlannerState extends State<Block_Planner> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    icon: const Icon(Icons.add),
-                    label: const Text(
-                      "Add Exercises",
-                      style: TextStyle(color: Colors.pink),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blueGrey.shade700,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
-                    ),
-                    onPressed: _showExercisePickerDialog,
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text(
+                    "Add Exercises",
+                    style: TextStyle(color: Colors.white),
                   ),
+
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blueGrey.shade700,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  ),
+                  onPressed: _showExercisePickerDialog,
                 ),
                 Expanded(
                   child: ElevatedButton.icon(
@@ -1011,8 +1046,7 @@ class _BlockPlannerState extends State<Block_Planner> {
             ),
             const SizedBox(height: 12),
             SizedBox(
-              height: exercises.length *
-                  100, // 👈 Tweak if your cards are taller/shorter
+              height: exercises.length * 240, // 👈 Tweak if your cards are taller/shorter
               child: ReorderableListView.builder(
                 shrinkWrap: true,
                 physics:
@@ -1025,64 +1059,67 @@ class _BlockPlannerState extends State<Block_Planner> {
                   });
                 },
                 itemCount: exercises.length,
-                itemBuilder: (context, index) {
-                  final exercise = exercises[index];
-                  return Dismissible(
-                    key: ValueKey(exercise),
-                    direction: DismissDirection.endToStart,
-                    onDismissed: (_) {
-                      final removedExercise = exercises[index];
+                  itemBuilder: (context, index) {
+                    final exercise = exercises[index];
 
-                      setState(() {
-                        exercises.removeAt(index);
-                      });
+                    final settingsExist = exerciseSettings.containsKey(exercise);
+                    final datesLoaded = _blockStartDate != null && _blockEndDate != null;
 
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                              'Removed "${_exerciseIdToName[removedExercise] ?? 'Unknown Exercise'}"'),
-                          action: SnackBarAction(
-                            label: 'Undo',
-                            textColor: Colors.amberAccent,
-                            onPressed: () {
-                              setState(() {
-                                exercises.insert(index, removedExercise);
-                              });
-                            },
+                    return Dismissible(
+                      key: ValueKey(exercise),
+                      direction: DismissDirection.endToStart,
+                      onDismissed: (_) {
+                        final removedExercise = exercises[index];
+
+                        setState(() {
+                          exercises.removeAt(index);
+                        });
+
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('Removed "${_exerciseIdToName[removedExercise] ?? 'Unknown Exercise'}"'),
+                            action: SnackBarAction(
+                              label: 'Undo',
+                              textColor: Colors.amberAccent,
+                              onPressed: () {
+                                setState(() {
+                                  exercises.insert(index, removedExercise);
+                                });
+                              },
+                            ),
+                            duration: const Duration(seconds: 4),
+                            backgroundColor: Colors.blueGrey.shade700,
+                            behavior: SnackBarBehavior.floating,
+                            margin: const EdgeInsets.all(16),
                           ),
-                          duration: const Duration(seconds: 4),
-                          backgroundColor: Colors.blueGrey.shade700,
-                          behavior: SnackBarBehavior.floating,
-                          margin: const EdgeInsets.all(16),
-                        ),
-                      );
-                    },
-                    background: Container(
-                      color: Colors.red,
-                      padding: const EdgeInsets.only(left: 16),
-                      alignment: Alignment.centerLeft,
-                      child: const Icon(Icons.delete, color: Colors.white),
-                    ),
-                    child: (_blockStartDate == null || _blockEndDate == null)
-                        ? const SizedBox.shrink() // or show a loading spinner
-                        : _ExerciseCard(
-                            exerciseId: exercise,
-                            exerciseName: _exerciseIdToName[exercise] ??
-                                'Unknown Exercise',
-                            exerciseSettings: exerciseSettings,
-                            blockStartDate:
-                                _blockStartDate, // ✅ now passed properly
-                            blockEndDate:
-                                _blockEndDate, // ✅ now passed properly
-                            onUpdateSetting: (exerciseId, key, value) {
-                              setState(() {
-                                exerciseSettings[exerciseId] ??= {};
-                                exerciseSettings[exerciseId]![key] = value;
-                              });
-                            },
-                          ),
-                  );
-                },
+                        );
+                      },
+                      background: Container(
+                        color: Colors.red,
+                        padding: const EdgeInsets.only(left: 16),
+                        alignment: Alignment.centerLeft,
+                        child: const Icon(Icons.delete, color: Colors.white),
+                      ),
+
+                      // ✅ Only render _ExerciseCard once both block dates AND settings exist
+                      child: (!datesLoaded || !settingsExist)
+                          ? const SizedBox.shrink()
+                          : _ExerciseCard(
+                        exerciseId: exercise,
+                        exerciseName: _exerciseIdToName[exercise] ?? 'Unknown Exercise',
+                        exerciseSettings: exerciseSettings,
+                        blockStartDate: _blockStartDate,
+                        blockEndDate: _blockEndDate,
+                        onUpdateSetting: (exerciseId, key, value) {
+                          setState(() {
+                            exerciseSettings[exerciseId] ??= {};
+                            exerciseSettings[exerciseId]![key] = value;
+                          });
+                        },
+                      ),
+                    );
+                  }
+
               ),
             ),
           ],
@@ -1317,14 +1354,18 @@ class _ExerciseCard extends StatefulWidget {
       onUpdateSetting;
   final DateTime? blockStartDate;
   final DateTime? blockEndDate;
+  final Map<String, dynamic>? plannedExerciseDetails;
+
 
   const _ExerciseCard({
     required this.exerciseId,
     required this.exerciseName,
     required this.exerciseSettings,
     required this.onUpdateSetting,
+    this.plannedExerciseDetails, // 🔁 not required
     this.blockStartDate,
     this.blockEndDate,
+
   });
 
   @override
@@ -1334,16 +1375,20 @@ class _ExerciseCard extends StatefulWidget {
 class _ExerciseCardState extends State<_ExerciseCard> {
   bool isExpanded = false;
   final FocusNode _incrementsFocusNode = FocusNode();
-  final TextEditingController _weeklyFrequencyController =
-      TextEditingController(text: "7");
-  final TextEditingController _repTargetsDisplayController =
-      TextEditingController();
+  final TextEditingController _weeklyFrequencyController = TextEditingController(text: "7");
+  final TextEditingController _repTargetsDisplayController = TextEditingController();
+  final TextEditingController _rirDisplayController = TextEditingController();
   final List<int> dailyUndulatingWeekDefaultReps = [10, 5, 12, 8, 3, 7, 1];
   final TextEditingController _notesController = TextEditingController();
   final TextEditingController _incrementsController = TextEditingController();
   final TextEditingController _maxWeightController = TextEditingController();
   final TextEditingController _maxRepsController = TextEditingController();
   Map<String, Map<String, String>>? _cachedRepTargetMap;
+  Map<String, String> _selectedRirModel = {}; // Keeps track of selection per exercise
+  Map<String, String> _selectedProgressionModel = {};
+
+  Map<String, Map<String, Map<String, Map<String, String>>>>? _cachedRirPlan;
+
 
   double _currentE1RM = 0.0;
 
@@ -1369,8 +1414,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   @override
   void initState() {
     super.initState();
-    print("📦 [INIT] Full settings map: ${widget.exerciseSettings}");
-
+    _syncCachedRirPlan(widget.exerciseName);
     _incrementsFocusNode.addListener(() {
       if (!_incrementsFocusNode.hasFocus) {
         final cleaned = _incrementsController.text
@@ -1387,9 +1431,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       }
     });
 
-    print("🛠️ [_ExerciseCard] INIT for: ${widget.exerciseName}");
     final settings = widget.exerciseSettings[widget.exerciseId];
-    print("📦 Settings: $settings");
+
 
     if (settings != null) {
       final reps = settings['repTargets'];
@@ -1454,6 +1497,65 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         widget.onUpdateSetting(widget.exerciseId, 'weeklyFrequency', value);
       }
     });
+
+    final rirModel = settings?['rirModel'];
+    if (rirModel != null && rirModel is String) {
+      _selectedRirModel[widget.exerciseName] = rirModel;
+      print("📥 [INIT] Loaded RIR model for ${widget.exerciseName}: $rirModel");
+    }
+
+
+    final rirPlan = settings?['rirPlan'];
+    if (rirPlan != null && rirPlan is Map<String, dynamic>) {
+      _cachedRirPlan = rirPlan.map((weekKey, weekVal) {
+        return MapEntry(
+          weekKey,
+          (weekVal as Map<String, dynamic>).map((sessionKey, sessionVal) {
+            return MapEntry(
+              sessionKey,
+              (sessionVal as Map<String, dynamic>).map((setKey, setVal) {
+                return MapEntry(
+                  setKey,
+                  Map<String, String>.from(setVal as Map),
+                );
+              }),
+            );
+          }),
+        );
+      });
+
+      print("📥 [INIT] Loaded and casted RIR plan for ${widget.exerciseName}: $_cachedRirPlan");
+    }
+
+    final weekData = _cachedRirPlan?['week1'] as Map<String, dynamic>?;
+
+    if (weekData != null) {
+      final summary = <String>[];
+
+      for (int i = 1; i <= 3; i++) {
+        final session = weekData['session$i'] as Map<String, dynamic>?;
+
+        if (session != null) {
+          final set1 = session['set1'] as Map<String, dynamic>?;
+
+          if (set1 != null) {
+            final rir = set1['rir'];
+            if (rir != null) summary.add(rir.toString());
+          }
+        }
+      }
+
+      _rirDisplayController.text = 'W1 → ${summary.join(' | ')}';
+    }
+
+    final savedProgressionModel = widget.exerciseSettings[widget.exerciseId]?['progressionModel'];
+    if (savedProgressionModel is String && savedProgressionModel.isNotEmpty) {
+      final normalized = (savedProgressionModel == 'linear') ? 'Linear Weight Increase' : savedProgressionModel;
+      _selectedProgressionModel[widget.exerciseName] = normalized;
+    }
+
+
+
   }
 
   @override
@@ -1516,6 +1618,15 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         result['week1'] = {
           'instance1': repText,
         };
+
+        // ✅ Save RIR plan from cache
+        if (_cachedRirPlan != null) {
+          widget.onUpdateSetting(widget.exerciseId, 'rirPlan', _cachedRirPlan);
+          print("💾 [DISPOSE] Saved DUP Signature rirPlan → $_cachedRirPlan");
+        } else {
+          print("⚠️ [DISPOSE] No cached RIR plan found for DUP Signature");
+        }
+
       } else {
         // ✅ All other models (DUP-week, exposure, etc.)
         final values = repText
@@ -1532,8 +1643,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       }
 
       widget.onUpdateSetting(widget.exerciseId, 'repTargets', result);
-      print(
-          "💾 [DISPOSE] Saved repTargets for ${widget.exerciseName} using model $model → $result");
+      print("💾 [DISPOSE] Saved repTargets for ${widget.exerciseName} using model $model → $result");
+
     }
 
     // ✅ Clean and normalize increments
@@ -1571,6 +1682,13 @@ class _ExerciseCardState extends State<_ExerciseCard> {
           "💾 [DISPOSE] Saved increments for ${widget.exerciseName}: $incrementsMap");
     }
 
+    final progressionModel = _selectedProgressionModel[widget.exerciseName];
+    if (progressionModel != null && progressionModel.isNotEmpty) {
+      widget.onUpdateSetting(widget.exerciseId, 'progressionModel', progressionModel);
+      print("💾 [DISPOSE] Saved progression model for ${widget.exerciseName}: $progressionModel");
+    }
+
+
     final notes = _notesController.text.trim();
     widget.onUpdateSetting(widget.exerciseId, 'notes', notes);
     print("💾 [DISPOSE] Saved notes for ${widget.exerciseName}: $notes");
@@ -1592,6 +1710,18 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       print("⚠️ [DISPOSE] Skipped saving maxWeightXReps due to invalid input.");
     }
 
+    final rirModel = _selectedRirModel[widget.exerciseName];
+    if (rirModel != null && rirModel.isNotEmpty) {
+      widget.onUpdateSetting(widget.exerciseId, 'rirModel', rirModel);
+      print("💾 [DISPOSE] Saved RIR model for ${widget.exerciseName}: $rirModel");
+    }
+
+
+    if (_cachedRirPlan != null && _cachedRirPlan!.isNotEmpty) {
+      widget.onUpdateSetting(widget.exerciseId, 'rirPlan', _cachedRirPlan);
+      print("💾 [DISPOSE] Saved rirPlan for ${widget.exerciseName}: ${jsonEncode(_cachedRirPlan)}");
+    }
+
     _weeklyFrequencyController.dispose();
     _repTargetsDisplayController.dispose();
     _incrementsController.dispose();
@@ -1600,6 +1730,11 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     _maxRepsController.dispose();
 
     super.dispose();
+  }
+
+
+  double roundToNearestHalf(double value) {
+    return (value * 2).round() / 2.0;
   }
 
   void _syncCachedRepTargets(String exerciseName) {
@@ -1643,7 +1778,57 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       print(
           "! [_syncCachedRepTargets] No valid repTargets found (value: $reps)");
     }
+
+
   }
+
+  void _syncCachedRirPlan(String exerciseName) {
+    final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
+    final rirRaw = widget.exerciseSettings[exerciseId]?['rirPlan']
+        ?? widget.exerciseSettings[exerciseName]?['rirPlan'];
+
+
+    print("🛠️ [_syncCachedRirPlan] for $exerciseName → $rirRaw");
+
+    if (rirRaw is Map<String, dynamic>) {
+      final parsed = <String, Map<String, Map<String, Map<String, String>>>>{};
+
+      for (final weekKey in rirRaw.keys) {
+        final weekVal = rirRaw[weekKey];
+        if (weekVal is Map<String, dynamic>) {
+          final sessionMap = <String, Map<String, Map<String, String>>>{};
+
+          for (final sessionKey in weekVal.keys) {
+            final sessionVal = weekVal[sessionKey];
+            if (sessionVal is Map<String, dynamic>) {
+              final setMap = <String, Map<String, String>>{};
+
+              for (final setKey in sessionVal.keys) {
+                final setVal = sessionVal[setKey];
+                if (setVal is Map<String, dynamic>) {
+                  setMap[setKey] = {
+                    'rir': setVal['rir']?.toString() ?? '',
+                    'reps': setVal['reps']?.toString() ?? '',
+                  };
+                }
+              }
+
+              sessionMap[sessionKey] = setMap;
+            }
+          }
+
+          parsed[weekKey] = sessionMap;
+        }
+      }
+
+      _cachedRirPlan = parsed;
+      print("✅ [_syncCachedRirPlan] RIR cache updated for $exerciseName");
+    } else {
+      print("❌ [_syncCachedRirPlan] No valid rirPlan found.");
+      _cachedRirPlan = {};
+    }
+  }
+
 
   void _updateE1RM() {
     final weight = double.tryParse(_maxWeightController.text);
@@ -2521,72 +2706,971 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     );
   }
 
-  void _showRepTargetDialog(String exerciseName) {
-    List<int> reps = List<int>.from(widget.exerciseSettings[widget.exerciseName]
-            ?['repTargets'] ??
-        List.filled(12, 6));
+
+
+  // RIR Models                                               RIR MODELS
+
+  void _showLinearTaperRirTargetDialog(String exerciseName, {int? frequency}) {
+    final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
+
+    print("🆔 Checking keys → ID: $exerciseId | Name: $exerciseName");
+    print("📦 Settings keys: ${widget.exerciseSettings.keys}");
+
+
+    final settings = widget.exerciseSettings[exerciseId];
+    final model = settings?['periodizationModel'];
+    final weeklyFrequency = settings?['weeklyFrequency'];
+
+    final details = widget.exerciseSettings[exerciseName] ?? {}; // ✅ consistent with wave
+
+    final blockLengthWeeks = widget.blockStartDate != null && widget.blockEndDate != null
+        ? PeriodizationModelUtils.getBlockLength(
+      blockStartDate: widget.blockStartDate!,
+      blockEndDate: widget.blockEndDate!,
+    )
+        : 6;
+
+    final periodizationModel = details['periodizationModel'] ?? '';
+    final instanceMap = details['repTargets']?['week1'] ?? {};
+
+    // ✅ Rep string parsing for sets per session
+    final repString = details['repTargets']?['week1']?['instance1'] ?? '';
+    final match = RegExp(r'x\s*(\d+)').firstMatch(repString);
+    final setsPerSession = int.tryParse(match?.group(1) ?? '3') ?? 3;
+
+    // 🧪 Debugging
+    print("📦 [LinearTaper] repString = $repString");
+    print("✅ [LinearTaper] $exerciseName → weeklyFrequency=$weeklyFrequency, setsPerSession=$setsPerSession");
+
+    // ✅ Taper logic
+    final startRir = blockLengthWeeks > 5 ? 4.0 : 3.0;
+    final decrementPerWeek = startRir / blockLengthWeeks;
 
     showDialog(
       context: context,
-      builder: (ctx) {
-        List<TextEditingController> controllers = List.generate(
-          reps.length,
-          (i) => TextEditingController(text: reps[i].toString()),
-        );
-
-        return AlertDialog(
-          backgroundColor: Colors.blueGrey.shade900,
-          title: const Text("Rep Targets by Week",
-              style: TextStyle(color: Colors.white)),
-          content: SizedBox(
+      builder: (context) {
+        print('🔍 [SHOWDIALOG] Cached RIR Plan for $exerciseName: $_cachedRirPlan');
+        print('🔍 [SHOWDIALOG] Lookup week1/session1/set1 = ${_cachedRirPlan?["week1"]?["session1"]?["set1"]}');
+        return Dialog(
+          child: SizedBox(
             width: double.maxFinite,
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: 12,
-              itemBuilder: (context, i) {
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: TextField(
-                    controller: controllers[i],
-                    keyboardType: TextInputType.number,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      labelText: "Week ${i + 1}",
-                      labelStyle: const TextStyle(color: Colors.white70),
-                      filled: true,
-                      fillColor: Colors.blueGrey.shade800,
-                      border: OutlineInputBorder(),
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 10),
+            height: 500,
+            child: Column(
+              children: [
+                Expanded(
+                  child: Scrollbar(
+                    thumbVisibility: true,
+                    child: ListView.builder(
+                      itemCount: blockLengthWeeks,
+                      itemBuilder: (context, weekIndex) {
+                        final currentWeek = weekIndex + 1;
+                        final rawBase = startRir - (weekIndex * decrementPerWeek);
+                        final baseRir = roundToNearestHalf(rawBase.clamp(0, 4));
+
+                        final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
+                        final settings = widget.exerciseSettings[exerciseId];
+                        final model = settings?['periodizationModel'];
+                        final frequency = model == 'DUP, Signature'
+                            ? (settings?['weeklyFrequency'] ?? 3)
+                            : instanceMap.keys.where((k) => k.toString().startsWith('instance')).length;
+
+                        return ExpansionTile(
+                          title: Text('Week $currentWeek'),
+                          children: List.generate(frequency, (sessionIndex) {
+                            final sessionTitle = 'Session ${sessionIndex + 1}';
+                            final sessionInstanceKey = 'instance${sessionIndex + 1}';
+                            final sessionRepString = instanceMap[sessionInstanceKey] ?? '';
+                            final repMatch = RegExp(r'^(\d+)\s*x\s*(\d+)').firstMatch(sessionRepString);
+
+                            final set1Reps = int.tryParse(repMatch?.group(1) ?? '10') ?? 10;
+                            final setsPerSession = int.tryParse(repMatch?.group(2) ?? '3') ?? 3;
+
+                            return ExpansionTile(
+                              title: Text(sessionTitle),
+                              children: List.generate(setsPerSession, (setIndex) {
+                                final weekKey = 'week${weekIndex + 1}';
+                                final sessionKey = 'session${sessionIndex + 1}';
+                                final setKey = 'set${setIndex + 1}';
+
+                                final defaultRir = setIndex == 0
+                                    ? roundToNearestHalf(baseRir).toString()
+                                    : roundToNearestHalf((baseRir + 1 + (setIndex - 1) * 0.5).clamp(0, 4)).toString();
+
+                                final defaultReps = setIndex == 0
+                                    ? set1Reps.toString()
+                                    : (set1Reps - setIndex).clamp(1, set1Reps).toString();
+
+                                _cachedRirPlan ??= {};
+                                _cachedRirPlan!.putIfAbsent(weekKey, () => {});
+                                _cachedRirPlan![weekKey]!.putIfAbsent(sessionKey, () => {});
+                                _cachedRirPlan![weekKey]![sessionKey]!.putIfAbsent(setKey, () {
+                                  return {
+                                    'rir': defaultRir,
+                                    'reps': defaultReps,
+                                  };
+                                });
+
+                                final currentSetData = _cachedRirPlan![weekKey]![sessionKey]![setKey]!;
+                                final repsValue = currentSetData['reps'] ?? defaultReps;
+                                final rirValue = currentSetData['rir'] ?? defaultRir;
+
+                                return Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: TextField(
+                                          controller: TextEditingController.fromValue(
+                                            TextEditingValue(
+                                              text: repsValue,
+                                              selection: TextSelection.collapsed(offset: repsValue.length),
+                                            ),
+                                          ),
+                                          keyboardType: TextInputType.number,
+                                          readOnly: setIndex == 0,
+                                          style: TextStyle(
+                                            color: setIndex == 0 ? Colors.white54 : Colors.white,
+                                          ),
+                                          decoration: InputDecoration(
+                                            labelText: 'Set ${setIndex + 1} Reps',
+                                            labelStyle: const TextStyle(color: Colors.white70),
+                                            filled: true,
+                                            fillColor: Colors.blueGrey.shade800,
+                                            border: const OutlineInputBorder(),
+                                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                          ),
+                                          onChanged: (val) {
+                                            _cachedRirPlan![weekKey]![sessionKey]![setKey]!['reps'] = val;
+                                          },
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: TextField(
+                                          controller: TextEditingController.fromValue(
+                                            TextEditingValue(
+                                              text: rirValue,
+                                              selection: TextSelection.collapsed(offset: rirValue.length),
+                                            ),
+                                          ),
+                                          keyboardType: TextInputType.number,
+                                          style: const TextStyle(color: Colors.white),
+                                          decoration: InputDecoration(
+                                            labelText: 'Set ${setIndex + 1} RIR',
+                                            labelStyle: const TextStyle(color: Colors.white70),
+                                            filled: true,
+                                            fillColor: Colors.blueGrey.shade800,
+                                            border: const OutlineInputBorder(),
+                                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                          ),
+                                          onChanged: (val) {
+                                            _cachedRirPlan![weekKey]![sessionKey]![setKey]!['rir'] = val;
+                                          },
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }),
+                            );
+                          }),
+                        );
+                      },
                     ),
                   ),
-                );
-              },
+                ),
+                const Divider(height: 1),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () {
+                          Navigator.of(context).pop();
+                        },
+                        child: const Text('Cancel'),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton(
+                        onPressed: () {
+                          widget.onUpdateSetting(
+                            exerciseName,
+                            'rirPlan',
+                            _cachedRirPlan ?? {},
+                          );
+
+                          final weekData = _cachedRirPlan?['week1'] as Map<String, dynamic>?;
+                          final freq = widget.exerciseSettings[PeriodizationModelUtils.nameToId[exerciseName]]?['weeklyFrequency'] ?? 3;
+
+                          if (weekData != null) {
+                            final summary = <String>[];
+
+                            for (int i = 1; i <= freq; i++) {
+                              final session = weekData['session$i'] as Map<String, dynamic>?;
+                              final set1 = session?['set1'] as Map<String, dynamic>?;
+                              final rir = set1?['rir'];
+                              if (rir != null) summary.add(rir.toString());
+                            }
+
+                            _rirDisplayController.text = 'W1 → ${summary.join(' | ')}';
+                          }
+
+                          Navigator.of(context).pop();
+                        },
+
+                        child: const Text('Save'),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child:
-                  const Text("Cancel", style: TextStyle(color: Colors.white)),
+        );
+
+      },
+    );
+
+  }
+
+
+  void _showWaveRirUndulationDialog(String exerciseName, {int? frequency}) {
+    final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
+
+
+    final settings = widget.exerciseSettings[exerciseId];
+    final model = settings?['periodizationModel'];
+    final weeklyFrequency = settings?['weeklyFrequency'];
+
+    print("🧪 [RIR Tap] Settings for $exerciseName: $settings");
+    print("📆 [RIR Tap] Weekly Frequency from settings = $weeklyFrequency hello");
+    print("🧪 [RIR Tap] $exerciseName → Selected model: $model");
+    final details = widget.exerciseSettings[exerciseName] ?? {}; // ✅ consistent with wave
+
+    print("🆔 Checking keys → ID: $exerciseId | Name: $exerciseName");
+    print("📦 Settings keys: ${widget.exerciseSettings.keys}");
+
+    final blockLengthWeeks = widget.blockStartDate != null && widget.blockEndDate != null
+        ? PeriodizationModelUtils.getBlockLength(
+      blockStartDate: widget.blockStartDate!,
+      blockEndDate: widget.blockEndDate!,
+    )
+        : 6;
+
+    final periodizationModel = details['periodizationModel'] ?? '';
+    final instanceMap = details['repTargets']?['week1'] ?? {};
+
+    // ✅ Rep string parsing for sets per session
+    final repString = details['repTargets']?['week1']?['instance1'] ?? '';
+    final match = RegExp(r'x\s*(\d+)').firstMatch(repString);
+    final setsPerSession = int.tryParse(match?.group(1) ?? '3') ?? 3;
+
+
+    final wave = [3.0, 2.0, 1.0];
+
+
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        final Map<String, TextEditingController> _rirControllers = {};
+        final Map<String, TextEditingController> _repsControllers = {};
+
+        return Dialog(
+          child: SizedBox(
+            width: double.maxFinite,
+            height: 560,
+            child: Column(
+              children: [
+                Expanded(
+                  child: Scrollbar(
+                    thumbVisibility: true,
+                    child: ListView.builder(
+                      itemCount: blockLengthWeeks,
+                      itemBuilder: (context, weekIndex) {
+                        final currentWeek = weekIndex + 1;
+                        final baseRir = wave[weekIndex % wave.length];
+
+                        final model = settings?['periodizationModel'];
+                        final frequency = model == 'DUP, Signature'
+                            ? (settings?['weeklyFrequency'] ?? 3)
+                            : instanceMap.keys.where((k) => k.toString().startsWith('instance')).length;
+
+                        return ExpansionTile(
+                          title: Text('Week $currentWeek'),
+                          children: List.generate(frequency, (sessionIndex) {
+                            final sessionKey = 'instance${sessionIndex + 1}';
+                            final sessionRepString = instanceMap[sessionKey] ?? '';
+                            final repMatch = RegExp(r'^(\d+)\s*x\s*(\d+)').firstMatch(sessionRepString);
+
+                            final set1Reps = int.tryParse(repMatch?.group(1) ?? '10') ?? 10;
+                            final setsPerSession = int.tryParse(repMatch?.group(2) ?? '3') ?? 3;
+
+                            print('📘 [WaveRIR] $exerciseName → Week $currentWeek, Session ${sessionIndex + 1} = $sessionRepString → $setsPerSession sets');
+
+                            return ExpansionTile(
+                              title: Text('Session ${sessionIndex + 1}'),
+                              children: List.generate(setsPerSession, (setIndex) {
+                                final weekKey = 'week${weekIndex + 1}';
+                                final sKey = 'session${sessionIndex + 1}';
+                                final setKey = 'set${setIndex + 1}';
+
+                                final defaultRir = setIndex == 0
+                                    ? roundToNearestHalf(baseRir).toString()
+                                    : roundToNearestHalf((baseRir + 1 + (setIndex - 1) * 0.5).clamp(0, 4)).toString();
+
+                                final defaultReps = setIndex == 0
+                                    ? set1Reps.toString()
+                                    : (set1Reps - setIndex).clamp(1, set1Reps).toString();
+
+                                _cachedRirPlan ??= {};
+                                _cachedRirPlan![weekKey] ??= {};
+                                _cachedRirPlan![weekKey]![sKey] ??= {};
+
+// Only insert defaults if set doesn't exist at all
+                                if (!_cachedRirPlan![weekKey]![sKey]!.containsKey(setKey)) {
+                                  _cachedRirPlan![weekKey]![sKey]![setKey] = {
+                                    'rir': defaultRir,
+                                    'reps': defaultReps,
+                                  };
+                                }
+
+// Use whatever is already in the cache
+                                final repsValue = _cachedRirPlan![weekKey]![sKey]![setKey]!['reps'] ?? defaultReps;
+                                final rirValue  = _cachedRirPlan![weekKey]![sKey]![setKey]!['rir'] ?? defaultRir;
+
+                                return Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  child: Row(
+                                    children: [
+                                      // Reps
+                                      Expanded(
+                                        child: Builder(
+                                          builder: (context) {
+                                            final controllerKey = '$weekKey-$sKey-$setKey';
+                                            _repsControllers[controllerKey] ??= TextEditingController(text: repsValue);
+
+                                            return TextField(
+                                              controller: _repsControllers[controllerKey],
+                                              keyboardType: TextInputType.number,
+                                              readOnly: setIndex == 0, // ✅ Set 1 = read-only
+                                              style: TextStyle(
+                                                color: setIndex == 0 ? Colors.white54 : Colors.white,
+                                              ),
+                                              decoration: InputDecoration(
+                                                labelText: 'Set ${setIndex + 1} Reps',
+                                                labelStyle: const TextStyle(color: Colors.white70),
+                                                filled: true,
+                                                fillColor: Colors.blueGrey.shade800,
+                                                border: const OutlineInputBorder(),
+                                                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                      ),
+
+                                      const SizedBox(width: 12),
+                                      // RIR
+                                      Expanded(
+                                        child: Builder(
+                                          builder: (context) {
+                                            final controllerKey = '$weekKey-$sKey-$setKey';
+                                            _rirControllers[controllerKey] ??= TextEditingController(text: rirValue);
+
+                                            return TextField(
+                                              controller: _rirControllers[controllerKey],
+                                              keyboardType: TextInputType.number,
+                                              style: const TextStyle(color: Colors.white),
+                                              decoration: InputDecoration(
+                                                labelText: 'Set ${setIndex + 1} RIR',
+                                                labelStyle: const TextStyle(color: Colors.white70),
+                                                filled: true,
+                                                fillColor: Colors.blueGrey.shade800,
+                                                border: const OutlineInputBorder(),
+                                                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                      ),
+
+                                    ],
+                                  ),
+                                );
+                              }),
+                            );
+                          }),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                const Divider(height: 1),
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () {
+                          Navigator.pop(context); // ❌ Discard changes
+                        },
+                        child: const Text("Cancel", style: TextStyle(color: Colors.white)),
+                      ),
+                      const SizedBox(width: 8),
+                      TextButton(
+                        onPressed: () {
+                          // ✅ Write user inputs back into _cachedRirPlan
+                          for (final key in _rirControllers.keys) {
+                            final parts = key.split('-'); // key = week1-session1-set1
+                            if (parts.length != 3) continue;
+
+                            final weekKey = parts[0];
+                            final sessionKey = parts[1];
+                            final setKey = parts[2];
+
+                            _cachedRirPlan ??= {};
+                            _cachedRirPlan![weekKey] ??= {};
+                            _cachedRirPlan![weekKey]![sessionKey] ??= {};
+                            _cachedRirPlan![weekKey]![sessionKey]![setKey] = {
+                              'rir': _rirControllers[key]?.text.trim() ?? '',
+                              'reps': _repsControllers[key]?.text.trim() ?? '',
+                            };
+                          }
+
+                          // ✅ Save to Firestore
+                          widget.onUpdateSetting(
+                            exerciseName,
+                            'rirPlan',
+                            _cachedRirPlan ?? {},
+                          );
+                          final weekData = _cachedRirPlan?['week1'] as Map<String, dynamic>?;
+
+                          if (weekData != null) {
+                            final summary = <String>[];
+
+                            for (int i = 1; i <= 3; i++) {
+                              final session = weekData['session$i'] as Map<String, dynamic>?;
+
+                              if (session != null) {
+                                final set1 = session['set1'] as Map<String, dynamic>?;
+
+                                if (set1 != null) {
+                                  final rir = set1['rir'];
+                                  if (rir != null) summary.add(rir.toString());
+                                }
+                              }
+                            }
+
+                            _rirDisplayController.text = 'W1 → ${summary.join(' | ')}';
+                          }
+
+
+                          print("💾 [RIR Dialog] Saved RIR plan for $exerciseName → $_cachedRirPlan");
+                          Navigator.pop(context); // ✅ Close
+                        },
+                        child: const Text("Save", style: TextStyle(color: Colors.white)),
+                      ),
+                    ],
+                  ),
+                ),
+
+              ],
             ),
-            TextButton(
-              onPressed: () {
-                final updatedReps =
-                    controllers.map((c) => int.tryParse(c.text) ?? 6).toList();
-                setState(() {
-                  widget.exerciseSettings[widget.exerciseName]?['repTargets'] =
-                      updatedReps;
-                });
-                Navigator.pop(ctx);
-              },
-              child: const Text("Save", style: TextStyle(color: Colors.white)),
+          ),
+        );
+
+      },
+    );
+  }
+
+  void _showStaticRirDialog(String exerciseName, {int? frequency}) {
+    final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
+    final settings = widget.exerciseSettings[exerciseId];
+    final weeklyFrequency = settings?['weeklyFrequency'];
+    final details = widget.exerciseSettings[exerciseName] ?? {};
+
+    final blockLengthWeeks = widget.blockStartDate != null && widget.blockEndDate != null
+        ? PeriodizationModelUtils.getBlockLength(
+      blockStartDate: widget.blockStartDate!,
+      blockEndDate: widget.blockEndDate!,
+    )
+        : 6;
+
+    final instanceMap = details['repTargets']?['week1'] ?? {};
+    final repString = instanceMap['instance1'] ?? '';
+    final match = RegExp(r'x\s*(\d+)').firstMatch(repString);
+    final setsPerSession = int.tryParse(match?.group(1) ?? '3') ?? 3;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        final Map<String, TextEditingController> _rirControllers = {};
+        final Map<String, TextEditingController> _repsControllers = {};
+
+        bool _isUpdating = false;
+
+        return Dialog(
+          child: SizedBox(
+            width: double.maxFinite,
+            height: 560,
+            child: Column(
+              children: [
+                Expanded(
+                  child: Scrollbar(
+                    thumbVisibility: true,
+                    child: ListView.builder(
+                      itemCount: blockLengthWeeks,
+                      itemBuilder: (context, weekIndex) {
+                        final currentWeek = weekIndex + 1;
+                        final isWeek1 = weekIndex == 0;
+                        final weekKey = 'week$currentWeek';
+                        final week1Values = _cachedRirPlan?['week1'];
+
+                        final model = settings?['periodizationModel'];
+                        final frequency = model == 'DUP, Signature'
+                            ? (settings?['weeklyFrequency'] ?? 3)
+                            : instanceMap.keys.where((k) => k.toString().startsWith('instance')).length;
+
+                        return ExpansionTile(
+                          title: Text('Week $currentWeek'),
+                          children: List.generate(frequency, (sessionIndex) {
+                            final sKey = 'session${sessionIndex + 1}';
+                            final instanceKey = 'instance${sessionIndex + 1}';
+                            final repMatch = RegExp(r'^(\d+)\s*x\s*(\d+)').firstMatch(instanceMap[instanceKey] ?? '');
+
+                            final set1Reps = int.tryParse(repMatch?.group(1) ?? '10') ?? 10;
+                            final setsPerSession = int.tryParse(repMatch?.group(2) ?? '3') ?? 3;
+
+                            return ExpansionTile(
+                              title: Text('Session ${sessionIndex + 1}'),
+                              children: List.generate(setsPerSession, (setIndex) {
+                                final weekKey = 'week${weekIndex + 1}';
+                                final sessionKey = 'session${sessionIndex + 1}';
+                                final setKey = 'set${setIndex + 1}';
+                                final isWeek1 = weekIndex == 0;
+
+                                // 👇 Default RIR matrix by session index
+                                final List<List<double>> defaultRirMatrix = [
+                                  [2.0, 2.0, 2.5, 3.0],   // Session 1
+                                  [2.0, 2.0, 2.5, 3.0],   // Session 2
+                                  [2.0, 2.0, 2.5, 3.5],   // Session 3
+                                  [2.5, 3.0, 3.0, 3.5],   // Session 4
+                                ];
+
+                                final sessionPatternIndex = sessionIndex < defaultRirMatrix.length
+                                    ? sessionIndex
+                                    : (sessionIndex % 3); // Cycle if more than 4 sessions
+
+                                final defaultRirFromPattern = setIndex < defaultRirMatrix[sessionPatternIndex].length
+                                    ? defaultRirMatrix[sessionPatternIndex][setIndex]
+                                    : 3.0;
+
+                                final defaultRir = defaultRirFromPattern.toString();
+                                final defaultReps = '10';
+// Ensure cache entry exists
+                                _cachedRirPlan ??= {};
+                                _cachedRirPlan!.putIfAbsent(weekKey, () => {});
+                                _cachedRirPlan![weekKey]!.putIfAbsent(sessionKey, () => {});
+                                _cachedRirPlan![weekKey]![sessionKey]!.putIfAbsent(setKey, () {
+                                  return {
+                                    'rir': defaultRir,
+                                    'reps': defaultReps,
+                                  };
+                                });
+
+                                final currentSetData = _cachedRirPlan![weekKey]![sessionKey]![setKey]!;
+                                final repsValue = currentSetData['reps'] ?? defaultReps;
+                                final rirValue = currentSetData['rir'] ?? defaultRir;
+
+                                final controllerKey = '$weekKey-$sKey-$setKey';
+                                _repsControllers[controllerKey] ??= TextEditingController(text: repsValue);
+                                if (isWeek1) {
+                                  _repsControllers[controllerKey]!.addListener(() {
+                                    if (_isUpdating) return;
+                                    _isUpdating = true;
+
+                                    final updatedValue = _repsControllers[controllerKey]!.text;
+                                    for (int w = 1; w < blockLengthWeeks; w++) {
+                                      final wk = 'week${w + 1}';
+                                      final copyKey = '$wk-$sKey-$setKey';
+                                      if (_repsControllers[copyKey] != null) {
+                                        _repsControllers[copyKey]!.text = updatedValue;
+                                      }
+                                    }
+
+                                    _isUpdating = false;
+                                  });
+                                }
+
+                                _rirControllers[controllerKey] ??= TextEditingController(text: rirValue);
+                                if (isWeek1) {
+                                  _rirControllers[controllerKey]!.addListener(() {
+                                    if (_isUpdating) return;
+                                    _isUpdating = true;
+
+                                    final updatedValue = _rirControllers[controllerKey]!.text;
+                                    for (int w = 1; w < blockLengthWeeks; w++) {
+                                      final wk = 'week${w + 1}';
+                                      final copyKey = '$wk-$sKey-$setKey';
+                                      if (_rirControllers[copyKey] != null) {
+                                        _rirControllers[copyKey]!.text = updatedValue;
+                                      }
+                                    }
+
+                                    _isUpdating = false;
+                                  });
+                                }
+
+
+                                return Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: TextField(
+                                          controller: _repsControllers[controllerKey],
+                                          keyboardType: TextInputType.number,
+                                          readOnly: setIndex == 0,
+                                          style: TextStyle(color: setIndex == 0 ? Colors.white54 : Colors.white),
+                                          decoration: InputDecoration(
+                                            labelText: 'Set ${setIndex + 1} Reps',
+                                            labelStyle: const TextStyle(color: Colors.white70),
+                                            filled: true,
+                                            fillColor: Colors.blueGrey.shade800,
+                                            border: const OutlineInputBorder(),
+                                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: TextField(
+                                          controller: _rirControllers[controllerKey],
+                                          keyboardType: TextInputType.number,
+                                          style: const TextStyle(color: Colors.white),
+                                          decoration: InputDecoration(
+                                            labelText: 'Set ${setIndex + 1} RIR',
+                                            labelStyle: const TextStyle(color: Colors.white70),
+                                            filled: true,
+                                            fillColor: Colors.blueGrey.shade800,
+                                            border: const OutlineInputBorder(),
+                                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }),
+                            );
+
+                          }),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                const Divider(height: 1),
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text("Cancel", style: TextStyle(color: Colors.white)),
+                      ),
+                      const SizedBox(width: 8),
+                      TextButton(
+                        onPressed: () {
+                          for (final key in _rirControllers.keys) {
+                            final parts = key.split('-');
+                            if (parts.length != 3) continue;
+
+                            final weekKey = parts[0];
+                            final sessionKey = parts[1];
+                            final setKey = parts[2];
+
+                            _cachedRirPlan![weekKey]![sessionKey]![setKey] = {
+                              'rir': _rirControllers[key]?.text.trim() ?? '',
+                              'reps': _repsControllers[key]?.text.trim() ?? '',
+                            };
+                          }
+
+                          widget.onUpdateSetting(
+                            exerciseName,
+                            'rirPlan',
+                            _cachedRirPlan ?? {},
+                          );
+
+                          final weekData = _cachedRirPlan?['week1'] as Map<String, dynamic>?;
+                          if (weekData != null) {
+                            final summary = <String>[];
+                            for (int i = 1; i <= 3; i++) {
+                              final session = weekData['session$i'] as Map<String, dynamic>?;
+                              final set1 = session?['set1'] as Map<String, dynamic>?;
+                              final rir = set1?['rir'];
+                              if (rir != null) summary.add(rir.toString());
+                            }
+                            _rirDisplayController.text = 'W1 → ${summary.join(' | ')}';
+                          }
+
+                          print("💾 [Static RIR] Saved RIR plan for $exerciseName → $_cachedRirPlan");
+                          Navigator.pop(context);
+                        },
+                        child: const Text("Save", style: TextStyle(color: Colors.white)),
+                      ),
+                    ],
+                  ),
+                )
+              ],
             ),
-          ],
+          ),
         );
       },
     );
   }
+
+
+  static Map<String, dynamic> generateStaticRirPlan({
+    required int weeks,
+    required int sessionsPerWeek,
+    required int setsPerSession,
+  }) {
+    final Map<String, dynamic> plan = {};
+
+    final List<List<double>> defaultRirMatrix = [
+      [2.0, 2.0, 2.5, 3.0],
+      [2.0, 2.0, 2.5, 3.0],
+      [2.0, 2.0, 2.5, 3.5],
+      [2.5, 3.0, 3.0, 3.5],
+    ];
+
+    for (int week = 1; week <= weeks; week++) {
+      final weekKey = 'week$week';
+      plan[weekKey] = {};
+
+      for (int session = 1; session <= sessionsPerWeek; session++) {
+        final sessionKey = 'session$session';
+        plan[weekKey][sessionKey] = {};
+
+        final patternIndex = session < defaultRirMatrix.length ? session - 1 : (session - 1) % 3;
+
+        for (int set = 1; set <= setsPerSession; set++) {
+          final setKey = 'set$set';
+          final rir = set - 1 < defaultRirMatrix[patternIndex].length
+              ? defaultRirMatrix[patternIndex][set - 1]
+              : 3.0;
+
+          plan[weekKey][sessionKey][setKey] = {
+            'rir': rir.toString(),
+            'reps': '10',
+          };
+        }
+      }
+    }
+
+    return plan;
+  }
+
+  static const Map<String, List<double>> sessionBasedRirPatternsByName = {
+    'Bench Press, Barbell': [2.0, 1.5, 0.5, 1.0],
+    'Chin-Up': [2.0, 1.5, 0.5, 1.0],
+    'Overhead Dumbbell Press, Unilateral': [2.0, 1.5, 0.5, 1.0],
+    'Deadlift, Conventional': [3.0, 3.5, 2.5, 1.0],
+    'Back Squat, Barbell': [3.0, 2.0, 1.0, 2.5],
+    'default': [1.5, 1.0, 0.5, 1.0],
+  };
+
+
+
+
+  void _showSessionUndulatingRirDialog(String exerciseName, {int? frequency}) {
+    final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
+    final settings = widget.exerciseSettings[exerciseId];
+    final weeklyFrequency = settings?['weeklyFrequency'] ?? 3;
+    final details = widget.exerciseSettings[exerciseName] ?? {};
+
+    final blockLengthWeeks = widget.blockStartDate != null && widget.blockEndDate != null
+        ? PeriodizationModelUtils.getBlockLength(
+      blockStartDate: widget.blockStartDate!,
+      blockEndDate: widget.blockEndDate!,
+    )
+        : 6;
+
+    final instanceMap = details['repTargets']?['week1'] ?? {};
+    final repString = instanceMap['instance1'] ?? '';
+    final match = RegExp(r'x\s*(\d+)').firstMatch(repString);
+    final setsPerSession = int.tryParse(match?.group(1) ?? '3') ?? 3;
+
+    final List<double> rirPattern =
+        sessionBasedRirPatternsByName[exerciseName] ?? sessionBasedRirPatternsByName['default']!;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        final Map<String, TextEditingController> _rirControllers = {};
+        final Map<String, TextEditingController> _repsControllers = {};
+
+        return Dialog(
+          child: SizedBox(
+            width: double.maxFinite,
+            height: 560,
+            child: Column(
+              children: [
+                Expanded(
+                  child: Scrollbar(
+                    thumbVisibility: true,
+                    child: ListView.builder(
+                      itemCount: blockLengthWeeks,
+                      itemBuilder: (context, weekIndex) {
+                        final currentWeek = weekIndex + 1;
+                        final weekKey = 'week$currentWeek';
+
+                        return ExpansionTile(
+                          title: Text('Week $currentWeek'),
+                          children: List.generate(weeklyFrequency, (sessionIndex) {
+                            final sKey = 'session${sessionIndex + 1}';
+
+                            // ✅ Use global session index to avoid resetting each week
+                            final totalSessionIndex = (weekIndex * weeklyFrequency) + sessionIndex;
+                            final sessionRir = rirPattern[(totalSessionIndex % rirPattern.length).toInt()];
+
+
+
+                            return ExpansionTile(
+                              title: Text('Session ${sessionIndex + 1}'),
+                              children: List.generate(setsPerSession, (setIndex) {
+                                final setKey = 'set${setIndex + 1}';
+
+                                final defaultRir = sessionRir.toString();
+                                final defaultReps = '10';
+
+                                _cachedRirPlan ??= {};
+                                _cachedRirPlan!.putIfAbsent(weekKey, () => {});
+                                _cachedRirPlan![weekKey]!.putIfAbsent(sKey, () => {});
+                                _cachedRirPlan![weekKey]![sKey]!.putIfAbsent(setKey, () {
+                                  return {
+                                    'rir': defaultRir,
+                                    'reps': defaultReps,
+                                  };
+                                });
+
+                                final currentSetData = _cachedRirPlan![weekKey]![sKey]![setKey]!;
+                                final repsValue = currentSetData['reps'] ?? defaultReps;
+                                final rirValue = currentSetData['rir'] ?? defaultRir;
+
+                                final controllerKey = '$weekKey-$sKey-$setKey';
+                                _repsControllers[controllerKey] ??= TextEditingController(text: repsValue);
+                                _rirControllers[controllerKey] ??= TextEditingController(text: rirValue);
+
+                                return Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: TextField(
+                                          controller: _repsControllers[controllerKey],
+                                          keyboardType: TextInputType.number,
+                                          readOnly: setIndex == 0,
+                                          style: TextStyle(color: setIndex == 0 ? Colors.white54 : Colors.white),
+                                          decoration: InputDecoration(
+                                            labelText: 'Set ${setIndex + 1} Reps',
+                                            labelStyle: const TextStyle(color: Colors.white70),
+                                            filled: true,
+                                            fillColor: Colors.blueGrey.shade800,
+                                            border: const OutlineInputBorder(),
+                                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: TextField(
+                                          controller: _rirControllers[controllerKey],
+                                          keyboardType: TextInputType.number,
+                                          style: const TextStyle(color: Colors.white),
+                                          decoration: InputDecoration(
+                                            labelText: 'Set ${setIndex + 1} RIR',
+                                            labelStyle: const TextStyle(color: Colors.white70),
+                                            filled: true,
+                                            fillColor: Colors.blueGrey.shade800,
+                                            border: const OutlineInputBorder(),
+                                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }),
+                            );
+                          }),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                const Divider(height: 1),
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text("Cancel", style: TextStyle(color: Colors.white)),
+                      ),
+                      const SizedBox(width: 8),
+                      TextButton(
+                        onPressed: () {
+                          for (final key in _rirControllers.keys) {
+                            final parts = key.split('-');
+                            if (parts.length != 3) continue;
+
+                            final weekKey = parts[0];
+                            final sessionKey = parts[1];
+                            final setKey = parts[2];
+
+                            _cachedRirPlan![weekKey]![sessionKey]![setKey] = {
+                              'rir': _rirControllers[key]?.text.trim() ?? '',
+                              'reps': _repsControllers[key]?.text.trim() ?? '',
+                            };
+                          }
+
+                          widget.onUpdateSetting(exerciseName, 'rirPlan', _cachedRirPlan ?? {});
+
+                          final weekData = _cachedRirPlan?['week1'] as Map<String, dynamic>?;
+                          if (weekData != null) {
+                            final summary = <String>[];
+                            for (int i = 1; i <= 3; i++) {
+                              final session = weekData['session$i'] as Map<String, dynamic>?;
+                              final set1 = session?['set1'] as Map<String, dynamic>?;
+                              final rir = set1?['rir'];
+                              if (rir != null) summary.add(rir.toString());
+                            }
+                            _rirDisplayController.text = 'W1 → ${summary.join(' | ')}';
+                          }
+
+                          print("💾 [Session RIR] Saved RIR plan for $exerciseName → $_cachedRirPlan");
+                          Navigator.pop(context);
+                        },
+                        child: const Text("Save", style: TextStyle(color: Colors.white)),
+                      ),
+                    ],
+                  ),
+                )
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -2670,6 +3754,55 @@ class _ExerciseCardState extends State<_ExerciseCard> {
               spacing: 5,
               runSpacing: 4,
               children: [
+
+                SizedBox(
+                  width: 158, height: 39,
+                  child: TextFormField(
+                    controller: _incrementsController,
+                    focusNode: _incrementsFocusNode,
+                    keyboardType: TextInputType.text,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9., ]'))
+
+                      // ❌ Removed auto-formatting to preserve cursor position
+                    ],
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    decoration: InputDecoration(
+                      labelText: 'Increments (kg)',
+                      hintText: '2.5, 1, 0.5, …',
+                      labelStyle: const TextStyle(color: Colors.white),
+                      hintStyle: const TextStyle(color: Colors.white38),
+                      floatingLabelBehavior: FloatingLabelBehavior.always,
+                      filled: true,
+                      fillColor: Colors.blueGrey.shade700,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 5),
+
+                _smallInput(
+                  "Weekly Frequency",
+                  controller: _weeklyFrequencyController,
+                  width: 148,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    FilteringTextInputFormatter.allow(RegExp(r'^[0-9]{0,2}$')),
+                    TextInputFormatter.withFunction((oldValue, newValue) {
+                      final intVal = int.tryParse(newValue.text);
+                      if (intVal != null && intVal > 14) {
+                        return oldValue;
+                      }
+                      return newValue;
+                    }),
+                  ],
+                ),
+
+                const SizedBox(height: 6, width:400),
+
                 SizedBox(
                   width: 158,
                   child: DropdownButtonFormField<String>(
@@ -2737,6 +3870,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                       contentPadding: const EdgeInsets.symmetric(
                           horizontal: 10, vertical: 10),
                     ),
+
                   ),
                 ),
 
@@ -2759,7 +3893,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                 _smallInput("Progression Model", width: 158),
                 SizedBox(
-                  width: 158,
+                  width: 158, height: 48,
                   child: GestureDetector(
                     onTap: () {
                       final model = _mapLabelToModelType(_selectedModel);
@@ -2802,66 +3936,267 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                       child: TextFormField(
                         controller: _repTargetsDisplayController,
                         readOnly: true,
-                        style:
-                            const TextStyle(color: Colors.white, fontSize: 12),
+                        style: const TextStyle(color: Colors.white, fontSize: 13),
                         decoration: InputDecoration(
                           labelText: 'Rep Targets X sets',
                           labelStyle: const TextStyle(color: Colors.white),
                           floatingLabelBehavior: FloatingLabelBehavior.always,
                           filled: true,
                           fillColor: Colors.blueGrey.shade700,
-                          border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(6)),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
                           isDense: true,
-                          contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 10),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
                         ),
                       ),
                     ),
                   ),
                 ),
 
-                const SizedBox(
-                    height: 6,
-                    width:
-                        400), // Adjust to 10 or 12 if you want more breathing room
+                const SizedBox(height: 6, width:400),
+
                 SizedBox(
                   width: 158,
-                  child: TextFormField(
-                    controller: _incrementsController,
-                    focusNode: _incrementsFocusNode,
-                    keyboardType: TextInputType.text,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.allow(RegExp(r'[0-9., ]'))
+                  child: Theme(
+                    data: Theme.of(context).copyWith(
+                      canvasColor: Colors.blueGrey.shade700,
+                    ),
+                    child: DropdownButtonFormField<String>(
+                      value: _selectedRirModel[widget.exerciseName],
+                      isExpanded: true, // ✅ Prevents layout overflow
+                      items: [
+                        'Linear-Taper',
+                        'Wave RIR undulation',
+                        'Session RIR Undulation',
+                        'Static RIR',
+                      ].map((label) {
+                        return DropdownMenuItem<String>(
+                          value: label,
+                          child: Text(
+                            label,
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                            softWrap: false,
+                          ),
+                        );
+                      }).toList(),
+                      selectedItemBuilder: (context) {
+                        return [
+                          'Linear-Taper',
+                          'Wave RIR undulation',
+                          'Session RIR Undulation',
+                          'Static RIR',
+                        ].map((label) {
+                          return Container(
+                            alignment: Alignment.centerLeft,
+                            width: 130,
+                            child: Text(
+                              label,
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                              softWrap: false,
+                              style: const TextStyle(color: Colors.white, fontSize: 12),
+                            ),
+                          );
+                        }).toList();
+                      },
+                      onChanged: (value) {
+                        setState(() {
+                          _selectedRirModel[widget.exerciseName] = value!;
+                          print("💾 [UI] Saved RIR model '$value' for ${widget.exerciseName}");
 
-                      // ❌ Removed auto-formatting to preserve cursor position
-                    ],
-                    style: const TextStyle(color: Colors.white, fontSize: 12),
-                    decoration: InputDecoration(
-                      labelText: 'Increments (kg)',
-                      hintText: '2.5, 1, 0.5, …',
-                      labelStyle: const TextStyle(color: Colors.white),
-                      hintStyle: const TextStyle(color: Colors.white38),
-                      floatingLabelBehavior: FloatingLabelBehavior.always,
-                      filled: true,
-                      fillColor: Colors.blueGrey.shade700,
-                      border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(6)),
-                      isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 10),
+                          // ✅ Clear cached RIR plan so new model starts with fresh defaults
+                          _cachedRirPlan = null;
+                          print("🧹 [CACHE RESET] Cleared cached RIR plan due to model change to '$value'");
+                          // ✅ Clear or update RIR summary box
+                          _rirDisplayController.text = 'W1 → [Not generated]';
+
+                          // ✅ Save to Firestore via onUpdateSetting
+                          widget.onUpdateSetting(widget.exerciseId, 'rirModel', value);
+                        });
+                      },
+
+
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                      decoration: InputDecoration(
+                        labelText: 'RIR Periodization Model',
+                        labelStyle: const TextStyle(color: Colors.white),
+                        floatingLabelBehavior: FloatingLabelBehavior.always,
+                        filled: true,
+                        fillColor: Colors.blueGrey.shade700,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                      ),
                     ),
                   ),
                 ),
 
-                const SizedBox(
-                    height: 6,
-                    width:
-                        400), // Adjust to 10 or 12 if you want more breathing room
+                SizedBox(
+                  width: 158,
+                  height: 48,
+                  child: GestureDetector(
+                    onTap: () {
+                      final model = _selectedRirModel[widget.exerciseName];
+                      final exerciseId = PeriodizationModelUtils.nameToId[widget.exerciseName];
+                      final settings = widget.exerciseSettings[exerciseId];
+                      final weeklyFrequency = settings?['weeklyFrequency'];
+
+                      print("🧪 [RIR Tap] Settings for ${widget.exerciseName}: $settings");
+                      print("📆 [RIR Tap] Weekly Frequency from settings = $weeklyFrequency");
+                      print("🧪 [RIR Tap] ${widget.exerciseName} → Selected model: $model");
+
+                      switch (model) {
+                        case 'Linear-Taper':
+                          _showLinearTaperRirTargetDialog(widget.exerciseName, frequency: weeklyFrequency);
+                          break;
+
+                        case 'Wave RIR undulation':
+                          _showWaveRirUndulationDialog(widget.exerciseName, frequency: weeklyFrequency);
+                          break;
+
+                        case 'Static RIR':
+                          _showStaticRirDialog(widget.exerciseName, frequency: weeklyFrequency);
+                          break;
+
+                        case 'Session RIR Undulation':
+                          _showSessionUndulatingRirDialog(widget.exerciseName, frequency: weeklyFrequency);
+                          break;
+
+                        default:
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Model "$model" not supported yet')),
+                          );
+                      }
+                    },
+                    child: AbsorbPointer(
+                      child: TextFormField(
+                        controller: _rirDisplayController, // ✅ ADD THIS LINE
+                        readOnly: true,
+                        style: const TextStyle(color: Colors.white, fontSize: 13),
+                        decoration: InputDecoration(
+                          labelText: 'RIR Targets',
+                          labelStyle: const TextStyle(color: Colors.white),
+                          floatingLabelBehavior: FloatingLabelBehavior.always,
+                          filled: true,
+                          fillColor: Colors.blueGrey.shade700,
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+
+
+
+                const SizedBox(height: 6, width:400), // Adjust to 10 or 12 if you want more breathing room
 
                 SizedBox(
                   width: 158,
-                  height: 48, // Match Notes height
+                  height: 48,
+                  child: Theme(
+                    data: Theme.of(context).copyWith(
+                      canvasColor: Colors.blueGrey.shade700,
+                    ),
+                    child: DropdownButtonFormField<String>(
+                      value: _selectedProgressionModel[widget.exerciseName],
+                      isExpanded: true,
+                      items: [
+                        DropdownMenuItem<String>(
+                          value: 'Linear Weight Increase',
+                          child: Text(
+                            'Linear Weight Increase',
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                            softWrap: false,
+                          ),
+                        ),
+                        DropdownMenuItem<String>(
+                          value: 'Smart Progression',
+                          child: Text(
+                            'Smart Progression',
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                            softWrap: false,
+                          ),
+                        ),
+                        DropdownMenuItem<String>(
+                          value: 'Add Reps',
+                          child: Text(
+                            'Add Reps',
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                            softWrap: false,
+                          ),
+                        ),
+                        DropdownMenuItem<String>(
+                          value: 'None',
+                          child: Text(
+                            'None',
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                            softWrap: false,
+                          ),
+                        ),
+                      ],
+                      selectedItemBuilder: (context) {
+                        return [
+                          'Linear Weight Increase',
+                          'Smart Progression',
+                          'Add Reps',
+                          'None',
+                        ].map((label) {
+                          return Container(
+                            alignment: Alignment.centerLeft,
+                            width: 130,
+                            child: Text(
+                              label,
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                              softWrap: false,
+                              style: const TextStyle(color: Colors.white, fontSize: 12),
+                            ),
+                          );
+                        }).toList();
+                      },
+                      onChanged: (value) {
+                        setState(() {
+                          _selectedProgressionModel[widget.exerciseName] = value!;
+                          widget.onUpdateSetting(widget.exerciseId, 'progressionModel', value);
+                          print("💾 [UI] Saved progression model '$value' for ${widget.exerciseName}");
+                        });
+                      },
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                      decoration: InputDecoration(
+                        labelText: 'Progression Model',
+                        labelStyle: const TextStyle(color: Colors.white),
+                        floatingLabelBehavior: FloatingLabelBehavior.always,
+                        filled: true,
+                        fillColor: Colors.blueGrey.shade700,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                      ),
+                    ),
+
+
+
+
+                  ),
+                ),
+
+
+
+                // Add spacing if needed
+
+
+
+
+                SizedBox(
+                  width: 158,
+                  height: 44, // Match Notes height
                   child: Stack(
                     children: [
                       Positioned.fill(
@@ -2869,7 +4204,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 10, vertical: 2),
                           decoration: BoxDecoration(
-                            color: Colors.blueGrey.shade800,
+                            color: Colors.blueGrey.shade700,
                             borderRadius: BorderRadius.circular(4),
                             border: Border.all(color: Colors.white38),
                           ),
@@ -2925,20 +4260,20 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         left: 8,
                         top: -4,
                         child: Text(
-                          'Max Weight × Reps',
-                          style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.white,
-                              backgroundColor: Colors.blueGrey.shade800),
+                          'Best Weight × Reps',
+                          style: TextStyle(fontSize: 12, color: Colors.white, backgroundColor: Colors.blueGrey.shade700
+                          ),
                         ),
                       ),
                     ],
                   ),
                 ),
 
+                const SizedBox(height: 3, width:400), // Adjust to 10 or 12 if you want more breathing room
+
                 SizedBox(
-                  width: 158,
-                  height: 48,
+                  width: 350,
+                  height:48,
                   child: TextField(
                     controller: _notesController,
                     maxLines: null,
@@ -2948,7 +4283,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                       labelText: 'Notes',
                       labelStyle: const TextStyle(color: Colors.white),
                       filled: true,
-                      fillColor: Colors.blueGrey.shade800,
+                      fillColor: Colors.blueGrey.shade700,
                       border: const OutlineInputBorder(),
                       contentPadding: const EdgeInsets.symmetric(
                           horizontal: 8, vertical: 10),
