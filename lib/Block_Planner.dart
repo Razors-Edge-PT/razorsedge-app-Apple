@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:localtest222/BlockBuilder2.0.dart';
 import 'template_model.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'workout_entry_screen.dart';
@@ -33,11 +34,15 @@ class _BlockPlannerState extends State<Block_Planner> {
   String? blockIdToUse;
   bool _isSavedBlock = false;
   bool _didRunInitOnce = false;
+  bool _initialBlockIsActive = false;
 
   @override
   void dispose() {
     _blockNameController.dispose();
     _historyInputController.dispose();
+    Future.delayed(Duration(milliseconds: 100), () {
+      _savePlannedExercises();
+    }); // ✅ Autosave exercise details on exit
     super.dispose();
   }
 
@@ -68,6 +73,7 @@ class _BlockPlannerState extends State<Block_Planner> {
         .get();
 
     if (!doc.exists) return;
+
     final data = doc.data()!;
 
     setState(() {
@@ -81,6 +87,8 @@ class _BlockPlannerState extends State<Block_Planner> {
             .map((key, val) => MapEntry(key, Map<String, dynamic>.from(val))),
       );
       _isSavedBlock = true;
+
+      _initialBlockIsActive = data['isActive'] ?? false;
     });
   }
 
@@ -101,6 +109,27 @@ class _BlockPlannerState extends State<Block_Planner> {
 
 // 🔁 AUTO-SAVE & SAVE BLOCK FEATURES INTEGRATED
 // Add this inside your _BlockPlannerState class:
+
+  void _onUpdateSetting(String exerciseId, String key, dynamic value) {
+    // 1) update local map so UI stays in sync
+    setState(() {
+      exerciseSettings[exerciseId]![key] = value;
+    });
+
+    // 2) push just that one field up to Firestore
+    final userId = FirebaseAuth.instance.currentUser!.uid;
+    FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(userId)
+        .collection('blocks')
+        .doc(blockIdToUse)
+        .update({
+      'exerciseSettings.$exerciseId.$key': value
+    })
+        .catchError((e) {
+      print("❌ Failed to save $key for $exerciseId: $e");
+    });
+  }
 
   @override
   void initState() {
@@ -160,11 +189,20 @@ class _BlockPlannerState extends State<Block_Planner> {
 
       exerciseSettings = Map<String, Map<String, dynamic>>.from(
         (data['exerciseSettings'] ?? {}).map(
-          (key, value) => MapEntry(key, Map<String, dynamic>.from(value)),
+              (key, value) => MapEntry(key, Map<String, dynamic>.from(value)),
         ),
       );
+      print("📥 Loaded block $blockId from Firestore");
+      print("📥 Found ${exerciseSettings.length} exerciseSettings entries:");
+
+      for (final entry in exerciseSettings.entries) {
+        print("🔍 ${entry.key} → ${jsonEncode(entry.value)}");
+      }
+
+
     });
   }
+
 
 // Call _autoSaveDraft anywhere changes are made:
 // e.g. in setState blocks in _showExercisePickerDialog and onUpdateSetting
@@ -595,14 +633,25 @@ class _BlockPlannerState extends State<Block_Planner> {
 
   Future<void> _savePlannedExercises() async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    if (user == null || blockIdToUse == null) return;
 
+    // 🔄 Now writing into the *same* collection as savePlannedBlock
     final docRef = FirebaseFirestore.instance
-        .collection('users')
+        .collection('planned_blocks')
         .doc(user.uid)
-        .collection('block_planner')
-        .doc('current_block');
+        .collection('blocks')
+        .doc(blockIdToUse);
 
+    print("📤 Saving exerciseSettings for ${exercises.length} exercises");
+
+    for (final id in exercises) {
+      final settings = exerciseSettings[id];
+      print("💾 $id → ${jsonEncode(settings)}");
+    }
+
+    print("📤 Writing full block to Firestore...");
+
+    // Read-modify your exerciseDetails as before
     final snapshot = await docRef.get();
     final data = snapshot.data() ?? {};
 
@@ -680,8 +729,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       }
       else {
         existingDetails[exercise] = {
-          'periodizationModel':
-              entry['periodizationModel'] ?? 'Linear Exposure',
+          'periodizationModel': entry['periodizationModel'],
           'repTargets': savedTargets,
           'rirPlan': entry['rirPlan'], // ✅ Add this
           'rirModel': entry['rirModel'], // ✅ add this line
@@ -877,7 +925,11 @@ class _BlockPlannerState extends State<Block_Planner> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    final isKeyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;
+    return GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: () => FocusScope.of(context).unfocus(),
+    child: Scaffold(
       backgroundColor: Colors.blueGrey.shade900,
       appBar: AppBar(
         title: const Text("Block Planner"),
@@ -912,67 +964,59 @@ class _BlockPlannerState extends State<Block_Planner> {
               }
 
               // Use StatefulBuilder to capture checkbox value
-              bool tempActive = false;
+              bool tempActive = _initialBlockIsActive;
+
               final confirm = await showDialog<bool>(
                 context: context,
                 builder: (ctx) {
-                  return StatefulBuilder(
-                    builder: (context, setState) {
-                      return AlertDialog(
-                        title: const Text("Save Block?"),
-                        content: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Text(
-                                "Do you want to save this block to your plans?"),
-                            Row(
-                              children: [
-                                const Text("Set as Active?"),
-                                const SizedBox(width: 12),
-                                Checkbox(
-                                  value: tempActive,
-                                  onChanged: (val) => setState(() {
-                                    tempActive = val ?? false;
-                                  }),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx, null),
-                            child: const Text("Cancel"),
-                          ),
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx, true),
-                            child: const Text("Save"),
+                  return StatefulBuilder(builder: (context, setState) {
+                    return AlertDialog(
+                      title: const Text("Save Block?"),
+                      content: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text("Do you want to save this block to your plans?"),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text("Set as Active?"),
+                              Switch(
+                                value: tempActive,
+                                onChanged: (v) => setState(() => tempActive = v),
+                              ),
+                            ],
                           ),
                         ],
-                      );
-                    },
-                  );
+                      ),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(ctx, null), child: const Text("Cancel")),
+                        TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Save")),
+                      ],
+                    );
+                  });
                 },
               );
 
               if (confirm == true) {
-                await _savePlannedBlock(
-                    setActive: tempActive); // ✅ correct state passed
+                await _savePlannedExercises(); // ✅ Save exercise-level data
+                await _savePlannedBlock(setActive: tempActive); // ✅ Save block-level metadata
               }
+
+
             },
           ),
         ],
       ),
 
       // 🔽 Floating button shows conditionally
-      floatingActionButton: _isSavedBlock
+    floatingActionButton: _isSavedBlock && !isKeyboardOpen
           ? FloatingActionButton.extended(
               onPressed: () {
                 if (blockIdToUse == null) return;
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (context) => WeekPlanner(blockId: blockIdToUse!),
+                    builder: (context) => BlockBuilder2(blockId: blockIdToUse!),
                   ),
                 );
               },
@@ -1110,13 +1154,9 @@ class _BlockPlannerState extends State<Block_Planner> {
                         exerciseSettings: exerciseSettings,
                         blockStartDate: _blockStartDate,
                         blockEndDate: _blockEndDate,
-                        onUpdateSetting: (exerciseId, key, value) {
-                          setState(() {
-                            exerciseSettings[exerciseId] ??= {};
-                            exerciseSettings[exerciseId]![key] = value;
-                          });
-                        },
+                        onUpdateSetting: _onUpdateSetting, // ✅ Calls the real one that updates Firestore
                       ),
+
                     );
                   }
 
@@ -1125,7 +1165,7 @@ class _BlockPlannerState extends State<Block_Planner> {
           ],
         ),
       ),
-    );
+    ));
   }
 
   Widget _buildGlobalBlockInputs() {
@@ -1554,14 +1594,33 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       _selectedProgressionModel[widget.exerciseName] = normalized;
     }
 
+    _maxWeightController.addListener(_updateE1RM);
+    _maxRepsController.  addListener(_updateE1RM);
 
+    _maxWeightController.addListener(_syncBestWeightXReps);
+    _maxRepsController  .addListener(_syncBestWeightXReps);
 
+  }
+
+  void _syncBestWeightXReps() {
+    final kg   = _maxWeightController.text.trim();
+    final reps = _maxRepsController .text.trim();
+    if (kg.isNotEmpty && reps.isNotEmpty) {
+      // fire your generic onUpdateSetting callback with the combined string
+      widget.onUpdateSetting(
+        widget.exerciseId,
+        'maxWeightXReps',
+        '$kg x $reps',
+      );
+    }
   }
 
   @override
   void dispose() {
     _maxWeightController.removeListener(_updateE1RM);
     _maxRepsController.removeListener(_updateE1RM);
+    _maxWeightController.removeListener(_syncBestWeightXReps);
+    _maxRepsController .removeListener(_syncBestWeightXReps);
 
     final value = int.tryParse(_weeklyFrequencyController.text.trim());
     if (value != null) {
@@ -3671,6 +3730,47 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     );
   }
 
+  Widget _buildHeader() {
+    return GestureDetector(
+      onTap: () => setState(() => isExpanded = !isExpanded),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Expanded(
+            child: RichText(
+              overflow: isExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
+              maxLines: isExpanded ? null : 1,
+              text: TextSpan(
+                children: [
+                  TextSpan(
+                    text: isExpanded ? "▼  " : "➤  ",
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                  TextSpan(
+                    text: widget.exerciseName,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // E1RM display
+          Builder(builder: (_) {
+            final w = double.tryParse(_maxWeightController.text);
+            final r = double.tryParse(_maxRepsController.text);
+            final display = (w != null && r != null)
+                ? "Avg E1RM: ${PeriodizationModelUtils.calculateE1RM(w, r, 0.5).toStringAsFixed(1)}kg"
+                : "Avg E1RM: –";
+            return Text(display, style: const TextStyle(color: Colors.white70, fontSize: 11));
+          }),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -3686,64 +3786,12 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 🔽 Header Row with Expand/Collapse toggle
+          _buildHeader(),
           GestureDetector(
             onTap: () => setState(() => isExpanded = !isExpanded),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Expanded(
-                  child: RichText(
-                    overflow: isExpanded
-                        ? TextOverflow.visible
-                        : TextOverflow.ellipsis, // ✅ Dynamic
-                    maxLines: isExpanded
-                        ? null
-                        : 1, // ✅ Allow full multi-line when expanded
-                    text: TextSpan(
-                      children: [
-                        TextSpan(
-                          text: isExpanded ? "▼  " : "➤  ",
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                          ),
-                        ),
-                        TextSpan(
-                          text: widget.exerciseName,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 13,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                Builder(
-                  builder: (_) {
-                    final double? weight =
-                        double.tryParse(_maxWeightController.text);
-                    final double? reps =
-                        double.tryParse(_maxRepsController.text);
-
-                    String displayText;
-                    if (weight != null && reps != null) {
-                      final e1rm = PeriodizationModelUtils.calculateE1RM(
-                          weight, reps, 0.5);
-                      displayText = "Avg E1RM: ${e1rm.toStringAsFixed(1)} kg";
-                    } else {
-                      displayText = "Avg E1RM: –";
-                    }
-
-                    return Text(
-                      displayText,
-                      style:
-                          const TextStyle(color: Colors.white70, fontSize: 11),
-                    );
-                  },
-                )
               ],
             ),
           ),
@@ -3783,23 +3831,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                 ),
 
                 const SizedBox(height: 5),
-
-                _smallInput(
-                  "Weekly Frequency",
-                  controller: _weeklyFrequencyController,
-                  width: 148,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    FilteringTextInputFormatter.allow(RegExp(r'^[0-9]{0,2}$')),
-                    TextInputFormatter.withFunction((oldValue, newValue) {
-                      final intVal = int.tryParse(newValue.text);
-                      if (intVal != null && intVal > 14) {
-                        return oldValue;
-                      }
-                      return newValue;
-                    }),
-                  ],
-                ),
 
                 const SizedBox(height: 6, width:400),
 
@@ -3890,8 +3921,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                     }),
                   ],
                 ),
-
-                _smallInput("Progression Model", width: 158),
                 SizedBox(
                   width: 158, height: 48,
                   child: GestureDetector(
