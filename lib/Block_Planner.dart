@@ -33,6 +33,7 @@ class _BlockPlannerState extends State<Block_Planner> {
   String? blockIdToUse;
   bool _isSavedBlock = false;
   bool _didRunInitOnce = false;
+  bool _initialBlockIsActive = false;
 
   @override
   void dispose() {
@@ -68,8 +69,8 @@ class _BlockPlannerState extends State<Block_Planner> {
         .get();
 
     if (!doc.exists) return;
-    final data = doc.data()!;
 
+    final data = doc.data()!;
     setState(() {
       _blockNameController.text = data['name'] ?? '';
       _blockStartDate = (data['startDate'] as Timestamp).toDate();
@@ -81,6 +82,8 @@ class _BlockPlannerState extends State<Block_Planner> {
             .map((key, val) => MapEntry(key, Map<String, dynamic>.from(val))),
       );
       _isSavedBlock = true;
+
+      _initialBlockIsActive = data['isActive'] ?? false;
     });
   }
 
@@ -595,19 +598,20 @@ class _BlockPlannerState extends State<Block_Planner> {
 
   Future<void> _savePlannedExercises() async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    if (user == null || blockIdToUse == null) return;
 
+    // 🔄 Now writing into the *same* collection as savePlannedBlock
     final docRef = FirebaseFirestore.instance
-        .collection('users')
+        .collection('planned_blocks')
         .doc(user.uid)
-        .collection('block_planner')
-        .doc('current_block');
+        .collection('blocks')
+        .doc(blockIdToUse);
 
+    // Read-modify your exerciseDetails as before
     final snapshot = await docRef.get();
     final data = snapshot.data() ?? {};
-
     final existingDetails = Map<String, dynamic>.from(
-      data['plannedExerciseDetails'] ?? {},
+      data['exerciseSettings'] ?? {},
     );
 
     for (final exercise in exercises) {
@@ -680,16 +684,15 @@ class _BlockPlannerState extends State<Block_Planner> {
       }
       else {
         existingDetails[exercise] = {
-          'periodizationModel':
-              entry['periodizationModel'] ?? 'Linear Exposure',
-          'repTargets': savedTargets,
-          'rirPlan': entry['rirPlan'], // ✅ Add this
-          'rirModel': entry['rirModel'], // ✅ add this line
-          'progressionModel': entry['progressionModel'] ?? 'Linear Weight Increase',
-          'increments': entry['increments'] ?? {'week': 2.5, 'block': 5.0},
-          'weeklyFrequency': entry['weeklyFrequency'] ?? 3,
-          'maxWeightXReps': entry['maxWeightXReps'] ?? '',
-          'notes': entry['notes'] ?? '',
+          'periodizationModel': entry['periodizationModel'],
+          'repTargets': entry['repTargets'],
+          'rirModel': entry['rirModel'],
+          'rirPlan': entry['rirPlan'],
+          'progressionModel': entry['progressionModel'],
+          'increments': entry['increments'],
+          'weeklyFrequency': entry['weeklyFrequency'],
+          'maxWeightXReps': entry['maxWeightXReps'],
+          'notes': entry['notes'],
         };
       }
     }
@@ -822,14 +825,15 @@ class _BlockPlannerState extends State<Block_Planner> {
       final reps = exerciseRepTargets[exercise] ?? [10, 8, 6];
 
       final entry = {
-        'periodizationModel':
-            existingEntry?['periodizationModel'] ?? 'Linear Exposure',
-        'repTargets': reps,
-        'progressionModel': existingEntry?['progressionModel'] ?? "Linear Weight Increase",
-        'increments': existingEntry?['increments'] ?? {'week': 2.5, 'block': 5.0},
-        'weeklyFrequency': existingEntry?['weeklyFrequency'] ?? 3,
-        'maxWeightXReps': existingEntry?['maxWeightXReps'] ?? '',
-        'notes': existingEntry?['notes'] ?? '',
+        'periodizationModel': existingEntry?['periodizationModel'] ?? 'Linear Exposure',
+        'repTargets'        : reps,
+        'progressionModel'  : existingEntry?['progressionModel']  ?? 'Linear Weight Increase',
+        'increments'        : existingEntry?['increments']        ?? {'week': 2.5, 'block': 5.0},
+        'weeklyFrequency'   : existingEntry?['weeklyFrequency']   ?? 3,
+        'maxWeightXReps'    : existingEntry?['maxWeightXReps']    ?? '',
+        'notes'             : existingEntry?['notes']             ?? '',
+        'rirModel'          : existingEntry?['rirModel']          ?? 'Linear-Taper',
+        'rirPlan'           : existingEntry?['rirPlan']           ?? <String, dynamic>{},
       };
 
       existingDetails[exercise] = entry;
@@ -877,7 +881,11 @@ class _BlockPlannerState extends State<Block_Planner> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    final isKeyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;
+    return GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: () => FocusScope.of(context).unfocus(),
+    child: Scaffold(
       backgroundColor: Colors.blueGrey.shade900,
       appBar: AppBar(
         title: const Text("Block Planner"),
@@ -912,60 +920,50 @@ class _BlockPlannerState extends State<Block_Planner> {
               }
 
               // Use StatefulBuilder to capture checkbox value
-              bool tempActive = false;
+              bool tempActive = _initialBlockIsActive;
+
               final confirm = await showDialog<bool>(
                 context: context,
                 builder: (ctx) {
-                  return StatefulBuilder(
-                    builder: (context, setState) {
-                      return AlertDialog(
-                        title: const Text("Save Block?"),
-                        content: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Text(
-                                "Do you want to save this block to your plans?"),
-                            Row(
-                              children: [
-                                const Text("Set as Active?"),
-                                const SizedBox(width: 12),
-                                Checkbox(
-                                  value: tempActive,
-                                  onChanged: (val) => setState(() {
-                                    tempActive = val ?? false;
-                                  }),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx, null),
-                            child: const Text("Cancel"),
-                          ),
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx, true),
-                            child: const Text("Save"),
+                  return StatefulBuilder(builder: (context, setState) {
+                    return AlertDialog(
+                      title: const Text("Save Block?"),
+                      content: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text("Do you want to save this block to your plans?"),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text("Set as Active?"),
+                              Switch(
+                                value: tempActive,
+                                onChanged: (v) => setState(() => tempActive = v),
+                              ),
+                            ],
                           ),
                         ],
-                      );
-                    },
-                  );
+                      ),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(ctx, null), child: const Text("Cancel")),
+                        TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Save")),
+                      ],
+                    );
+                  });
                 },
               );
 
               if (confirm == true) {
-                await _savePlannedBlock(
-                    setActive: tempActive); // ✅ correct state passed
+                await _savePlannedBlock(setActive: tempActive);
               }
+
             },
           ),
         ],
       ),
 
       // 🔽 Floating button shows conditionally
-      floatingActionButton: _isSavedBlock
+    floatingActionButton: _isSavedBlock && !isKeyboardOpen
           ? FloatingActionButton.extended(
               onPressed: () {
                 if (blockIdToUse == null) return;
@@ -1125,7 +1123,7 @@ class _BlockPlannerState extends State<Block_Planner> {
           ],
         ),
       ),
-    );
+    ));
   }
 
   Widget _buildGlobalBlockInputs() {
@@ -3784,23 +3782,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                 const SizedBox(height: 5),
 
-                _smallInput(
-                  "Weekly Frequency",
-                  controller: _weeklyFrequencyController,
-                  width: 148,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    FilteringTextInputFormatter.allow(RegExp(r'^[0-9]{0,2}$')),
-                    TextInputFormatter.withFunction((oldValue, newValue) {
-                      final intVal = int.tryParse(newValue.text);
-                      if (intVal != null && intVal > 14) {
-                        return oldValue;
-                      }
-                      return newValue;
-                    }),
-                  ],
-                ),
-
                 const SizedBox(height: 6, width:400),
 
                 SizedBox(
@@ -3890,8 +3871,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                     }),
                   ],
                 ),
-
-                _smallInput("Progression Model", width: 158),
                 SizedBox(
                   width: 158, height: 48,
                   child: GestureDetector(

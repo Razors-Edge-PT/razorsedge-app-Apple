@@ -114,13 +114,13 @@ class MyApp extends StatelessWidget {
         '/exercises': (context) => const ExercisesScreen(),
         '/templates': (context) => const TemplatesScreen(),
         '/workouts': (context) => const WorkoutPage(),
-        '/BB2': (context) => const BlockBuilder2(),
+        // '/BB2': (context) => const BlockBuilder2(),
         '/body_weight_tracker': (context) => const BodyWeightTracker(),
-        '/week_planner': (context) => const WeekPlanner(),
+        '/week_planner': (context) => const BlockBuilder2(),
         '/planned_blocks': (context) => const PlannedBlocksScreen(),
         '/block_builder': (context) => const Block_Planner(),
         '/workout_entry':   (c) => const WorkoutPage(),                // new workout
-        '/week_planner_b':   (c) => const WeekPlanner(),              // training schedule
+        '/week_planner_b':   (c) => const BlockBuilder2(),              // training schedule
         '/saved_workouts':  (c) => const SavedWorkoutsScreen(),        // saved workouts
         '/body_weight':     (c) => const BodyWeightTracker(),          // weight tracker
       },

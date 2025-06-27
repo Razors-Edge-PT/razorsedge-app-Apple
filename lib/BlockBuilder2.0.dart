@@ -129,7 +129,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   final Map<String, Map<String, dynamic>> _cachedProgressedValues = {};
   String? _selectedBlockId;
 
-
   //UI bits
 
   final GlobalKey cardKey = GlobalKey();
@@ -141,19 +140,12 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   int initialDayIndex = 0; // Optional but useful for fine control
   final Set<int> loadedWeekIndices = {};
 
-
   DateTime _bb2StartTime = DateTime.now();
-
-
 
 // Key = weekday index (0=Mon...6=Sun), Value = latest edited structure
   VoidCallback? _lastUndoAction;
 
-
-
   late Future<void> _initialLoad;
-
-
 
   final Map<String, FocusNode> _focusNodes = {};
 
@@ -194,8 +186,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     return total.clamp(minHeight, maxHeight);
   }
 
-
-
   Future<void> loadAllData() async {
     print("🧪 [BB2] Starting loadAllData()...");
     final stopwatch = Stopwatch()..start();
@@ -228,8 +218,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     print('⏱️ BB2 loadAllData + loadVisibleWeeksOnly took ${stopwatch.elapsedMilliseconds}ms');
 
   }
-
-
 
   Future<void> loadBlockDateRange() async {
     final user = FirebaseAuth.instance.currentUser;

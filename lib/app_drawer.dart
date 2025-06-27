@@ -90,11 +90,11 @@ class AppDrawer extends StatelessWidget {
             Navigator.pushReplacementNamed(context, '/login');
           }),
 
-          // ⚙️ Utilities section
-          const DrawerSectionHeader(title: "Testing"),
-          _drawerTile(context, Icons.adb, 'BB2 Test', () {
-            Navigator.pushNamed(context, '/BB2');
-          }),
+          // // ⚙️ Utilities section
+          // const DrawerSectionHeader(title: "Testing"),
+          // _drawerTile(context, Icons.adb, 'BB2 Test', () {
+          //   Navigator.pushNamed(context, '/BB2');
+          // }),
 
           const CustomDivider(),
         ],
