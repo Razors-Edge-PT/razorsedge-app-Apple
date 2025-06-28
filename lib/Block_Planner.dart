@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:localtest222/BlockBuilder2.0.dart';
 import 'template_model.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'workout_entry_screen.dart';
@@ -89,7 +90,6 @@ class _BlockPlannerState extends State<Block_Planner> {
 
   String _repsText = '';
 
-
   DateTime? _blockStartDate;
   DateTime? _blockEndDate;
   Map<String, dynamic> exerciseRepTargets = {};
@@ -104,6 +104,27 @@ class _BlockPlannerState extends State<Block_Planner> {
 
 // 🔁 AUTO-SAVE & SAVE BLOCK FEATURES INTEGRATED
 // Add this inside your _BlockPlannerState class:
+
+  void _onUpdateSetting(String exerciseId, String key, dynamic value) {
+    // 1) update local map so UI stays in sync
+    setState(() {
+      exerciseSettings[exerciseId]![key] = value;
+    });
+
+    // 2) push just that one field up to Firestore
+    final userId = FirebaseAuth.instance.currentUser!.uid;
+    FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(userId)
+        .collection('blocks')
+        .doc(blockIdToUse)
+        .update({
+      'exerciseSettings.$exerciseId.$key': value
+    })
+        .catchError((e) {
+      print("❌ Failed to save $key for $exerciseId: $e");
+    });
+  }
 
   @override
   void initState() {
@@ -970,7 +991,7 @@ class _BlockPlannerState extends State<Block_Planner> {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (context) => WeekPlanner(blockId: blockIdToUse!),
+                    builder: (context) => BlockBuilder2(blockId: blockIdToUse!),
                   ),
                 );
               },
@@ -1431,7 +1452,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
     final settings = widget.exerciseSettings[widget.exerciseId];
 
-
     if (settings != null) {
       final reps = settings['repTargets'];
 
@@ -1502,7 +1522,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       print("📥 [INIT] Loaded RIR model for ${widget.exerciseName}: $rirModel");
     }
 
-
     final rirPlan = settings?['rirPlan'];
     if (rirPlan != null && rirPlan is Map<String, dynamic>) {
       _cachedRirPlan = rirPlan.map((weekKey, weekVal) {
@@ -1552,14 +1571,33 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       _selectedProgressionModel[widget.exerciseName] = normalized;
     }
 
+    _maxWeightController.addListener(_updateE1RM);
+    _maxRepsController.  addListener(_updateE1RM);
 
+    _maxWeightController.addListener(_syncBestWeightXReps);
+    _maxRepsController  .addListener(_syncBestWeightXReps);
 
+  }
+
+  void _syncBestWeightXReps() {
+    final kg   = _maxWeightController.text.trim();
+    final reps = _maxRepsController .text.trim();
+    if (kg.isNotEmpty && reps.isNotEmpty) {
+      // fire your generic onUpdateSetting callback with the combined string
+      widget.onUpdateSetting(
+        widget.exerciseId,
+        'maxWeightXReps',
+        '$kg x $reps',
+      );
+    }
   }
 
   @override
   void dispose() {
     _maxWeightController.removeListener(_updateE1RM);
     _maxRepsController.removeListener(_updateE1RM);
+    _maxWeightController.removeListener(_syncBestWeightXReps);
+    _maxRepsController .removeListener(_syncBestWeightXReps);
 
     final value = int.tryParse(_weeklyFrequencyController.text.trim());
     if (value != null) {
@@ -2704,10 +2742,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     );
   }
 
-
-
   // RIR Models                                               RIR MODELS
-
   void _showLinearTaperRirTargetDialog(String exerciseName, {int? frequency}) {
     final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
 
@@ -2931,7 +2966,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     );
 
   }
-
 
   void _showWaveRirUndulationDialog(String exerciseName, {int? frequency}) {
     final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
@@ -3432,7 +3466,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     );
   }
 
-
   static Map<String, dynamic> generateStaticRirPlan({
     required int weeks,
     required int sessionsPerWeek,
@@ -3482,9 +3515,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     'Back Squat, Barbell': [3.0, 2.0, 1.0, 2.5],
     'default': [1.5, 1.0, 0.5, 1.0],
   };
-
-
-
 
   void _showSessionUndulatingRirDialog(String exerciseName, {int? frequency}) {
     final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
@@ -3536,8 +3566,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                             // ✅ Use global session index to avoid resetting each week
                             final totalSessionIndex = (weekIndex * weeklyFrequency) + sessionIndex;
                             final sessionRir = rirPattern[(totalSessionIndex % rirPattern.length).toInt()];
-
-
 
                             return ExpansionTile(
                               title: Text('Session ${sessionIndex + 1}'),

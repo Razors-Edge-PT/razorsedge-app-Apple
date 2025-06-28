@@ -365,40 +365,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     weekIndices = List.generate(totalWeeks, (i) => i);
   }
 
-  /// Moves everything you had on [from] to [to], and clears the original day.
-  // void _shiftTrainingDay({required DateTime from, required DateTime to}) {
-  //   // compute zero‐based day offsets relative to your display window
-  //   final int fromOffset = from.difference(_displayStart).inDays;
-  //   final int toOffset   = to.difference(_displayStart).inDays;
-  //
-  //   if (fromOffset < 0 ||
-  //       toOffset   < 0 ||
-  //       fromOffset >= totalWeeks * 7 ||
-  //       toOffset   >= totalWeeks * 7) return;
-  //
-  //   final int fromWeek = fromOffset ~/ 7;
-  //   final int fromDay  = fromOffset % 7;
-  //   final int toWeek   = toOffset ~/ 7;
-  //   final int toDay    = toOffset % 7;
-  //
-  //   setState(() {
-  //     // 1️⃣ grab all the data
-  //     final movedRows       = exerciseRows[fromWeek][fromDay];
-  //     final movedTemplateId = selectedTemplateIds[fromWeek][fromDay];
-  //     final movedCircuits   = circuitStartIndices[fromWeek][fromDay];
-  //
-  //     // 2️⃣ clear the original
-  //     exerciseRows[fromWeek][fromDay]       = <ExerciseRow>[];
-  //     selectedTemplateIds[fromWeek][fromDay] = null;
-  //     circuitStartIndices[fromWeek][fromDay] = [0];
-  //
-  //     // 3️⃣ inject into the new spot
-  //     exerciseRows[toWeek][toDay]       = movedRows;
-  //     selectedTemplateIds[toWeek][toDay] = movedTemplateId;
-  //     circuitStartIndices[toWeek][toDay] = movedCircuits;
-  //   });
-  // }
-
 // 1) New helper for days outside the block:
   Widget _buildOutsideDayRow(DateTime date) {
     final label = DateFormat('E • d MMM').format(date);
@@ -996,31 +962,33 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   }
 
   //Big function, calls full week
-
   Future<void> loadBlockDataFromFirestore() async {
     final stopwatch = Stopwatch()..start();
     print('⏳ [BB2] Starting loadBlockDataFromFirestore');
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    if (user == null || _selectedBlockId == null) return;
 
-    final weekSnapshots = await FirebaseFirestore.instance
-        .collection('users')
+    final weeksSnapshot = await FirebaseFirestore.instance
+        .collection('planned_blocks')
         .doc(user.uid)
-        .collection('block_data')
-        .doc('current_block')
+        .collection('blocks')
+        .doc(_selectedBlockId!)
         .collection('weeks')
         .get();
-    print('🧩 Found ${weekSnapshots.docs.length} week documents');
+    print('🧩 Found ${weeksSnapshot.docs.length} week documents');
 
-
-    for (final weekDoc in weekSnapshots.docs) {
-      final weekIndex = int.tryParse(weekDoc.id.replaceAll('week_', '')) ?? 0;
+    for (final weekDoc in weeksSnapshot.docs) {
+      final weekIndex =
+          int.tryParse(weekDoc.id.replaceAll('week_', '')) ?? 0;
       final daySnapshots = await weekDoc.reference.collection('days').get();
-      print('📆 Week $weekIndex → ${daySnapshots.docs.length} day docs [${stopwatch.elapsedMilliseconds}ms]');
-
+      print(
+          '📆 Week $weekIndex → ${daySnapshots.docs.length} day docs '
+              '[${stopwatch.elapsedMilliseconds}ms]'
+      );
 
       for (final dayDoc in daySnapshots.docs) {
-        final dayIndex = int.tryParse(dayDoc.id.replaceAll('day_', '')) ?? 0;
+        final dayIndex =
+            int.tryParse(dayDoc.id.replaceAll('day_', '')) ?? 0;
         final data = dayDoc.data();
 
         final parseStart = stopwatch.elapsedMilliseconds;
@@ -1188,43 +1156,38 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   // Week specific function, calls current week on start up and triggered by page scroll
 
   Future<void> loadBlockDataForWeek(int weekIndex) async {
-    final stopwatch = Stopwatch()..start();
-    print('⏳ [BB2] Starting loadBlockDataForWeek($weekIndex)');
-
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    if (user == null || _selectedBlockId == null) return;
+    final uid = user.uid;
 
-    final weekRef = FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .collection('block_data')
-        .doc('current_block')
+    final weekDocRef = FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(uid)
+        .collection('blocks')
+        .doc(_selectedBlockId)
         .collection('weeks')
         .doc('week_$weekIndex');
 
-    final weekSnapshot = await weekRef.get();
+    final weekSnapshot = await weekDocRef.get();
     if (!weekSnapshot.exists) {
-      print('❌ Week $weekIndex does not exist in Firestore.');
+      print('❌ Week $weekIndex does not exist under planned_blocks.');
       return;
     }
 
-    final daySnapshots = await weekRef.collection('days').get();
-
-
-
-
-    print('📆 Week $weekIndex → ${daySnapshots.docs.length} day docs [${stopwatch.elapsedMilliseconds}ms]');
+    final daySnapshots = await weekDocRef.collection('days').get();
+    print('📆 Week $weekIndex → ${daySnapshots.docs.length} day docs');
 
     for (final dayDoc in daySnapshots.docs) {
-      final dayIndex = int.tryParse(dayDoc.id.replaceAll('day_', '')) ?? 0;
+      final dayIndex = int.tryParse(dayDoc.id.replaceFirst('day_', '')) ?? 0;
       final data = dayDoc.data();
 
       final exercises = List<Map<String, dynamic>>.from(data['exercises'] ?? []);
-      final savedCircuitIndices = List<int>.from(data['circuitStartIndices'] ?? [0]);
+      final savedCircuitIndices =
+      List<int>.from(data['circuitStartIndices'] ?? [0]);
 
       final List<ExerciseRow> loadedRows = [];
 
-      for (int i = 0; i < exercises.length; i++) {
+      for (var i = 0; i < exercises.length; i++) {
         final ex = exercises[i];
         final name = (ex['name'] ?? '').toString().trim();
         if (name.isEmpty) continue;
@@ -1236,7 +1199,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
               ? ex['circuitIndex']
               : _getCircuitIndexForRow(i, savedCircuitIndices),
         );
-
         row.exerciseController.text = name;
 
         final dynamic rawWeight = ex['weight'];
@@ -1367,7 +1329,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       }
     }
 
-    print('✅ [BB2] loadBlockDataForWeek($weekIndex) done in ${stopwatch.elapsedMilliseconds}ms');
     setState(() {});
   }
 
@@ -1757,24 +1718,31 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     }
   }
 
-
   Future<void> deleteAllBlockAndWorkoutData() async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    if (user == null || _selectedBlockId == null) return;
+    final uid = user.uid;
 
-    final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
-
-    // 🧹 1. Delete all workouts
-    final workoutsSnapshot = await userDoc.collection('workouts').get();
+    // 1️⃣ Delete all workouts
+    final workoutsSnapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('workouts')
+        .get();
     for (final doc in workoutsSnapshot.docs) {
       await doc.reference.delete();
     }
     print("🗑️ All workouts deleted.");
 
-    // 🧹 2. Delete block_data > current_block > weeks > days
-    final currentBlockDoc = userDoc.collection('block_data').doc('current_block');
-    final weeksSnapshot = await currentBlockDoc.collection('weeks').get();
+    // 2️⃣ Delete all block‐planner data under planned_blocks/{uid}/blocks/{blockId}
+    final blockWeekColl = FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(uid)
+        .collection('blocks')
+        .doc(_selectedBlockId)
+        .collection('weeks');
 
+    final weeksSnapshot = await blockWeekColl.get();
     for (final weekDoc in weeksSnapshot.docs) {
       final daysSnapshot = await weekDoc.reference.collection('days').get();
       for (final dayDoc in daysSnapshot.docs) {
@@ -1783,22 +1751,24 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       await weekDoc.reference.delete();
     }
 
-    await currentBlockDoc.delete();
-    print("🧼 All block data deleted.");
+    print("🧼 All block‐planner data deleted for block $_selectedBlockId.");
   }
 
   Future<void> deleteBlockBuilderDataOnly() async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    if (user == null || _selectedBlockId == null) return;
+    final uid = user.uid;
 
-    final currentBlockDoc = FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .collection('block_data')
-        .doc('current_block');
+    // Reference to weeks under the active block
+    final weeksColl = FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(uid)
+        .collection('blocks')
+        .doc(_selectedBlockId)
+        .collection('weeks');
 
-    final weeksSnapshot = await currentBlockDoc.collection('weeks').get();
-
+    // Delete each day sub-doc, then each week doc
+    final weeksSnapshot = await weeksColl.get();
     for (final weekDoc in weeksSnapshot.docs) {
       final daysSnapshot = await weekDoc.reference.collection('days').get();
       for (final dayDoc in daysSnapshot.docs) {
@@ -1807,8 +1777,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       await weekDoc.reference.delete();
     }
 
-    await currentBlockDoc.delete(); // Optional: keep this if you want to remove the doc shell
-    print("🧼 BlockBuilder-only data deleted.");
+    print("🧼 BlockBuilder-only data deleted for block $_selectedBlockId.");
   }
 
   void clearDay(int weekIndex, int dayIndex) {
