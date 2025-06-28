@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:localtest222/BlockBuilder2.0.dart';
+import 'package:localtest222/Camp_BB2.dart';
 import 'template_model.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'workout_entry_screen.dart';
@@ -40,11 +40,49 @@ class _BlockPlannerState extends State<Block_Planner> {
   void dispose() {
     _blockNameController.dispose();
     _historyInputController.dispose();
-    Future.delayed(Duration(milliseconds: 100), () {
-      _savePlannedExercises();
-    }); // ✅ Autosave exercise details on exit
+
+    Future.delayed(Duration(milliseconds: 100), () async {
+      await _savePlannedExercises(); // ✅ Saves to /planned_blocks
+
+      // ✅ Also mirror to WES-compatible location
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+
+      final plannedBlock = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('planned_blocks')
+          .doc('current_block')
+          .get();
+
+      final blockData = plannedBlock.data();
+      final exerciseSettings = blockData?['blocks']?[blockIdToUse]?['exerciseSettings'];
+
+
+      if (exerciseSettings != null) {
+        for (final exerciseId in exerciseSettings.keys) {
+          final data = exerciseSettings[exerciseId];
+
+          await FirebaseFirestore.instance
+              .collection('users')
+              .doc(user.uid)
+              .collection('plannedExerciseDetails')
+              .doc(exerciseId)
+              .set({
+            'progressionModel': data['progressionModel'],
+            'periodizationModel': data['periodizationModel'],
+            'repTargets': data['repTargets'],
+            'rirPlan': data['rirPlan'],
+            'increments': data['increments'],
+            'maxWeightByReps': data['maxWeightByReps'],
+          }, SetOptions(merge: true));
+        }
+      }
+    });
+
     super.dispose();
   }
+
 
   @override
   void didChangeDependencies() {
@@ -1016,7 +1054,7 @@ class _BlockPlannerState extends State<Block_Planner> {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (context) => BlockBuilder2(blockId: blockIdToUse!),
+                    builder: (context) => Camp_BB2(blockId: blockIdToUse!),
                   ),
                 );
               },

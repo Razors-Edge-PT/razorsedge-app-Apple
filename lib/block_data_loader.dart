@@ -1,4 +1,4 @@
-part of 'BlockBuilder2.0.dart';
+part of 'Camp_BB2.dart';
 
 /// Helper to parse Firestore day documents into typed data
 class DayPayload {
