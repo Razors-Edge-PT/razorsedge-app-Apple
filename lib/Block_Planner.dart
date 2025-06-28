@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:localtest222/BlockBuilder2.0.dart';
 import 'template_model.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'workout_entry_screen.dart';
@@ -34,7 +33,6 @@ class _BlockPlannerState extends State<Block_Planner> {
   String? blockIdToUse;
   bool _isSavedBlock = false;
   bool _didRunInitOnce = false;
-  bool _initialBlockIsActive = false;
 
   @override
   void dispose() {
@@ -70,8 +68,8 @@ class _BlockPlannerState extends State<Block_Planner> {
         .get();
 
     if (!doc.exists) return;
-
     final data = doc.data()!;
+
     setState(() {
       _blockNameController.text = data['name'] ?? '';
       _blockStartDate = (data['startDate'] as Timestamp).toDate();
@@ -83,12 +81,11 @@ class _BlockPlannerState extends State<Block_Planner> {
             .map((key, val) => MapEntry(key, Map<String, dynamic>.from(val))),
       );
       _isSavedBlock = true;
-
-      _initialBlockIsActive = data['isActive'] ?? false;
     });
   }
 
   String _repsText = '';
+
 
   DateTime? _blockStartDate;
   DateTime? _blockEndDate;
@@ -104,27 +101,6 @@ class _BlockPlannerState extends State<Block_Planner> {
 
 // 🔁 AUTO-SAVE & SAVE BLOCK FEATURES INTEGRATED
 // Add this inside your _BlockPlannerState class:
-
-  void _onUpdateSetting(String exerciseId, String key, dynamic value) {
-    // 1) update local map so UI stays in sync
-    setState(() {
-      exerciseSettings[exerciseId]![key] = value;
-    });
-
-    // 2) push just that one field up to Firestore
-    final userId = FirebaseAuth.instance.currentUser!.uid;
-    FirebaseFirestore.instance
-        .collection('planned_blocks')
-        .doc(userId)
-        .collection('blocks')
-        .doc(blockIdToUse)
-        .update({
-      'exerciseSettings.$exerciseId.$key': value
-    })
-        .catchError((e) {
-      print("❌ Failed to save $key for $exerciseId: $e");
-    });
-  }
 
   @override
   void initState() {
@@ -619,20 +595,19 @@ class _BlockPlannerState extends State<Block_Planner> {
 
   Future<void> _savePlannedExercises() async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null || blockIdToUse == null) return;
+    if (user == null) return;
 
-    // 🔄 Now writing into the *same* collection as savePlannedBlock
     final docRef = FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(user.uid)
-        .collection('blocks')
-        .doc(blockIdToUse);
+        .collection('block_planner')
+        .doc('current_block');
 
-    // Read-modify your exerciseDetails as before
     final snapshot = await docRef.get();
     final data = snapshot.data() ?? {};
+
     final existingDetails = Map<String, dynamic>.from(
-      data['exerciseSettings'] ?? {},
+      data['plannedExerciseDetails'] ?? {},
     );
 
     for (final exercise in exercises) {
@@ -705,15 +680,16 @@ class _BlockPlannerState extends State<Block_Planner> {
       }
       else {
         existingDetails[exercise] = {
-          'periodizationModel': entry['periodizationModel'],
-          'repTargets': entry['repTargets'],
-          'rirModel': entry['rirModel'],
-          'rirPlan': entry['rirPlan'],
-          'progressionModel': entry['progressionModel'],
-          'increments': entry['increments'],
-          'weeklyFrequency': entry['weeklyFrequency'],
-          'maxWeightXReps': entry['maxWeightXReps'],
-          'notes': entry['notes'],
+          'periodizationModel':
+              entry['periodizationModel'] ?? 'Linear Exposure',
+          'repTargets': savedTargets,
+          'rirPlan': entry['rirPlan'], // ✅ Add this
+          'rirModel': entry['rirModel'], // ✅ add this line
+          'progressionModel': entry['progressionModel'] ?? 'Linear Weight Increase',
+          'increments': entry['increments'] ?? {'week': 2.5, 'block': 5.0},
+          'weeklyFrequency': entry['weeklyFrequency'] ?? 3,
+          'maxWeightXReps': entry['maxWeightXReps'] ?? '',
+          'notes': entry['notes'] ?? '',
         };
       }
     }
@@ -846,15 +822,14 @@ class _BlockPlannerState extends State<Block_Planner> {
       final reps = exerciseRepTargets[exercise] ?? [10, 8, 6];
 
       final entry = {
-        'periodizationModel': existingEntry?['periodizationModel'] ?? 'Linear Exposure',
-        'repTargets'        : reps,
-        'progressionModel'  : existingEntry?['progressionModel']  ?? 'Linear Weight Increase',
-        'increments'        : existingEntry?['increments']        ?? {'week': 2.5, 'block': 5.0},
-        'weeklyFrequency'   : existingEntry?['weeklyFrequency']   ?? 3,
-        'maxWeightXReps'    : existingEntry?['maxWeightXReps']    ?? '',
-        'notes'             : existingEntry?['notes']             ?? '',
-        'rirModel'          : existingEntry?['rirModel']          ?? 'Linear-Taper',
-        'rirPlan'           : existingEntry?['rirPlan']           ?? <String, dynamic>{},
+        'periodizationModel':
+            existingEntry?['periodizationModel'] ?? 'Linear Exposure',
+        'repTargets': reps,
+        'progressionModel': existingEntry?['progressionModel'] ?? "Linear Weight Increase",
+        'increments': existingEntry?['increments'] ?? {'week': 2.5, 'block': 5.0},
+        'weeklyFrequency': existingEntry?['weeklyFrequency'] ?? 3,
+        'maxWeightXReps': existingEntry?['maxWeightXReps'] ?? '',
+        'notes': existingEntry?['notes'] ?? '',
       };
 
       existingDetails[exercise] = entry;
@@ -902,11 +877,7 @@ class _BlockPlannerState extends State<Block_Planner> {
 
   @override
   Widget build(BuildContext context) {
-    final isKeyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;
-    return GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onTap: () => FocusScope.of(context).unfocus(),
-    child: Scaffold(
+    return Scaffold(
       backgroundColor: Colors.blueGrey.shade900,
       appBar: AppBar(
         title: const Text("Block Planner"),
@@ -941,57 +912,67 @@ class _BlockPlannerState extends State<Block_Planner> {
               }
 
               // Use StatefulBuilder to capture checkbox value
-              bool tempActive = _initialBlockIsActive;
-
+              bool tempActive = false;
               final confirm = await showDialog<bool>(
                 context: context,
                 builder: (ctx) {
-                  return StatefulBuilder(builder: (context, setState) {
-                    return AlertDialog(
-                      title: const Text("Save Block?"),
-                      content: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Text("Do you want to save this block to your plans?"),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              const Text("Set as Active?"),
-                              Switch(
-                                value: tempActive,
-                                onChanged: (v) => setState(() => tempActive = v),
-                              ),
-                            ],
+                  return StatefulBuilder(
+                    builder: (context, setState) {
+                      return AlertDialog(
+                        title: const Text("Save Block?"),
+                        content: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Text(
+                                "Do you want to save this block to your plans?"),
+                            Row(
+                              children: [
+                                const Text("Set as Active?"),
+                                const SizedBox(width: 12),
+                                Checkbox(
+                                  value: tempActive,
+                                  onChanged: (val) => setState(() {
+                                    tempActive = val ?? false;
+                                  }),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx, null),
+                            child: const Text("Cancel"),
+                          ),
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx, true),
+                            child: const Text("Save"),
                           ),
                         ],
-                      ),
-                      actions: [
-                        TextButton(onPressed: () => Navigator.pop(ctx, null), child: const Text("Cancel")),
-                        TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Save")),
-                      ],
-                    );
-                  });
+                      );
+                    },
+                  );
                 },
               );
 
               if (confirm == true) {
-                await _savePlannedBlock(setActive: tempActive);
+                await _savePlannedBlock(
+                    setActive: tempActive); // ✅ correct state passed
               }
-
             },
           ),
         ],
       ),
 
       // 🔽 Floating button shows conditionally
-    floatingActionButton: _isSavedBlock && !isKeyboardOpen
+      floatingActionButton: _isSavedBlock
           ? FloatingActionButton.extended(
               onPressed: () {
                 if (blockIdToUse == null) return;
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (context) => BlockBuilder2(blockId: blockIdToUse!),
+                    builder: (context) => WeekPlanner(blockId: blockIdToUse!),
                   ),
                 );
               },
@@ -1144,7 +1125,7 @@ class _BlockPlannerState extends State<Block_Planner> {
           ],
         ),
       ),
-    ));
+    );
   }
 
   Widget _buildGlobalBlockInputs() {
@@ -1452,6 +1433,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
     final settings = widget.exerciseSettings[widget.exerciseId];
 
+
     if (settings != null) {
       final reps = settings['repTargets'];
 
@@ -1522,6 +1504,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       print("📥 [INIT] Loaded RIR model for ${widget.exerciseName}: $rirModel");
     }
 
+
     final rirPlan = settings?['rirPlan'];
     if (rirPlan != null && rirPlan is Map<String, dynamic>) {
       _cachedRirPlan = rirPlan.map((weekKey, weekVal) {
@@ -1571,33 +1554,14 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       _selectedProgressionModel[widget.exerciseName] = normalized;
     }
 
-    _maxWeightController.addListener(_updateE1RM);
-    _maxRepsController.  addListener(_updateE1RM);
 
-    _maxWeightController.addListener(_syncBestWeightXReps);
-    _maxRepsController  .addListener(_syncBestWeightXReps);
 
-  }
-
-  void _syncBestWeightXReps() {
-    final kg   = _maxWeightController.text.trim();
-    final reps = _maxRepsController .text.trim();
-    if (kg.isNotEmpty && reps.isNotEmpty) {
-      // fire your generic onUpdateSetting callback with the combined string
-      widget.onUpdateSetting(
-        widget.exerciseId,
-        'maxWeightXReps',
-        '$kg x $reps',
-      );
-    }
   }
 
   @override
   void dispose() {
     _maxWeightController.removeListener(_updateE1RM);
     _maxRepsController.removeListener(_updateE1RM);
-    _maxWeightController.removeListener(_syncBestWeightXReps);
-    _maxRepsController .removeListener(_syncBestWeightXReps);
 
     final value = int.tryParse(_weeklyFrequencyController.text.trim());
     if (value != null) {
@@ -1724,6 +1688,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       print("💾 [DISPOSE] Saved progression model for ${widget.exerciseName}: $progressionModel");
     }
 
+
     final notes = _notesController.text.trim();
     widget.onUpdateSetting(widget.exerciseId, 'notes', notes);
     print("💾 [DISPOSE] Saved notes for ${widget.exerciseName}: $notes");
@@ -1751,6 +1716,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       print("💾 [DISPOSE] Saved RIR model for ${widget.exerciseName}: $rirModel");
     }
 
+
     if (_cachedRirPlan != null && _cachedRirPlan!.isNotEmpty) {
       widget.onUpdateSetting(widget.exerciseId, 'rirPlan', _cachedRirPlan);
       print("💾 [DISPOSE] Saved rirPlan for ${widget.exerciseName}: ${jsonEncode(_cachedRirPlan)}");
@@ -1765,6 +1731,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
     super.dispose();
   }
+
 
   double roundToNearestHalf(double value) {
     return (value * 2).round() / 2.0;
@@ -1811,12 +1778,15 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       print(
           "! [_syncCachedRepTargets] No valid repTargets found (value: $reps)");
     }
+
+
   }
 
   void _syncCachedRirPlan(String exerciseName) {
     final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
     final rirRaw = widget.exerciseSettings[exerciseId]?['rirPlan']
         ?? widget.exerciseSettings[exerciseName]?['rirPlan'];
+
 
     print("🛠️ [_syncCachedRirPlan] for $exerciseName → $rirRaw");
 
@@ -1858,6 +1828,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       _cachedRirPlan = {};
     }
   }
+
 
   void _updateE1RM() {
     final weight = double.tryParse(_maxWeightController.text);
@@ -2735,7 +2706,10 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     );
   }
 
+
+
   // RIR Models                                               RIR MODELS
+
   void _showLinearTaperRirTargetDialog(String exerciseName, {int? frequency}) {
     final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
 
@@ -2959,6 +2933,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     );
 
   }
+
 
   void _showWaveRirUndulationDialog(String exerciseName, {int? frequency}) {
     final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
@@ -3459,6 +3434,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     );
   }
 
+
   static Map<String, dynamic> generateStaticRirPlan({
     required int weeks,
     required int sessionsPerWeek,
@@ -3508,6 +3484,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     'Back Squat, Barbell': [3.0, 2.0, 1.0, 2.5],
     'default': [1.5, 1.0, 0.5, 1.0],
   };
+
+
+
 
   void _showSessionUndulatingRirDialog(String exerciseName, {int? frequency}) {
     final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
@@ -3559,6 +3538,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                             // ✅ Use global session index to avoid resetting each week
                             final totalSessionIndex = (weekIndex * weeklyFrequency) + sessionIndex;
                             final sessionRir = rirPattern[(totalSessionIndex % rirPattern.length).toInt()];
+
+
 
                             return ExpansionTile(
                               title: Text('Session ${sessionIndex + 1}'),
@@ -3690,47 +3671,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     );
   }
 
-  Widget _buildHeader() {
-    return GestureDetector(
-      onTap: () => setState(() => isExpanded = !isExpanded),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Expanded(
-            child: RichText(
-              overflow: isExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
-              maxLines: isExpanded ? null : 1,
-              text: TextSpan(
-                children: [
-                  TextSpan(
-                    text: isExpanded ? "▼  " : "➤  ",
-                    style: const TextStyle(color: Colors.white, fontSize: 12),
-                  ),
-                  TextSpan(
-                    text: widget.exerciseName,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          // E1RM display
-          Builder(builder: (_) {
-            final w = double.tryParse(_maxWeightController.text);
-            final r = double.tryParse(_maxRepsController.text);
-            final display = (w != null && r != null)
-                ? "Avg E1RM: ${PeriodizationModelUtils.calculateE1RM(w, r, 0.5).toStringAsFixed(1)}kg"
-                : "Avg E1RM: –";
-            return Text(display, style: const TextStyle(color: Colors.white70, fontSize: 11));
-          }),
-        ],
-      ),
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -3746,12 +3686,64 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildHeader(),
+          // 🔽 Header Row with Expand/Collapse toggle
           GestureDetector(
             onTap: () => setState(() => isExpanded = !isExpanded),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
+                Expanded(
+                  child: RichText(
+                    overflow: isExpanded
+                        ? TextOverflow.visible
+                        : TextOverflow.ellipsis, // ✅ Dynamic
+                    maxLines: isExpanded
+                        ? null
+                        : 1, // ✅ Allow full multi-line when expanded
+                    text: TextSpan(
+                      children: [
+                        TextSpan(
+                          text: isExpanded ? "▼  " : "➤  ",
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                          ),
+                        ),
+                        TextSpan(
+                          text: widget.exerciseName,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Builder(
+                  builder: (_) {
+                    final double? weight =
+                        double.tryParse(_maxWeightController.text);
+                    final double? reps =
+                        double.tryParse(_maxRepsController.text);
+
+                    String displayText;
+                    if (weight != null && reps != null) {
+                      final e1rm = PeriodizationModelUtils.calculateE1RM(
+                          weight, reps, 0.5);
+                      displayText = "Avg E1RM: ${e1rm.toStringAsFixed(1)} kg";
+                    } else {
+                      displayText = "Avg E1RM: –";
+                    }
+
+                    return Text(
+                      displayText,
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 11),
+                    );
+                  },
+                )
               ],
             ),
           ),
@@ -3791,6 +3783,23 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                 ),
 
                 const SizedBox(height: 5),
+
+                _smallInput(
+                  "Weekly Frequency",
+                  controller: _weeklyFrequencyController,
+                  width: 148,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    FilteringTextInputFormatter.allow(RegExp(r'^[0-9]{0,2}$')),
+                    TextInputFormatter.withFunction((oldValue, newValue) {
+                      final intVal = int.tryParse(newValue.text);
+                      if (intVal != null && intVal > 14) {
+                        return oldValue;
+                      }
+                      return newValue;
+                    }),
+                  ],
+                ),
 
                 const SizedBox(height: 6, width:400),
 
@@ -3881,6 +3890,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                     }),
                   ],
                 ),
+
+                _smallInput("Progression Model", width: 158),
                 SizedBox(
                   width: 158, height: 48,
                   child: GestureDetector(
