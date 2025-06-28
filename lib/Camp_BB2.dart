@@ -548,18 +548,35 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   }) {
     final exerciseId = nameToIdMap[exerciseName];
     if (exerciseId == null) return null;
+    print('🔍 [getPlannedRirSetValues] $exerciseName → $exerciseId');
+
+    if (exerciseId == null) {
+      print('❌ nameToIdMap missing for $exerciseName');
+      return null;
+    }
 
     final rirPlan = plannedExerciseDetails[exerciseId]?['rirPlan'];
     if (rirPlan == null) return null;
 
     final sessionIndex = getExerciseCountInWeek(exerciseName, week, day, row);
     final weekKey = 'week${week + 1}';
-    final sessionKey = 'session${sessionIndex + 1}';
+
+    final weekData = rirPlan[weekKey] as Map<String, dynamic>? ?? {};
+    final maxSessions = weekData.keys.length;
+
+    final clampedSessionIndex = sessionIndex.clamp(0, maxSessions - 1);
+    final sessionKey = 'session${clampedSessionIndex + 1}';
+
+    print('🧪 Checking $weekKey → $sessionKey (original index $sessionIndex)');
 
     final Map<String, dynamic>? sessionData =
-        (rirPlan[weekKey]?[sessionKey] as Map?)?.cast<String, dynamic>();
+    (rirPlan[weekKey]?[sessionKey] as Map?)?.cast<String, dynamic>();
 
-    if (sessionData == null) return null;
+
+    if (sessionData == null) {
+      print('❌ No sessionData found at $weekKey → $sessionKey');
+      return null;
+    }
 
     return sessionData.map((setKey, setValue) => MapEntry(setKey, {
           'reps': setValue['reps'],
@@ -1994,10 +2011,20 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           row: rowIndex,
         );
 
+
+
         // 🧠 First define hintRir (safe to use afterward)
         final String hintRir = (rirController.text.isEmpty && rirSetValues != null)
             ? (rirSetValues['set1']?['rir']?.toString() ?? '0.5')
             : rirController.text;
+
+        print("📝 hintRir = \"$hintRir\" | controller = \"${rirController.text}\"");
+        print("🔎 [BB2] RIR Debug for $exerciseName");
+        print("🧬 rirSetValues = $rirSetValues");
+        print("🧬 set1 = ${rirSetValues?['set1']}");
+        print("🧬 set1['rir'] = ${rirSetValues?['set1']?['rir']}");
+        print("🧬 controller.text = ${rirController.text}");
+        print("🧬 Final hintRir = $hintRir");
 
 // ✅ Then use it here
         final double rirValue = rirController.text.isNotEmpty
