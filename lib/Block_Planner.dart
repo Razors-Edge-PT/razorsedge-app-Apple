@@ -1724,7 +1724,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       print("💾 [DISPOSE] Saved progression model for ${widget.exerciseName}: $progressionModel");
     }
 
-
     final notes = _notesController.text.trim();
     widget.onUpdateSetting(widget.exerciseId, 'notes', notes);
     print("💾 [DISPOSE] Saved notes for ${widget.exerciseName}: $notes");
@@ -1752,7 +1751,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       print("💾 [DISPOSE] Saved RIR model for ${widget.exerciseName}: $rirModel");
     }
 
-
     if (_cachedRirPlan != null && _cachedRirPlan!.isNotEmpty) {
       widget.onUpdateSetting(widget.exerciseId, 'rirPlan', _cachedRirPlan);
       print("💾 [DISPOSE] Saved rirPlan for ${widget.exerciseName}: ${jsonEncode(_cachedRirPlan)}");
@@ -1767,7 +1765,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
     super.dispose();
   }
-
 
   double roundToNearestHalf(double value) {
     return (value * 2).round() / 2.0;
@@ -1814,15 +1811,12 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       print(
           "! [_syncCachedRepTargets] No valid repTargets found (value: $reps)");
     }
-
-
   }
 
   void _syncCachedRirPlan(String exerciseName) {
     final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
     final rirRaw = widget.exerciseSettings[exerciseId]?['rirPlan']
         ?? widget.exerciseSettings[exerciseName]?['rirPlan'];
-
 
     print("🛠️ [_syncCachedRirPlan] for $exerciseName → $rirRaw");
 
@@ -1864,7 +1858,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       _cachedRirPlan = {};
     }
   }
-
 
   void _updateE1RM() {
     final weight = double.tryParse(_maxWeightController.text);
@@ -3697,6 +3690,47 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     );
   }
 
+  Widget _buildHeader() {
+    return GestureDetector(
+      onTap: () => setState(() => isExpanded = !isExpanded),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Expanded(
+            child: RichText(
+              overflow: isExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
+              maxLines: isExpanded ? null : 1,
+              text: TextSpan(
+                children: [
+                  TextSpan(
+                    text: isExpanded ? "▼  " : "➤  ",
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                  TextSpan(
+                    text: widget.exerciseName,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // E1RM display
+          Builder(builder: (_) {
+            final w = double.tryParse(_maxWeightController.text);
+            final r = double.tryParse(_maxRepsController.text);
+            final display = (w != null && r != null)
+                ? "Avg E1RM: ${PeriodizationModelUtils.calculateE1RM(w, r, 0.5).toStringAsFixed(1)}kg"
+                : "Avg E1RM: –";
+            return Text(display, style: const TextStyle(color: Colors.white70, fontSize: 11));
+          }),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -3712,64 +3746,12 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 🔽 Header Row with Expand/Collapse toggle
+          _buildHeader(),
           GestureDetector(
             onTap: () => setState(() => isExpanded = !isExpanded),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Expanded(
-                  child: RichText(
-                    overflow: isExpanded
-                        ? TextOverflow.visible
-                        : TextOverflow.ellipsis, // ✅ Dynamic
-                    maxLines: isExpanded
-                        ? null
-                        : 1, // ✅ Allow full multi-line when expanded
-                    text: TextSpan(
-                      children: [
-                        TextSpan(
-                          text: isExpanded ? "▼  " : "➤  ",
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                          ),
-                        ),
-                        TextSpan(
-                          text: widget.exerciseName,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 13,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                Builder(
-                  builder: (_) {
-                    final double? weight =
-                        double.tryParse(_maxWeightController.text);
-                    final double? reps =
-                        double.tryParse(_maxRepsController.text);
-
-                    String displayText;
-                    if (weight != null && reps != null) {
-                      final e1rm = PeriodizationModelUtils.calculateE1RM(
-                          weight, reps, 0.5);
-                      displayText = "Avg E1RM: ${e1rm.toStringAsFixed(1)} kg";
-                    } else {
-                      displayText = "Avg E1RM: –";
-                    }
-
-                    return Text(
-                      displayText,
-                      style:
-                          const TextStyle(color: Colors.white70, fontSize: 11),
-                    );
-                  },
-                )
               ],
             ),
           ),

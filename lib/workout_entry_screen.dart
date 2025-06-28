@@ -14,8 +14,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 // For JSON encoding
 import 'debounce_Utils.dart';
 
-
-
 Future<void> deleteAllUserWorkouts() async {
   final user = FirebaseAuth.instance.currentUser;
   if (user == null) return; // Exit if no user is signed in
@@ -36,8 +34,6 @@ Future<void> deleteAllUserWorkouts() async {
   }
 }
 
-
-
 class WorkoutPage extends StatefulWidget {
   final Template? initialTemplate;
   final Workout? workout; // Make workout optional
@@ -46,6 +42,8 @@ class WorkoutPage extends StatefulWidget {
   final List<String>? prefilledExercises; // 👈 Add this line back
   final DateTime? initialDate; // ✅ Add this line
   final String? initialWorkoutName; // ✅ Add this
+  final String? blockId;
+  // final bool isActive;
 
   const WorkoutPage({
     Key? key,
@@ -56,17 +54,17 @@ class WorkoutPage extends StatefulWidget {
     this.prefilledExercises, // ✅ Don't forget this!
     this.initialDate,
     this.initialWorkoutName, // ✅ Add this
+    this.blockId,
+    // required this.isActive,
   }) : super(key: key);
-
 
   @override
   _WorkoutPageState createState() => _WorkoutPageState();
 }
 
 class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
-
-
-  List<String> exercises = []; // Use this to store selected exercises from the dialog
+  List<String> exercises =
+  []; // Use this to store selected exercises from the dialog
   final TextEditingController _workoutNameController = TextEditingController();
   late DateTime _selectedDate; // move this to the top of the State class
   final List<Map<String, dynamic>> _selectedExercisesWithCircuits = [];
@@ -87,7 +85,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   // Cache progression results keyed by exercise index.
   final Map<int, Map<String, dynamic>> _cachedProgressedValues = {};
 
-
   bool _isLoadingData = true; // Tracks whether data is still loading
 
   Future<void> loadPreviousWorkoutData() async {
@@ -102,11 +99,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     if (user == null) return;
 
     final doc = await FirebaseFirestore.instance
-        .collection('users')
+        .collection('planned_blocks')
         .doc(user.uid)
-        .collection('block_planner')
-        .doc('current_block')
+        .collection('blocks')
+        .doc(widget.blockId)
         .get();
+
+    print(
+        '[WorkoutPage] loading plannedExercises for blockId=${widget.blockId}');
 
     if (doc.exists) {
       final data = doc.data();
@@ -125,7 +125,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       });
     }
   }
-
 
   // ✅ Custom Hybrid E1RM Formula: Brzycki for ≤6 reps, Epley for >6 reps
   double calculateE1RM(double? weight, double? reps, double? rir) {
@@ -147,63 +146,78 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   double _parseToDouble(dynamic value) {
     if (value is double) return value; // ✅ Already a double, return it
     if (value is int) return value.toDouble(); // ✅ Convert int to double
-    if (value is String) return double.tryParse(value) ?? 0; // ✅ Convert String to double
+    if (value is String)
+      return double.tryParse(value) ?? 0; // ✅ Convert String to double
     return 0; // ✅ Default case
   }
 
-  final TextEditingController _mirroredRepsController = TextEditingController();
-
-
   //Determine available rep targets for this workout:
+  Map<String, List<double>> exercisePreviousE1RMs =
+  {}; // ✅ E1RM history per exercise
 
-  Map<String, List<double>> exercisePreviousE1RMs = {}; // ✅ E1RM history per exercise
-
-  Map<String, List<int>> exercisePreviousTopSetReps = {}; // ✅ Tracks reps per exercise
-
+  Map<String, List<int>> exercisePreviousTopSetReps =
+  {}; // ✅ Tracks reps per exercise
 
   double getAverageE1RM(String exerciseName) {
-    if (!PeriodizationModelUtils.exercisePreviousE1RMs.containsKey(exerciseName) ||
+    if (!PeriodizationModelUtils.exercisePreviousE1RMs
+        .containsKey(exerciseName) ||
         PeriodizationModelUtils.exercisePreviousE1RMs[exerciseName]!.isEmpty) {
       return 0.0; // ✅ Default if no history
     }
 
-    List<double> recentE1RMs = PeriodizationModelUtils.exercisePreviousE1RMs[exerciseName]!.take(4).toList();
+    List<double> recentE1RMs = PeriodizationModelUtils
+        .exercisePreviousE1RMs[exerciseName]!
+        .take(4)
+        .toList();
     return recentE1RMs.reduce((a, b) => a + b) / recentE1RMs.length;
   }
 
-
   double getSet2E1RM(int exerciseIndex) {
-    String exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
+    String exerciseName =
+        _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
 
-    double set1Weight = double.tryParse(_weightControllers[exerciseIndex][0].text) ?? set1SuggestedWeight(exerciseIndex);
-    int set1Reps = int.tryParse(_repsControllers[exerciseIndex][0].text) ?? set1SuggestedReps(exerciseIndex).toInt();
-    double set1RIRValue = double.tryParse(_rirControllers[exerciseIndex][0].text) ?? set1RIR(exerciseIndex);
+    double set1Weight =
+        double.tryParse(_weightControllers[exerciseIndex][0].text) ??
+            set1SuggestedWeight(exerciseIndex);
+    int set1Reps = int.tryParse(_repsControllers[exerciseIndex][0].text) ??
+        set1SuggestedReps(exerciseIndex).toInt();
+    double set1RIRValue =
+        double.tryParse(_rirControllers[exerciseIndex][0].text) ??
+            set1RIR(exerciseIndex);
     double set1EffectiveReps = set1Reps + set1RIRValue;
 
     double set1E1RM = (set1EffectiveReps <= 6)
         ? (set1Weight * (36 / (37 - set1EffectiveReps))) // Brzycki for low reps
-        : (set1Weight * (1 + (0.0333 * set1EffectiveReps))); // Epley for high reps
+        : (set1Weight *
+        (1 + (0.0333 * set1EffectiveReps))); // Epley for high reps
 
-    print("Set 2 E1RM for $exerciseName: ${set1E1RM.toStringAsFixed(1)}"); // ✅ Debugging
+    print(
+        "Set 2 E1RM for $exerciseName: ${set1E1RM.toStringAsFixed(
+            1)}"); // ✅ Debugging
     return (set1E1RM > 7) ? (set1E1RM - 7) : 1.0;
   }
 
-
   double getSet3E1RM(int exerciseIndex) {
-    String exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
+    String exerciseName =
+        _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
 
-    double set1Weight = double.tryParse(_weightControllers[exerciseIndex][0].text) ?? set1SuggestedWeight(exerciseIndex);
-    int set1Reps = int.tryParse(_repsControllers[exerciseIndex][0].text) ?? set1SuggestedReps(exerciseIndex).toInt();
-    double set1RIRValue = double.tryParse(_rirControllers[exerciseIndex][0].text) ?? set1RIR(exerciseIndex);
+    double set1Weight =
+        double.tryParse(_weightControllers[exerciseIndex][0].text) ??
+            set1SuggestedWeight(exerciseIndex);
+    int set1Reps = int.tryParse(_repsControllers[exerciseIndex][0].text) ??
+        set1SuggestedReps(exerciseIndex).toInt();
+    double set1RIRValue =
+        double.tryParse(_rirControllers[exerciseIndex][0].text) ??
+            set1RIR(exerciseIndex);
     double set1EffectiveReps = set1Reps + set1RIRValue;
 
     double set1E1RM = (set1EffectiveReps <= 6)
         ? (set1Weight * (36 / (37 - set1EffectiveReps))) // Brzycki for low reps
-        : (set1Weight * (1 + (0.0333 * set1EffectiveReps))); // Epley for high reps
+        : (set1Weight *
+        (1 + (0.0333 * set1EffectiveReps))); // Epley for high reps
 
     return (set1E1RM > 7) ? (set1E1RM - 10.5) : 1.0;
   }
-
 
   Future<void> _fetchLastWorkoutTopSetReps() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -227,7 +241,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
           if (workout.exercises.isNotEmpty) {
             for (var exercise in workout.exercises) {
-              String exerciseName = exercise.name; // ✅ Exercise-specific tracking
+              String exerciseName =
+                  exercise.name; // ✅ Exercise-specific tracking
 
               SetDetails? topSet;
               double highestE1RM = 0.0;
@@ -249,7 +264,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
               }
 
               if (topSet != null) {
-                int effectiveReps = (_parseToDouble(topSet.reps) + _parseToDouble(topSet.rir)).floor();
+                int effectiveReps =
+                (_parseToDouble(topSet.reps) + _parseToDouble(topSet.rir))
+                    .floor();
 
                 // ✅ Store E1RM per exercise
                 exercisePreviousE1RMs.putIfAbsent(exerciseName, () => []);
@@ -268,7 +285,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                 // ✅ Keep only last 12 reps per exercise
                 if (exercisePreviousTopSetReps[exerciseName]!.length > 12) {
                   exercisePreviousTopSetReps[exerciseName] =
-                      exercisePreviousTopSetReps[exerciseName]!.take(12).toList();
+                      exercisePreviousTopSetReps[exerciseName]!
+                          .take(12)
+                          .toList();
                 }
               }
             }
@@ -285,8 +304,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
 
     // Get exercise info.
-    final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
-    final exerciseId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
+    final exerciseName =
+        _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
+    final exerciseId =
+        PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
     final weekIndex = _getApplicableWeekIndex(exerciseId);
 
     // Determine how many times this exercise appeared before.
@@ -299,15 +320,20 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     // Get rep target.
     double repTarget;
-    final model = PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
+    final model =
+    PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
     if (model == PeriodizationModelType.dailyUndulatingExposure) {
       // (Assuming your existing model-specific logic is used here)
-      final week1 = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets']?['week1'];
+      final week1 = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]
+      ?['repTargets']?['week1'];
       if (week1 is Map<String, dynamic>) {
-        final sorted = week1.entries.where((e) => e.key.startsWith('instance')).toList()
+        final sorted = week1.entries
+            .where((e) => e.key.startsWith('instance'))
+            .toList()
           ..sort((a, b) => a.key.compareTo(b.key));
         if (sorted.isNotEmpty) {
-          final count = PeriodizationModelUtils.getInstanceCountForExerciseInBlock(
+          final count =
+          PeriodizationModelUtils.getInstanceCountForExerciseInBlock(
             exerciseName: exerciseName,
             savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
             blockStartDate: _blockStartDate!,
@@ -316,7 +342,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           final index = count % sorted.length;
           final raw = sorted[index].value?.toString() ?? '';
           final match = RegExp(r'^(\d+)').firstMatch(raw);
-          repTarget = match != null ? int.tryParse(match.group(1)!)?.toDouble() ?? 10.0 : 10.0;
+          repTarget = match != null
+              ? int.tryParse(match.group(1)!)?.toDouble() ?? 10.0
+              : 10.0;
         } else {
           repTarget = 10.0;
         }
@@ -331,12 +359,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       }
     } else if (model == PeriodizationModelType.dailyUndulatingWeek) {
       final weekKey = 'week${(weekIndex ?? 0) + 1}';
-      final weekMap = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets']?[weekKey];
+      final weekMap = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]
+      ?['repTargets']?[weekKey];
       if (weekMap is Map<String, dynamic>) {
-        final sorted = weekMap.entries.where((e) => e.key.startsWith('instance')).toList()
+        final sorted = weekMap.entries
+            .where((e) => e.key.startsWith('instance'))
+            .toList()
           ..sort((a, b) => a.key.compareTo(b.key));
         if (sorted.isNotEmpty) {
-          final count = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+          final count =
+          PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
             exerciseName: exerciseName,
             savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
             blockStartDate: _blockStartDate!,
@@ -345,7 +377,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           final index = count % sorted.length;
           final raw = sorted[index].value?.toString() ?? '';
           final match = RegExp(r'^(\d+)').firstMatch(raw);
-          repTarget = match != null ? int.tryParse(match.group(1)!)?.toDouble() ?? 10.0 : 10.0;
+          repTarget = match != null
+              ? int.tryParse(match.group(1)!)?.toDouble() ?? 10.0
+              : 10.0;
         } else {
           repTarget = 10.0;
         }
@@ -353,7 +387,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         repTarget = 10.0;
       }
     } else if (model == PeriodizationModelType.linearClassic) {
-      final repTargets = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets'];
+      final repTargets = PeriodizationModelUtils
+          .plannedExerciseDetails[exerciseId]?['repTargets'];
       final weekStart = repTargets?['week1'];
       final week = weekIndex ?? 0;
       final blockLength = PeriodizationModelUtils.getBlockLength(
@@ -361,20 +396,28 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         blockEndDate: _blockEndDate!,
       );
       if (weekStart is Map<String, dynamic>) {
-        final instanceCount = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+        final instanceCount =
+        PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
           exerciseName: exerciseName,
           savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
           blockStartDate: _blockStartDate!,
           weekIndex: week,
         );
-        final sortedKeys = weekStart.keys.where((k) => k.startsWith('instance')).toList()..sort();
+        final sortedKeys = weekStart.keys
+            .where((k) => k.startsWith('instance'))
+            .toList()
+          ..sort();
         if (sortedKeys.isNotEmpty) {
           final instanceKey = sortedKeys[instanceCount % sortedKeys.length];
           final startRaw = weekStart[instanceKey]?.toString() ?? '10 x 3';
           final startMatch = RegExp(r'^(\d+)').firstMatch(startRaw);
-          final startReps = startMatch != null ? int.tryParse(startMatch.group(1)!) ?? 10 : 10;
+          final startReps = startMatch != null
+              ? int.tryParse(startMatch.group(1)!) ?? 10
+              : 10;
           const endReps = 1;
-          repTarget = (startReps + ((endReps - startReps) * (week / (blockLength - 1)))).roundToDouble();
+          repTarget =
+              (startReps + ((endReps - startReps) * (week / (blockLength - 1))))
+                  .roundToDouble();
         } else {
           repTarget = 10.0;
         }
@@ -392,27 +435,31 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
 
     // Get default weight using rep and RIR logic.
-    final double defaultWeight = PeriodizationModelUtils.getSuggestedWeightFromRep(
+    final double defaultWeight =
+    PeriodizationModelUtils.getSuggestedWeightFromRep(
       exerciseName,
       repTarget.toInt(),
       set1RIR(exerciseIndex),
     );
 
     // Get the progression model info.
-    final String? progressionModelName =
-    PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['progressionModel'];
-    final progressionModel = PeriodizationModelUtils.parseProgressionModel(progressionModelName);
+    final String? progressionModelName = PeriodizationModelUtils
+        .plannedExerciseDetails[exerciseId]?['progressionModel'];
+    final progressionModel =
+    PeriodizationModelUtils.parseProgressionModel(progressionModelName);
     final double rir = set1RIR(exerciseIndex);
 
     // Call the progression model (which contains its internal logic).
-    final Map<String, dynamic> progressed = PeriodizationModelUtils.getWeightByProgressionModel(
+    final Map<String, dynamic> progressed =
+    PeriodizationModelUtils.getWeightByProgressionModel(
       model: progressionModel,
       exerciseName: exerciseName,
       repTarget: repTarget.toInt(),
       defaultWeight: defaultWeight,
       rirValue: rir,
       increments: PeriodizationModelUtils.getIncrementsForExercise(exerciseId),
-      maxWeightByReps: PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['maxWeightByReps'],
+      maxWeightByReps: PeriodizationModelUtils
+          .plannedExerciseDetails[exerciseId]?['maxWeightByReps'],
       topSetHistory: PeriodizationModelUtils.topSetsByExercise[exerciseName],
       weekIndex: weekIndex ?? 0,
     );
@@ -422,11 +469,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     return progressed;
   }
 
-
   //Determine hint texts for this workout:NEW METHOD
 
   double set1SuggestedReps(int exerciseIndex) {
-    final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
+    final exerciseName =
+        _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
     final rirText = _rirControllers[exerciseIndex][0].text;
     final weightText = _weightControllers[exerciseIndex][0].text;
     final repsText = _repsControllers[exerciseIndex][0].text;
@@ -438,11 +485,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final bb2Entry = _resolvedBB2Values[normalizedKey];
     final double? bb2Reps = bb2Entry?['reps']?.toDouble();
 
-
     final progressed = _getProgressedValues(exerciseIndex);
     final baseWeight = (progressed['weight'] ?? 20.0).toDouble();
     final baseReps = (progressed['reps'] ?? 10).toDouble();
-    final baseE1RM = PeriodizationModelUtils.calculateE1RM(baseWeight, baseReps, rir);
+    final baseE1RM =
+    PeriodizationModelUtils.calculateE1RM(baseWeight, baseReps, rir);
 
     // CASE 1: Reps already entered by user → use that
     if (reps != null) return reps;
@@ -452,17 +499,18 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       return bb2Reps;
     }
 
-
     // CASE 2: Weight is user-entered → derive reps
     if (weight != null) {
       final derivedReps = PeriodizationModelUtils.reverseCalculateReps(
-        targetE1RM: baseE1RM * 1.02, // ⛔ cap at +2%
+        targetE1RM: baseE1RM * 1.02,
+        // ⛔ cap at +2%
         weight: weight,
         baseWeight: baseWeight,
         rir: rir,
         minReps: baseReps,
       );
-      print('🔁 [WES] User-entered weight $weight → adjusted reps = $derivedReps to stay near E1RM = $baseE1RM');
+      print(
+          '🔁 [WES] User-entered weight $weight → adjusted reps = $derivedReps to stay near E1RM = $baseE1RM');
       return derivedReps;
       return derivedReps;
     }
@@ -471,13 +519,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     return baseReps;
   }
 
-
-
   double set2SuggestedReps(int exerciseIndex) {
-    String exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
+    String exerciseName =
+        _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
 
     double set2E1RM = getSet2E1RM(exerciseIndex);
-    double? set1Reps = double.tryParse(_repsControllers[exerciseIndex][0].text) ?? set1SuggestedReps(exerciseIndex);
+    double? set1Reps =
+        double.tryParse(_repsControllers[exerciseIndex][0].text) ??
+            set1SuggestedReps(exerciseIndex);
 
     return PeriodizationModelUtils.getSuggestedSet2RepsByModel(
       exerciseName: exerciseName,
@@ -488,13 +537,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     );
   }
 
-
-
   double set3SuggestedReps(int exerciseIndex) {
-    String exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
+    String exerciseName =
+        _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
 
     double set3E1RM = getSet3E1RM(exerciseIndex);
-    double? set2Reps = double.tryParse(_repsControllers[exerciseIndex][1].text) ?? set2SuggestedReps(exerciseIndex);
+    double? set2Reps =
+        double.tryParse(_repsControllers[exerciseIndex][1].text) ??
+            set2SuggestedReps(exerciseIndex);
 
     return PeriodizationModelUtils.getSuggestedSet3RepsByModel(
       exerciseName: exerciseName,
@@ -516,7 +566,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       return null;
     }
 
-    final rirPlan = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['rirPlan'];
+    final rirPlan =
+    PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['rirPlan'];
     if (rirPlan == null) {
       print('❌ [WES ALT] No rirPlan found for ID "$exerciseId"');
       return null;
@@ -528,7 +579,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       return null;
     }
 
-    final sessionIndex = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+    final sessionIndex =
+    PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
       exerciseName: exerciseName,
       savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
       blockStartDate: _blockStartDate!,
@@ -539,56 +591,63 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final sessionKey = 'session${sessionIndex + 1}';
     final setKey = 'set$setNumber';
 
-    print('🧪 [WES ALT] $exerciseName ($exerciseId) → $weekKey > $sessionKey > $setKey');
+    print(
+        '🧪 [WES ALT] $exerciseName ($exerciseId) → $weekKey > $sessionKey > $setKey');
     final sessionData = rirPlan[weekKey]?[sessionKey] as Map?;
     if (sessionData == null) {
       print('❌ [WES ALT] No session data found for $weekKey → $sessionKey');
       return null;
     }
 
-    return sessionData.map((key, value) => MapEntry(key, {
-      'reps': value['reps'],
-      'rir': value['rir'],
-    }));
+    return sessionData.map((key, value) =>
+        MapEntry(key, {
+          'reps': value['reps'],
+          'rir': value['rir'],
+        }));
   }
-
-
 
   double getRirFromPlanOrInput(int exerciseIndex, int setNumber) {
     if (setNumber < 1 || setNumber > 8) return 0.5; // Safety fallback
 
-    final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
+    final exerciseName =
+        _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
     final bb2Entry = _resolvedBB2Values[exerciseName.toLowerCase()];
     final rawBB2Rir = bb2Entry?['rir'];
-    final bb2Rir = (rawBB2Rir != null && rawBB2Rir.toString().trim().isNotEmpty)
+    final bb2Rir = (rawBB2Rir != null && rawBB2Rir
+        .toString()
+        .trim()
+        .isNotEmpty)
         ? double.tryParse(rawBB2Rir.toString())
         : null;
 
-
     // ✅ Set 1: Use BB2 if available
     if (setNumber == 1 && bb2Rir != null && bb2Rir != 0.0) {
-      print('🔁 [WES] Using BB2-entered RIR for "$exerciseName" Set 1: $bb2Rir');
+      print(
+          '🔁 [WES] Using BB2-entered RIR for "$exerciseName" Set 1: $bb2Rir');
       return bb2Rir;
     }
 
-
-    final exerciseId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
+    final exerciseId =
+        PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
     final weekIndex = _getApplicableWeekIndex(exerciseId);
     if (weekIndex == null) return setNumber == 1 ? 0.5 : 1.5;
 
     if (_blockStartDate == null) {
-      print('❌ [WES] _blockStartDate is null in getRirFromPlanOrInput for $exerciseName');
+      print(
+          '❌ [WES] _blockStartDate is null in getRirFromPlanOrInput for $exerciseName');
       return 2.0; // fallback RIR value
     }
 
-    final sessionIndex = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+    final sessionIndex =
+    PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
       exerciseName: exerciseName,
       savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
       blockStartDate: _blockStartDate!,
       weekIndex: weekIndex,
     );
 
-    final rirPlan = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['rirPlan'];
+    final rirPlan =
+    PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['rirPlan'];
     final weekKey = 'week${weekIndex + 1}';
     final sessionKey = 'session${sessionIndex + 1}';
     final setKey = 'set$setNumber';
@@ -600,24 +659,17 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     // ✅ Sets 2–8: Use BB2 RIR if it's higher than planned
     if (setNumber > 1 && bb2Rir != null && plannedRir != null) {
       final chosen = bb2Rir > plannedRir ? bb2Rir : plannedRir;
-      print('🔁 [WES] Using higher of BB2 ($bb2Rir) vs planned ($plannedRir) → $chosen');
+      print(
+          '🔁 [WES] Using higher of BB2 ($bb2Rir) vs planned ($plannedRir) → $chosen');
       return chosen;
     }
 
-
     final fallback = (setNumber == 1 ? 0.5 : 1.5);
     final finalRir = plannedRir ?? fallback;
-    print('📦 [WES] Final RIR used for "$exerciseName" set $setNumber → $finalRir');
+    print(
+        '📦 [WES] Final RIR used for "$exerciseName" set $setNumber → $finalRir');
     return finalRir;
-
   }
-
-
-
-
-
-
-
 
   // ✅ Function to determine RIR for Set 1 (Default: 0.5, Modifiable in Future)
   /*double set1RIR(int exerciseIndex) {
@@ -658,20 +710,24 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
   double set1RIR(int i) => getRirFromPlanOrInput(i, 1);
 
-
-
-
 // ✅ Function to determine RIR for Set 2 (Default: 1.5, Modifiable in Future)
   double set2RIR(int i) => getRirFromPlanOrInput(i, 2);
+
   double set3RIR(int i) => getRirFromPlanOrInput(i, 3);
+
   double set4RIR(int i) => getRirFromPlanOrInput(i, 4);
+
   double set5RIR(int i) => getRirFromPlanOrInput(i, 5);
+
   double set6RIR(int i) => getRirFromPlanOrInput(i, 6);
+
   double set7RIR(int i) => getRirFromPlanOrInput(i, 7);
+
   double set8RIR(int i) => getRirFromPlanOrInput(i, 8);
 
   double set1SuggestedWeight(int exerciseIndex) {
-    final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
+    final exerciseName =
+        _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
     final normalizedKey = exerciseName.toLowerCase();
     final bb2Entry = _resolvedBB2Values[normalizedKey];
 
@@ -704,7 +760,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final double modelRir = getRirFromPlanOrInput(exerciseIndex, 1);
 
     // ✅ Step 5: Calculate base E1RM using progression model only
-    final double baseE1RM = PeriodizationModelUtils.calculateE1RM(baseWeight, baseReps, modelRir);
+    final double baseE1RM =
+    PeriodizationModelUtils.calculateE1RM(baseWeight, baseReps, modelRir);
     print('🧠 [WES] Base progression E1RM = ${baseE1RM.toStringAsFixed(2)} '
         '(from $baseWeight × $baseReps @ RIR $modelRir)');
 
@@ -719,36 +776,46 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         rir: rirToUse,
       );
 
-      final double rounded = PeriodizationModelUtils.roundToNearestValidIncrement(
+      final double rounded =
+      PeriodizationModelUtils.roundToNearestValidIncrement(
         targetWeight: derived,
         exerciseName: exerciseName,
       );
 
-      final double newE1RM = PeriodizationModelUtils.calculateE1RM(rounded, repsToUse, rirToUse);
+      final double newE1RM =
+      PeriodizationModelUtils.calculateE1RM(rounded, repsToUse, rirToUse);
 
       if (userReps != null && userRir == null) {
-        print('📊 [WES] User reps = $userReps → updated weight = $rounded → new E1RM = ${newE1RM.toStringAsFixed(2)}');
+        print(
+            '📊 [WES] User reps = $userReps → updated weight = $rounded → new E1RM = ${newE1RM
+                .toStringAsFixed(2)}');
       } else if (userRir != null && userReps == null) {
-        print('📈 [WES] User RIR = $userRir → updated weight = $rounded → new E1RM = ${newE1RM.toStringAsFixed(2)}');
+        print(
+            '📈 [WES] User RIR = $userRir → updated weight = $rounded → new E1RM = ${newE1RM
+                .toStringAsFixed(2)}');
       } else {
-        print('📊 [WES] User reps = $userReps & RIR = $userRir → updated weight = $rounded → new E1RM = ${newE1RM.toStringAsFixed(2)}');
+        print(
+            '📊 [WES] User reps = $userReps & RIR = $userRir → updated weight = $rounded → new E1RM = ${newE1RM
+                .toStringAsFixed(2)}');
       }
 
       return rounded;
     }
 
     // ✅ Step 7: No overrides — fallback to rounded base weight
-    final double fallbackRounded = PeriodizationModelUtils.roundToNearestValidIncrement(
+    final double fallbackRounded =
+    PeriodizationModelUtils.roundToNearestValidIncrement(
       targetWeight: baseWeight,
       exerciseName: exerciseName,
     );
-    print('🎯 [WES] Final progression for $exerciseName using default RIR $modelRir → $fallbackRounded kg');
+    print(
+        '🎯 [WES] Final progression for $exerciseName using default RIR $modelRir → $fallbackRounded kg');
     return fallbackRounded;
   }
 
-
   double set2SuggestedWeight(int exerciseIndex) {
-    final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
+    final exerciseName =
+        _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
     final set2E1RM = getSet2E1RM(exerciseIndex);
 
     final repsText = _repsControllers[exerciseIndex][1].text;
@@ -766,7 +833,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   }
 
   double set3SuggestedWeight(int exerciseIndex) {
-    final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
+    final exerciseName =
+        _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
     final set3E1RM = getSet3E1RM(exerciseIndex);
 
     final repsText = _repsControllers[exerciseIndex][2].text;
@@ -783,137 +851,95 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     );
   }
 
-
   @override
   void initState() {
     super.initState();
+    print("➡️ WorkoutPage received prefilled: ${widget
+        .prefilledExercisesWithCircuits}");
     WidgetsBinding.instance.addObserver(this);
     _selectedDate = widget.initialDate ?? DateTime.now();
     _setInitialWorkoutName();
     _loadInitialData();
     _fetchLastWorkoutTopSetReps();
-
-
   }
 
   Future<void> _loadInitialData() async {
-
-    _injectIdToNameFromSelectedExercises();
-    await loadExercisesFromFirestoreForWES(); // ✅ BEFORE using name↔id anywhere
-    await _buildNameToIdMapsFromFirestore(); // Replaces _loadPlannedExerciseDetails()
-    await PeriodizationModelUtils.fetchFullTopSetHistory();
-
-
-    await loadSavedWorkoutsForInstanceCount(); // 📅 Prepares savedWorkoutsList
-
-    await _loadPlannedExerciseDetails(); // Only sets exerciseSettings and blockStartDate
-// ✅ Define test exercise (must exist in workouts)
-    final testExercise = "Bench Press, Barbell";
-
-// 🧠 Calculate current week index from today's date
-    final currentWeekIndex = PeriodizationModelUtils.getWeekIndexForDate(
-      DateTime.now(),
-      _blockStartDate!,
-    );
-
-// 🧮 Count total appearances across the whole block
-    final blockCount = PeriodizationModelUtils.getInstanceCountForExerciseInBlock(
-      exerciseName: testExercise,
-      savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
-      blockStartDate: _blockStartDate!,
-      blockEndDate: _blockEndDate!,
-    );
-
-// 🧮 Count appearances in the current week
-    final weekCount = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
-      exerciseName: testExercise,
-      savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
-      blockStartDate: _blockStartDate!,
-      weekIndex: currentWeekIndex,
-    );
-
-    // ...continue with your original logic
-    await loadPlannedExercisesFromFirestore();
-    await loadPreviousWorkoutData();
-
-    final draftLoaded = await _loadWorkoutDraftFromCache();
-
-
-
-    if (draftLoaded) {
-      // ✅ Priority 1: Use saved draft
-      await Future.delayed(const Duration(milliseconds: 400));
-      await _mergeNewBB2ExercisesIntoDraft();
-    } else if (widget.prefilledExercisesWithCircuits != null &&
-        widget.prefilledExercisesWithCircuits!.isNotEmpty) {
-      print('[WES] Received prefilledExercisesWithCircuits:');
-      for (final ex in widget.prefilledExercisesWithCircuits!) {
-        print('• ${ex['name']} (circuitIndex: ${ex['circuitIndex']})');
-      }
-
-      // ✅ Priority 2: Use freshly passed BB2 data
-      _selectedExercisesWithCircuits.clear();
-      _selectedExercisesWithCircuits.addAll(
-          List<Map<String, dynamic>>.from(widget.prefilledExercisesWithCircuits!)
-      );
-
-
-      _injectIdToNameFromSelectedExercises();
-
-      _workoutSets.clear();
-      _repsControllers.clear();
-      _weightControllers.clear();
-      _rirControllers.clear();
-
-      for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
-        _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
-        _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-        _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-        _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-      }
-
-      await _saveWorkoutDraftToCache();
-    } else {
-      // ✅ Priority 3: Load saved BB2 plan from Firestore
-      await _loadPlannedBlockBuilderExercisesIfAny();
-
-      if (_selectedExercisesWithCircuits.isNotEmpty) {
+    if (widget.prefilledExercisesWithCircuits?.isNotEmpty ?? false) {
+      setState(() {
+        _selectedExercisesWithCircuits.clear();
         _workoutSets.clear();
         _repsControllers.clear();
         _weightControllers.clear();
         _rirControllers.clear();
+        _resolvedBB2Values.clear();
+        _blockStartDate = widget.initialDate;
+        _blockEndDate   = widget.initialDate;
 
+        // copy in your two BB2 exercises
+        _selectedExercisesWithCircuits.addAll(
+          widget.prefilledExercisesWithCircuits!
+              .map((e) => Map<String, dynamic>.from(e)),
+        );
+
+        // give each one a default block of 3 SetDetails + controllers
         for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
-          _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
-          _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-          _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-          _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+          _workoutSets.add(
+            List.generate(_defaultSets, (_) => SetDetails()),
+          );
+          _repsControllers.add(
+            List.generate(_defaultSets, (_) => TextEditingController()),
+          );
+          _weightControllers.add(
+            List.generate(_defaultSets, (_) => TextEditingController()),
+          );
+          _rirControllers.add(
+            List.generate(_defaultSets, (_) => TextEditingController()),
+          );
         }
 
-        await _saveWorkoutDraftToCache();
-      }
+        _initializeControllers();
+        _isLoadingData = false;
+      });
+      return; // we’re done here
     }
 
-    if (_selectedExercisesWithCircuits.isNotEmpty) {
-      _initializeControllers();
+    // …and only if BB2 gave us nothing do we fall back to your normal loads:
+    await loadExercisesFromFirestoreForWES();
+    await _buildNameToIdMapsFromFirestore();
+    await PeriodizationModelUtils.fetchFullTopSetHistory();
+    await loadSavedWorkoutsForInstanceCount();
+    await _loadPlannedExerciseDetails();
+    await loadPlannedExercisesFromFirestore();
+    await loadPreviousWorkoutData();
+
+    // 2️⃣ then drafts if there was no BB2
+    final draftLoaded = await _loadWorkoutDraftFromCache();
+    if (draftLoaded) {
+      await Future.delayed(const Duration(milliseconds: 1000));
+      await _mergeNewBB2ExercisesIntoDraft();
+    } else {
+      // 3️⃣ fallback to saved BlockBuilder plan
+      await _loadPlannedBlockBuilderExercisesIfAny();
     }
 
-
-    // ✅ Preload BB2 values for all selected exercises
-    _resolvedBB2Values.clear();
+    // 4️⃣ any remaining SharedPrefs overrides
     for (final ex in _selectedExercisesWithCircuits) {
       final name = ex['name']?.trim() ?? '';
-      final values = await getBB2SavedValuesFromSharedPrefs(name, _selectedDate);
+      final values =
+          await getBB2SavedValuesFromSharedPrefs(name, _selectedDate);
       if (values != null) {
         _resolvedBB2Values[name.toLowerCase()] = values;
-
       }
     }
-    setState(() {});
+
+    setState(() {
+      _isLoadingData = false;
+    });
   }
 
   double _calculateFallbackSet1Reps(int exerciseIndex) {
-    String exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
+    String exerciseName =
+        _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
     int plannedCountBefore = 0;
 
     for (int i = 0; i < exerciseIndex; i++) {
@@ -922,9 +948,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       }
     }
 
-    final exerciseId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
+    final exerciseId =
+        PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
     final weekIndex = _getApplicableWeekIndex(exerciseId);
-    final model = PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
+    final model =
+        PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
 
     // dailyUndulatingExposure
     if (model == PeriodizationModelType.dailyUndulatingExposure) {
@@ -935,7 +963,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         blockEndDate: _blockEndDate!,
       );
 
-      final week1 = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets']?['week1'];
+      final week1 = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]
+          ?['repTargets']?['week1'];
 
       if (week1 is Map<String, dynamic>) {
         final sorted = week1.entries
@@ -964,7 +993,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         weekIndex: weekIndex ?? 0,
       );
 
-      final repTargets = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets'];
+      final repTargets = PeriodizationModelUtils
+          .plannedExerciseDetails[exerciseId]?['repTargets'];
       final weekKey = 'week${(weekIndex ?? 0) + 1}';
       final weekMap = repTargets?[weekKey];
 
@@ -988,11 +1018,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     // linearClassic
     if (model == PeriodizationModelType.linearClassic) {
-      final repTargets = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets'];
+      final repTargets = PeriodizationModelUtils
+          .plannedExerciseDetails[exerciseId]?['repTargets'];
       final weekStart = repTargets?['week1'];
 
       if (weekStart is Map<String, dynamic>) {
-        final instanceCount = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+        final instanceCount =
+            PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
           exerciseName: exerciseName,
           savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
           blockStartDate: _blockStartDate!,
@@ -1014,7 +1046,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         final startMatch = RegExp(r'^(\d+)').firstMatch(startRaw);
         final setMatch = RegExp(r'x\s*(\d+)').firstMatch(startRaw);
 
-        final startReps = startMatch != null ? int.tryParse(startMatch.group(1)!) ?? 10 : 10;
+        final startReps =
+            startMatch != null ? int.tryParse(startMatch.group(1)!) ?? 10 : 10;
         final sets = setMatch != null ? setMatch.group(1)! : '3';
         final endReps = 1;
 
@@ -1024,7 +1057,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         );
 
         final week = weekIndex ?? 0;
-        final reps = (startReps + ((endReps - startReps) * (week / (blockLength - 1)))).round();
+        final reps =
+            (startReps + ((endReps - startReps) * (week / (blockLength - 1))))
+                .round();
 
         return reps.toDouble();
       }
@@ -1035,7 +1070,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   }
 
   Future<void> loadExercisesFromFirestoreForWES() async {
-    final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
+    final snapshot =
+        await FirebaseFirestore.instance.collection('exercises').get();
 
     for (final doc in snapshot.docs) {
       final id = doc.id;
@@ -1048,123 +1084,148 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
   }
 
-
-
-
   Future<Map<String, dynamic>> _loadPlannedExerciseDetails() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return {};
 
+    // 1️⃣ If no blockId, skip loading from block‐planner entirely:
+    if (widget.blockId == null || widget.blockId!.isEmpty) {
+      setState(() {
+        plannedExercises = [];
+      });
+      return {};
+    }
+
+    // 2️⃣ Load the block document
     final doc = await FirebaseFirestore.instance
-        .collection('users')
+        .collection('planned_blocks')
         .doc(user.uid)
-        .collection('block_planner')
-        .doc('current_block')
+        .collection('blocks')
+        .doc(widget.blockId)
         .get();
 
-    final data = doc.data();
-    if (data == null) return {};
+    // 3️⃣ If it doesn’t exist, clear UI list and bail
+    if (!doc.exists) {
+      setState(() {
+        plannedExercises = [];
+      });
+      return {};
+    }
 
+    // 4️⃣ We know data() is non-null here
+    final data = doc.data()!;
+
+    // 5️⃣ Pull out the simple list for your UI
+    setState(() {
+      plannedExercises =
+          List<String>.from(data['plannedExercises'] ?? <String>[]);
+    });
+
+    // 6️⃣ If there are no detailed settings, bail
     if (!data.containsKey('plannedExerciseDetails')) {
       print('❌ [WES] No plannedExerciseDetails found in Firestore');
       return {};
     }
 
+    // 7️⃣ Grab your raw details map
     final details = Map<String, dynamic>.from(data['plannedExerciseDetails']);
 
-    // ✅ Inject into PMU first
+    // 8️⃣ Inject into your PeriodizationModelUtils
     PeriodizationModelUtils.setExerciseSettings(details);
-    print('✅ [WES] Injected exerciseSettings into PMU with keys: ${details.keys}');
+    print(
+        '✅ [WES] Injected exerciseSettings into PMU with keys: ${details.keys}');
 
-    // ✅ Handle blockMeta
+    // 9️⃣ If there’s blockMeta, tuck it in
     if (data.containsKey('blockMeta')) {
       details['blockMeta'] = Map<String, dynamic>.from(data['blockMeta']);
       print('📎 [WES] Injected blockMeta into plannedExerciseDetails');
     }
 
+    // 1️⃣0️⃣ Parse your block dates
     final meta = data['blockMeta'] as Map<String, dynamic>? ?? {};
     _blockStartDate = DateTime.tryParse(meta['blockStartDate'] ?? '');
     _blockEndDate = DateTime.tryParse(meta['blockEndDate'] ?? '');
+    print(
+        '📅 [WES] Loaded blockStartDate=$_blockStartDate, blockEndDate=$_blockEndDate');
 
-    print('📅 [WES] Loaded blockStartDate=$_blockStartDate, blockEndDate=$_blockEndDate');
-
-    // ✅ Clear and rebuild plannedExerciseDetails and periodization models
+    // 1️⃣1️⃣ Reset global maps
     PeriodizationModelUtils.plannedExerciseDetails.clear();
     PeriodizationModelUtils.exercisePeriodizationModels.clear();
 
+    // 1️⃣2️⃣ Walk each exercise entry
     details.forEach((exerciseId, entry) {
       if (exerciseId == 'blockMeta') return;
+      if (entry is! Map<String, dynamic>) return;
 
-      if (entry is Map<String, dynamic>) {
-        PeriodizationModelUtils.plannedExerciseDetails[exerciseId] = entry;
+      // Store the raw settings
+      PeriodizationModelUtils.plannedExerciseDetails[exerciseId] = entry;
 
-        final modelName = entry['periodizationModel'];
-        final modelEnum = PeriodizationModelUtils.stringToModel(modelName);
+      // Map periodizationModel → enum
+      final String? modelName = entry['periodizationModel'] as String?;
+
+      PeriodizationModelType? modelEnum;
+      if (modelName != null) {
+        modelEnum = PeriodizationModelUtils.stringToModel(modelName);
         if (modelEnum != null) {
-          PeriodizationModelUtils.exercisePeriodizationModels[exerciseId] = modelEnum;
+          PeriodizationModelUtils.exercisePeriodizationModels[exerciseId] =
+              modelEnum;
           print('✅ [WES] Mapped model $modelName → $modelEnum for $exerciseId');
         }
+      }
 
-        final progressionModel = entry['progressionModel'] ?? 'none';
-        _progressionModelsByExercise[exerciseId] = progressionModel;
-        print('🏗️ [WES] Progression model for $exerciseId: $progressionModel');
+      // Track progressionModel if you need it later
+      final progressionModel = entry['progressionModel'] ?? 'none';
+      _progressionModelsByExercise[exerciseId] = progressionModel;
+      print('🏗️ [WES] Progression model for $exerciseId: $progressionModel');
 
-
-        // ✅ Model-specific logic (DUP expansions, Linear Classic debug, etc.)
-        if (modelEnum == PeriodizationModelType.dailyUndulatingExposure ||
-            modelEnum == PeriodizationModelType.dailyUndulatingWeek) {
-          final repTargets = entry['repTargets'];
-          if (repTargets is Map<String, dynamic> &&
-              repTargets.length == 1 &&
-              repTargets.containsKey('week1')) {
-            final week1Map = repTargets['week1'];
-            if (week1Map is Map<String, dynamic> && week1Map.isNotEmpty) {
-              final expanded = PeriodizationModelUtils.expandDupDailyWeek1(
-                Map<String, String>.from(week1Map.map((k, v) => MapEntry(k, v.toString()))),
-                12,
-              );
-              PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets'] = expanded;
-              print('🔁 [WES] Expanded week1 → all weeks for $exerciseId');
-            }
+      // Example: DUP expansions
+      if (modelEnum == PeriodizationModelType.dailyUndulatingExposure ||
+          modelEnum == PeriodizationModelType.dailyUndulatingWeek) {
+        final repTargets = entry['repTargets'];
+        if (repTargets is Map<String, dynamic> &&
+            repTargets.length == 1 &&
+            repTargets.containsKey('week1')) {
+          final week1Map = repTargets['week1'];
+          if (week1Map is Map<String, dynamic> && week1Map.isNotEmpty) {
+            final expanded = PeriodizationModelUtils.expandDupDailyWeek1(
+              Map<String, String>.from(
+                  week1Map.map((k, v) => MapEntry(k, v.toString()))),
+              12,
+            );
+            PeriodizationModelUtils.plannedExerciseDetails[exerciseId]
+                ?['repTargets'] = expanded;
+            print('🔁 [WES] Expanded week1 → all weeks for $exerciseId');
           }
         }
+      }
 
-        if (modelEnum == PeriodizationModelType.linearClassic) {
-          final repTargets = entry['repTargets'];
-          if (repTargets is Map<String, dynamic>) {
-            print('🧪 [WES] Linear Classic repTargets for $exerciseId → ${jsonEncode(repTargets)}');
-
-            final start = _blockStartDate;
-            final end = _blockEndDate;
-            final blockLength = PeriodizationModelUtils.getBlockLength(
-              blockStartDate: start,
-              blockEndDate: end,
-            );
-            print('🧠 [WES] Linear Classic blockLength = $blockLength');
-
-            final week1 = repTargets['week1'];
-            final finalWeek = repTargets['week$blockLength'];
-            print('📅 [WES] week1: ${jsonEncode(week1)}');
-            print('📅 [WES] finalWeek: ${jsonEncode(finalWeek)}');
-          }
+      // Example: Linear classic debug
+      if (modelEnum == PeriodizationModelType.linearClassic) {
+        final repTargets = entry['repTargets'];
+        if (repTargets is Map<String, dynamic>) {
+          final blockLength = PeriodizationModelUtils.getBlockLength(
+              blockStartDate: _blockStartDate, blockEndDate: _blockEndDate);
+          print('🧠 [WES] Linear Classic blockLength = $blockLength');
+          print('📅 [WES] week1: ${repTargets['week1']}');
+          print('📅 [WES] finalWeek: ${repTargets['week$blockLength']}');
         }
       }
     });
 
-    print('📄 [WES] Full plannedExerciseDetails loaded: ${jsonEncode(details)}');
-    return details; // ✅ Return the injected structure
+    // 1️⃣3️⃣ Finally, return the injected structure
+    print('📄 [WES] Full plannedExerciseDetails loaded: ${details.keys}');
+    return details;
   }
-
 
   Future<void> _buildNameToIdMapsFromFirestore() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
     final doc = await FirebaseFirestore.instance
-        .collection('users')
+        .collection('planned_blocks') // ← your real root
         .doc(user.uid)
-        .collection('block_planner')
-        .doc('current_block')
+        .collection('blocks')
+        .doc(widget.blockId)
         .get();
 
     final data = doc.data();
@@ -1173,14 +1234,17 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       return;
     }
 
-    final rawDetails = Map<String, dynamic>.from(data['plannedExerciseDetails']);
-    print('📦 [WES] [Firestore Function] Full raw Firestore data: ${jsonEncode(data)}');
-    print('📦 [WES] Extracted plannedExerciseDetails: ${jsonEncode(rawDetails)}');
-
+    final rawDetails =
+        Map<String, dynamic>.from(data['plannedExerciseDetails']);
+    print(
+        '📦 [WES] [Firestore Function] Full raw Firestore data: ${jsonEncode(data)}');
+    print(
+        '📦 [WES] Extracted plannedExerciseDetails: ${jsonEncode(rawDetails)}');
 
     // ✅ Inject into PMU
     PeriodizationModelUtils.setExerciseSettings(rawDetails);
-    print('✅ [WES] Injected exerciseSettings into PMU with keys: ${rawDetails.keys}');
+    print(
+        '✅ [WES] Injected exerciseSettings into PMU with keys: ${rawDetails.keys}');
 
     // ✅ Build name ↔ ID maps
     final nameToIdMap = <String, String>{};
@@ -1192,7 +1256,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         String? name = entry['name'];
 
         // ✅ Fallback: try to get it from injected _selectedExercisesWithCircuits
-        if ((name == null || name.trim().isEmpty) && PeriodizationModelUtils.idToName.containsKey(id)) {
+        if ((name == null || name.trim().isEmpty) &&
+            PeriodizationModelUtils.idToName.containsKey(id)) {
           name = PeriodizationModelUtils.idToName[id];
           print('🔁 [WES] Using fallback name from idToName for $id → $name');
         }
@@ -1207,7 +1272,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       }
     });
 
-
     PeriodizationModelUtils.nameToId = nameToIdMap;
     PeriodizationModelUtils.idToName.clear();
     PeriodizationModelUtils.idToName.addAll(idToNameMap);
@@ -1215,7 +1279,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     print('✅ [WES] nameToIdMap injected with ${nameToIdMap.length} entries');
     print('✅ [WES] idToNameMap injected with ${idToNameMap.length} entries');
   }
-
 
   void _injectIdToNameFromSelectedExercises() {
     for (final ex in _selectedExercisesWithCircuits) {
@@ -1228,7 +1291,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
   }
 
-
   Future<void> loadSavedWorkoutsForInstanceCount() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -1240,14 +1302,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         .get();
 
     final workouts = snapshot.docs.map((doc) => doc.data()).toList();
-    PeriodizationModelUtils.savedWorkoutsList = List<Map<String, dynamic>>.from(workouts);
+    PeriodizationModelUtils.savedWorkoutsList =
+        List<Map<String, dynamic>>.from(workouts);
 
-    print('📦 [WES] Loaded ${workouts.length} saved workouts into savedWorkoutsList');
+    print(
+        '📦 [WES] Loaded ${workouts.length} saved workouts into savedWorkoutsList');
   }
 
-
   int? _getApplicableWeekIndex(String exerciseId) {
-    final model = PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
+    final model =
+        PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
 
     if (model == PeriodizationModelType.linearClassic ||
         model == PeriodizationModelType.dailyUndulatingWeek ||
@@ -1265,24 +1329,24 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     return null; // exposure-based models
   }
 
-
-
   void _setInitialWorkoutName() {
-    if (widget.initialTemplate != null && widget.initialTemplate!.name.isNotEmpty) {
+    if (widget.initialTemplate != null &&
+        widget.initialTemplate!.name.isNotEmpty) {
       _workoutNameController.text = widget.initialTemplate!.name;
     } else if (widget.initialWorkoutName != null) {
       _workoutNameController.text = widget.initialWorkoutName!;
     } else {
-      _workoutNameController.text = DateFormat('EEE d MMM yyyy').format(_selectedDate);
+      _workoutNameController.text =
+          DateFormat('EEE d MMM yyyy').format(_selectedDate);
     }
   }
-
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) async {
     if (state == AppLifecycleState.resumed) {
       final prefs = await SharedPreferences.getInstance();
-      final dateKey = '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
+      final dateKey =
+          '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
       final timestampStr = prefs.getString('draft_last_saved_$dateKey');
       if (timestampStr != null) {
         final savedAt = DateTime.tryParse(timestampStr);
@@ -1296,10 +1360,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
   }
 
-
-
-
-
   void _loadWorkout(Workout workout) {
     _workoutNameController.text = workout.name;
     _selectedDate = workout.date;
@@ -1310,21 +1370,23 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     for (var exercise in workout.exercises) {
       _selectedExercisesWithCircuits.add({
         'name': exercise.name,
-        'circuitIndex': exercise.circuitIndex ?? 0, // ✅ fallback to 0 if missing
+        'circuitIndex':
+            exercise.circuitIndex ?? 0, // ✅ fallback to 0 if missing
       });
 
       _workoutSets.add(
-        exercise.sets.map((set) => SetDetails(
-          reps: set.reps,
-          weight: set.weight,
-          rir: set.rir,
-        )).toList(),
+        exercise.sets
+            .map((set) => SetDetails(
+                  reps: set.reps,
+                  weight: set.weight,
+                  rir: set.rir,
+                ))
+            .toList(),
       );
     }
 
     _initializeControllers();
   }
-
 
   void _loadTemplate(Template template) {
     setState(() {
@@ -1336,16 +1398,18 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       for (var e in template.exercises) {
         _selectedExercisesWithCircuits.add({
           'name': (e is String) ? e : (e['name'] ?? 'Unnamed'),
-          'circuitIndex': (e is Map && e.containsKey('circuitIndex')) ? e['circuitIndex'] : 0,
+          'circuitIndex': (e is Map && e.containsKey('circuitIndex'))
+              ? e['circuitIndex']
+              : 0,
         });
       }
 
       // ✅ Initialize sets and controllers
       _workoutSets.addAll(List.generate(
         _selectedExercisesWithCircuits.length,
-            (_) => List.generate(
+        (_) => List.generate(
           _defaultSets,
-              (_) => SetDetails(reps: null, weight: null, rir: null),
+          (_) => SetDetails(reps: null, weight: null, rir: null),
         ),
       ));
 
@@ -1363,36 +1427,39 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         .collection('templates')
         .get();
 
-    final templates = snapshot.docs.map((doc) => Template.fromFirestore(doc.data(), doc.id)).toList();
-
+    final templates = snapshot.docs
+        .map((doc) => Template.fromFirestore(doc.data(), doc.id))
+        .toList();
 
     final selectedTemplate = await showDialog<Template>(
       context: context,
       builder: (context) {
         return AlertDialog(
           backgroundColor: Colors.blueGrey.shade800,
-          title: const Text('Select Template', style: TextStyle(color: Colors.white)),
+          title: const Text('Select Template',
+              style: TextStyle(color: Colors.white)),
           content: SizedBox(
             width: double.maxFinite,
             child: templates.isEmpty
                 ? const Center(
-              child: Text(
-                'No templates available.',
-                style: TextStyle(color: Colors.white70),
-              ),
-            )
+                    child: Text(
+                      'No templates available.',
+                      style: TextStyle(color: Colors.white70),
+                    ),
+                  )
                 : ListView.builder(
-              shrinkWrap: true,
-              itemCount: templates.length,
-              itemBuilder: (context, index) {
-                final template = templates[index];
-                return ListTile(
-                  title: Text(template.name, style: const TextStyle(color: Colors.white)),
-                  dense: true, // ✅ THIS is what reduces vertical space
-                  onTap: () => Navigator.pop(context, template),
-                );
-              },
-            ),
+                    shrinkWrap: true,
+                    itemCount: templates.length,
+                    itemBuilder: (context, index) {
+                      final template = templates[index];
+                      return ListTile(
+                        title: Text(template.name,
+                            style: const TextStyle(color: Colors.white)),
+                        dense: true, // ✅ THIS is what reduces vertical space
+                        onTap: () => Navigator.pop(context, template),
+                      );
+                    },
+                  ),
           ),
         );
       },
@@ -1403,15 +1470,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
   }
 
-
-
-
   void _addNewCircuitExercise() {
     setState(() {
       int nextCircuitIndex = 0;
 
       if (_selectedExercisesWithCircuits.isNotEmpty) {
-        final lastCircuitIndex = _selectedExercisesWithCircuits.last['circuitIndex'] ?? 0;
+        final lastCircuitIndex =
+            _selectedExercisesWithCircuits.last['circuitIndex'] ?? 0;
         nextCircuitIndex = lastCircuitIndex + 1;
       }
 
@@ -1421,15 +1486,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       });
 
       _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
-      _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-      _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-      _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+      _repsControllers
+          .add(List.generate(_defaultSets, (_) => TextEditingController()));
+      _weightControllers
+          .add(List.generate(_defaultSets, (_) => TextEditingController()));
+      _rirControllers
+          .add(List.generate(_defaultSets, (_) => TextEditingController()));
     });
   }
-
-
-
-
 
   @override
   void dispose() {
@@ -1451,13 +1515,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         controller.dispose();
       }
     }
-
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
-
-
   }
-
 
   void _initializeControllers() {
     // ✅ Ensure controller lists are at least as long as the exercise list
@@ -1497,9 +1557,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
   }
 
-
-
-
   void _showExercisePickerDialog() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -1510,13 +1567,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 // 🧠 Double guard: If it's still empty after loading, just skip the planned-only filter.
     bool plannedModeAvailable = plannedExercises.isNotEmpty;
 
-    final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
+    final snapshot =
+        await FirebaseFirestore.instance.collection('exercises').get();
 
-    final allExercises = snapshot.docs.map((doc) => {
-      'id': doc.id,
-      'name': doc['name'] as String,
-      'category': doc['category'] as String,
-    }).toList();
+    final allExercises = snapshot.docs
+        .map((doc) => {
+              'id': doc.id,
+              'name': doc['name'] as String,
+              'category': doc['category'] as String,
+            })
+        .toList();
 
     // 🔥 Build Name ➔ ID map
     final Map<String, String> nameToIdMap = {
@@ -1527,234 +1587,266 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final Map<String, bool> expandedGroups = {};
 
     final List<String> selected = await showDialog<List<String>>(
-      context: context,
-      builder: (ctx) {
-        List<String> tempSelected = _selectedExercisesWithCircuits.map((e) => e['name'] as String).toList();
-        String searchQuery = "";
+          context: context,
+          builder: (ctx) {
+            List<String> tempSelected = _selectedExercisesWithCircuits
+                .map((e) => e['name'] as String)
+                .toList();
+            String searchQuery = "";
 
-
-        return StatefulBuilder(builder: (context, setLocalState) {
-          List<Map<String, String>> filteredExercises = (showPlannedOnly && plannedModeAvailable)
-              ? allExercises.where((ex) => plannedExercises.contains(ex['id'])).toList()
-              : allExercises;
+            return StatefulBuilder(builder: (context, setLocalState) {
+              List<Map<String, String>> filteredExercises =
+                  (showPlannedOnly && plannedModeAvailable)
+                      ? allExercises
+                          .where((ex) => plannedExercises.contains(ex['id']))
+                          .toList()
+                      : allExercises;
 
 // 🔍 Apply case-insensitive name filter
-          if (searchQuery.trim().isNotEmpty) {
-            final query = searchQuery.toLowerCase();
-            filteredExercises = filteredExercises.where((ex) {
-              final name = ex['name']?.toLowerCase() ?? "";
-              return name.contains(query);
-            }).toList();
-          }
+              if (searchQuery.trim().isNotEmpty) {
+                final query = searchQuery.toLowerCase();
+                filteredExercises = filteredExercises.where((ex) {
+                  final name = ex['name']?.toLowerCase() ?? "";
+                  return name.contains(query);
+                }).toList();
+              }
 
+              print('Planned Exercise IDs: $plannedExercises');
+              print(
+                  'Loaded Exercises (id, name): ${allExercises.map((e) => '${e['id']} (${e['name']})').toList()}');
+              print(
+                  'Filtered Exercises (${showPlannedOnly ? "Planned Only" : "All"}): ${filteredExercises.map((e) => e['name']).toList()}');
 
+              final Map<String, List<String>> grouped = {};
 
-          print('Planned Exercise IDs: $plannedExercises');
-          print('Loaded Exercises (id, name): ${allExercises.map((e) => '${e['id']} (${e['name']})').toList()}');
-          print('Filtered Exercises (${showPlannedOnly ? "Planned Only" : "All"}): ${filteredExercises.map((e) => e['name']).toList()}');
+              for (final exercise in filteredExercises) {
+                final category = exercise['category'] ?? 'Other';
+                final name = exercise['name'] ?? 'Unnamed';
+                grouped.putIfAbsent(category, () => []).add(name);
+              }
 
-          final Map<String, List<String>> grouped = {};
+              for (final group in grouped.values) {
+                group
+                    .sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+              }
 
-          for (final exercise in filteredExercises) {
-            final category = exercise['category'] ?? 'Other';
-            final name = exercise['name'] ?? 'Unnamed';
-            grouped.putIfAbsent(category, () => []).add(name);
-          }
+              const categoryOrder = [
+                'Horizontal Press',
+                'Horizontal Pull',
+                'Vertical Press',
+                'Vertical Pull',
+                'Lateral Raise',
+                'Arm Extension',
+                'Arm Curl',
+                'Squat Pattern',
+                'Hip Hinge',
+                'Leg Extension',
+                'Leg Curl',
+                'Hip Abduction/adduction',
+                'Calf Raise',
+                'Core',
+              ];
 
-          for (final group in grouped.values) {
-            group.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-          }
+              final Map<String, List<String>> orderedGrouped = {};
+              for (final cat in categoryOrder) {
+                if (grouped.containsKey(cat)) {
+                  orderedGrouped[cat] = grouped[cat]!;
+                }
+              }
+              for (final entry in grouped.entries) {
+                if (!orderedGrouped.containsKey(entry.key)) {
+                  orderedGrouped[entry.key] = entry.value;
+                }
+              }
 
-          const categoryOrder = [
-            'Horizontal Press',
-            'Horizontal Pull',
-            'Vertical Press',
-            'Vertical Pull',
-            'Lateral Raise',
-            'Arm Extension',
-            'Arm Curl',
-            'Squat Pattern',
-            'Hip Hinge',
-            'Leg Extension',
-            'Leg Curl',
-            'Hip Abduction/adduction',
-            'Calf Raise',
-            'Core',
-          ];
+              for (final category in orderedGrouped.keys) {
+                expandedGroups.putIfAbsent(category, () => false);
+              }
 
-          final Map<String, List<String>> orderedGrouped = {};
-          for (final cat in categoryOrder) {
-            if (grouped.containsKey(cat)) {
-              orderedGrouped[cat] = grouped[cat]!;
-            }
-          }
-          for (final entry in grouped.entries) {
-            if (!orderedGrouped.containsKey(entry.key)) {
-              orderedGrouped[entry.key] = entry.value;
-            }
-          }
-
-          for (final category in orderedGrouped.keys) {
-            expandedGroups.putIfAbsent(category, () => false);
-          }
-
-          return AlertDialog(
-            backgroundColor: Colors.blueGrey.shade900,
-            insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 2), // 🔧 reduce horizontal margin
-            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12), // 🔧 reduce internal padding
-            title: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text("Select Exercises", style: TextStyle(fontSize: 13, color: Colors.white)),
-                if (plannedModeAvailable)
-                  Row(
+              return AlertDialog(
+                backgroundColor: Colors.blueGrey.shade900,
+                insetPadding: const EdgeInsets.symmetric(
+                    horizontal: 24, vertical: 2), // 🔧 reduce horizontal margin
+                contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 12), // 🔧 reduce internal padding
+                title: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text("Select Exercises",
+                        style: TextStyle(fontSize: 13, color: Colors.white)),
+                    if (plannedModeAvailable)
+                      Row(
+                        children: [
+                          Text(
+                            showPlannedOnly ? "Planned Only" : "All Exercises",
+                            style: const TextStyle(
+                                fontSize: 12, color: Colors.white70),
+                          ),
+                          Switch(
+                            value: showPlannedOnly,
+                            onChanged: (value) =>
+                                setLocalState(() => showPlannedOnly = value),
+                            activeColor: Colors.lightBlueAccent,
+                          ),
+                        ],
+                      )
+                    else
+                      const SizedBox(),
+                  ],
+                ),
+                content: SizedBox(
+                  width: double.maxFinite,
+                  child: Column(
                     children: [
-                      Text(
-                        showPlannedOnly ? "Planned Only" : "All Exercises",
-                        style: const TextStyle(fontSize: 12, color: Colors.white70),
+                      // 🔍 Search bar
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8.0),
+                        child: TextField(
+                          onChanged: (value) =>
+                              setLocalState(() => searchQuery = value),
+                          style: const TextStyle(color: Colors.white),
+                          decoration: InputDecoration(
+                            hintText: "Search exercises...",
+                            hintStyle: const TextStyle(color: Colors.white54),
+                            filled: true,
+                            fillColor: Colors.blueGrey.shade800,
+                            border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8.0)),
+                            prefixIcon:
+                                const Icon(Icons.search, color: Colors.white70),
+                          ),
+                        ),
                       ),
-                      Switch(
-                        value: showPlannedOnly,
-                        onChanged: (value) => setLocalState(() => showPlannedOnly = value),
-                        activeColor: Colors.lightBlueAccent,
+
+                      // 🔍 Filtered exercise list
+                      Expanded(
+                        child: searchQuery.trim().isNotEmpty
+                            ? ListView(
+                                children: filteredExercises.map((ex) {
+                                  final name = ex['name']!;
+                                  final isChecked = tempSelected.contains(name);
+                                  return CheckboxListTile(
+                                    contentPadding: const EdgeInsets.symmetric(
+                                        horizontal: 10), // 🔧 tighter spacing
+                                    dense: true, // ✅ less vertical space
+                                    value: isChecked,
+                                    title: Text(
+                                      name,
+                                      style: const TextStyle(
+                                          color: Colors.white, fontSize: 18),
+                                    ),
+                                    controlAffinity:
+                                        ListTileControlAffinity.leading,
+                                    activeColor: Colors.lightBlueAccent,
+                                    checkColor: Colors.black,
+
+                                    onChanged: (checked) {
+                                      setLocalState(() {
+                                        if (checked == true) {
+                                          tempSelected.add(name);
+                                        } else {
+                                          tempSelected.remove(name);
+                                        }
+                                      });
+                                    },
+                                  );
+                                }).toList(),
+                              )
+                            : ListView(
+                                children: orderedGrouped.entries.map((entry) {
+                                  final category = entry.key;
+                                  final exercises = entry.value;
+                                  final isExpanded =
+                                      expandedGroups[category] ?? false;
+
+                                  return Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      ListTile(
+                                        tileColor: Colors.blueGrey.shade800,
+                                        title: Text(category,
+                                            style: const TextStyle(
+                                                color: Colors.white,
+                                                fontWeight: FontWeight.bold)),
+                                        trailing: Icon(
+                                          isExpanded
+                                              ? Icons.expand_less
+                                              : Icons.expand_more,
+                                          color: Colors.white70,
+                                        ),
+                                        onTap: () {
+                                          setLocalState(() {
+                                            expandedGroups[category] =
+                                                !isExpanded;
+                                          });
+                                        },
+                                      ),
+                                      if (isExpanded)
+                                        ...exercises.map((name) {
+                                          final isChecked =
+                                              tempSelected.contains(name);
+                                          return CheckboxListTile(
+                                            value: isChecked,
+                                            title: Text(name,
+                                                style: const TextStyle(
+                                                    color: Colors.white)),
+                                            controlAffinity:
+                                                ListTileControlAffinity.leading,
+                                            activeColor: Colors.lightBlueAccent,
+                                            checkColor: Colors.black,
+                                            onChanged: (checked) {
+                                              setLocalState(() {
+                                                if (checked == true) {
+                                                  tempSelected.add(name);
+                                                } else {
+                                                  tempSelected.remove(name);
+                                                }
+                                              });
+                                            },
+                                          );
+                                        }),
+                                      const Divider(
+                                          height: 10, color: Colors.grey),
+                                    ],
+                                  );
+                                }).toList(),
+                              ),
                       ),
                     ],
-                  )
-                else
-                  const SizedBox(),
-
-              ],
-            ),
-            content: SizedBox(
-              width: double.maxFinite,
-              child: Column(
-                children: [
-                  // 🔍 Search bar
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8.0),
-                    child: TextField(
-                      onChanged: (value) => setLocalState(() => searchQuery = value),
-                      style: const TextStyle(color: Colors.white),
-                      decoration: InputDecoration(
-                        hintText: "Search exercises...",
-                        hintStyle: const TextStyle(color: Colors.white54),
-                        filled: true,
-                        fillColor: Colors.blueGrey.shade800,
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.0)),
-                        prefixIcon: const Icon(Icons.search, color: Colors.white70),
-                      ),
-                    ),
                   ),
+                ),
 
-                  // 🔍 Filtered exercise list
-                  Expanded(
-                    child: searchQuery.trim().isNotEmpty
-                        ? ListView(
-                      children: filteredExercises.map((ex) {
-                        final name = ex['name']!;
-                        final isChecked = tempSelected.contains(name);
-                        return CheckboxListTile(
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 10), // 🔧 tighter spacing
-                          dense: true, // ✅ less vertical space
-                          value: isChecked,
-                          title: Text(name, style: const TextStyle(color: Colors.white, fontSize: 18),),
-                          controlAffinity: ListTileControlAffinity.leading,
-                          activeColor: Colors.lightBlueAccent,
-                          checkColor: Colors.black,
-
-                          onChanged: (checked) {
-                            setLocalState(() {
-                              if (checked == true) {
-                                tempSelected.add(name);
-                              } else {
-                                tempSelected.remove(name);
-                              }
-                            });
-                          },
-                        );
-                      }).toList(),
-                    )
-                        : ListView(
-                      children: orderedGrouped.entries.map((entry) {
-                        final category = entry.key;
-                        final exercises = entry.value;
-                        final isExpanded = expandedGroups[category] ?? false;
-
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            ListTile(
-                              tileColor: Colors.blueGrey.shade800,
-                              title: Text(category, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                              trailing: Icon(
-                                isExpanded ? Icons.expand_less : Icons.expand_more,
-                                color: Colors.white70,
-                              ),
-                              onTap: () {
-                                setLocalState(() {
-                                  expandedGroups[category] = !isExpanded;
-                                });
-                              },
-                            ),
-                            if (isExpanded)
-                              ...exercises.map((name) {
-                                final isChecked = tempSelected.contains(name);
-                                return CheckboxListTile(
-                                  value: isChecked,
-                                  title: Text(name, style: const TextStyle(color: Colors.white)),
-                                  controlAffinity: ListTileControlAffinity.leading,
-                                  activeColor: Colors.lightBlueAccent,
-                                  checkColor: Colors.black,
-                                  onChanged: (checked) {
-                                    setLocalState(() {
-                                      if (checked == true) {
-                                        tempSelected.add(name);
-                                      } else {
-                                        tempSelected.remove(name);
-                                      }
-                                    });
-                                  },
-                                );
-                              }),
-                            const Divider(height: 10, color: Colors.grey),
-                          ],
-                        );
-                      }).toList(),
-                    ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text("Cancel"),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, tempSelected),
+                    child: const Text("Save"),
                   ),
                 ],
-              ),
-            ),
-
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text("Cancel"),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, tempSelected),
-                child: const Text("Save"),
-              ),
-            ],
-          );
-        });
-      },
-    ) ?? [];
+              );
+            });
+          },
+        ) ??
+        [];
 
     setState(() {
       _selectedExercisesWithCircuits.clear();
       _selectedExercisesWithCircuits.addAll(
         selected.map((name) => {
-          'name': name,
-          'circuitIndex': 0,
-        }),
+              'name': name,
+              'circuitIndex': 0,
+            }),
       );
 
       _workoutSets.clear();
       _workoutSets.addAll(
         List.generate(
           _selectedExercisesWithCircuits.length,
-              (_) => List.generate(_defaultSets, (_) => SetDetails()),
+          (_) => List.generate(_defaultSets, (_) => SetDetails()),
         ),
       );
 
@@ -1770,14 +1862,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
 
     bool plannedModeAvailable = plannedExercises.isNotEmpty;
-    final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
+    final snapshot =
+        await FirebaseFirestore.instance.collection('exercises').get();
 
-
-    final allExercises = snapshot.docs.map((doc) => {
-      'id': doc.id,
-      'name': doc['name'] as String,
-      'category': doc['category'] as String,
-    }).toList();
+    final allExercises = snapshot.docs
+        .map((doc) => {
+              'id': doc.id,
+              'name': doc['name'] as String,
+              'category': doc['category'] as String,
+            })
+        .toList();
 
     final Map<String, String> nameToIdMap = {
       for (final ex in allExercises) ex['name']!: ex['id']!,
@@ -1793,23 +1887,28 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         return StatefulBuilder(builder: (context, setLocalState) {
           List<Widget> _buildExerciseList() {
             final filteredExercises = (showPlannedOnly && plannedModeAvailable)
-                ? allExercises.where((ex) => plannedExercises.contains(ex['id'])).toList()
+                ? allExercises
+                    .where((ex) => plannedExercises.contains(ex['id']))
+                    .toList()
                 : allExercises;
 
             final searched = searchQuery.isNotEmpty
                 ? filteredExercises
-                .where((ex) => ex['name']!.toLowerCase().contains(searchQuery))
-                .toList()
+                    .where(
+                        (ex) => ex['name']!.toLowerCase().contains(searchQuery))
+                    .toList()
                 : filteredExercises;
 
             if (searchQuery.isNotEmpty) {
               return searched
                   .map((ex) => ListTile(
-                title: Text(ex['name']!, style: const TextStyle(color: Colors.white70)),
-                onTap: () => Navigator.pop(ctx, ex['name']!),
-                dense: true,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 10),
-              ))
+                        title: Text(ex['name']!,
+                            style: const TextStyle(color: Colors.white70)),
+                        onTap: () => Navigator.pop(ctx, ex['name']!),
+                        dense: true,
+                        contentPadding:
+                            const EdgeInsets.symmetric(horizontal: 10),
+                      ))
                   .toList();
             }
 
@@ -1867,20 +1966,25 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                 children: [
                   ListTile(
                     tileColor: Colors.blueGrey.shade800,
-                    title: Text(category, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    title: Text(category,
+                        style: const TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.bold)),
                     trailing: Icon(
                       isExpanded ? Icons.expand_less : Icons.expand_more,
                       color: Colors.white70,
                     ),
-                    onTap: () => setLocalState(() => expandedGroups[category] = !isExpanded),
+                    onTap: () => setLocalState(
+                        () => expandedGroups[category] = !isExpanded),
                   ),
                   if (isExpanded)
                     ...exercises.map((name) => ListTile(
-                      title: Text(name, style: const TextStyle(color: Colors.white70)),
-                      onTap: () => Navigator.pop(ctx, name),
-                      dense: true,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 10),
-                    )),
+                          title: Text(name,
+                              style: const TextStyle(color: Colors.white70)),
+                          onTap: () => Navigator.pop(ctx, name),
+                          dense: true,
+                          contentPadding:
+                              const EdgeInsets.symmetric(horizontal: 10),
+                        )),
                   const Divider(height: 10, color: Colors.grey),
                 ],
               );
@@ -1889,22 +1993,27 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
           return AlertDialog(
             backgroundColor: Colors.blueGrey.shade900,
-            insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 2), // 🔧 reduce horizontal margin
-            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12), // 🔧 reduce internal padding
+            insetPadding: const EdgeInsets.symmetric(
+                horizontal: 24, vertical: 2), // 🔧 reduce horizontal margin
+            contentPadding: const EdgeInsets.symmetric(
+                horizontal: 14, vertical: 12), // 🔧 reduce internal padding
             title: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text("Select Exercise", style: TextStyle(fontSize: 13, color: Colors.white)),
+                const Text("Select Exercise",
+                    style: TextStyle(fontSize: 13, color: Colors.white)),
                 if (plannedModeAvailable)
                   Row(
                     children: [
                       Text(
                         showPlannedOnly ? "Planned Only" : "All Exercises",
-                        style: const TextStyle(fontSize: 12, color: Colors.white70),
+                        style: const TextStyle(
+                            fontSize: 12, color: Colors.white70),
                       ),
                       Switch(
                         value: showPlannedOnly,
-                        onChanged: (value) => setLocalState(() => showPlannedOnly = value),
+                        onChanged: (value) =>
+                            setLocalState(() => showPlannedOnly = value),
                         activeColor: Colors.lightBlueAccent,
                       ),
                     ],
@@ -1927,10 +2036,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                         hintStyle: const TextStyle(color: Colors.white54),
                         filled: true,
                         fillColor: Colors.blueGrey.shade800,
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.0)),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 10.0),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8.0)),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 10.0, vertical: 10.0),
                       ),
-                      onChanged: (val) => setLocalState(() => searchQuery = val.toLowerCase()),
+                      onChanged: (val) =>
+                          setLocalState(() => searchQuery = val.toLowerCase()),
                     ),
                   ),
                   Expanded(
@@ -1941,7 +2053,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                 ],
               ),
             ),
-
           );
         });
       },
@@ -1969,11 +2080,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       int newCircuitIndex = 0;
       if (_selectedExercisesWithCircuits.isNotEmpty) {
         if (newIndex == 0) {
-          newCircuitIndex = _selectedExercisesWithCircuits.first['circuitIndex'] ?? 0;
+          newCircuitIndex =
+              _selectedExercisesWithCircuits.first['circuitIndex'] ?? 0;
         } else if (newIndex >= _selectedExercisesWithCircuits.length) {
-          newCircuitIndex = _selectedExercisesWithCircuits.last['circuitIndex'] ?? 0;
+          newCircuitIndex =
+              _selectedExercisesWithCircuits.last['circuitIndex'] ?? 0;
         } else {
-          newCircuitIndex = _selectedExercisesWithCircuits[newIndex]['circuitIndex'] ?? 0;
+          newCircuitIndex =
+              _selectedExercisesWithCircuits[newIndex]['circuitIndex'] ?? 0;
         }
       }
 
@@ -1988,10 +2102,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     });
   }
 
-
   Future<void> _saveWorkout() async {
-    if (_workoutNameController.text.isEmpty || _selectedExercisesWithCircuits.isEmpty) {
-
+    if (_workoutNameController.text.isEmpty ||
+        _selectedExercisesWithCircuits.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please fill in all required fields.')),
       );
@@ -2006,7 +2119,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       return;
     }
     final prefs = await SharedPreferences.getInstance();
-    final dateKey = '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
+    final dateKey =
+        '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
     final draftKey = 'workout_draft_$dateKey';
     final timestampKey = 'draft_last_saved_$dateKey';
 
@@ -2020,7 +2134,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       if (savedTime != null && now.difference(savedTime).inMinutes >= 120) {
         try {
           final parsed = jsonDecode(draftJson);
-          final exercises = List<Map<String, dynamic>>.from(parsed['exercises'] ?? []);
+          final exercises =
+              List<Map<String, dynamic>>.from(parsed['exercises'] ?? []);
           final sets = List<List>.from(parsed['sets'] ?? []);
 
           final filtered = <Map<String, dynamic>>[];
@@ -2029,7 +2144,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
             final exercise = exercises[i];
             final setList = List<Map<String, dynamic>>.from(sets[i]);
 
-            final hasData = setList.any((s) => (s['weight'] ?? 0) > 0 || (s['reps'] ?? 0) > 0);
+            final hasData = setList
+                .any((s) => (s['weight'] ?? 0) > 0 || (s['reps'] ?? 0) > 0);
             if (hasData) {
               filtered.add({
                 'name': exercise['name'],
@@ -2052,11 +2168,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
               });
 
               final setList = List<Map<String, dynamic>>.from(ex['sets']);
-              final sets = setList.map((s) => SetDetails(
-                reps: s['reps'],
-                weight: (s['weight'] as num?)?.toDouble(),
-                rir: (s['rir'] as num?)?.toDouble(),
-              )).toList();
+              final sets = setList
+                  .map((s) => SetDetails(
+                        reps: s['reps'],
+                        weight: (s['weight'] as num?)?.toDouble(),
+                        rir: (s['rir'] as num?)?.toDouble(),
+                      ))
+                  .toList();
 
               _workoutSets.add(sets);
             }
@@ -2072,18 +2190,19 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       }
     }
 
-
     // ✅ Sync TextField input into _workoutSets
     for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
-
       for (int j = 0; j < _workoutSets[i].length; j++) {
         final repsText = _repsControllers[i][j].text.trim();
         final weightText = _weightControllers[i][j].text.trim();
         final rirText = _rirControllers[i][j].text.trim();
 
-        _workoutSets[i][j].reps = repsText.isNotEmpty ? int.tryParse(repsText) : null;
-        _workoutSets[i][j].weight = weightText.isNotEmpty ? double.tryParse(weightText) : null;
-        _workoutSets[i][j].rir = rirText.isNotEmpty ? double.tryParse(rirText) : null;
+        _workoutSets[i][j].reps =
+            repsText.isNotEmpty ? int.tryParse(repsText) : null;
+        _workoutSets[i][j].weight =
+            weightText.isNotEmpty ? double.tryParse(weightText) : null;
+        _workoutSets[i][j].rir =
+            rirText.isNotEmpty ? double.tryParse(rirText) : null;
       }
     }
 
@@ -2092,40 +2211,47 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       'name': _workoutNameController.text,
       'date': _selectedDate.toIso8601String(),
       'userId': user.uid,
-      'exercises': _selectedExercisesWithCircuits.asMap().entries.map((entry) {
-        int exerciseIndex = entry.key;
-        String exerciseName = (entry.value['name'] is String && entry.value['name'].toString().trim().isNotEmpty)
-            ? entry.value['name']
-            : 'Unnamed';
+      'exercises': _selectedExercisesWithCircuits
+          .asMap()
+          .entries
+          .map((entry) {
+            int exerciseIndex = entry.key;
+            String exerciseName = (entry.value['name'] is String &&
+                    entry.value['name'].toString().trim().isNotEmpty)
+                ? entry.value['name']
+                : 'Unnamed';
 
-        int circuitIndex = entry.value['circuitIndex'] ?? 0;
+            int circuitIndex = entry.value['circuitIndex'] ?? 0;
 
-        List<Map<String, dynamic>> validSets = [];
+            List<Map<String, dynamic>> validSets = [];
 
-        for (int setIndex = 0; setIndex < _workoutSets[exerciseIndex].length; setIndex++) {
-          final set = _workoutSets[exerciseIndex][setIndex];
-          final weight = set.weight ?? 0.0;
+            for (int setIndex = 0;
+                setIndex < _workoutSets[exerciseIndex].length;
+                setIndex++) {
+              final set = _workoutSets[exerciseIndex][setIndex];
+              final weight = set.weight ?? 0.0;
 
-          if (weight > 0) {
-            validSets.add({
-              'exerciseName': exerciseName,
-              'reps': set.reps ?? 0,
-              'weight': weight,
-              'rir': set.rir ?? 0.0,
-            });
-          }
-        }
+              if (weight > 0) {
+                validSets.add({
+                  'exerciseName': exerciseName,
+                  'reps': set.reps ?? 0,
+                  'weight': weight,
+                  'rir': set.rir ?? 0.0,
+                });
+              }
+            }
 
-        return validSets.isNotEmpty
-            ? {
-          'name': exerciseName,
-          'circuitIndex': circuitIndex,
-          'sets': validSets,
-        }
-            : null;
-      }).where((e) => e != null).toList(),
+            return validSets.isNotEmpty
+                ? {
+                    'name': exerciseName,
+                    'circuitIndex': circuitIndex,
+                    'sets': validSets,
+                  }
+                : null;
+          })
+          .where((e) => e != null)
+          .toList(),
     };
-
 
     try {
       print("🧠 Saving to Firestore: ${jsonEncode(workoutData)}");
@@ -2152,97 +2278,114 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     } catch (e) {
       print("❌ Failed to save workout: $e");
 
-
-
-    ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Workout saved successfully.')),
       );
 
       // ✅ Push workout into BlockBuilder day (block_data)
-      final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
+      final userDoc =
+          FirebaseFirestore.instance.collection('users').doc(user.uid);
 
-// Get block start date
-      final blockDoc = await userDoc.collection('block_planner').doc('current_block').get();
-      if (blockDoc.exists) {
-        final blockStartStr = blockDoc.data()?['blockStartDate'];
-        if (blockStartStr != null) {
-          final blockStart = DateTime.parse(blockStartStr);
-          final daysSinceStart = _selectedDate.difference(blockStart).inDays;
-          final weekIndex = (daysSinceStart / 7).floor();
-          final dayIndex = daysSinceStart % 7;
+// 1️⃣ Reference your actual block document:
+      final blockId = widget.blockId;
+      if (blockId != null && blockId.isNotEmpty) {
+        final blockRef = FirebaseFirestore.instance
+            .collection('planned_blocks')
+            .doc(user.uid)
+            .collection('blocks')
+            .doc(blockId);
 
-          final weekDocRef = userDoc
-              .collection('block_data')
-              .doc('current_block')
-              .collection('weeks')
-              .doc('week_$weekIndex');
+        // 2️⃣ Fetch its meta:
+        final blockSnap = await blockRef.get();
+        if (blockSnap.exists) {
+          // 3️⃣ Read the startDate as a Timestamp
+          final ts = blockSnap.get('startDate') as Timestamp?;
+          if (ts != null) {
+            final blockStart = ts.toDate();
 
-          // Ensure week doc exists
-          await weekDocRef.set({'exists': true}, SetOptions(merge: true));
+            // 4️⃣ Compute week/day indexes
+            final daysSinceStart = _selectedDate.difference(blockStart).inDays;
+            final weekIndex = (daysSinceStart / 7).floor();
+            final dayIndex = daysSinceStart % 7;
 
-          final List<Map<String, dynamic>> updatedExercises = [];
+            // 5️⃣ Point at the exact week doc under your block:
+            final weekDocRef =
+                blockRef.collection('weeks').doc('week_$weekIndex');
 
-          for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
-            final name = _selectedExercisesWithCircuits[i]['name'] ?? 'Unnamed';
-            final circuitIndex = _selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0;
-            final sets = _workoutSets[i];
+            // Ensure week doc exists
+            await weekDocRef.set({'exists': true}, SetOptions(merge: true));
 
-            final validSets = sets.where((s) {
-              final reps = s.reps ?? 0;
-              final weight = s.weight ?? 0.0;
-              return reps >= 1 || weight > 1;
-            }).toList();
+            final List<Map<String, dynamic>> updatedExercises = [];
 
+            for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+              final name =
+                  _selectedExercisesWithCircuits[i]['name'] ?? 'Unnamed';
+              final circuitIndex =
+                  _selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0;
+              final sets = _workoutSets[i];
 
-            if (validSets.isEmpty) continue;
+              final validSets = sets.where((s) {
+                final reps = s.reps ?? 0;
+                final weight = s.weight ?? 0.0;
+                return reps >= 1 || weight > 1;
+              }).toList();
 
-            final bestSet = validSets.fold<SetDetails?>(null, (prev, curr) {
-              if (prev == null) return curr;
-              final prevE1RM = calculateE1RM(prev.weight, prev.reps?.toDouble(), prev.rir);
-              final currE1RM = calculateE1RM(curr.weight, curr.reps?.toDouble(), curr.rir);
-              return (currE1RM > prevE1RM) ? curr : prev;
-            });
+              if (validSets.isEmpty) continue;
 
-            if (bestSet != null && bestSet.weight != null && bestSet.reps != null) {
-              updatedExercises.add({
-                'name': name,
-                'circuitIndex': circuitIndex,
-                'weight': bestSet.weight,
-                'reps': bestSet.reps,
-                'rir': bestSet.rir ?? 0.0,
+              final bestSet = validSets.fold<SetDetails?>(null, (prev, curr) {
+                if (prev == null) return curr;
+                final prevE1RM =
+                    calculateE1RM(prev.weight, prev.reps?.toDouble(), prev.rir);
+                final currE1RM =
+                    calculateE1RM(curr.weight, curr.reps?.toDouble(), curr.rir);
+                return (currE1RM > prevE1RM) ? curr : prev;
               });
-            }
-          }
 
-
-
-          // Fetch current day data
-          final dayDoc = await weekDocRef.collection('days').doc('day_$dayIndex').get();
-          final existing = dayDoc.data();
-          final List<Map<String, dynamic>> existingExercises = List<Map<String, dynamic>>.from(existing?['exercises'] ?? []);
-
-          // Merge existing + new, keeping highest E1RM
-          for (final newEx in updatedExercises) {
-            final matchIndex = existingExercises.indexWhere((e) => e['name'] == newEx['name']);
-            if (matchIndex == -1) {
-              existingExercises.add(newEx);
-            } else {
-              final existingEx = existingExercises[matchIndex];
-              final oldE1RM = calculateE1RM(existingEx['weight'], existingEx['reps']?.toDouble(), existingEx['rir']);
-              final newE1RM = calculateE1RM(newEx['weight'], newEx['reps']?.toDouble(), newEx['rir']);
-              if (newE1RM > oldE1RM) {
-                existingExercises[matchIndex] = newEx;
+              if (bestSet != null &&
+                  bestSet.weight != null &&
+                  bestSet.reps != null) {
+                updatedExercises.add({
+                  'name': name,
+                  'circuitIndex': circuitIndex,
+                  'weight': bestSet.weight,
+                  'reps': bestSet.reps,
+                  'rir': bestSet.rir ?? 0.0,
+                });
               }
             }
-          }
 
-          await weekDocRef
-              .collection('days')
-              .doc('day_$dayIndex')
-              .set({'exercises': existingExercises}, SetOptions(merge: true));
+            // Fetch current day data
+            final dayDoc =
+                await weekDocRef.collection('days').doc('day_$dayIndex').get();
+            final existing = dayDoc.data();
+            final List<Map<String, dynamic>> existingExercises =
+                List<Map<String, dynamic>>.from(existing?['exercises'] ?? []);
+
+            // Merge existing + new, keeping highest E1RM
+            for (final newEx in updatedExercises) {
+              final matchIndex = existingExercises
+                  .indexWhere((e) => e['name'] == newEx['name']);
+              if (matchIndex == -1) {
+                existingExercises.add(newEx);
+              } else {
+                final existingEx = existingExercises[matchIndex];
+                final oldE1RM = calculateE1RM(existingEx['weight'],
+                    existingEx['reps']?.toDouble(), existingEx['rir']);
+                final newE1RM = calculateE1RM(
+                    newEx['weight'], newEx['reps']?.toDouble(), newEx['rir']);
+                if (newE1RM > oldE1RM) {
+                  existingExercises[matchIndex] = newEx;
+                }
+              }
+            }
+
+            await weekDocRef
+                .collection('days')
+                .doc('day_$dayIndex')
+                .set({'exercises': existingExercises}, SetOptions(merge: true));
+          }
         }
       }
-
 
       // ✅ Return top sets to BlockBuilder
       Navigator.pop(context, {
@@ -2259,8 +2402,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
           final bestSet = validSets.fold<SetDetails?>(null, (prev, curr) {
             if (prev == null) return curr;
-            final prevE1RM = calculateE1RM(prev.weight, prev.reps?.toDouble(), prev.rir);
-            final currE1RM = calculateE1RM(curr.weight, curr.reps?.toDouble(), curr.rir);
+            final prevE1RM =
+                calculateE1RM(prev.weight, prev.reps?.toDouble(), prev.rir);
+            final currE1RM =
+                calculateE1RM(curr.weight, curr.reps?.toDouble(), curr.rir);
             return (currE1RM > prevE1RM) ? curr : prev;
           });
 
@@ -2277,7 +2422,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         if (_selectedDate != widget.initialDate)
           'reschedule': {
             'from': widget.initialDate!,
-            'to':   _selectedDate,
+            'to': _selectedDate,
           },
       });
 
@@ -2290,15 +2435,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
       for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
         final name = _selectedExercisesWithCircuits[i]['name'];
-        final circuitIndex = _selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0;
+        final circuitIndex =
+            _selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0;
         final set = _workoutSets[i].isNotEmpty ? _workoutSets[i][0] : null;
         if (set == null) continue;
 
         final blockDoc = await FirebaseFirestore.instance
-            .collection('users')
+            .collection('planned_blocks')
             .doc(user.uid)
-            .collection('block_planner')
-            .doc('current_block')
+            .collection('blocks')
+            .doc(blockId)
             .get();
         final blockStartStr = blockDoc.data()?['blockStartDate'];
         final blockStart = DateTime.parse(blockStartStr);
@@ -2321,8 +2467,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         'savedFields_${_selectedDate.toIso8601String().substring(0, 10)}',
         savedFieldKeys,
       );
-
-
     } catch (error) {
       print("❌ Failed to save workout: $error");
 
@@ -2330,10 +2474,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         SnackBar(content: Text('Failed to save workout: $error')),
       );
     }
-
-
-
-
   }
 
   Future<void> _loadPlannedBlockBuilderExercisesIfAny() async {
@@ -2342,61 +2482,66 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
+    final blockId = widget.blockId;
+    if (blockId == null || blockId.isEmpty) return;
 
-    // Fetch block start date
-    final blockDoc = await userDoc.collection('block_planner').doc('current_block').get();
-    if (!blockDoc.exists) return;
+    // 1️⃣ Reference the exact block document
+    final blockRef = FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(user.uid)
+        .collection('blocks')
+        .doc(blockId);
 
-    final blockStartStr = blockDoc.data()?['blockStartDate'];
-    if (blockStartStr == null) return;
+    // 2️⃣ Fetch its metadata
+    final blockSnap = await blockRef.get();
+    if (!blockSnap.exists) return;
 
-    final blockStart = DateTime.parse(blockStartStr);
+    // 3️⃣ Read the `startDate` timestamp
+    final ts = blockSnap.get('startDate') as Timestamp?;
+    if (ts == null) return;
+    final blockStart = ts.toDate();
+
+    // 4️⃣ Compute how many days/weeks since block start
     final daysSinceStart = _selectedDate.difference(blockStart).inDays;
-    if (daysSinceStart < 0) return; // Before block
-
+    if (daysSinceStart < 0) return; // before the block began
     final weekIndex = (daysSinceStart / 7).floor();
     final dayIndex = daysSinceStart % 7;
 
-    final dayDoc = await userDoc
-        .collection('block_data')
-        .doc('current_block')
+    // 5️⃣ Point at that specific day document
+    final dayDoc = await blockRef
         .collection('weeks')
         .doc('week_$weekIndex')
         .collection('days')
         .doc('day_$dayIndex')
         .get();
-
     if (!dayDoc.exists) return;
 
-    final exercises = List<Map<String, dynamic>>.from(dayDoc.data()?['exercises'] ?? []);
+    // 6️⃣ Pull out your saved exercises
+    final exercises = List<Map<String, dynamic>>.from(
+        dayDoc.data()?['exercises'] ?? <Map<String, dynamic>>[]);
     if (exercises.isEmpty) return;
 
+    // 7️⃣ Inject into your UI state exactly as before
     setState(() {
-      _bb2DataByExercise.clear(); // 🔄 Cache full BB2 day data
-
+      _bb2DataByExercise.clear();
       _selectedExercisesWithCircuits.clear();
       _workoutSets.clear();
 
       for (final ex in exercises) {
         final name = (ex['name'] ?? '').toString().trim();
-        final circuitIndex = ex['circuitIndex'] ?? 0;
+        final circuitIndex = ex['circuitIndex'] as int? ?? 0;
+        final weightVal =
+            (ex['weight'] is num) ? (ex['weight'] as num).toDouble() : null;
+        final repsVal =
+            (ex['reps'] is num) ? (ex['reps'] as num).toInt() : null;
+        final rirVal =
+            (ex['rir'] is num) ? (ex['rir'] as num).toDouble() : null;
 
-        final dynamic rawWeight = ex['weight'];
-        final dynamic rawReps = ex['reps'];
-        final dynamic rawRIR = ex['rir'];
-
-        final double? weightVal = rawWeight != null ? double.tryParse(rawWeight.toString()) : null;
-        final int? repsVal = rawReps != null ? int.tryParse(rawReps.toString()) : null;
-        final double? rirVal = rawRIR != null ? double.tryParse(rawRIR.toString()) : null;
-
-        // ✅ Add to visual circuit layout
         _selectedExercisesWithCircuits.add({
           'name': name,
           'circuitIndex': circuitIndex,
         });
 
-        // ✅ Store override values (null-safe, clean)
         _bb2DataByExercise[name] = {
           if (repsVal != null) 'reps': repsVal,
           if (weightVal != null) 'weight': weightVal,
@@ -2405,15 +2550,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         };
         print('📦 [WES] Final BB2 keys: ${_bb2DataByExercise.keys}');
 
+        // initialize blank sets (you’ll override reps/weight/rir via controllers)
         _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
 
-        print('✅ [WES] BB2 override loaded → $name → reps: $repsVal, weight: $weightVal, RIR: $rirVal');
+        print('✅ [WES] BB2 override loaded → '
+            '$name → reps: $repsVal, weight: $weightVal, RIR: $rirVal');
       }
-
 
       _initializeControllers();
     });
-
   }
 
   Future<Map<String, dynamic>?> getBB2ExerciseValuesForDate({
@@ -2424,29 +2569,43 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return null;
 
+    // 1️⃣ Make sure we have a blockId on this screen
+    final blockId = widget.blockId;
+    if (blockId == null || blockId.isEmpty) return null;
+
+    // 2️⃣ Compute which week/day to read
     final normalizedName = exerciseName.trim().toLowerCase();
-    final weekIndex = PeriodizationModelUtils.getWeekIndexForDate(date, blockStartDate);
-    final dayIndex = date.weekday - 1;
+    final weekIndex =
+        PeriodizationModelUtils.getWeekIndexForDate(date, blockStartDate);
+    final dayIndex = date.weekday - 1; // Mon=0 ... Sun=6
 
-    final weekDocRef = FirebaseFirestore.instance
-        .collection('users')
+    // 3️⃣ Point at planned_blocks/{uid}/blocks/{blockId}/weeks/week_<i>
+    final blockRef = FirebaseFirestore.instance
+        .collection('planned_blocks')
         .doc(user.uid)
-        .collection('block_data')
-        .doc('current_block')
-        .collection('weeks')
-        .doc('week_$weekIndex');
+        .collection('blocks')
+        .doc(blockId);
 
-    final daySnapshot = await weekDocRef.collection('days').doc('day_$dayIndex').get();
+    final weekDocRef = blockRef.collection('weeks').doc('week_$weekIndex');
+
+    // 4️⃣ Grab that day document
+    final daySnapshot =
+        await weekDocRef.collection('days').doc('day_$dayIndex').get();
+
     if (!daySnapshot.exists) return null;
 
-    final exercises = List<Map<String, dynamic>>.from(daySnapshot.data()?['exercises'] ?? []);
+    // 5️⃣ Parse out your saved exercises
+    final exercises = List<Map<String, dynamic>>.from(
+        daySnapshot.data()?['exercises'] ?? <Map<String, dynamic>>[]);
 
+    // 6️⃣ Find the matching exercise by (lower-case) name
     for (final ex in exercises) {
       final name = (ex['name'] ?? '').toString().trim().toLowerCase();
       if (name == normalizedName) {
-        final reps = int.tryParse(ex['reps']?.toString() ?? '');
-        final weight = double.tryParse(ex['weight']?.toString() ?? '');
-        final rir = double.tryParse(ex['rir']?.toString() ?? '');
+        final reps = ex['reps'] is num ? (ex['reps'] as num).toInt() : null;
+        final weight =
+            ex['weight'] is num ? (ex['weight'] as num).toDouble() : null;
+        final rir = ex['rir'] is num ? (ex['rir'] as num).toDouble() : null;
 
         return {
           'reps': reps,
@@ -2459,8 +2618,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     return null;
   }
 
-
-  Future<Map<String, dynamic>?> getBB2SavedValuesFromSharedPrefs(String exerciseName, DateTime date) async {
+  Future<Map<String, dynamic>?> getBB2SavedValuesFromSharedPrefs(
+      String exerciseName, DateTime date) async {
     final prefs = await SharedPreferences.getInstance();
     final dateKey = DateFormat('yyyy-MM-dd').format(date);
     final raw = prefs.getString('bb2_dayData_$dateKey');
@@ -2474,7 +2633,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final exercises = List<Map<String, dynamic>>.from(data['exercises'] ?? []);
 
     final match = exercises.firstWhere(
-          (e) => (e['name']?.toString().trim().toLowerCase() ?? '') ==
+      (e) =>
+          (e['name']?.toString().trim().toLowerCase() ?? '') ==
           exerciseName.trim().toLowerCase(),
       orElse: () => {},
     );
@@ -2487,17 +2647,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         'rir': match['rir'],
       };
     } else {
-      print('🚫 [WES] No matching exercise "$exerciseName" found in SharedPrefs for $dateKey');
+      print(
+          '🚫 [WES] No matching exercise "$exerciseName" found in SharedPrefs for $dateKey');
       return null;
     }
   }
 
-
-
-
   Future<void> _saveWorkoutDraftToCache() async {
     final prefs = await SharedPreferences.getInstance();
-    final dateKey = '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
+    final dateKey =
+        '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
     final draftKey = 'workout_draft_$dateKey';
     final timestampKey = 'draft_last_saved_$dateKey';
 
@@ -2506,25 +2665,28 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       'date': _selectedDate.toIso8601String(),
       'exercises': _selectedExercisesWithCircuits,
       'sets': _workoutSets.map((setsForExercise) {
-        return setsForExercise.map((set) => {
-          'reps': set.reps,
-          'weight': set.weight,
-          'rir': set.rir,
-        }).toList();
+        return setsForExercise
+            .map((set) => {
+                  'reps': set.reps,
+                  'weight': set.weight,
+                  'rir': set.rir,
+                })
+            .toList();
       }).toList(),
     };
 
-    await prefs.setString(draftKey, jsonEncode(workoutDraft)); // ✅ actually save the draft
-    await prefs.setString(timestampKey, DateTime.now().toIso8601String()); // ✅ save timestamp
+    await prefs.setString(
+        draftKey, jsonEncode(workoutDraft)); // ✅ actually save the draft
+    await prefs.setString(
+        timestampKey, DateTime.now().toIso8601String()); // ✅ save timestamp
 
     print("[WES] Draft saved for $_selectedDate under key: $draftKey");
   }
 
-
-
   Future<bool> _loadWorkoutDraftFromCache() async {
     final prefs = await SharedPreferences.getInstance();
-    final dateKey = '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
+    final dateKey =
+        '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
     final draftKey = 'workout_draft_$dateKey';
     final timestampKey = 'draft_last_saved_$dateKey';
 
@@ -2541,7 +2703,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       final now = DateTime.now();
       final draft = jsonDecode(draftJson);
 
-      final exercises = List<Map<String, dynamic>>.from(draft['exercises'] ?? []);
+      final exercises =
+          List<Map<String, dynamic>>.from(draft['exercises'] ?? []);
       final sets = List<List>.from(draft['sets'] ?? []);
 
       final filteredExercises = <Map<String, dynamic>>[];
@@ -2550,7 +2713,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       for (int i = 0; i < exercises.length; i++) {
         final setList = List<Map<String, dynamic>>.from(sets[i]);
         final hasRealData = setList.any((s) =>
-        (s['weight'] ?? 0) > 0 ||
+            (s['weight'] ?? 0) > 0 ||
             (s['reps'] ?? 0) > 0 ||
             (s['rir'] ?? 0) > 0);
         if (hasRealData) {
@@ -2569,17 +2732,18 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           print('[WES] Draft expired and had no usable data — discarded.');
           return false;
         } else {
-          print('[WES] Draft expired, but kept ${filteredExercises.length} non-empty exercises.');
+          print(
+              '[WES] Draft expired, but kept ${filteredExercises.length} non-empty exercises.');
         }
       } else {
         // 🧠 Draft is still fresh, so keep everything
         filteredExercises.clear();
         filteredExercises.addAll(exercises);
         filteredSets.clear();
-        filteredSets.addAll(sets.map((s) => List<Map<String, dynamic>>.from(s)));
+        filteredSets
+            .addAll(sets.map((s) => List<Map<String, dynamic>>.from(s)));
         print('[WES] Draft is fresh — all exercises kept.');
       }
-
 
       _selectedExercisesWithCircuits.clear();
       _selectedExercisesWithCircuits.addAll(filteredExercises);
@@ -2592,21 +2756,27 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       for (int i = 0; i < filteredExercises.length; i++) {
         final setList = filteredSets[i];
 
-        _workoutSets.add(setList.map((s) => SetDetails(
-          reps: s['reps'],
-          weight: (s['weight'] as num?)?.toDouble(),
-          rir: (s['rir'] as num?)?.toDouble(),
-        )).toList());
+        _workoutSets.add(setList
+            .map((s) => SetDetails(
+                  reps: s['reps'],
+                  weight: (s['weight'] as num?)?.toDouble(),
+                  rir: (s['rir'] as num?)?.toDouble(),
+                ))
+            .toList());
 
-        _repsControllers.add(List.generate(setList.length, (_) => TextEditingController()));
-        _weightControllers.add(List.generate(setList.length, (_) => TextEditingController()));
-        _rirControllers.add(List.generate(setList.length, (_) => TextEditingController()));
+        _repsControllers
+            .add(List.generate(setList.length, (_) => TextEditingController()));
+        _weightControllers
+            .add(List.generate(setList.length, (_) => TextEditingController()));
+        _rirControllers
+            .add(List.generate(setList.length, (_) => TextEditingController()));
       }
 
       _initializeControllers();
       _workoutNameController.text = draft['name'] ?? '';
 
-      print('[WES] Loaded draft (expired=$isExpired, kept=${filteredExercises.length})');
+      print(
+          '[WES] Loaded draft (expired=$isExpired, kept=${filteredExercises.length})');
 
       return true;
     } catch (e) {
@@ -2615,12 +2785,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
   }
 
-
-
-
-
   Future<void> _mergeNewBB2ExercisesIntoDraft() async {
-    print('[WES] Attempting to merge BB2 exercises into draft for $_selectedDate');
+    print(
+        '[WES] Attempting to merge BB2 exercises into draft for $_selectedDate');
 
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
@@ -2628,17 +2795,34 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       return;
     }
 
-    final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
-    final blockDoc = await userDoc.collection('block_planner').doc('current_block').get();
-    final blockStartStr = blockDoc.data()?['blockMeta']?['blockStartDate'];
-
-
-    if (blockStartStr == null) {
-      print('[WES] blockStartDate is null');
+    // 1️⃣ Make sure we have a blockId
+    final blockId = widget.blockId;
+    if (blockId == null || blockId.isEmpty) {
+      print('[WES] No blockId provided – skipping BB2 merge');
       return;
     }
 
-    final blockStart = DateTime.parse(blockStartStr);
+    // 2️⃣ Load the block‐meta doc under planned_blocks/{uid}/blocks/{blockId}
+    final blockDoc = await FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(user.uid)
+        .collection('blocks')
+        .doc(blockId)
+        .get();
+    if (!blockDoc.exists) {
+      print('[WES] No such block in planned_blocks');
+      return;
+    }
+
+    // 3️⃣ Pull out your saved start date
+    final meta = blockDoc.data()?['blockMeta'] as Map<String, dynamic>?;
+    final startStr = meta?['blockStartDate'] as String?;
+    if (startStr == null) {
+      print('[WES] blockMeta.blockStartDate is missing');
+      return;
+    }
+
+    final blockStart = DateTime.parse(startStr);
     final daysSinceStart = _selectedDate.difference(blockStart).inDays;
     if (daysSinceStart < 0) {
       print('[WES] selectedDate is before block start');
@@ -2648,11 +2832,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final weekIndex = (daysSinceStart / 7).floor();
     final dayIndex = daysSinceStart % 7;
 
-    print('[WES] Fetching week_$weekIndex, day_$dayIndex');
+    print('[WES] Fetching week_$weekIndex / day_$dayIndex from BB2');
 
-    final dayDoc = await userDoc
-        .collection('block_data')
-        .doc('current_block')
+    // 4️⃣ Now point at weeks/day under planned_blocks/{uid}/blocks/{blockId}
+    final dayDoc = await FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(user.uid)
+        .collection('blocks')
+        .doc(blockId)
         .collection('weeks')
         .doc('week_$weekIndex')
         .collection('days')
@@ -2667,30 +2854,34 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final data = dayDoc.data();
     print('[WES] BB2 day doc data: $data');
 
-    final bb2Exercises = List<Map<String, dynamic>>.from(data?['exercises'] ?? []);
+    final bb2Exercises =
+        List<Map<String, dynamic>>.from(data?['exercises'] ?? []);
     if (bb2Exercises.isEmpty) {
       print('[WES] No exercises in BB2 day doc');
       return;
     }
 
-    final existingNames = _selectedExercisesWithCircuits.map((e) => e['name']).toSet();
-    final newOnes = bb2Exercises.where((ex) => !existingNames.contains(ex['name'])).toList();
+    // 5️⃣ Find which ones aren’t already in our draft
+    final existingNames =
+        _selectedExercisesWithCircuits.map((e) => e['name']).toSet();
+    final newOnes = bb2Exercises
+        .where((ex) => !existingNames.contains(ex['name']))
+        .toList();
 
     print('[WES] Found ${newOnes.length} new BB2 exercises');
 
     if (newOnes.isNotEmpty) {
-      _selectedExercisesWithCircuits.addAll(
-        newOnes.map((e) => {
-          'name': e['name'],
-          'circuitIndex': e['circuitIndex'] ?? 0,
-        }),
-      );
+      // 6️⃣ Merge them in
+      setState(() {
+        _selectedExercisesWithCircuits.addAll(newOnes.map((e) => {
+              'name': e['name'],
+              'circuitIndex': e['circuitIndex'] ?? 0,
+            }));
 
-      _workoutSets.addAll(
-        List.generate(newOnes.length, (_) => List.generate(_defaultSets, (_) => SetDetails())),
-      );
+        _workoutSets.addAll(List.generate(newOnes.length,
+            (_) => List.generate(_defaultSets, (_) => SetDetails())));
+      });
 
-      print('[WES] _mergeNewBB2ExercisesIntoDraft() called');
       print("[WES] Merged ${newOnes.length} new BB2 exercises into draft");
       await _saveWorkoutDraftToCache();
     } else {
@@ -2698,14 +2889,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
   }
 
-
-
-
-
   void addSet(int exerciseIndex) {
     setState(() {
-      _workoutSets[exerciseIndex]
-          .add(SetDetails(reps: 0, weight: 0, rir: 0));
+      _workoutSets[exerciseIndex].add(SetDetails(reps: 0, weight: 0, rir: 0));
       _repsControllers[exerciseIndex].add(TextEditingController());
       _weightControllers[exerciseIndex].add(TextEditingController());
       _rirControllers[exerciseIndex].add(TextEditingController());
@@ -2722,7 +2908,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
             return AlertDialog(
               title: const Text('Confirm Removal'),
               content:
-              const Text('Are you sure you want to remove this exercise?'),
+                  const Text('Are you sure you want to remove this exercise?'),
               actions: <Widget>[
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
@@ -2766,77 +2952,97 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       lastDate: DateTime(2101),
     );
 
-    if (pickedDate != null && pickedDate != _selectedDate) {
-      // Step 1: Save current date's draft
-      await _saveWorkoutDraftToCache();
+    if (pickedDate == null || pickedDate == _selectedDate) return;
 
-      // Step 2: Switch date and reset workout name
-      setState(() {
-        _selectedDate = pickedDate;
-        _workoutNameController.text = _formatWorkoutDate(_selectedDate);
-      });
+    // 1️⃣ Save the current draft
+    await _saveWorkoutDraftToCache();
 
-      // Step 3: Try load draft for new date
-      final draftLoaded = await _loadWorkoutDraftFromCache();
+    // 2️⃣ Switch date & workout-name
+    setState(() {
+      _selectedDate = pickedDate;
+      _workoutNameController.text = _formatWorkoutDate(_selectedDate);
+    });
 
-      // Step 4: If no draft, fall back to BB2
-      if (!draftLoaded) {
-        await _loadPlannedBlockBuilderExercisesIfAny();
-      } else {
-        // If draft was loaded, merge in any new exercises from BB2
-        final user = FirebaseAuth.instance.currentUser;
-        if (user != null) {
-          final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
-          final blockDoc = await userDoc.collection('block_planner').doc('current_block').get();
-          final blockStartStr = blockDoc.data()?['blockStartDate'];
-          if (blockStartStr != null) {
-            final blockStart = DateTime.parse(blockStartStr);
-            final daysSinceStart = _selectedDate.difference(blockStart).inDays;
-            if (daysSinceStart >= 0) {
-              final weekIndex = (daysSinceStart / 7).floor();
-              final dayIndex = daysSinceStart % 7;
+    // 3️⃣ Try loading a draft
+    final draftLoaded = await _loadWorkoutDraftFromCache();
 
-              final dayDoc = await userDoc
-                  .collection('block_data')
-                  .doc('current_block')
-                  .collection('weeks')
-                  .doc('week_$weekIndex')
-                  .collection('days')
-                  .doc('day_$dayIndex')
-                  .get();
+    // 4️⃣ If no draft, load BB2; otherwise merge any new BB2 exercises
+    if (!draftLoaded) {
+      await _loadPlannedBlockBuilderExercisesIfAny();
+    } else {
+      final user = FirebaseAuth.instance.currentUser;
+      final blockId = widget.blockId;
+      if (user != null && blockId != null && blockId.isNotEmpty) {
+        // 1️⃣ load the block doc
+        final blockDoc = await FirebaseFirestore.instance
+            .collection('planned_blocks')
+            .doc(user.uid)
+            .collection('blocks')
+            .doc(blockId)
+            .get();
+        if (!blockDoc.exists) return;
 
-              if (dayDoc.exists) {
-                final bb2Exercises = List<Map<String, dynamic>>.from(dayDoc.data()?['exercises'] ?? []);
+        // 2️⃣ pull startDate
+        final ts = blockDoc.data()?['startDate'] as Timestamp?;
+        if (ts == null) return;
+        final blockStart = ts.toDate();
 
-                // Filter for only new ones not in draft
-                final existingNames = _selectedExercisesWithCircuits.map((e) => e['name']).toSet();
-                final newExercises = bb2Exercises.where((e) => !existingNames.contains(e['name'])).toList();
+        // 3️⃣ compute week/day
+        final daysSinceStart = _selectedDate.difference(blockStart).inDays;
+        if (daysSinceStart < 0) return; // before block
+        final weekIndex = (daysSinceStart / 7).floor();
+        final dayIndex = daysSinceStart % 7;
 
-                if (newExercises.isNotEmpty) {
-                  setState(() {
-                    _selectedExercisesWithCircuits.addAll(
-                      newExercises.map((e) => {
-                        'name': e['name'] ?? '',
-                        'circuitIndex': e['circuitIndex'] ?? 0,
-                      }),
-                    );
-                    for (int i = 0; i < newExercises.length; i++) {
-                      _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
-                      _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-                      _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-                      _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-                    }
-                  });
-                }
-              }
+        // 4️⃣ fetch that day
+        final dayDoc = await FirebaseFirestore.instance
+            .collection('planned_blocks')
+            .doc(user.uid)
+            .collection('blocks')
+            .doc(blockId)
+            .collection('weeks')
+            .doc('week_$weekIndex')
+            .collection('days')
+            .doc('day_$dayIndex')
+            .get();
+        if (!dayDoc.exists) return;
+
+        final bb2Exercises = List<Map<String, dynamic>>.from(
+          dayDoc.data()?['exercises'] ?? <Map<String, dynamic>>[],
+        );
+
+        // filter only new ones
+        final existingNames =
+            _selectedExercisesWithCircuits.map((e) => e['name']).toSet();
+        final newExercises = bb2Exercises
+            .where((e) => !existingNames.contains(e['name']))
+            .toList();
+
+        if (newExercises.isNotEmpty) {
+          setState(() {
+            for (var ex in newExercises) {
+              _selectedExercisesWithCircuits.add({
+                'name': ex['name'] ?? '',
+                'circuitIndex': ex['circuitIndex'] ?? 0,
+              });
+              // add matching controllers and sets
+              _workoutSets.add(
+                List.generate(_defaultSets, (_) => SetDetails()),
+              );
+              _repsControllers.add(
+                List.generate(_defaultSets, (_) => TextEditingController()),
+              );
+              _weightControllers.add(
+                List.generate(_defaultSets, (_) => TextEditingController()),
+              );
+              _rirControllers.add(
+                List.generate(_defaultSets, (_) => TextEditingController()),
+              );
             }
-          }
+          });
         }
       }
     }
   }
-
-
 
   String _formatWorkoutDate(DateTime date) {
     final dayOfWeek = DateFormat('EEEE').format(date); // e.g., Tuesday
@@ -2847,15 +3053,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     return '$dayOfWeek $day $month $year';
   }
 
-
-
-
   void _navigateToExerciseDetails(String exerciseName) async {
-    List<Workout> recentWorkouts = await getRecentWorkoutsForExercise(exerciseName, _selectedDate);
+    List<Workout> recentWorkouts =
+        await getRecentWorkoutsForExercise(exerciseName, _selectedDate);
 
     if (recentWorkouts.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No recent workouts found for this exercise.')),
+        const SnackBar(
+            content: Text('No recent workouts found for this exercise.')),
       );
       return; // ✅ Do not navigate if no workouts exist
     }
@@ -2883,13 +3088,18 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         .limit(20)
         .get();
 
-    final recentWorkouts = snapshot.docs.map((doc) {
-      return Workout.fromFirestore(doc);
-    }).where((workout) => workout.exercises.any((ex) => ex.name == exerciseName)).toList();
+    final recentWorkouts = snapshot.docs
+        .map((doc) {
+          return Workout.fromFirestore(doc);
+        })
+        .where(
+            (workout) => workout.exercises.any((ex) => ex.name == exerciseName))
+        .toList();
 
     if (recentWorkouts.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No recent workouts found for this exercise.')),
+        const SnackBar(
+            content: Text('No recent workouts found for this exercise.')),
       );
       return;
     }
@@ -2904,9 +3114,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       ),
     );
   }
-
-
-
 
   Future<List<Workout>> getRecentWorkoutsForExercise(
       String exerciseName, DateTime currentWorkoutDate) async {
@@ -2925,35 +3132,39 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           .limit(12)
           .get();
 
-      List<Workout> filteredWorkouts = snapshot.docs.map((doc) {
-        final data = doc.data();
+      List<Workout> filteredWorkouts = snapshot.docs
+          .map((doc) {
+            final data = doc.data();
 
-        // ✅ Handle both Firestore Timestamp and String date formats safely
-        DateTime workoutDate;
-        if (data['date'] is Timestamp) {
-          workoutDate = (data['date'] as Timestamp).toDate();
-        } else if (data['date'] is String) {
-          workoutDate = DateTime.tryParse(data['date']) ?? DateTime.now();
-        } else {
-          throw Exception('Invalid date format in Firestore');
-        }
+            // ✅ Handle both Firestore Timestamp and String date formats safely
+            DateTime workoutDate;
+            if (data['date'] is Timestamp) {
+              workoutDate = (data['date'] as Timestamp).toDate();
+            } else if (data['date'] is String) {
+              workoutDate = DateTime.tryParse(data['date']) ?? DateTime.now();
+            } else {
+              throw Exception('Invalid date format in Firestore');
+            }
 
-        // ✅ Convert exercises safely
-        List<Exercise> exercises = [];
-        if (data['exercises'] is List) {
-          exercises = (data['exercises'] as List)
-              .map((exercise) => Exercise.fromFirestore(exercise as Map<String, dynamic>))
-              .toList();
-        }
+            // ✅ Convert exercises safely
+            List<Exercise> exercises = [];
+            if (data['exercises'] is List) {
+              exercises = (data['exercises'] as List)
+                  .map((exercise) =>
+                      Exercise.fromFirestore(exercise as Map<String, dynamic>))
+                  .toList();
+            }
 
-        return Workout(
-          name: data['name'] ?? 'Unnamed Workout',
-          date: workoutDate,
-          exercises: exercises,
-        );
-      }).where((workout) =>
-      workout.date.isBefore(currentWorkoutDate) &&
-          workout.exercises.any((exercise) => exercise.name == exerciseName))
+            return Workout(
+              name: data['name'] ?? 'Unnamed Workout',
+              date: workoutDate,
+              exercises: exercises,
+            );
+          })
+          .where((workout) =>
+              workout.date.isBefore(currentWorkoutDate) &&
+              workout.exercises
+                  .any((exercise) => exercise.name == exerciseName))
           .toList();
 
       return filteredWorkouts;
@@ -2963,10 +3174,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
   }
 
-
   @override
   Widget build(BuildContext context) {
-    print('🔁 [WES] Full page build() called');
+    print('🏷 prefilledExercisesWithCircuits = '
+        '${widget.prefilledExercisesWithCircuits?.map((e) => e['name']).toList()}');
+    print(
+        "[build] state exercises = ${_selectedExercisesWithCircuits.map((e) => e['name']).toList()}");
+
+    final exercises = widget.prefilledExercisesWithCircuits;
     return Scaffold(
       backgroundColor: Colors.blueGrey.shade900,
       appBar: AppBar(
@@ -2983,9 +3198,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
             tooltip: "Undo last action",
             onPressed: _lastUndoAction != null
                 ? () {
-              _lastUndoAction?.call();
-              _lastUndoAction = null;
-            }
+                    _lastUndoAction?.call();
+                    _lastUndoAction = null;
+                  }
                 : null,
           ),
           IconButton(
@@ -2995,8 +3210,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                 context: context,
                 builder: (BuildContext context) {
                   return AlertDialog(
-                    title: const Text('Clear Workout', style: TextStyle(fontFamily: 'Verdana', color: Colors.white),),
-                    content: const Text('Delete this workout?', style: TextStyle(fontFamily: 'Verdana', color: Colors.white),),
+                    title: const Text(
+                      'Clear Workout',
+                      style:
+                          TextStyle(fontFamily: 'Verdana', color: Colors.white),
+                    ),
+                    content: const Text(
+                      'Delete this workout?',
+                      style:
+                          TextStyle(fontFamily: 'Verdana', color: Colors.white),
+                    ),
                     actions: <Widget>[
                       TextButton(
                         onPressed: () => Navigator.of(context).pop(),
@@ -3024,8 +3247,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
             icon: const Icon(Icons.save),
             onPressed: _saveWorkout,
           ),
-
-
         ],
       ),
       body: SingleChildScrollView(
@@ -3035,20 +3256,24 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           children: [
             TextField(
               controller: _workoutNameController,
-              style: TextStyle(fontSize: 18),  textAlign: TextAlign.center, // 👈 Center the text,
-              decoration: InputDecoration( // ✅ remove `const`
+              style: TextStyle(fontSize: 18),
+              textAlign: TextAlign.center, // 👈 Center the text,
+              decoration: InputDecoration(
+                // ✅ remove `const`
                 labelStyle: const TextStyle(color: Colors.white),
                 filled: true,
                 fillColor: Colors.blueGrey.shade900, // ✅ works now
                 border: OutlineInputBorder(borderSide: BorderSide.none),
-                contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12), // 👈 Tighten spacing
+                contentPadding: const EdgeInsets.symmetric(
+                    vertical: 10, horizontal: 12), // 👈 Tighten spacing
               ),
             ),
 // 🆕 Add a non-editable display of the workout date
             // 🆕 Date displayed below, uneditable
 
             Padding(
-              padding: const EdgeInsets.only(left: 8.0, bottom: 7.0), // 👈 shifts it to the right
+              padding: const EdgeInsets.only(
+                  left: 8.0, bottom: 7.0), // 👈 shifts it to the right
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
@@ -3064,18 +3289,24 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
             const SizedBox(height: 0.0),
             Padding(
-              padding: const EdgeInsets.only(left: 5, top: 0, right:5, bottom: 0), // 🔥 Added cleaner side spacing
+              padding: const EdgeInsets.only(
+                  left: 5,
+                  top: 0,
+                  right: 5,
+                  bottom: 0), // 🔥 Added cleaner side spacing
               child: Row(
                 children: [
                   Flexible(
                     flex: 4,
                     child: ElevatedButton.icon(
                       icon: const Icon(Icons.add, size: 16),
-                      label: const Text("Add Exercises", style: TextStyle(fontSize: 14)),
+                      label: const Text("Add Exercises",
+                          style: TextStyle(fontSize: 14)),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.blueGrey.shade700,
                         foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 8),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 5, vertical: 8),
                       ),
                       onPressed: _showExercisePickerDialog,
                     ),
@@ -3086,10 +3317,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.blueGrey.shade700,
-                        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 2, vertical: 8),
                       ),
                       onPressed: _showTemplateSelectionDialog,
-                      child: const Text('Load Template', style: TextStyle(fontSize: 13, fontFamily: 'Verdana', color: Colors.white)),
+                      child: const Text('Load Template',
+                          style: TextStyle(
+                              fontSize: 13,
+                              fontFamily: 'Verdana',
+                              color: Colors.white)),
                     ),
                   ),
                   const SizedBox(width: 6),
@@ -3098,539 +3334,712 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.blueGrey.shade700,
-                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 8),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 5, vertical: 8),
                       ),
                       onPressed: () => _selectDate(context),
-                      child: const Text('Select Date', style: TextStyle(fontFamily: 'Verdana', color: Colors.white)),
+                      child: const Text('Select Date',
+                          style: TextStyle(
+                              fontFamily: 'Verdana', color: Colors.white)),
                     ),
                   ),
                 ],
               ),
             ),
 
-
-
-
             const SizedBox(height: 4.0),
             if (_selectedExercisesWithCircuits.isEmpty)
               Column(
                 children: [
-                  const Text(
-                      'No exercises selected yet. Add some to get started.', style: TextStyle(fontFamily: 'Verdana', color: Colors.white, fontSize: 14),),
-                  const SizedBox(height: 6.0),
+                  Text(
+                    'No exercises selected yet. Add some to get started.',
+                    style: TextStyle(color: Colors.white, fontSize: 14),
+                  ),
+                  const SizedBox(height: 6),
                 ],
-              ),
+              )
+            else
+              ReorderableListView(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                onReorder: _onReorderExercises,
+                children:
+                    List.generate(_selectedExercisesWithCircuits.length, (i) {
+                  final current = _selectedExercisesWithCircuits[i];
+                  final prev =
+                      i > 0 ? _selectedExercisesWithCircuits[i - 1] : null;
+                  final isNewCircuit = i == 0 ||
+                      current['circuitIndex'] != prev?['circuitIndex'];
 
+                  return Column(
+                    key: ValueKey("column_$i"),
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (isNewCircuit)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 6),
+                          child: Text(
+                            'Circuit ${current['circuitIndex'] + 1}',
+                            style: const TextStyle(
+                              color: Colors.lightBlueAccent,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      Dismissible(
+                        key: ValueKey(current['name']),
+                        direction: DismissDirection.endToStart,
+                        background: Container(
+                          color: Colors.red,
+                          alignment: Alignment.centerRight,
+                          padding: const EdgeInsets.only(right: 16),
+                          child: const Icon(Icons.delete, color: Colors.white),
+                        ),
+                        onDismissed: (_) {
+                          final removedExercise =
+                              _selectedExercisesWithCircuits[i];
+                          final removedSets = _workoutSets[i];
+                          final removedReps = _repsControllers[i];
+                          final removedWeight = _weightControllers[i];
+                          final removedRIR = _rirControllers[i];
 
-    ReorderableListView(
-    shrinkWrap: true,
-    physics: const NeverScrollableScrollPhysics(),
-    onReorder: _onReorderExercises,
-      children: List.generate(_selectedExercisesWithCircuits.length, (i) {
-        final current = _selectedExercisesWithCircuits[i];
-        final prev = i > 0 ? _selectedExercisesWithCircuits[i - 1] : null;
-        final isNewCircuit = i == 0 || current['circuitIndex'] != prev?['circuitIndex'];
+                          setState(() {
+                            _selectedExercisesWithCircuits.removeAt(i);
+                            _workoutSets.removeAt(i);
+                            _repsControllers.removeAt(i);
+                            _weightControllers.removeAt(i);
+                            _rirControllers.removeAt(i);
+                          });
 
-        return Column(
-            key: ValueKey("column_$i"),
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-            if (isNewCircuit)
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-          child: Text(
-            'Circuit ${current['circuitIndex'] + 1}',
-            style: const TextStyle(
-              color: Colors.lightBlueAccent,
-              fontWeight: FontWeight.bold,
-              fontSize: 12,
-            ),
-          ),
-        ),
-        Dismissible(
-        key: ValueKey(current['name']),
-        direction: DismissDirection.endToStart,
-        background: Container(
-        color: Colors.red,
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 16),
-        child: const Icon(Icons.delete, color: Colors.white),
-        ),
-        onDismissed: (_) {
-        final removedExercise = _selectedExercisesWithCircuits[i];
-        final removedSets = _workoutSets[i];
-        final removedReps = _repsControllers[i];
-        final removedWeight = _weightControllers[i];
-        final removedRIR = _rirControllers[i];
+                          _lastUndoAction = () {
+                            setState(() {
+                              _selectedExercisesWithCircuits.insert(
+                                  i, removedExercise);
+                              _workoutSets.insert(i, removedSets);
+                              _repsControllers.insert(i, removedReps);
+                              _weightControllers.insert(i, removedWeight);
+                              _rirControllers.insert(i, removedRIR);
+                            });
+                          };
 
-        setState(() {
-        _selectedExercisesWithCircuits.removeAt(i);
-        _workoutSets.removeAt(i);
-        _repsControllers.removeAt(i);
-        _weightControllers.removeAt(i);
-        _rirControllers.removeAt(i);
-        });
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content:
+                                  Text('Deleted "${removedExercise['name']}"'),
+                              action: SnackBarAction(
+                                label: 'Undo',
+                                textColor: Colors.blueGrey.shade700,
+                                onPressed: () {
+                                  _lastUndoAction?.call();
+                                  _lastUndoAction = null;
+                                },
+                              ),
+                            ),
+                          );
+                        },
+                        child: Card(
+                          key: ValueKey("card_$i"), // 👈 Unique per exercise
+                          // 🔁 All your existing ExpansionTile UI goes here
+                          color: Colors.blueGrey.shade700,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(3)),
+                          margin: const EdgeInsets.only(
+                              left: 0, top: 2, right: 0, bottom: 0),
+                          child: ExpansionTile(
+                            tilePadding: const EdgeInsets.symmetric(
+                                horizontal: 8), // ✅ Shrink horizontal padding
+                            title: (_selectedExercisesWithCircuits[i]['name'] ??
+                                        '')
+                                    .isEmpty
+                                ? TextButton(
+                                    onPressed: () =>
+                                        _showExercisePickerForRow(i),
+                                    child: const Text(
+                                      'Select Exercise',
+                                      style: TextStyle(color: Colors.white70),
+                                    ),
+                                  )
+                                : Text(
+                                    _selectedExercisesWithCircuits[i]['name'],
+                                    style: TextStyle(
+                                      color: Colors.grey.shade300,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14,
+                                    ),
+                                  ),
 
-        _lastUndoAction = () {
-        setState(() {
-        _selectedExercisesWithCircuits.insert(i, removedExercise);
-        _workoutSets.insert(i, removedSets);
-        _repsControllers.insert(i, removedReps);
-        _weightControllers.insert(i, removedWeight);
-        _rirControllers.insert(i, removedRIR);
-        });
-        };
-
-        ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-        content: Text('Deleted "${removedExercise['name']}"'),
-        action: SnackBarAction(
-        label: 'Undo',
-        textColor: Colors.blueGrey.shade700,
-        onPressed: () {
-        _lastUndoAction?.call();
-        _lastUndoAction = null;
-        },
-        ),
-        ),
-        );
-        },
-        child: Card(
-        key: ValueKey("card_$i"), // 👈 Unique per exercise
-        // 🔁 All your existing ExpansionTile UI goes here
-    color: Colors.blueGrey.shade700,
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(3)),
-    margin: const EdgeInsets.only(left: 0, top: 2, right: 0, bottom: 0),
-          child: ExpansionTile(
-            tilePadding: const EdgeInsets.symmetric(horizontal: 8), // ✅ Shrink horizontal padding
-            title: (_selectedExercisesWithCircuits[i]['name'] ?? '').isEmpty
-                ? TextButton(
-              onPressed: () => _showExercisePickerForRow(i),
-              child: const Text(
-                'Select Exercise',
-                style: TextStyle(color: Colors.white70),
-              ),
-            )
-                : Text(
-              _selectedExercisesWithCircuits[i]['name'],
-              style: TextStyle(
-                color: Colors.grey.shade300,
-                fontWeight: FontWeight.bold,
-                fontSize: 14,
-              ),
-            ),
-
-      trailing: Row(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-    IconButton(
-    icon: const Icon(Icons.info_outline),
-    color: Colors.blueGrey,
-    onPressed: () {
-      _navigateToExerciseDetails(_selectedExercisesWithCircuits[i]['name'] ?? '');
-
-    },
-    ),
-    const SizedBox(width: 4),
-    ElevatedButton(
-    style: ElevatedButton.styleFrom(
-    backgroundColor: Colors.blueGrey,
-    ),
-    onPressed: () {
-    _navigateToTopSets(_selectedExercisesWithCircuits[i]['name'] ?? '');
-    },
-    child: Text(
-    'Top Sets',
-    style: TextStyle(
-    fontFamily: 'Verdana',
-    color: Colors.blueGrey.shade900,
-    ),
-    ),
-    ),
-    ],
-    ),
-    children: [
-                    // New row between selected exercise and workout sets:
-      Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6.0, vertical: 0),
-        child: Row(
-
-          mainAxisAlignment: MainAxisAlignment.end, // 👈 Pushes to the right
-          children: [
-          ],
-        ),
-      ),
-
-
-      for (int j = 0; j < _workoutSets[i].length; j++)
-                      Padding(
-                        padding: const EdgeInsets.only(left: 6, bottom: 0, top: 0, right: 6),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-
-
-
-                            if (j == 0) ...[
-                              const SizedBox(height: 2),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.info_outline),
+                                  color: Colors.blueGrey,
+                                  onPressed: () {
+                                    _navigateToExerciseDetails(
+                                        _selectedExercisesWithCircuits[i]
+                                                ['name'] ??
+                                            '');
+                                  },
+                                ),
+                                const SizedBox(width: 4),
+                                ElevatedButton(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.blueGrey,
+                                  ),
+                                  onPressed: () {
+                                    _navigateToTopSets(
+                                        _selectedExercisesWithCircuits[i]
+                                                ['name'] ??
+                                            '');
+                                  },
+                                  child: Text(
+                                    'Top Sets',
+                                    style: TextStyle(
+                                      fontFamily: 'Verdana',
+                                      color: Colors.blueGrey.shade900,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            children: [
+                              // New row between selected exercise and workout sets:
                               Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 1),
-                                child: SingleChildScrollView(
-                                  scrollDirection: Axis.horizontal,
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    crossAxisAlignment: CrossAxisAlignment.center, // ✅ Center vertically
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 6.0, vertical: 0),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment
+                                      .end, // 👈 Pushes to the right
+                                  children: [],
+                                ),
+                              ),
+
+                              for (int j = 0; j < _workoutSets[i].length; j++)
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                      left: 6, bottom: 0, top: 0, right: 6),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
-                                      // ➡️ Previous Rep Targets + Available Rep Targets (on the LEFT)
-                                      Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                      if (j == 0) ...[
+                                        const SizedBox(height: 2),
+                                        Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 1),
+                                          child: SingleChildScrollView(
+                                            scrollDirection: Axis.horizontal,
+                                            child: Row(
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment
+                                                      .spaceBetween,
+                                              crossAxisAlignment: CrossAxisAlignment
+                                                  .center, // ✅ Center vertically
+                                              children: [
+                                                // ➡️ Previous Rep Targets + Available Rep Targets (on the LEFT)
+                                                Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      () {
+                                                        final exerciseName =
+                                                            _selectedExercisesWithCircuits[
+                                                                            i]
+                                                                        ['name']
+                                                                    ?.trim() ??
+                                                                '';
+                                                        final targetWeight =
+                                                            set1SuggestedWeight(
+                                                                i);
+                                                        final history =
+                                                            PeriodizationModelUtils
+                                                                        .topSetsByExercise[
+                                                                    exerciseName] ??
+                                                                [];
+
+                                                        final matchingSets = history
+                                                            .where((s) =>
+                                                                (s['weight']
+                                                                        as double)
+                                                                    .toStringAsFixed(
+                                                                        1) ==
+                                                                targetWeight
+                                                                    .toStringAsFixed(
+                                                                        1))
+                                                            .toList();
+
+                                                        if (matchingSets
+                                                            .isEmpty)
+                                                          return 'No previous sets at ${targetWeight.toStringAsFixed(1)} kg';
+
+                                                        matchingSets
+                                                            .sort((a, b) {
+                                                          final repsA =
+                                                              a['reps'] ?? 0.0;
+                                                          final repsB =
+                                                              b['reps'] ?? 0.0;
+                                                          final rirA =
+                                                              a['rir'] ?? 99.0;
+                                                          final rirB =
+                                                              b['rir'] ?? 99.0;
+
+                                                          if (repsB.compareTo(
+                                                                  repsA) !=
+                                                              0)
+                                                            return repsB
+                                                                .compareTo(
+                                                                    repsA);
+                                                          return rirA
+                                                              .compareTo(rirB);
+                                                        });
+
+                                                        final best =
+                                                            matchingSets.first;
+                                                        final reps =
+                                                            best['reps'];
+                                                        final rir = best['rir'];
+
+                                                        return 'Best at ${targetWeight.toStringAsFixed(1)} kg: $reps reps @ RIR $rir';
+                                                      }(),
+                                                      style: const TextStyle(
+                                                        fontSize: 10.0,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        color: Colors.white24,
+                                                      ),
+                                                    ),
+                                                    const SizedBox(height: 0),
+                                                    Builder(
+                                                      builder: (context) {
+                                                        final exerciseName =
+                                                            _selectedExercisesWithCircuits[
+                                                                            i]
+                                                                        ['name']
+                                                                    ?.trim() ??
+                                                                '';
+                                                        final repTarget =
+                                                            set1SuggestedReps(i)
+                                                                .round();
+                                                        final history =
+                                                            PeriodizationModelUtils
+                                                                        .topSetsByExercise[
+                                                                    exerciseName] ??
+                                                                [];
+
+                                                        final matchingSets =
+                                                            history.where((s) {
+                                                          final reps =
+                                                              (s['reps']
+                                                                      as num?)
+                                                                  ?.round();
+                                                          return reps ==
+                                                              repTarget;
+                                                        }).toList();
+
+                                                        if (matchingSets
+                                                            .isEmpty) {
+                                                          return Text(
+                                                            'No previous sets at $repTarget reps',
+                                                            style:
+                                                                const TextStyle(
+                                                              fontSize: 10.0,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .bold,
+                                                              color: Colors
+                                                                  .white54,
+                                                            ),
+                                                          );
+                                                        }
+
+                                                        matchingSets
+                                                            .sort((a, b) {
+                                                          final wa =
+                                                              a['weight'] ??
+                                                                  0.0;
+                                                          final wb =
+                                                              b['weight'] ??
+                                                                  0.0;
+                                                          return (wb as num)
+                                                              .compareTo(
+                                                                  wa as num);
+                                                        });
+
+                                                        final best =
+                                                            matchingSets.first;
+                                                        final weight =
+                                                            best['weight'];
+                                                        final rir = best['rir'];
+
+                                                        return Text(
+                                                          'Best at $repTarget reps: ${weight.toStringAsFixed(1)} kg @ RIR ${rir.toString()}',
+                                                          style:
+                                                              const TextStyle(
+                                                            fontSize: 10.0,
+                                                            fontWeight:
+                                                                FontWeight.bold,
+                                                            color:
+                                                                Colors.white54,
+                                                          ),
+                                                        );
+                                                      },
+                                                    ),
+                                                  ],
+                                                ),
+
+                                                const SizedBox(
+                                                    width:
+                                                        12), // ✅ Optional spacing between sections
+
+                                                // ➡️ Avg E1RM (on the RIGHT)
+                                                Text(
+                                                  'Avg E1RM: ${getAverageE1RM(_selectedExercisesWithCircuits[i]['name'] ?? '').toStringAsFixed(1)}Kg',
+                                                  style: const TextStyle(
+                                                    fontSize: 12.0,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: Colors.blueGrey,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(height: 1),
+                                      ],
+
+                                      SizedBox(
+                                        height:
+                                            25, // or 26, or 28 (experiment to see what feels tight but readable)
+                                        child: Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.spaceBetween,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Padding(
+                                              padding: const EdgeInsets.only(
+                                                  left: 4, top: 3),
+                                              child: Text(
+                                                'Set ${j + 1}',
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 12.0,
+                                                  color: Colors.white70,
+                                                ),
+                                              ),
+                                            ),
+                                            Container(
+                                              padding:
+                                                  const EdgeInsets.only(top: 2),
+                                              child: IconButton(
+                                                icon: const Icon(Icons.remove),
+                                                iconSize: 18,
+                                                padding: EdgeInsets.zero,
+                                                constraints:
+                                                    const BoxConstraints(),
+                                                onPressed: () =>
+                                                    removeSet(i, j),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+
+                                      // ✅ Header Row with aligned labels
+                                      Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 4,
+                                            vertical:
+                                                1), // ✅ Align horizontally cleanly
+                                        child: Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.start,
+                                          crossAxisAlignment: CrossAxisAlignment
+                                              .start, // ✅ Center vertically
+                                          children: [
+                                            const Expanded(
+                                              child: Text(
+                                                'Weight',
+                                                textAlign: TextAlign.left,
+                                                style: TextStyle(
+                                                    fontSize: 10.0,
+                                                    color: Colors.white70,
+                                                    fontWeight:
+                                                        FontWeight.bold),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 4.0),
+                                            const Expanded(
+                                              child: Text(
+                                                'Reps',
+                                                textAlign: TextAlign.left,
+                                                style: TextStyle(
+                                                    fontSize: 10.0,
+                                                    color: Colors.white70,
+                                                    fontWeight:
+                                                        FontWeight.bold),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 4.0),
+                                            const Expanded(
+                                              child: Text(
+                                                'RIR',
+                                                textAlign: TextAlign.left,
+                                                style: TextStyle(
+                                                    fontSize: 10.0,
+                                                    color: Colors.white70,
+                                                    fontWeight:
+                                                        FontWeight.bold),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 4.0),
+                                            const Expanded(
+                                              child: Text(
+                                                'E1RM',
+                                                textAlign: TextAlign.left,
+                                                style: TextStyle(
+                                                    fontSize: 10.0,
+                                                    color: Colors.white70,
+                                                    fontWeight:
+                                                        FontWeight.bold),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+
+                                      const SizedBox(height: 0.0),
+
+                                      // ✅ Input Row with aligned values
+
+                                      Row(
                                         children: [
-                                          Text(
-                                                () {
-                                              final exerciseName = _selectedExercisesWithCircuits[i]['name']?.trim() ?? '';
-                                              final targetWeight = set1SuggestedWeight(i);
-                                              final history = PeriodizationModelUtils.topSetsByExercise[exerciseName] ?? [];
-
-                                              final matchingSets = history
-                                                  .where((s) => (s['weight'] as double).toStringAsFixed(1) == targetWeight.toStringAsFixed(1))
-                                                  .toList();
-
-                                              if (matchingSets.isEmpty) return 'No previous sets at ${targetWeight.toStringAsFixed(1)} kg';
-
-                                              matchingSets.sort((a, b) {
-                                                final repsA = a['reps'] ?? 0.0;
-                                                final repsB = b['reps'] ?? 0.0;
-                                                final rirA = a['rir'] ?? 99.0;
-                                                final rirB = b['rir'] ?? 99.0;
-
-                                                if (repsB.compareTo(repsA) != 0) return repsB.compareTo(repsA);
-                                                return rirA.compareTo(rirB);
-                                              });
-
-                                              final best = matchingSets.first;
-                                              final reps = best['reps'];
-                                              final rir = best['rir'];
-
-                                              return 'Best at ${targetWeight.toStringAsFixed(1)} kg: $reps reps @ RIR $rir';
-                                            }(),
-                                            style: const TextStyle(
-                                              fontSize: 10.0,
-                                              fontWeight: FontWeight.bold,
-                                              color: Colors.white24,
+                                          // ✅ Weight Input Field with Suggested Weight for Each Set
+                                          Expanded(
+                                            child: TextField(
+                                              controller: _weightControllers[i]
+                                                  [j],
+                                              keyboardType:
+                                                  TextInputType.number,
+                                              decoration: InputDecoration(
+                                                hintText: (j == 0)
+                                                    ? set1SuggestedWeight(i)
+                                                        .toStringAsFixed(1)
+                                                    : (j == 1)
+                                                        ? set2SuggestedWeight(i)
+                                                            .toStringAsFixed(1)
+                                                        : (j == 2)
+                                                            ? set3SuggestedWeight(
+                                                                    i)
+                                                                .toStringAsFixed(
+                                                                    1)
+                                                            : '20',
+                                                hintStyle: const TextStyle(
+                                                  color: Colors.grey,
+                                                  fontStyle: FontStyle.italic,
+                                                  fontSize: 12,
+                                                ),
+                                                contentPadding: EdgeInsets.only(
+                                                    left:
+                                                        4), // ✅ Add slight left padding inside field
+                                              ),
+                                              onChanged: (value) {
+                                                setState(() {});
+                                              },
+                                              style: TextStyle(
+                                                color: _weightControllers[i][j]
+                                                        .text
+                                                        .isEmpty
+                                                    ? Colors.grey
+                                                    : Colors.white,
+                                              ),
                                             ),
                                           ),
 
-                                          const SizedBox(height: 0),
-                                          Builder(
-                                            builder: (context) {
-                                              final exerciseName = _selectedExercisesWithCircuits[i]['name']?.trim() ?? '';
-                                              final repTarget = set1SuggestedReps(i).round();
-                                              final history = PeriodizationModelUtils.topSetsByExercise[exerciseName] ?? [];
+                                          const SizedBox(width: 4.0),
 
-                                              final matchingSets = history.where((s) {
-                                                final reps = (s['reps'] as num?)?.round();
-                                                return reps == repTarget;
-                                              }).toList();
+                                          // ✅ Updated UI for Reps in all Sets
+                                          Expanded(
+                                            child: TextField(
+                                              controller: _repsControllers[i]
+                                                  [j],
+                                              keyboardType:
+                                                  TextInputType.number,
+                                              decoration: InputDecoration(
+                                                hintText: _isLoadingData
+                                                    ? '' // ✅ Show no hint while loading
+                                                    : (j == 0)
+                                                        ? set1SuggestedReps(i)
+                                                            .toInt()
+                                                            .toString()
+                                                        : (j == 1)
+                                                            ? set2SuggestedReps(
+                                                                    i)
+                                                                .toInt()
+                                                                .toString()
+                                                            : (j == 2)
+                                                                ? set3SuggestedReps(
+                                                                        i)
+                                                                    .toInt()
+                                                                    .toString()
+                                                                : '10', // Default for other sets
+                                                hintStyle: const TextStyle(
+                                                  color: Colors.grey,
+                                                  fontStyle: FontStyle.italic,
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                              onChanged: (value) {
+                                                setState(() {});
+                                              },
+                                              style: TextStyle(
+                                                color: _repsControllers[i][j]
+                                                        .text
+                                                        .isEmpty
+                                                    ? Colors.grey
+                                                    : Colors.white,
+                                              ),
+                                            ),
+                                          ),
 
-                                              if (matchingSets.isEmpty) {
-                                                return Text(
-                                                  'No previous sets at $repTarget reps',
-                                                  style: const TextStyle(
-                                                    fontSize: 10.0,
-                                                    fontWeight: FontWeight.bold,
-                                                    color: Colors.white54,
+                                          const SizedBox(width: 4.0),
+
+                                          // ✅ Updated UI for RIR Input Field
+                                          Expanded(
+                                            child: Builder(
+                                              builder: (context) {
+                                                final rirText =
+                                                    _rirControllers[i][j].text;
+                                                final hint = (j == 0)
+                                                    ? set1RIR(i).toString()
+                                                    : (j == 1)
+                                                        ? set2RIR(i).toString()
+                                                        : (j == 2)
+                                                            ? set3RIR(i)
+                                                                .toString()
+                                                            : '1';
+
+                                                print(
+                                                    '🧪 [WES RIR Field] Set $j for exercise $i → controller="$rirText", hint="$hint"');
+
+                                                return TextField(
+                                                  controller: _rirControllers[i]
+                                                      [j],
+                                                  keyboardType:
+                                                      TextInputType.number,
+                                                  decoration: InputDecoration(
+                                                    hintText: hint,
+                                                    hintStyle: const TextStyle(
+                                                      color: Colors.grey,
+                                                      fontStyle:
+                                                          FontStyle.italic,
+                                                      fontSize: 14,
+                                                    ),
+                                                  ),
+                                                  onChanged: (value) {
+                                                    setState(() {});
+                                                  },
+                                                  style: TextStyle(
+                                                    color: rirText.isEmpty
+                                                        ? Colors.grey
+                                                        : Colors.white,
                                                   ),
                                                 );
-                                              }
+                                              },
+                                            ),
+                                          ),
 
-                                              matchingSets.sort((a, b) {
-                                                final wa = a['weight'] ?? 0.0;
-                                                final wb = b['weight'] ?? 0.0;
-                                                return (wb as num).compareTo(wa as num);
-                                              });
+                                          const SizedBox(width: 4.0),
 
-                                              final best = matchingSets.first;
-                                              final weight = best['weight'];
-                                              final rir = best['rir'];
-
-                                              return Text(
-                                                'Best at $repTarget reps: ${weight.toStringAsFixed(1)} kg @ RIR ${rir.toString()}',
-                                                style: const TextStyle(
-                                                  fontSize: 10.0,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: Colors.white54,
-                                                ),
-                                              );
-                                            },
+                                          // ✅ E1RM Display using Brzycki Formula with Suggested Weight, Reps, and RIR as Default
+                                          Expanded(
+                                            child: Text(
+                                              calculateE1RM(
+                                                      double.tryParse(
+                                                              _weightControllers[
+                                                                      i][j]
+                                                                  .text) ??
+                                                          ((j == 0)
+                                                              ? set1SuggestedWeight(
+                                                                  i)
+                                                              : (j == 1)
+                                                                  ? set2SuggestedWeight(
+                                                                      i)
+                                                                  : (j == 2)
+                                                                      ? set3SuggestedWeight(
+                                                                          i)
+                                                                      : 20.0),
+                                                      (int.tryParse(
+                                                                  _repsControllers[
+                                                                          i][j]
+                                                                      .text) ??
+                                                              ((j == 0)
+                                                                  ? set1SuggestedReps(
+                                                                          i)
+                                                                      .toInt()
+                                                                  : (j == 1)
+                                                                      ? set2SuggestedReps(
+                                                                              i)
+                                                                          .toDouble()
+                                                                      : (j == 2)
+                                                                          ? set3SuggestedReps(i)
+                                                                              .toDouble()
+                                                                          : 10))
+                                                          .toDouble(),
+                                                      double.tryParse(
+                                                              _rirControllers[i]
+                                                                      [j]
+                                                                  .text) ??
+                                                          ((j == 0)
+                                                              ? set1RIR(i)
+                                                              : (j == 1)
+                                                                  ? set2RIR(i)
+                                                                  : (j == 2)
+                                                                      ? set3RIR(
+                                                                          i)
+                                                                      : 1.0) // Now correctly using set-specific RIR
+                                                      )
+                                                  .toStringAsFixed(1),
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.bold,
+                                                color: (_weightControllers[i][j]
+                                                            .text
+                                                            .isNotEmpty ||
+                                                        _repsControllers[i][j]
+                                                            .text
+                                                            .isNotEmpty ||
+                                                        _rirControllers[i][j]
+                                                            .text
+                                                            .isNotEmpty)
+                                                    ? Colors.white
+                                                    : Colors.grey,
+                                              ),
+                                            ),
                                           ),
                                         ],
-                                      ),
-
-                                      const SizedBox(width: 12), // ✅ Optional spacing between sections
-
-                                      // ➡️ Avg E1RM (on the RIGHT)
-                                      Text(
-                                        'Avg E1RM: ${getAverageE1RM(_selectedExercisesWithCircuits[i]['name'] ?? '').toStringAsFixed(1)}Kg',
-                                        style: const TextStyle(
-                                          fontSize: 12.0,
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.blueGrey,
-                                        ),
                                       ),
                                     ],
                                   ),
                                 ),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: IconButton(
+                                  icon: const Icon(Icons.add),
+                                  onPressed: () => addSet(i),
+                                ),
                               ),
-
-                              const SizedBox(height: 1),
-                            ],
-
-
-                            SizedBox(
-                              height: 25, // or 26, or 28 (experiment to see what feels tight but readable)
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Padding(
-                                    padding: const EdgeInsets.only(left: 4, top: 3),
-                                    child: Text(
-                                      'Set ${j + 1}',
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 12.0,
-                                        color: Colors.white70,
-                                      ),
-                                    ),
-                                  ),
-                                  Container(
-                                    padding: const EdgeInsets.only(top: 2),
-                                    child: IconButton(
-                                      icon: const Icon(Icons.remove),
-                                      iconSize: 18,
-                                      padding: EdgeInsets.zero,
-                                      constraints: const BoxConstraints(),
-                                      onPressed: () => removeSet(i, j),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-
-
-
-                            // ✅ Header Row with aligned labels
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1), // ✅ Align horizontally cleanly
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.start,
-                                crossAxisAlignment: CrossAxisAlignment.start, // ✅ Center vertically
-                                children: [
-                                  const Expanded(
-                                    child: Text(
-                                      'Weight',
-                                      textAlign: TextAlign.left,
-                                      style: TextStyle(fontSize: 10.0, color: Colors.white70, fontWeight: FontWeight.bold),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 4.0),
-                                  const Expanded(
-                                    child: Text(
-                                      'Reps',
-                                      textAlign: TextAlign.left,
-                                      style: TextStyle(fontSize: 10.0, color: Colors.white70, fontWeight: FontWeight.bold),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 4.0),
-                                  const Expanded(
-                                    child: Text(
-                                      'RIR',
-                                      textAlign: TextAlign.left,
-                                      style: TextStyle(fontSize: 10.0, color: Colors.white70, fontWeight: FontWeight.bold),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 4.0),
-                                  const Expanded(
-                                    child: Text(
-                                      'E1RM',
-                                      textAlign: TextAlign.left,
-                                      style: TextStyle(fontSize: 10.0, color: Colors.white70, fontWeight: FontWeight.bold),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-
-                            const SizedBox(height: 0.0),
-
-                            // ✅ Input Row with aligned values
-
-
-                            Row(
-                              children: [
-                                // ✅ Weight Input Field with Suggested Weight for Each Set
-                                Expanded(
-                                  child: TextField(
-                                    controller: _weightControllers[i][j],
-                                    keyboardType: TextInputType.number,
-                                    decoration: InputDecoration(
-                                      hintText: (j == 0)
-                                          ? set1SuggestedWeight(i).toStringAsFixed(1)
-                                          : (j == 1)
-                                          ? set2SuggestedWeight(i).toStringAsFixed(1)
-                                          : (j == 2)
-                                          ? set3SuggestedWeight(i).toStringAsFixed(1)
-                                          : '20',
-                                      hintStyle: const TextStyle(
-                                        color: Colors.grey,
-                                        fontStyle: FontStyle.italic,
-                                        fontSize: 12,
-                                      ),
-                                      contentPadding: EdgeInsets.only(left: 4), // ✅ Add slight left padding inside field
-                                    ),
-                                    onChanged: (value) {
-                                      setState(() {});
-                                    },
-                                    style: TextStyle(
-                                      color: _weightControllers[i][j].text.isEmpty ? Colors.grey : Colors.white,
-                                    ),
-                                  ),
-                                ),
-
-
-                                const SizedBox(width: 4.0),
-
-                                // ✅ Updated UI for Reps in all Sets
-                                Expanded(
-                                  child: TextField(
-                                    controller: _repsControllers[i][j],
-                                    keyboardType: TextInputType.number,
-                                    decoration: InputDecoration(
-                                      hintText: _isLoadingData
-                                          ? '' // ✅ Show no hint while loading
-                                          : (j == 0)
-                                          ? set1SuggestedReps(i).toInt().toString()
-                                          : (j == 1)
-                                          ? set2SuggestedReps(i).toInt().toString()
-                                          : (j == 2)
-                                          ? set3SuggestedReps(i).toInt().toString()
-                                          : '10', // Default for other sets
-                                      hintStyle: const TextStyle(
-                                        color: Colors.grey,
-                                        fontStyle: FontStyle.italic,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                    onChanged: (value) {
-
-                                      setState(() {});
-                                    },
-                                    style: TextStyle(
-                                      color: _repsControllers[i][j].text.isEmpty ? Colors.grey : Colors.white,
-                                    ),
-                                  ),
-
-                                ),
-
-
-
-                                const SizedBox(width: 4.0),
-
-                                // ✅ Updated UI for RIR Input Field
-                                Expanded(
-                                  child: Builder(
-                                    builder: (context) {
-                                      final rirText = _rirControllers[i][j].text;
-                                      final hint = (j == 0)
-                                          ? set1RIR(i).toString()
-                                          : (j == 1)
-                                          ? set2RIR(i).toString()
-                                          : (j == 2)
-                                          ? set3RIR(i).toString()
-                                          : '1';
-
-                                      print('🧪 [WES RIR Field] Set $j for exercise $i → controller="$rirText", hint="$hint"');
-
-                                      return TextField(
-                                        controller: _rirControllers[i][j],
-                                        keyboardType: TextInputType.number,
-                                        decoration: InputDecoration(
-                                          hintText: hint,
-                                          hintStyle: const TextStyle(
-                                            color: Colors.grey,
-                                            fontStyle: FontStyle.italic,
-                                            fontSize: 14,
-                                          ),
-                                        ),
-                                        onChanged: (value) {
-                                          setState(() {});
-                                        },
-                                        style: TextStyle(
-                                          color: rirText.isEmpty ? Colors.grey : Colors.white,
-                                        ),
-                                      );
-                                    },
-                                  ),
-                                ),
-
-
-
-                                const SizedBox(width: 4.0),
-
-                                // ✅ E1RM Display using Brzycki Formula with Suggested Weight, Reps, and RIR as Default
-                                Expanded(
-                                  child: Text(
-                                    calculateE1RM(
-                                        double.tryParse(_weightControllers[i][j].text) ??
-                                            ((j == 0) ? set1SuggestedWeight(i)
-                                                : (j == 1) ? set2SuggestedWeight(i)
-                                                : (j == 2) ? set3SuggestedWeight(i)
-                                                : 20.0),
-                                        (int.tryParse(_repsControllers[i][j].text) ??
-                                            ((j == 0) ? set1SuggestedReps(i).toInt()
-                                                : (j == 1) ? set2SuggestedReps(i).toDouble()
-                                                : (j == 2) ? set3SuggestedReps(i).toDouble()
-                                                : 10)).toDouble(),
-                                        double.tryParse(_rirControllers[i][j].text) ??
-                                            ((j == 0) ? set1RIR(i)
-                                                : (j == 1) ? set2RIR(i)
-                                                : (j == 2) ? set3RIR(i)
-                                                : 1.0) // Now correctly using set-specific RIR
-                                    ).toStringAsFixed(1),
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.bold,
-                                      color: (_weightControllers[i][j].text.isNotEmpty ||
-                                          _repsControllers[i][j].text.isNotEmpty ||
-                                          _rirControllers[i][j].text.isNotEmpty)
-                                          ? Colors.white
-                                          : Colors.grey,
-                                    ),
-                                  ),
-                                ),
-
-                              ],
-
-                            ),
-                          ],
-                        ),
+                            ], //paste point
+                          ),
+                        ), //old bracket for Card
                       ),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: IconButton(
-                        icon: const Icon(Icons.add),
-                        onPressed: () => addSet(i),
-                      ),
-                    ),
-                  ], //paste point
-                ),
-              ), //old bracket for Card
-        ),
-            ],
-
-    );
-    }),
-    ),
+                    ],
+                  );
+                }),
+              ),
             Padding(
               padding: const EdgeInsets.only(top: 12.0),
               child: Align(
@@ -3646,12 +4055,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                 ),
               ),
             ),
-
-
           ],
         ),
       ),
-
     );
   }
 }

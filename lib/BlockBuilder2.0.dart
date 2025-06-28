@@ -114,6 +114,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   bool _loading = true;
   List<BlockMeta> _allBlocks = [];
   String? _selectedBlockId;
+  List<Map<String, dynamic>> _selectedExercisesWithCircuits = [];
 
   late PageController _weekPageController;
   int _currentWeekPage = 0;
@@ -485,7 +486,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
   Map<String, List<String>> groupedExercises = {};
 
   Future<void> loadExercisesFromFirestore() async {
-
     final snapshot =
         await FirebaseFirestore.instance.collection('exercises').get();
 
@@ -629,11 +629,9 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           return rep.toString();
 
         default:
-
           return null;
       }
-    } catch (e) {
-    }
+    } catch (e) {}
     return null;
   }
 
@@ -720,8 +718,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           }
           PeriodizationModelUtils.plannedExerciseDetails[exerciseId] = details;
         });
-      } else {
-      }
+      } else {}
     });
 
     plannedExerciseDetails.forEach((exerciseId, details) {
@@ -752,12 +749,10 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
       final updatedEntry = _repTargetsByExercise[exerciseId];
       if (updatedEntry is Map && updatedEntry.containsKey('repTargets')) {
-      } else {
-      }
+      } else {}
 
       if (updatedEntry != null) {
-      } else {
-      }
+      } else {}
     });
   }
 
@@ -771,7 +766,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     required double defaultWeight,
     required double rir,
   }) {
-
     final String cacheKey = '$exerciseId-$weekIndex-$dayIndex-$rowIndex';
 
     if (_cachedProgressedValues.containsKey(cacheKey)) {
@@ -978,22 +972,20 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
     print('🧩 Found ${weeksSnapshot.docs.length} week documents');
 
     for (final weekDoc in weeksSnapshot.docs) {
-      final weekIndex =
-          int.tryParse(weekDoc.id.replaceAll('week_', '')) ?? 0;
+      final weekIndex = int.tryParse(weekDoc.id.replaceAll('week_', '')) ?? 0;
       final daySnapshots = await weekDoc.reference.collection('days').get();
-      print(
-          '📆 Week $weekIndex → ${daySnapshots.docs.length} day docs '
-              '[${stopwatch.elapsedMilliseconds}ms]'
-      );
+      print('📆 Week $weekIndex → ${daySnapshots.docs.length} day docs '
+          '[${stopwatch.elapsedMilliseconds}ms]');
 
       for (final dayDoc in daySnapshots.docs) {
-        final dayIndex =
-            int.tryParse(dayDoc.id.replaceAll('day_', '')) ?? 0;
+        final dayIndex = int.tryParse(dayDoc.id.replaceAll('day_', '')) ?? 0;
         final data = dayDoc.data();
 
         final parseStart = stopwatch.elapsedMilliseconds;
-        final exercises = List<Map<String, dynamic>>.from(data['exercises'] ?? []);
-        final savedCircuitIndices = List<int>.from(data['circuitStartIndices'] ?? [0]);
+        final exercises =
+            List<Map<String, dynamic>>.from(data['exercises'] ?? []);
+        final savedCircuitIndices =
+            List<int>.from(data['circuitStartIndices'] ?? [0]);
 
         final List<ExerciseRow> loadedRows = [];
 
@@ -1015,9 +1007,12 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           final dynamic rawReps = ex['reps'];
           final dynamic rawRIR = ex['rir'];
 
-          final double? weightVal = rawWeight != null ? double.tryParse(rawWeight.toString()) : null;
-          final int? repsVal = rawReps != null ? int.tryParse(rawReps.toString()) : null;
-          final double? rirVal = rawRIR != null ? double.tryParse(rawRIR.toString()) : null;
+          final double? weightVal =
+              rawWeight != null ? double.tryParse(rawWeight.toString()) : null;
+          final int? repsVal =
+              rawReps != null ? int.tryParse(rawReps.toString()) : null;
+          final double? rirVal =
+              rawRIR != null ? double.tryParse(rawRIR.toString()) : null;
 
 // ✅ Only populate if user likely typed something in (i.e., not default 0)
           if (weightVal != null && weightVal != 0.0) {
@@ -1029,7 +1024,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           if (rirVal != null && rirVal != 0.0) {
             row.rirController.text = rirVal.toString();
           }
-
 
           final rowIndex = loadedRows.length;
           final baseKey = 'w${weekIndex}_d${dayIndex}_r$rowIndex';
@@ -1052,18 +1046,20 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           }
 
           loadedRows.add(row);
-
         }
 
-        print('[Parse] Week $weekIndex Day $dayIndex parse time: ${stopwatch.elapsedMilliseconds - parseStart}ms');
+        print(
+            '[Parse] Week $weekIndex Day $dayIndex parse time: ${stopwatch.elapsedMilliseconds - parseStart}ms');
 
         // ⛓ Assign to map
 
         exerciseRows[weekIndex][dayIndex] = loadedRows;
-        print('[BLOCK LOAD] Week $weekIndex, Day $dayIndex loaded ${loadedRows.length} rows from block_data');
+        print(
+            '[BLOCK LOAD] Week $weekIndex, Day $dayIndex loaded ${loadedRows.length} rows from block_data');
 
         for (final row in loadedRows) {
-          print('  • ${row.exercise} | weight: ${row.weightController.text} | reps: ${row.repsController.text} | RIR: ${row.rirController.text}');
+          print(
+              '  • ${row.exercise} | weight: ${row.weightController.text} | reps: ${row.repsController.text} | RIR: ${row.rirController.text}');
         }
 
         final List<int> newStarts = [];
@@ -1080,7 +1076,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         circuitStartIndices[weekIndex][dayIndex] = newStarts;
 
 // 🔁 Inject saved WES workout override logic
-        final DateTime date = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
+        final DateTime date =
+            blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
         final String dateKey = DateFormat('yyyy-MM-dd').format(date);
 
         final wesStart = stopwatch.elapsedMilliseconds;
@@ -1099,19 +1096,21 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         if (!workoutDoc.exists) {
           print('[WES Check] No saved workout for $dateKey.');
         } else {
-          print('[WES Check] Found saved WES workout. Attempting to override...');
+          print(
+              '[WES Check] Found saved WES workout. Attempting to override...');
         }
 
 // 🕓 Print how long this WES lookup took
-        print('[WES Check] Week $weekIndex Day $dayIndex override time: ${stopwatch.elapsedMilliseconds - wesStart}ms');
-
+        print(
+            '[WES Check] Week $weekIndex Day $dayIndex override time: ${stopwatch.elapsedMilliseconds - wesStart}ms');
 
         if (workoutDoc.exists) {
           final workoutData = workoutDoc.data();
-          final savedExercises = List<Map<String, dynamic>>.from(workoutData?['exercises'] ?? []);
+          final savedExercises =
+              List<Map<String, dynamic>>.from(workoutData?['exercises'] ?? []);
 
-          print('[WES OVERRIDE] Overriding Week $weekIndex, Day $dayIndex with ${savedExercises.length} WES exercises');
-
+          print(
+              '[WES OVERRIDE] Overriding Week $weekIndex, Day $dayIndex with ${savedExercises.length} WES exercises');
 
           for (int i = 0; i < savedExercises.length; i++) {
             final ex = savedExercises[i];
@@ -1122,34 +1121,32 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             ExerciseRow? matchingRow;
             try {
               matchingRow = loadedRows.firstWhere(
-                    (r) => r.exercise == name && r.circuitIndex == circuit,
+                (r) => r.exercise == name && r.circuitIndex == circuit,
               );
             } catch (_) {
               matchingRow = null;
             }
-
 
             if (matchingRow == null || sets.isEmpty) continue;
 
             final rowIndex = loadedRows.indexOf(matchingRow);
             final baseKey = 'w${weekIndex}_d${dayIndex}_r$rowIndex';
 
-            matchingRow.weightController.text = sets[0]['weight']?.toString() ?? '';
+            matchingRow.weightController.text =
+                sets[0]['weight']?.toString() ?? '';
             matchingRow.repsController.text = sets[0]['reps']?.toString() ?? '';
             matchingRow.rirController.text = sets[0]['rir']?.toString() ?? '';
 
             _savedFields['${baseKey}_weight'] = true;
             _savedFields['${baseKey}_reps'] = true;
             _savedFields['${baseKey}_rir'] = true;
-
           }
-
         }
-
       }
     }
 
-    print('✅ [BB2] loadBlockDataFromFirestore done in ${stopwatch.elapsedMilliseconds}ms');
+    print(
+        '✅ [BB2] loadBlockDataFromFirestore done in ${stopwatch.elapsedMilliseconds}ms');
     setState(() {});
   }
 
@@ -1181,9 +1178,10 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       final dayIndex = int.tryParse(dayDoc.id.replaceFirst('day_', '')) ?? 0;
       final data = dayDoc.data();
 
-      final exercises = List<Map<String, dynamic>>.from(data['exercises'] ?? []);
+      final exercises =
+          List<Map<String, dynamic>>.from(data['exercises'] ?? []);
       final savedCircuitIndices =
-      List<int>.from(data['circuitStartIndices'] ?? [0]);
+          List<int>.from(data['circuitStartIndices'] ?? [0]);
 
       final List<ExerciseRow> loadedRows = [];
 
@@ -1205,9 +1203,12 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
         final dynamic rawReps = ex['reps'];
         final dynamic rawRIR = ex['rir'];
 
-        final double? weightVal = rawWeight != null ? double.tryParse(rawWeight.toString()) : null;
-        final int? repsVal = rawReps != null ? int.tryParse(rawReps.toString()) : null;
-        final double? rirVal = rawRIR != null ? double.tryParse(rawRIR.toString()) : null;
+        final double? weightVal =
+            rawWeight != null ? double.tryParse(rawWeight.toString()) : null;
+        final int? repsVal =
+            rawReps != null ? int.tryParse(rawReps.toString()) : null;
+        final double? rirVal =
+            rawRIR != null ? double.tryParse(rawRIR.toString()) : null;
 
         if (weightVal != null && weightVal != 0.0) {
           row.weightController.text = weightVal.toString();
@@ -1221,7 +1222,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
         final rowIndex = loadedRows.length;
         final baseKey = 'w${weekIndex}_d${dayIndex}_r${rowIndex}';
-
 
         if (row.weightController.text.trim().isNotEmpty &&
             double.tryParse(row.weightController.text.trim()) != null &&
@@ -1249,10 +1249,12 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       }
 
       exerciseRows[weekIndex][dayIndex] = loadedRows;
-      print('[BLOCK LOAD] Week $weekIndex, Day $dayIndex loaded ${loadedRows.length} rows from block_data');
+      print(
+          '[BLOCK LOAD] Week $weekIndex, Day $dayIndex loaded ${loadedRows.length} rows from block_data');
 
       for (final row in loadedRows) {
-        print('  • ${row.exercise} | weight: ${row.weightController.text} | reps: ${row.repsController.text} | RIR: ${row.rirController.text}');
+        print(
+            '  • ${row.exercise} | weight: ${row.weightController.text} | reps: ${row.repsController.text} | RIR: ${row.rirController.text}');
       }
 
       final List<int> newStarts = [];
@@ -1269,7 +1271,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       circuitStartIndices[weekIndex][dayIndex] = newStarts;
 
       // 🔁 Inject saved WES workout override logic
-      final DateTime date = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
+      final DateTime date =
+          blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
       final String dateKey = DateFormat('yyyy-MM-dd').format(date);
 
       final workoutDoc = await FirebaseFirestore.instance
@@ -1287,9 +1290,11 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
       if (workoutDoc.exists) {
         final workoutData = workoutDoc.data();
-        final savedExercises = List<Map<String, dynamic>>.from(workoutData?['exercises'] ?? []);
+        final savedExercises =
+            List<Map<String, dynamic>>.from(workoutData?['exercises'] ?? []);
 
-        print('[WES OVERRIDE] Overriding Week $weekIndex, Day $dayIndex with ${savedExercises.length} WES exercises');
+        print(
+            '[WES OVERRIDE] Overriding Week $weekIndex, Day $dayIndex with ${savedExercises.length} WES exercises');
 
         for (int i = 0; i < savedExercises.length; i++) {
           final ex = savedExercises[i];
@@ -1300,7 +1305,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           ExerciseRow? matchingRow;
           try {
             matchingRow = loadedRows.firstWhere(
-                  (r) => r.exercise == name && r.circuitIndex == circuit,
+              (r) => r.exercise == name && r.circuitIndex == circuit,
             );
           } catch (_) {
             matchingRow = null;
@@ -1311,8 +1316,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
           final rowIndex = loadedRows.indexOf(matchingRow);
           final baseKey = 'w${weekIndex}_d${dayIndex}_r${rowIndex}';
 
-
-          matchingRow.weightController.text = sets[0]['weight']?.toString() ?? '';
+          matchingRow.weightController.text =
+              sets[0]['weight']?.toString() ?? '';
           matchingRow.repsController.text = sets[0]['reps']?.toString() ?? '';
           matchingRow.rirController.text = sets[0]['rir']?.toString() ?? '';
 
@@ -1324,7 +1329,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
               "${matchingRow.weightController.text}, "
               "${matchingRow.repsController.text}, "
               "${matchingRow.rirController.text}");
-          print('[Override Attempt] Exercise: $name, Circuit: $circuit, Sets: $sets');
+          print(
+              '[Override Attempt] Exercise: $name, Circuit: $circuit, Sets: $sets');
         }
       }
     }
@@ -1591,8 +1597,6 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
       }
     }
   }
-
-
 
   Future<void> saveDayToFirestore(int weekIndex, int dayIndex) async {
     final user = FirebaseAuth.instance.currentUser;
@@ -1868,7 +1872,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
 
     // Derive a set of the planned exercise *names*:
     final plannedNames = plannedExerciseDetails.keys
-        .where((id) => id != 'blockMeta')          // skip the meta‐entry
+        .where((id) => id != 'blockMeta') // skip the meta‐entry
         .map((id) => exerciseIdToName[id])
         .whereType<String>()
         .toSet();
@@ -1909,7 +1913,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             child: ListView(
               children: filtered.entries.map((e) {
                 return ExpansionTile(
-                  title: Text(e.key, style: const TextStyle(fontWeight: FontWeight.bold)),
+                  title: Text(e.key,
+                      style: const TextStyle(fontWeight: FontWeight.bold)),
                   children: e.value.map((name) {
                     return ListTile(
                       title: Text(name),
@@ -1924,7 +1929,9 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+            TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel')),
           ],
         );
       }),
@@ -2780,15 +2787,29 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                           ),
                           onPressed: () async {
+                            // 1️⃣ Figure out your workout date & name first
+                            final DateTime workoutDate = blockStartDate.add(
+                              Duration(days: weekIndex * 7 + dayIndex),
+                            );
+                            final String formattedWorkoutName =
+                                "${DateFormat('EEE d MMM').format(workoutDate)} - Week ${weekIndex + 1}";
+
+                            // 2️⃣ (Optional) If you actually want to read BB2 SharedPrefs:
+                            // final prefs = await SharedPreferences.getInstance();
+                            // final dateKey = DateFormat('yyyy-MM-dd').format(workoutDate);
+                            // final raw = prefs.getString('bb2_dayData_$dateKey');
+                            // if (raw != null) {
+                            //   final dayData = jsonDecode(raw);
+                            //   // extract exercises from dayData['exercises']…
+                            // }
+
+                            // 3️⃣ Build your prefilled list from the in-memory rows
                             final rows = exerciseRows[weekIndex][dayIndex];
                             final List<Map<String, dynamic>> prefilled = [];
-
-                            print(
-                                '[BB2] exerciseRows for week $weekIndex, day $dayIndex:');
+                            print('[BB2] exerciseRows for week $weekIndex, day $dayIndex:');
                             for (final row in rows) {
-                              print(
-                                  '• ${row.exercise} | weight: ${row.weightController.text} | reps: ${row.repsController.text}');
                               final name = row.exerciseController.text.trim();
+                              print('• $name | weight: ${row.weightController.text} | reps: ${row.repsController.text}');
                               if (name.isNotEmpty) {
                                 prefilled.add({
                                   'name': name,
@@ -2796,11 +2817,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                                 });
                               }
                             }
-
-                            final DateTime workoutDate = blockStartDate
-                                .add(Duration(days: weekIndex * 7 + dayIndex));
-                            final String formattedWorkoutName =
-                                "${DateFormat('EEE d MMM').format(workoutDate)} - Week ${weekIndex + 1}";
+                            print('🏷️ prefilledExercisesWithCircuits: $prefilled');
 
                             // ✅ Ensure BB2 data is persisted for WES to access
                             await saveDayToFirestore(weekIndex, dayIndex);
@@ -2848,6 +2865,7 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                             }
 
                             // 🚀 Open WES normally
+                            print("Selected Exercises${prefilled}");    // should show your two exercises
                             final result = await Navigator.push(
                               context,
                               MaterialPageRoute(
@@ -2856,6 +2874,8 @@ class _BlockBuilder2State extends State<BlockBuilder2> {
                                   isNewWorkout: true,
                                   initialDate: workoutDate,
                                   initialWorkoutName: formattedWorkoutName,
+                                  blockId: _selectedBlockId!,
+                                  // isActive: true,
                                 ),
                               ),
                             );
