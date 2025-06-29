@@ -25,7 +25,22 @@ class BlockPlannerRepository {
       selectedDays: List<String>.from(data['selectedDays'] ?? []),
     );
   }
+
+  /// ✅ Add this inside the class
+  Future<String?> fetchActiveBlockId() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return null;
+
+    final doc = await _db
+        .collection('planned_blocks')
+        .doc(user.uid)
+        .get();
+
+    return doc.data()?['activeBlockId'] as String?;
+  }
 }
+
+
 
 class BlockMeta {
   final DateTime startDate;
