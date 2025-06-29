@@ -149,6 +149,7 @@ class _BlockPlannerState extends State<Block_Planner> {
 // Add this inside your _BlockPlannerState class:
 
   void _onUpdateSetting(String exerciseId, String key, dynamic value) {
+    print("📤 [TOP] Writing to Firestore: $exerciseId → $key = $value");
     // 1) update local map so UI stays in sync
     setState(() {
       exerciseSettings[exerciseId]![key] = value;
@@ -1576,11 +1577,16 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       }
     });
 
-    final rirModel = settings?['rirModel'];
-    if (rirModel != null && rirModel is String) {
+
+    final rirModel = settings != null ? settings['rirModel'] : null;
+
+    if (rirModel != null && rirModel is String && rirModel.isNotEmpty) {
       _selectedRirModel[widget.exerciseName] = rirModel;
       print("📥 [INIT] Loaded RIR model for ${widget.exerciseName}: $rirModel");
+    } else {
+      print("⚠️ [INIT] No RIR model found for ${widget.exerciseName} → settings = $settings");
     }
+
 
 
     final rirPlan = settings?['rirPlan'];
@@ -1655,6 +1661,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
   @override
   void dispose() {
+    print("🧹 [DISPOSE] Called for ${widget.exerciseName}");
     _maxWeightController.removeListener(_updateE1RM);
     _maxRepsController.removeListener(_updateE1RM);
     _maxWeightController.removeListener(_syncBestWeightXReps);
@@ -1808,6 +1815,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     }
 
     final rirModel = _selectedRirModel[widget.exerciseName];
+    print("🧪 [DISPOSE] Checking RIR model for ${widget.exerciseName}: ${_selectedRirModel[widget.exerciseName]}");
+
     if (rirModel != null && rirModel.isNotEmpty) {
       widget.onUpdateSetting(widget.exerciseId, 'rirModel', rirModel);
       print("💾 [DISPOSE] Saved RIR model for ${widget.exerciseName}: $rirModel");
@@ -1819,12 +1828,15 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       print("💾 [DISPOSE] Saved rirPlan for ${widget.exerciseName}: ${jsonEncode(_cachedRirPlan)}");
     }
 
+
     _weeklyFrequencyController.dispose();
     _repTargetsDisplayController.dispose();
     _incrementsController.dispose();
     _notesController.dispose();
     _maxWeightController.dispose();
     _maxRepsController.dispose();
+    _rirDisplayController.dispose();
+    _incrementsFocusNode.dispose();
 
     super.dispose();
   }

@@ -1088,29 +1088,23 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return {};
 
-    // 1️⃣ If no blockId, skip loading from block‐planner entirely:
-    if (widget.blockId == null || widget.blockId!.isEmpty) {
-      setState(() {
-        plannedExercises = [];
-      });
-      return {};
-    }
-
-    // 2️⃣ Load the block document
+// ✅ Always load from current_block
     final doc = await FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(user.uid)
-        .collection('blocks')
-        .doc(widget.blockId)
+        .collection('block_planner')
+        .doc('current_block')
         .get();
 
-    // 3️⃣ If it doesn’t exist, clear UI list and bail
+// ❌ Bail if no current block data
     if (!doc.exists) {
       setState(() {
         plannedExercises = [];
       });
+      print('❌ [WES] No current_block found');
       return {};
     }
+
 
     // 4️⃣ We know data() is non-null here
     final data = doc.data()!;
