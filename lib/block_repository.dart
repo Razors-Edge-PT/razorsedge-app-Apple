@@ -24,7 +24,13 @@ class BlockRepository {
         .limit(1)
         .get();
 
-    if (snap.docs.isEmpty) return null;
-    return snap.docs.first.id;
+    if (snap.docs.isEmpty) {
+      print('❌ [Repo] No active block found for user $uid');
+      return null;
+    }
+
+    final id = snap.docs.first.id;
+    print('🎯 [Repo] Active block ID for $uid = $id'); // ✅ Debug print
+    return id;
   }
 }

@@ -14,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 // For JSON encoding
 import 'debounce_Utils.dart';
 import 'block_planner_repository.dart';
+import 'block_repository.dart';
 
 Future<void> deleteAllUserWorkouts() async {
   final user = FirebaseAuth.instance.currentUser;
@@ -34,6 +35,23 @@ Future<void> deleteAllUserWorkouts() async {
     // Handle error silently or show a message to the user if needed
   }
 }
+
+class BlockMeta {
+  final String id;
+  final String name;
+  final DateTime startDate;
+  final DateTime endDate;
+  final List<String> selectedDays;
+
+  BlockMeta({
+    required this.id,
+    required this.name,
+    required this.startDate,
+    required this.endDate,
+    required this.selectedDays,
+  });
+}
+
 
 class WorkoutPage extends StatefulWidget {
   final Template? initialTemplate;
@@ -92,6 +110,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   final Map<int, Map<String, dynamic>> _cachedProgressedValues = {};
 
   bool _isLoadingData = true;
+  bool _isInitialized = false;
+
+
+  late Future<void> _initialLoad;
 
 
 
@@ -309,13 +331,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     print('🔍 [WES] _getProgressedValues CALLED for index $exerciseIndex');
     print('🔍 [WES] _getProgressedValues CALLED for index $exerciseIndex — ${_selectedExercisesWithCircuits[exerciseIndex]['name']}');
 
-
-    // If we've already computed this, return the cached result.
-    // if (_cachedProgressedValues.containsKey(exerciseIndex)) {
-//   return _cachedProgressedValues[exerciseIndex]!;
-// }
-
-
+    final rawName = _selectedExercisesWithCircuits[exerciseIndex]['name'];
+    if (rawName == null || rawName.toString().trim().isEmpty) {
+      print('❌ [WES] Null or empty exercise name at index $exerciseIndex — skipping progression');
+      return {
+        'weight': 20.0,
+        'reps': 10.0,
+        'rir': 0.5,
+      };
+    }
     // Get exercise info.
     final exerciseName =
         _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
@@ -384,26 +408,32 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
             .where((e) => e.key.startsWith('instance'))
             .toList()
           ..sort((a, b) => a.key.compareTo(b.key));
+
         if (sorted.isNotEmpty) {
-          final count =
-          PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
-            exerciseName: exerciseName,
-            savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
-            blockStartDate: _blockStartDate!,
-            weekIndex: weekIndex ?? 0,
-          );
-          final index = count % sorted.length;
-          final raw = sorted[index].value?.toString() ?? '';
-          final match = RegExp(r'^(\d+)').firstMatch(raw);
-          repTarget = match != null
-              ? int.tryParse(match.group(1)!)?.toDouble() ?? 10.0
-              : 10.0;
+          if (_blockStartDate == null) {
+            print('❌ [WES] _blockStartDate is null for $exerciseName — returning default repTarget');
+            repTarget = 10.0;
+          } else {
+            final count = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+              exerciseName: exerciseName,
+              savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+              blockStartDate: _blockStartDate!,
+              weekIndex: weekIndex ?? 0,
+            );
+            final index = count % sorted.length;
+            final raw = sorted[index].value?.toString() ?? '';
+            final match = RegExp(r'^(\d+)').firstMatch(raw);
+            repTarget = match != null
+                ? int.tryParse(match.group(1)!)?.toDouble() ?? 10.0
+                : 10.0;
+          }
         } else {
           repTarget = 10.0;
         }
       } else {
         repTarget = 10.0;
       }
+
 
       // ✅ Debug after dailyUndulatingWeek repTarget is determined
       print('🎯 [WES] dailyUndulatingWeek → repTarget = $repTarget for $exerciseName on $weekKey');
@@ -478,6 +508,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final double rir = set1RIR(exerciseIndex);
 
     // Call the progression model (which contains its internal logic).
+    final increments = PeriodizationModelUtils.getIncrementsForExercise(exerciseId);
+    if (increments == null || increments.isEmpty) {
+      print('❌ [WES] No increments found for $exerciseId → using fallback [2.5]');
+    }
+
     final Map<String, dynamic> progressed =
     PeriodizationModelUtils.getWeightByProgressionModel(
       model: progressionModel,
@@ -485,12 +520,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       repTarget: repTarget.toInt(),
       defaultWeight: defaultWeight,
       rirValue: rir,
-      increments: PeriodizationModelUtils.getIncrementsForExercise(exerciseId),
+      increments: increments ?? [2.5], // ✅ fallback
       maxWeightByReps: PeriodizationModelUtils
           .plannedExerciseDetails[exerciseId]?['maxWeightByReps'],
       topSetHistory: PeriodizationModelUtils.topSetsByExercise[exerciseName],
       weekIndex: weekIndex ?? 0,
     );
+
 
     // Cache and return
     _cachedProgressedValues[exerciseIndex] = progressed;
@@ -886,74 +922,85 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    print("➡️ WorkoutPage received prefilled: ${widget.prefilledExercisesWithCircuits}");
-    WidgetsBinding.instance.addObserver(this);
-
     _repo = BlockPlannerRepository();
     _selectedDate = widget.initialDate ?? DateTime.now();
     _setInitialWorkoutName();
+    WidgetsBinding.instance.addObserver(this);
 
-    _initWithBlock(); // ✅ Always run this
-  }
+    final pageLoadTimer = Stopwatch()..start();
 
+    _initialLoad = Future.wait([
+      _fetchActiveBlockThenMeta(),
+      _loadAllBlocks(),
+    ]).then((_) async {
+      if (_activeBlockId == null || _allBlocks.isEmpty) {
+        print('❌ [WES Init] Missing activeBlockId or blocks list');
+        return;
+      }
 
-  Future<void> _initWithBlock() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+      _selectedBlockId = _allBlocks.firstWhere(
+            (b) => b.id == _activeBlockId,
+        orElse: () => _allBlocks.first,
+      ).id;
 
-    if (widget.blockId != null) {
-      _selectedBlockId = widget.blockId;
-      print('🧱 [WES] Using passed blockId → $_selectedBlockId');
-    } else {
-      _selectedBlockId = await _repo.fetchActiveBlockId();
-      print('🧱 [WES] Loaded activeBlockId → $_selectedBlockId');
-    }
+      print("🧱 [WES Init] Loaded blockId: $_selectedBlockId (should match active: $_activeBlockId)");
 
-    if (_selectedBlockId != null) {
-      final meta = await _repo.loadBlockMeta(
-        userId: user.uid,
-        blockId: _selectedBlockId!,
-      );
-
-      _blockStartDate = meta.startDate;
-      _blockEndDate = meta.endDate;
-      _selectedDays = meta.selectedDays;
-
-      print('📦 [WES] BlockMeta: $_blockStartDate → $_blockEndDate | Days: $_selectedDays');
-    } else {
-      print('❌ No active block found. Continuing without block context.');
-    }
-
-    // ✅ Always load after attempting block fetch
-    await _loadInitialData();
-    _fetchLastWorkoutTopSetReps();
-  }
-
-
-  Future<void> _loadActiveBlockIdThenMeta() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    _selectedBlockId = await _repo.fetchActiveBlockId();
-    print('🧱 [WES] Loaded activeBlockId → $_selectedBlockId');
-
-    if (_selectedBlockId == null) {
-      print('❌ No active block found. Falling back to default loading.');
       await _loadInitialData();
       _fetchLastWorkoutTopSetReps();
+
+      setState(() {
+        _isInitialized = true; // ✅ Marks init done
+      });
+    });
+
+
+    print('🚀 [WES] initState complete → fetching block + meta');
+  }
+
+  Future<void> _loadAllBlocks() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final snap = await FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(user.uid)
+        .collection('blocks')
+        .get();
+
+    print('🔍 [WES] Loaded ${snap.docs.length} blocks: ${snap.docs.map((d) => d.id)}');
+
+    final blocks = snap.docs
+        .map((d) => BlockMeta(
+      id: d.id,
+      name: d['name'],
+      startDate: (d['startDate'] as Timestamp).toDate(),
+      endDate: (d['endDate'] as Timestamp).toDate(),
+      selectedDays: List<String>.from(d['selectedDays'] ?? []),
+    ))
+        .toList();
+
+    setState(() {
+      _allBlocks = blocks;
+    });
+  }
+
+
+  Future<void> _fetchActiveBlockThenMeta() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    _activeBlockId = await BlockRepository().fetchActiveBlockId(); // ✅ same as BB2
+
+    print('🎯 [WES] Active Block ID from Firestore = $_activeBlockId');
+
+    if (_activeBlockId == null) {
+      print('❌ [WES] No active block found');
       return;
     }
 
-    await _loadBlockMetaThenInit();
-  }
-
-  Future<void> _loadBlockMetaThenInit() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null || _selectedBlockId == null) return;
-
     final meta = await _repo.loadBlockMeta(
       userId: user.uid,
-      blockId: _selectedBlockId!,
+      blockId: _activeBlockId!,
     );
 
     _blockStartDate = meta.startDate;
@@ -961,11 +1008,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     _selectedDays = meta.selectedDays;
 
     print('📦 [WES] BlockMeta: $_blockStartDate → $_blockEndDate | Days: $_selectedDays');
-
-    await _loadInitialData();
-    _fetchLastWorkoutTopSetReps();
   }
-
 
 
   Future<void> _loadInitialData() async {
@@ -1195,78 +1238,47 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
   Future<Map<String, dynamic>> _loadPlannedExerciseDetails() async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return {};
+    if (user == null || _selectedBlockId == null) return {};
+    print('🔍 [WES] _loadPlannedExerciseDetails() using blockId: $_selectedBlockId');
 
-// ✅ Always load from current_block
+
+    // ✅ 1. Load from BB2-style Firestore path using _selectedBlockId
     final doc = await FirebaseFirestore.instance
-        .collection('users')
+        .collection('planned_blocks')
         .doc(user.uid)
-        .collection('block_planner')
-        .doc('current_block')
+        .collection('blocks')
+        .doc(_selectedBlockId!)
         .get();
 
-    print('📦 [WES] current_block Firestore data: ${doc.data()}');
-
-// ⬇️ extract ID + name
-    final currentBlockId = doc.data()?['blockId'];
-    final currentBlockName = doc.data()?['blockName'];
-    print('🧱 [WES] Loaded current_block → ID: $currentBlockId, Name: $currentBlockName');
-// ❌ Bail if no current block data
     if (!doc.exists) {
-      setState(() {
-        plannedExercises = [];
-      });
-      print('❌ [WES] No current_block found');
+      print('❌ [WES] No plannedExerciseDetails found in block $_selectedBlockId');
       return {};
     }
 
-
-    // 4️⃣ We know data() is non-null here
+    // ✅ 2. Extract data and handle blockMeta separately
     final data = doc.data()!;
-    final blockId = data['blockId'];
-    final blockName = data['blockName'];
-    print('🧱 [WES] Loaded current_block → ID: $blockId, Name: $blockName');
+    final blockMeta = data['blockMeta'] as Map<String, dynamic>? ?? {};
 
-    // 5️⃣ Pull out the simple list for your UI
-    setState(() {
-      plannedExercises =
-          List<String>.from(data['plannedExercises'] ?? <String>[]);
-    });
+    final details = Map<String, dynamic>.from(data['plannedExerciseDetails'] ?? {});
+    print('📦 [WES] Firestore plannedExerciseDetails keys: ${details.keys}');
 
-    // 6️⃣ If there are no detailed settings, bail
-    if (!data.containsKey('plannedExerciseDetails')) {
-      print('❌ [WES] No plannedExerciseDetails found in Firestore');
-      return {};
-    }
+    // ✅ 3. Do NOT setState() with plannedExercises — skipped by request
 
-    // 7️⃣ Grab your raw details map
-    final details = Map<String, dynamic>.from(data['plannedExerciseDetails']);
+    // ✅ 4. Set blockStartDate and blockEndDate from meta directly
+    _blockStartDate = DateTime.tryParse(blockMeta['blockStartDate'] ?? '');
+    _blockEndDate = DateTime.tryParse(blockMeta['blockEndDate'] ?? '');
+    print('📅 [WES] Loaded blockStartDate=$_blockStartDate, blockEndDate=$_blockEndDate');
 
-    // 8️⃣ Inject into your PeriodizationModelUtils
-    PeriodizationModelUtils.setExerciseSettings(details);
-    print(
-        '✅ [WES] Injected exerciseSettings into PMU with keys: ${details.keys}');
-
-    // 9️⃣ If there’s blockMeta, tuck it in
-    if (data.containsKey('blockMeta')) {
-      details['blockMeta'] = Map<String, dynamic>.from(data['blockMeta']);
-      print('📎 [WES] Injected blockMeta into plannedExerciseDetails');
-    }
-
-    // 1️⃣0️⃣ Parse your block dates
-    final meta = data['blockMeta'] as Map<String, dynamic>? ?? {};
-    _blockStartDate = DateTime.tryParse(meta['blockStartDate'] ?? '');
-    _blockEndDate = DateTime.tryParse(meta['blockEndDate'] ?? '');
-    print(
-        '📅 [WES] Loaded blockStartDate=$_blockStartDate, blockEndDate=$_blockEndDate');
-
-    // 1️⃣1️⃣ Reset global maps
+    // ✅ 5. Reset PMU maps BEFORE setting anything
     PeriodizationModelUtils.plannedExerciseDetails.clear();
     PeriodizationModelUtils.exercisePeriodizationModels.clear();
 
-    // 1️⃣2️⃣ Walk each exercise entry
+    // Inject into PMU
+    PeriodizationModelUtils.setExerciseSettings(details);
+    print('✅ [WES] Injected exerciseSettings into PMU with keys: ${details.keys}');
+
+    // Walk each exercise entry
     details.forEach((exerciseId, entry) {
-      if (exerciseId == 'blockMeta') return;
       if (entry is! Map<String, dynamic>) return;
 
       // Store the raw settings
@@ -1274,60 +1286,25 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
       // Map periodizationModel → enum
       final String? modelName = entry['periodizationModel'] as String?;
+      final modelEnum = modelName != null
+          ? PeriodizationModelUtils.stringToModel(modelName)
+          : null;
 
-      PeriodizationModelType? modelEnum;
-      if (modelName != null) {
-        modelEnum = PeriodizationModelUtils.stringToModel(modelName);
-        if (modelEnum != null) {
-          PeriodizationModelUtils.exercisePeriodizationModels[exerciseId] =
-              modelEnum;
-          print('✅ [WES] Mapped model $modelName → $modelEnum for $exerciseId');
-        }
+      if (modelEnum != null) {
+        PeriodizationModelUtils.exercisePeriodizationModels[exerciseId] = modelEnum;
+        print('✅ [WES] Mapped model $modelName → $modelEnum for $exerciseId');
       }
 
       // Track progressionModel if you need it later
       final progressionModel = entry['progressionModel'] ?? 'none';
       _progressionModelsByExercise[exerciseId] = progressionModel;
       print('🏗️ [WES] Progression model for $exerciseId: $progressionModel');
-
-      // Example: DUP expansions
-      if (modelEnum == PeriodizationModelType.dailyUndulatingExposure ||
-          modelEnum == PeriodizationModelType.dailyUndulatingWeek) {
-        final repTargets = entry['repTargets'];
-        if (repTargets is Map<String, dynamic> &&
-            repTargets.length == 1 &&
-            repTargets.containsKey('week1')) {
-          final week1Map = repTargets['week1'];
-          if (week1Map is Map<String, dynamic> && week1Map.isNotEmpty) {
-            final expanded = PeriodizationModelUtils.expandDupDailyWeek1(
-              Map<String, String>.from(
-                  week1Map.map((k, v) => MapEntry(k, v.toString()))),
-              12,
-            );
-            PeriodizationModelUtils.plannedExerciseDetails[exerciseId]
-                ?['repTargets'] = expanded;
-            print('🔁 [WES] Expanded week1 → all weeks for $exerciseId');
-          }
-        }
-      }
-
-      // Example: Linear classic debug
-      if (modelEnum == PeriodizationModelType.linearClassic) {
-        final repTargets = entry['repTargets'];
-        if (repTargets is Map<String, dynamic>) {
-          final blockLength = PeriodizationModelUtils.getBlockLength(
-              blockStartDate: _blockStartDate, blockEndDate: _blockEndDate);
-          print('🧠 [WES] Linear Classic blockLength = $blockLength');
-          print('📅 [WES] week1: ${repTargets['week1']}');
-          print('📅 [WES] finalWeek: ${repTargets['week$blockLength']}');
-        }
-      }
     });
 
-    // 1️⃣3️⃣ Finally, return the injected structure
     print('📄 [WES] Full plannedExerciseDetails loaded: ${details.keys}');
     return details;
   }
+
 
   Future<void> _buildNameToIdMapsFromFirestore() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -3288,10 +3265,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    print('🏷 prefilledExercisesWithCircuits = '
-        '${widget.prefilledExercisesWithCircuits?.map((e) => e['name']).toList()}');
-    print(
-        "[build] state exercises = ${_selectedExercisesWithCircuits.map((e) => e['name']).toList()}");
+    if (!_isInitialized) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()), // or blank container if preferred
+      );
+    }
+
 
     final exercises = widget.prefilledExercisesWithCircuits;
     return Scaffold(

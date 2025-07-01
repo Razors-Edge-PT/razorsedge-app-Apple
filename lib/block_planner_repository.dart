@@ -29,15 +29,29 @@ class BlockPlannerRepository {
   /// ✅ Add this inside the class
   Future<String?> fetchActiveBlockId() async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return null;
+    if (user == null) {
+      print('❌ [Repo] No user signed in');
+      return null;
+    }
+
+    print('🧪 [Repo] fetchActiveBlockId called for user: ${user.uid}');
 
     final doc = await _db
         .collection('planned_blocks')
         .doc(user.uid)
         .get();
 
-    return doc.data()?['activeBlockId'] as String?;
+    if (!doc.exists) {
+      print('❌ [Repo] No document found at planned_blocks/${user.uid}');
+      return null;
+    }
+
+    final id = doc.data()?['activeBlockId'];
+    print('🎯 [Repo] activeBlockId from Firestore = $id');
+
+    return id as String?;
   }
+
 }
 
 

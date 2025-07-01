@@ -243,6 +243,9 @@ class _BlockBuilder2State extends State<Camp_BB2> {
             .firstWhere((b) => b.id == _activeBlockId,
                 orElse: () => _allBlocks.first)
             .id;
+
+        print("🧱 [BB2 Init] Loaded blockId: $_selectedBlockId (should match active: $_activeBlockId)");
+
       });
 
       // 3) Now that _displayStart & totalWeeks are valid, compute today’s week
@@ -275,14 +278,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     });
   }
 
-  Future<void> _loadActiveBlockId() async {
-    final repo = BlockRepository();
-    final id = await repo.fetchActiveBlockId();
-    setState(() {
-      _activeBlockId = id;
-      _loading = false;
-    });
-  }
+
 
   Future<void> _loadAllBlocks() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -1200,6 +1196,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null || _selectedBlockId == null) return;
     final uid = user.uid;
+
+    print("🧱 [BB2 loadBlockDataForWeek] Loaded blockId: $_selectedBlockId (should match active: $_activeBlockId)");
 
     final weekDocRef = FirebaseFirestore.instance
         .collection('planned_blocks')
@@ -2206,8 +2204,11 @@ class _BlockBuilder2State extends State<Camp_BB2> {
             : progressedRepsRaw;
 
         final String hintReps = (repsController.text.isEmpty && isExerciseNamed)
-            ? roundedReps.toString()
-            : '';
+            ? (() {
+          print("🔍 [BB2 Rep Hint] Using hint from blockId: $_selectedBlockId");
+          return roundedReps.toString();
+        })()
+            : repsController.text;
 
         final String hintWeight = (weightController.text.isEmpty && isExerciseNamed)
             ? ((userTypedRir || repsController.text.isNotEmpty) && effectiveWeight != null
