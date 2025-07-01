@@ -2016,13 +2016,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
             ? (rirSetValues['set1']?['rir']?.toString() ?? '0.5')
             : rirController.text;
 
-        print("📝 hintRir = \"$hintRir\" | controller = \"${rirController.text}\"");
-        print("🔎 [BB2] RIR Debug for $exerciseName");
-        print("🧬 rirSetValues = $rirSetValues");
-        print("🧬 set1 = ${rirSetValues?['set1']}");
-        print("🧬 set1['rir'] = ${rirSetValues?['set1']?['rir']}");
-        print("🧬 controller.text = ${rirController.text}");
-        print("🧬 Final hintRir = $hintRir");
 
 // ✅ Then use it here
         final double rirValue = rirController.text.isNotEmpty
@@ -2206,6 +2199,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         final String hintReps = (repsController.text.isEmpty && isExerciseNamed)
             ? (() {
           print("🔍 [BB2 Rep Hint] Using hint from blockId: $_selectedBlockId");
+          print("📅 [BB2 Rep Hint] Block dates available? start = $blockStartDate, end = $blockEndDate");
           return roundedReps.toString();
         })()
             : repsController.text;
