@@ -626,19 +626,21 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
 
     // Get default weight using rep and RIR logic.
-    final double defaultWeight =
-    PeriodizationModelUtils.getSuggestedWeightFromRep(
-      exerciseName,
-      repTarget.toInt(),
-      set1RIR(exerciseIndex),
-    );
+
 
     // Get the progression model info.
     final String? progressionModelName = PeriodizationModelUtils
         .plannedExerciseDetails[exerciseId]?['progressionModel'];
     final progressionModel =
     PeriodizationModelUtils.parseProgressionModel(progressionModelName);
-    final double rir = set1RIR(exerciseIndex);
+    final double rir = getRirFromPlanOrInput(exerciseIndex, 1);
+
+    final double defaultWeight =
+    PeriodizationModelUtils.getSuggestedWeightFromRep(
+      exerciseName,
+      repTarget.toInt(),
+      rir,
+    );
 
     // Call the progression model (which contains its internal logic).
     final increments = PeriodizationModelUtils.getIncrementsForExercise(exerciseId);
