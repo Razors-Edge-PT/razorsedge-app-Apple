@@ -1,6 +1,7 @@
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'workout_model.dart'; // Import Workout and Exercise models
+import 'workout_model.dart';
 
 class ExerciseDetailsScreen extends StatelessWidget {
   final String exerciseName;
@@ -12,124 +13,162 @@ class ExerciseDetailsScreen extends StatelessWidget {
     required this.recentWorkouts,
   });
 
-  // ✅ Function to calculate E1RM using Hybrid (Brzycki for low reps, Epley for high reps)
   double calculateE1RM(double weight, double reps, double rir) {
-    double totalReps = reps + rir;
-
+    final totalReps = reps + rir;
     return (totalReps <= 6)
-        ? (weight * (36 / (37 - totalReps))) // Brzycki for low reps
-        : (weight * (1 + (0.0333 * totalReps))); // Epley for high reps
+        ? (weight * (36 / (37 - totalReps)))
+        : (weight * (1 + (0.0333 * totalReps)));
   }
-
 
   @override
   Widget build(BuildContext context) {
-    // ✅ Show up to 12 past workouts
-    final List<Workout> limitedWorkouts = recentWorkouts.take(12).toList();
+    final List<Workout> sortedWorkouts = [...recentWorkouts]..sort((a, b) => a.date.compareTo(b.date));
+
+    final List<FlSpot> e1rmSpots = [];
+    final List<String> dateLabels = [];
+
+    for (int i = 0; i < sortedWorkouts.length; i++) {
+      final workout = sortedWorkouts[i];
+      final exercise = workout.exercises.firstWhere(
+            (ex) => ex.name == exerciseName,
+        orElse: () => Exercise(name: '', sets: []),
+      );
+
+      if (exercise.sets.isNotEmpty) {
+        final topSet = exercise.sets.reduce((a, b) {
+          final aE1 = calculateE1RM(a.weight ?? 0.0, (a.reps ?? 0).toDouble(), a.rir ?? 0.0);
+          final bE1 = calculateE1RM(b.weight ?? 0.0, (b.reps ?? 0).toDouble(), b.rir ?? 0.0);
+          return aE1 > bE1 ? a : b;
+        });
+
+        final e1rm = calculateE1RM(topSet.weight ?? 0.0, (topSet.reps ?? 0).toDouble(), topSet.rir ?? 0.0);
+        e1rmSpots.add(FlSpot(i.toDouble(), e1rm));
+        dateLabels.add(DateFormat('dd MMM').format(workout.date));
+      }
+    }
 
     return Scaffold(
+      backgroundColor: Colors.black,
       appBar: AppBar(
-        title: Text('Exercise: $exerciseName'),
+        title: Text('E1RM Trend: $exerciseName'),
+        backgroundColor: Colors.black,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Past Workouts (Top Sets Only):',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 16),
-            Expanded(
-              child: ListView.builder(
-                itemCount: limitedWorkouts.length,
-                itemBuilder: (context, index) {
-                  final workout = limitedWorkouts[index];
+      body: Column(
+        children: [
+          // 🔥 Graph
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+            child: AspectRatio(
+              aspectRatio: 1.7,
+              child: LineChart(
+                LineChartData(
+                  minX: -0.3, // ✅ Add some padding to the left
+                  maxX: e1rmSpots.length.toDouble() - 0.7, // ✅ Add right padding so final label/point isn't clipped
 
-                  // ✅ Find the exercise data from this workout
-                  final exercise = workout.exercises.firstWhere(
-                        (ex) => ex.name == exerciseName,
-                    orElse: () => Exercise(name: '', sets: []),
-                  );
-
-                  if (exercise.sets.isNotEmpty) {
-                    // ✅ Find the set with the highest E1RM
-                    final topSet = exercise.sets.reduce((highest, current) {
-                      double highestE1RM = calculateE1RM(
-                        highest.weight ?? 0.0, // ✅ Provide default if null
-                        (highest.reps ?? 0).toDouble(), // ✅ Convert safely
-                        highest.rir ?? 0.0, // ✅ Provide default if null
-                      );
-
-                      double currentE1RM = calculateE1RM(
-                        current.weight ?? 0.0, // ✅ Provide default if null
-                        (current.reps ?? 0).toDouble(), // ✅ Convert safely
-                        current.rir ?? 0.0, // ✅ Provide default if null
-                      );
-
-                      return currentE1RM > highestE1RM ? current : highest;
-                    });
-
-                    double topE1RM = calculateE1RM(
-                      topSet.weight ?? 0.0, // ✅ Provide default if null
-                      (topSet.reps ?? 0).toDouble(), // ✅ Convert safely
-                      topSet.rir ?? 0.0, // ✅ Provide default if null
-                    );
-
-                    return ListTile(
-                      title: Text(
-                        'Workout Date: ${DateFormat('dd-MM-yyyy').format(workout.date)}',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      subtitle: Text.rich(
-                        TextSpan(
-                          children: [
-                            TextSpan(
-                              text: '${topSet.weight}kg',
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold, color: Colors.blue, fontSize: 14),
-                            ),
-                            const TextSpan(
-                              text: ' X ',
-                              style: TextStyle(fontSize: 14, color: Colors.blue),
-                            ),
-                            TextSpan(
-                              text: '${topSet.reps}',
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold, color: Colors.blue, fontSize: 14),
-                            ),
-                            const TextSpan(
-                              text: ',   RIR: ',
-                              style: TextStyle(fontSize: 14, color: Colors.blue),
-                            ),
-                            TextSpan(
-                              text: '${topSet.rir}', // Keeping RIR normal
-                              style: const TextStyle(fontSize: 14, color: Colors.black),
-                            ),
-                            const TextSpan(
-                              text: ' |     E1RM: ',
-                              style: TextStyle(fontSize: 14, color: Colors.blue),
-                            ),
-                            TextSpan(
-                              text: '${topE1RM.toStringAsFixed(1)} kg',
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold, color: Colors.blue, fontSize: 14),
-                            ),
-                          ],
+                  gridData: FlGridData(
+                    show: true,
+                    getDrawingHorizontalLine: (_) => FlLine(color: Colors.white10),
+                  ),
+                  titlesData: FlTitlesData(
+                    leftTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        reservedSize: 36,
+                        getTitlesWidget: (value, _) => Text(
+                          '${value.toInt()}',
+                          style: const TextStyle(color: Colors.white, fontSize: 10),
                         ),
                       ),
-                    );
-                  } else {
-                    // ✅ Return an empty container to prevent null widget errors
-                    return const SizedBox.shrink();
-                  }
-                },
+                    ),
+                    bottomTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        interval: 1,
+                        getTitlesWidget: (value, _) {
+                          final index = value.toInt();
+                          return Text(
+                            index >= 0 && index < dateLabels.length ? dateLabels[index] : '',
+                            style: const TextStyle(color: Colors.white, fontSize: 10),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  lineBarsData: [
+                    LineChartBarData(
+                      spots: e1rmSpots,
+                      isCurved: true,
+                      color: Colors.cyanAccent,
+                      dotData: FlDotData(show: true),
+                      belowBarData: BarAreaData(show: true, color: Colors.cyanAccent.withOpacity(0.1)),
+                    )
+                  ],
+                  lineTouchData: LineTouchData(
+                    touchTooltipData: LineTouchTooltipData(
+                      tooltipBgColor: Colors.grey[900]!,
+
+                      getTooltipItems: (touchedSpots) {
+                        return touchedSpots.map((spot) {
+                          final e1rm = spot.y.toStringAsFixed(1);
+                          final date = dateLabels[spot.x.toInt()];
+                          return LineTooltipItem('E1RM: $e1rm kg\n$date', const TextStyle(color: Colors.white));
+                        }).toList();
+                      },
+                    ),
+                  ),
+                ),
               ),
             ),
+          ),
 
-          ],
-        ),
+          const Divider(color: Colors.white24),
+
+          // 📋 Top Sets List
+          const Padding(
+            padding: EdgeInsets.only(left: 16, top: 8),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Top Sets:',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: ListView.builder(
+              itemCount: sortedWorkouts.length,
+              itemBuilder: (context, index) {
+                final workout = sortedWorkouts[index];
+                final exercise = workout.exercises.firstWhere(
+                      (ex) => ex.name == exerciseName,
+                  orElse: () => Exercise(name: '', sets: []),
+                );
+
+                if (exercise.sets.isEmpty) return const SizedBox.shrink();
+
+                final topSet = exercise.sets.reduce((a, b) {
+                  final aE1 = calculateE1RM(a.weight ?? 0.0, (a.reps ?? 0).toDouble(), a.rir ?? 0.0);
+                  final bE1 = calculateE1RM(b.weight ?? 0.0, (b.reps ?? 0).toDouble(), b.rir ?? 0.0);
+                  return aE1 > bE1 ? a : b;
+                });
+
+                final e1rm = calculateE1RM(topSet.weight ?? 0.0, (topSet.reps ?? 0).toDouble(), topSet.rir ?? 0.0);
+
+                return ListTile(
+                  title: Text(
+                    DateFormat('dd-MM-yyyy').format(workout.date),
+                    style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
+                  subtitle: Text(
+                    '${topSet.weight} kg × ${topSet.reps}, RIR ${topSet.rir} → E1RM: ${e1rm.toStringAsFixed(1)} kg',
+                    style: const TextStyle(color: Colors.cyanAccent),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -1085,6 +1085,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
       await _loadInitialData();
       await _fetchLastWorkoutTopSetReps();
+      await _loadExercisesFromBB2ForDay();
       _debugPrintBlockDates();
 
       _cachedProgressedValues.clear();
@@ -1194,6 +1195,47 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     });
   }
 
+  Future<void> _loadExercisesFromBB2ForDay() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || _selectedBlockId == null || _selectedDate == null) return;
+
+    final dateKey = DateFormat('yyyy-MM-dd').format(_selectedDate);
+    final doc = await FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(user.uid)
+        .collection('blocks')
+        .doc(_selectedBlockId)
+        .collection('block_data')
+        .doc(dateKey)
+        .get();
+
+    if (!doc.exists) {
+      print('🟡 [WES] No BB2 plan found for $dateKey in block $_selectedBlockId');
+      return;
+    }
+
+    final data = doc.data();
+    final List<dynamic> rows = data?['rows'] ?? [];
+
+    // Optional: clear old list first
+    _selectedExercisesWithCircuits.clear();
+
+    for (final row in rows) {
+      final name = row['name'] ?? '';
+      final circuit = row['circuitIndex'] ?? 0;
+
+      if (name.trim().isEmpty) continue;
+
+      _selectedExercisesWithCircuits.add({
+        'name': name.trim(),
+        'circuitIndex': circuit,
+      });
+    }
+
+    print('✅ [WES] Loaded ${_selectedExercisesWithCircuits.length} exercises from BB2 for $dateKey');
+
+    setState(() {}); // 🧠 Trigger UI update
+  }
 
 
 
@@ -1208,37 +1250,28 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         _rirControllers.clear();
         _resolvedBB2Values.clear();
         _blockStartDate = widget.initialDate;
-        _blockEndDate   = widget.initialDate;
+        _blockEndDate = widget.initialDate;
 
-        // copy in your two BB2 exercises
+        // ✅ Copy BB2 prefilled exercises
         _selectedExercisesWithCircuits.addAll(
           widget.prefilledExercisesWithCircuits!
               .map((e) => Map<String, dynamic>.from(e)),
         );
 
-        // give each one a default block of 3 SetDetails + controllers
         for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
-          _workoutSets.add(
-            List.generate(_defaultSets, (_) => SetDetails()),
-          );
-          _repsControllers.add(
-            List.generate(_defaultSets, (_) => TextEditingController()),
-          );
-          _weightControllers.add(
-            List.generate(_defaultSets, (_) => TextEditingController()),
-          );
-          _rirControllers.add(
-            List.generate(_defaultSets, (_) => TextEditingController()),
-          );
+          _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
+          _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+          _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+          _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
         }
 
         _initializeControllers();
         _isLoadingData = false;
       });
-      return; // we’re done here
+      return;
     }
 
-    // …and only if BB2 gave us nothing do we fall back to your normal loads:
+    // 🔁 Normal flow (no prefilled BB2)
     await loadExercisesFromFirestoreForWES();
     await _buildNameToIdMapsFromFirestore();
     await PeriodizationModelUtils.fetchFullTopSetHistory();
@@ -1247,21 +1280,26 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     await loadPlannedExercisesFromFirestore();
     await loadPreviousWorkoutData();
 
-    // 2️⃣ then drafts if there was no BB2
+    // 🧠 Try to load a saved WES draft first
     final draftLoaded = await _loadWorkoutDraftFromCache();
+
     if (draftLoaded) {
+      print('📦 [WES] Loaded workout draft from cache');
       await Future.delayed(const Duration(milliseconds: 1000));
+
+      // ✅ Merge BB2 exercises that were added after draft creation
       await _mergeNewBB2ExercisesIntoDraft();
     } else {
-      // 3️⃣ fallback to saved BlockBuilder plan
-      await _loadPlannedBlockBuilderExercisesIfAny();
+      print('📭 [WES] No draft found → loading BB2 plan');
+
+      // ✅ No draft = pull initial planned exercises from BB2
+      await _mergeNewBB2ExercisesIntoDraft();
     }
 
-    // 4️⃣ any remaining SharedPrefs overrides
+    // ✅ Final: resolve BB2 values into hint fields
     for (final ex in _selectedExercisesWithCircuits) {
       final name = ex['name']?.trim() ?? '';
-      final values =
-          await getBB2SavedValuesFromSharedPrefs(name, _selectedDate);
+      final values = await getBB2SavedValuesFromSharedPrefs(name, _selectedDate);
       if (values != null) {
         _resolvedBB2Values[name.toLowerCase()] = values;
       }
@@ -1271,6 +1309,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       _isLoadingData = false;
     });
   }
+
 
   double _calculateFallbackSet1Reps(int exerciseIndex) {
     String exerciseName =
@@ -3083,7 +3122,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
 
     // 1️⃣ Make sure we have a blockId
-    final blockId = widget.blockId;
+    final blockId = _selectedBlockId;
+
     if (blockId == null || blockId.isEmpty) {
       print('[WES] No blockId provided – skipping BB2 merge');
       return;
@@ -3102,24 +3142,30 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
 
     // 3️⃣ Pull out your saved start date
-    final meta = blockDoc.data()?['blockMeta'] as Map<String, dynamic>?;
-    final startStr = meta?['blockStartDate'] as String?;
-    if (startStr == null) {
-      print('[WES] blockMeta.blockStartDate is missing');
+    if (blockStartDate == null) {
+      print('[WES] _blockStartDate is null — cannot continue merge');
+      return;
+    }
+    final blockStart = blockStartDate!;
+
+
+    if (blockStartDate == null) {
+      print('[WES] _blockStartDate is null — cannot compute day offset');
       return;
     }
 
-    final blockStart = DateTime.parse(startStr);
-    final daysSinceStart = _selectedDate.difference(blockStart).inDays;
+    final daysSinceStart = _selectedDate.difference(blockStartDate!).inDays;
     if (daysSinceStart < 0) {
       print('[WES] selectedDate is before block start');
       return;
     }
 
+
     final weekIndex = (daysSinceStart / 7).floor();
     final dayIndex = daysSinceStart % 7;
 
     print('[WES] Fetching week_$weekIndex / day_$dayIndex from BB2');
+
 
     // 4️⃣ Now point at weeks/day under planned_blocks/{uid}/blocks/{blockId}
     final dayDoc = await FirebaseFirestore.instance
@@ -3240,96 +3286,30 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     );
 
     if (pickedDate == null || pickedDate == _selectedDate) return;
+    await _mergeNewBB2ExercisesIntoDraft();
 
-    // 1️⃣ Save the current draft
+    // 1️⃣ Save current draft
     await _saveWorkoutDraftToCache();
 
-    // 2️⃣ Switch date & workout-name
+    // 2️⃣ Switch date
     setState(() {
       _selectedDate = pickedDate;
       _workoutNameController.text = _formatWorkoutDate(_selectedDate);
     });
 
-    // 3️⃣ Try loading a draft
+    // 3️⃣ Load draft (if any)
     final draftLoaded = await _loadWorkoutDraftFromCache();
 
-    // 4️⃣ If no draft, load BB2; otherwise merge any new BB2 exercises
+    // 4️⃣ Always merge BB2 exercises after loading draft
+    await Future.delayed(const Duration(milliseconds: 50));
+
+
+    // 5️⃣ If no draft, try planned BB2 fallback
     if (!draftLoaded) {
       await _loadPlannedBlockBuilderExercisesIfAny();
-    } else {
-      final user = FirebaseAuth.instance.currentUser;
-      final blockId = widget.blockId;
-      if (user != null && blockId != null && blockId.isNotEmpty) {
-        // 1️⃣ load the block doc
-        final blockDoc = await FirebaseFirestore.instance
-            .collection('planned_blocks')
-            .doc(user.uid)
-            .collection('blocks')
-            .doc(blockId)
-            .get();
-        if (!blockDoc.exists) return;
-
-        // 2️⃣ pull startDate
-        final ts = blockDoc.data()?['startDate'] as Timestamp?;
-        if (ts == null) return;
-        final blockStart = ts.toDate();
-
-        // 3️⃣ compute week/day
-        final daysSinceStart = _selectedDate.difference(blockStart).inDays;
-        if (daysSinceStart < 0) return; // before block
-        final weekIndex = (daysSinceStart / 7).floor();
-        final dayIndex = daysSinceStart % 7;
-
-        // 4️⃣ fetch that day
-        final dayDoc = await FirebaseFirestore.instance
-            .collection('planned_blocks')
-            .doc(user.uid)
-            .collection('blocks')
-            .doc(blockId)
-            .collection('weeks')
-            .doc('week_$weekIndex')
-            .collection('days')
-            .doc('day_$dayIndex')
-            .get();
-        if (!dayDoc.exists) return;
-
-        final bb2Exercises = List<Map<String, dynamic>>.from(
-          dayDoc.data()?['exercises'] ?? <Map<String, dynamic>>[],
-        );
-
-        // filter only new ones
-        final existingNames =
-            _selectedExercisesWithCircuits.map((e) => e['name']).toSet();
-        final newExercises = bb2Exercises
-            .where((e) => !existingNames.contains(e['name']))
-            .toList();
-
-        if (newExercises.isNotEmpty) {
-          setState(() {
-            for (var ex in newExercises) {
-              _selectedExercisesWithCircuits.add({
-                'name': ex['name'] ?? '',
-                'circuitIndex': ex['circuitIndex'] ?? 0,
-              });
-              // add matching controllers and sets
-              _workoutSets.add(
-                List.generate(_defaultSets, (_) => SetDetails()),
-              );
-              _repsControllers.add(
-                List.generate(_defaultSets, (_) => TextEditingController()),
-              );
-              _weightControllers.add(
-                List.generate(_defaultSets, (_) => TextEditingController()),
-              );
-              _rirControllers.add(
-                List.generate(_defaultSets, (_) => TextEditingController()),
-              );
-            }
-          });
-        }
-      }
     }
   }
+
 
   String _formatWorkoutDate(DateTime date) {
     final dayOfWeek = DateFormat('EEEE').format(date); // e.g., Tuesday
@@ -3775,15 +3755,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              IconButton(
-                icon: const Icon(Icons.refresh),
-                tooltip: 'Refresh Rep Targets',
-                onPressed: () {
-                  setState(() {
-                    print('🔁 [WES] Refresh button pressed — forcing rebuild');
-                  });
-                },
-              ),
+
               IconButton(
                 icon: const Icon(Icons.info_outline),
                 color: Colors.blueGrey,
