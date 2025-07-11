@@ -1056,21 +1056,31 @@ class _BlockPlannerState extends State<Block_Planner> {
       ),
 
       // 🔽 Floating button shows conditionally
-    floatingActionButton: _isSavedBlock && !isKeyboardOpen
+      floatingActionButton: _isSavedBlock && !isKeyboardOpen
           ? FloatingActionButton.extended(
-              onPressed: () {
-                if (blockIdToUse == null) return;
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => Camp_BB2(blockId: blockIdToUse!),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.calendar_today),
-              label: const Text("Plan Weekly Schedule"),
-            )
+        onPressed: () {
+          if (blockIdToUse == null) return;
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => Camp_BB2(blockId: blockIdToUse!),
+            ),
+          );
+        },
+        label: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Icon(Icons.arrow_forward, size: 18),
+            SizedBox(width: 4),
+            Text(
+              "Week Planner",
+              style: TextStyle(fontSize: 14), // 👈 smaller font
+            ),
+          ],
+        ),
+      )
           : null,
+
 
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(12),
@@ -1592,13 +1602,14 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
 
     final rirModel = settings != null ? settings['rirModel'] : null;
-
     if (rirModel != null && rirModel is String && rirModel.isNotEmpty) {
-      _selectedRirModel[widget.exerciseName] = rirModel;
-      print("📥 [INIT] Loaded RIR model for ${widget.exerciseName}: $rirModel");
-    } else {
-      print("⚠️ [INIT] No RIR model found for ${widget.exerciseName} → settings = $settings");
+      setState(() {
+        _selectedRirModel[widget.exerciseId] = rirModel;
+
+        print("📥 [INIT] Loaded RIR model for ${widget.exerciseName}: $rirModel");
+      });
     }
+
 
 
 
@@ -1647,9 +1658,12 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
     final savedProgressionModel = widget.exerciseSettings[widget.exerciseId]?['progressionModel'];
     if (savedProgressionModel is String && savedProgressionModel.isNotEmpty) {
-      final normalized = (savedProgressionModel == 'linear') ? 'Linear Weight Increase' : savedProgressionModel;
-      _selectedProgressionModel[widget.exerciseName] = normalized;
+      final normalized = (savedProgressionModel == 'linear')
+          ? 'Linear Weight Increase'
+          : savedProgressionModel;
+      _selectedProgressionModel[widget.exerciseId] = normalized; // ✅ FIXED
     }
+
 
     _maxWeightController.addListener(_updateE1RM);
     _maxRepsController.  addListener(_updateE1RM);
@@ -4057,8 +4071,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                       canvasColor: Colors.blueGrey.shade700,
                     ),
                     child: DropdownButtonFormField<String>(
-                      value: _selectedRirModel[widget.exerciseName],
-                      isExpanded: true, // ✅ Prevents layout overflow
+                      value: _selectedRirModel[widget.exerciseId], // ✅ FIXED
+                      isExpanded: true,
                       items: [
                         'Linear-Taper',
                         'Wave RIR undulation',
@@ -4097,21 +4111,15 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                       },
                       onChanged: (value) {
                         setState(() {
-                          _selectedRirModel[widget.exerciseName] = value!;
-                          print("💾 [UI] Saved RIR model '$value' for ${widget.exerciseName}");
+                          _selectedRirModel[widget.exerciseId] = value!; // ✅ FIXED
+                          print("💾 [UI] Saved RIR model '$value' for ${widget.exerciseId}");
 
-                          // ✅ Clear cached RIR plan so new model starts with fresh defaults
                           _cachedRirPlan = null;
-                          print("🧹 [CACHE RESET] Cleared cached RIR plan due to model change to '$value'");
-                          // ✅ Clear or update RIR summary box
                           _rirDisplayController.text = '[Defaults for Model]';
 
-                          // ✅ Save to Firestore via onUpdateSetting
                           widget.onUpdateSetting(widget.exerciseId, 'rirModel', value);
                         });
                       },
-
-
                       style: const TextStyle(color: Colors.white, fontSize: 12),
                       decoration: InputDecoration(
                         labelText: 'RIR Periodization Model',
@@ -4124,6 +4132,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                       ),
                     ),
+
                   ),
                 ),
 
@@ -4199,7 +4208,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                       canvasColor: Colors.blueGrey.shade700,
                     ),
                     child: DropdownButtonFormField<String>(
-                      value: _selectedProgressionModel[widget.exerciseName],
+                      value: _selectedProgressionModel[widget.exerciseId], // ✅ FIXED
                       isExpanded: true,
                       items: [
                         DropdownMenuItem<String>(
@@ -4261,9 +4270,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                       },
                       onChanged: (value) {
                         setState(() {
-                          _selectedProgressionModel[widget.exerciseName] = value!;
+                          _selectedProgressionModel[widget.exerciseId] = value!; // ✅ FIXED
                           widget.onUpdateSetting(widget.exerciseId, 'progressionModel', value);
-                          print("💾 [UI] Saved progression model '$value' for ${widget.exerciseName}");
+                          print("💾 [UI] Saved progression model '$value' for ${widget.exerciseId}"); // ✅ FIXED
                         });
                       },
                       style: const TextStyle(color: Colors.white, fontSize: 12),
@@ -4278,6 +4287,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                       ),
                     ),
+
 
 
 
