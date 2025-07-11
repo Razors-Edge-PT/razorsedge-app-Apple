@@ -158,18 +158,19 @@ class PeriodizationModelUtils {
     switch (model) {
       case 'DUP, Signature':
         return PeriodizationModelType.dupSignature;
-      case 'DUP, Custom':
-        return PeriodizationModelType.dailyUndulatingWeek; // ✅ Check spelling
+      case 'DUP, By Week':
+        return PeriodizationModelType.dailyUndulatingWeek;
       case 'Linear, Classic':
         return PeriodizationModelType.linearClassic;
       case 'Linear, by Exposure':
         return PeriodizationModelType.linearExposure;
-      case 'Daily Undulating Periodization':
+      case 'DUP, By Exposure':
         return PeriodizationModelType.dailyUndulatingExposure;
       default:
         return PeriodizationModelType.dupSignature;
     }
   }
+
 
   static Future<int> getBlockLengthFromFirestore(String userId) async {
     try {
@@ -271,18 +272,22 @@ class PeriodizationModelUtils {
         return PeriodizationModelType.linearClassic;
 
       case 'DUP, Custom':
+      case 'DUP, By Week':
         return PeriodizationModelType.dailyUndulatingWeek;
 
       case 'DUP, Signature':
         return PeriodizationModelType.dupSignature;
 
       case 'Daily Undulating Periodization':
+      case 'DUP, By Exposure':
         return PeriodizationModelType.dailyUndulatingExposure;
 
       default:
-        return PeriodizationModelType.dupSignature; // Fallback to most generic
+        return PeriodizationModelType.dupSignature;
     }
   }
+
+
 
 
 

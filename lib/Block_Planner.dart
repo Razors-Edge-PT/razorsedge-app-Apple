@@ -391,22 +391,7 @@ class _BlockPlannerState extends State<Block_Planner> {
     }
   }
 
-  PeriodizationModelType _mapLabelToModelType(String label) {
-    switch (label) {
-      case 'Daily Undulating Periodization':
-        return PeriodizationModelType.dailyUndulatingExposure;
-      case 'DUP, Signature':
-        return PeriodizationModelType.dupSignature;
-      case 'DUP, Custom':
-        return PeriodizationModelType.dailyUndulatingWeek;
-      case 'Linear, Classic':
-        return PeriodizationModelType.linearClassic;
-      case 'Linear, by Exposure':
-        return PeriodizationModelType.linearExposure;
-      default:
-        return PeriodizationModelType.dupSignature;
-    }
-  }
+
 
   Map<String, List<String>> groupedExercises = {};
 
@@ -740,7 +725,7 @@ class _BlockPlannerState extends State<Block_Planner> {
 
       // ✅ Special handling for Daily Undulating Periodization
       final model = entry['periodizationModel'];
-      if (model == 'Daily Undulating Periodization' &&
+      if (model == 'DUP, By Exposure' &&
           repTargets is List &&
           repTargets.isNotEmpty &&
           repTargets.first is String) {
@@ -1501,11 +1486,11 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
   PeriodizationModelType _mapLabelToModelType(String label) {
     switch (label) {
-      case 'Daily Undulating Periodization':
+      case 'DUP, By Exposure':
         return PeriodizationModelType.dailyUndulatingExposure;
       case 'DUP, Signature':
         return PeriodizationModelType.dupSignature;
-      case 'DUP, Custom':
+      case 'DUP, By Week':
         return PeriodizationModelType.dailyUndulatingWeek;
       case 'Linear, Classic':
         return PeriodizationModelType.linearClassic;
@@ -1515,6 +1500,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         return PeriodizationModelType.dupSignature;
     }
   }
+
 
   @override
   void initState() {
@@ -1560,14 +1546,15 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       final model = settings['periodizationModel'];
       if (model != null &&
           [
-            'Daily Undulating Periodization',
+            'DUP, By Exposure',
             'DUP, Signature',
-            'DUP, Custom',
+            'DUP, By Week',
             'Linear, Classic',
             'Linear, by Exposure',
           ].contains(model)) {
         _selectedModel = model;
       }
+
 
       final notes = settings['notes'];
       if (notes != null) {
@@ -1978,7 +1965,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
   List<List<String>> getDefaultReps(String model, int frequency) {
     switch (model) {
-      case 'Daily Undulating Periodization':
+      case 'DUP, By Exposure':
         const dupMap = {
           1: [10],
           2: [10, 5],
@@ -2016,7 +2003,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         );
         return [week];
 
-      case 'DUP, Custom':
+      case 'DUP, By Week':
         const baseCycle = [
           [10, 5, 8, 3, 12, 1, 6],
           [9, 4, 7, 11, 2, 5, 8],
@@ -3933,9 +3920,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                     value: _selectedModel,
                     isExpanded: true,
                     items: [
-                      'Daily Undulating Periodization',
+                      'DUP, By Exposure',
+                      'DUP, By Week',
                       'DUP, Signature',
-                      'DUP, Custom',
                       'Linear, Classic',
                       'Linear, by Exposure',
                     ].map((label) {

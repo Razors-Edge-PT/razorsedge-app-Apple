@@ -261,7 +261,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       loadedWeekIndices.add(_currentWeekPage);
 
       await loadPlannedExercisesFromFirestore();
-
+      await _loadRepTargets();
       // 6) Finally trigger a rebuild
       setState(() {});
     });
@@ -771,7 +771,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       final repTargetEntry = _repTargetsByExercise[exerciseId];
       if (repTargetEntry is Map &&
           repTargetEntry.containsKey('repTargets') &&
-          modelName == 'Daily Undulating Periodization') {
+          modelName == 'DUP, By Exposure') {
         final map = repTargetEntry['repTargets'];
         if (map is Map<String, dynamic> && map.keys.length == 1 && map.containsKey('week1')) {
           final expanded = PeriodizationModelUtils.expandDupDailyWeek1(

@@ -1526,6 +1526,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       final modelEnum = modelName != null
           ? PeriodizationModelUtils.stringToModel(modelName)
           : null;
+      print("🧠 [WES] modelName = $modelName → modelEnum = $modelEnum");
 
       if (modelEnum != null) {
         PeriodizationModelUtils.exercisePeriodizationModels[exerciseId] = modelEnum;
