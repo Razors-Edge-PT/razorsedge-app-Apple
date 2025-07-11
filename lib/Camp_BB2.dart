@@ -313,7 +313,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
   Future<void> _fetchActiveBlockThenMeta() async {
     // 1️⃣ fetch the active blockId
-    _activeBlockId = await BlockRepository().fetchActiveBlockId();
+    _activeBlockId = widget.blockId ?? await BlockRepository().fetchActiveBlockId();
+
 
     // 2️⃣ guard against “no active block”
     if (_activeBlockId == null) {
