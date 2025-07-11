@@ -150,8 +150,10 @@ class _BlockPlannerState extends State<Block_Planner> {
 
   void _onUpdateSetting(String exerciseId, String key, dynamic value) {
     print("📤 [TOP] Writing to Firestore: $exerciseId → $key = $value");
+
     // 1) update local map so UI stays in sync
     setState(() {
+      exerciseSettings.putIfAbsent(exerciseId, () => {});
       exerciseSettings[exerciseId]![key] = value;
     });
 
@@ -163,12 +165,13 @@ class _BlockPlannerState extends State<Block_Planner> {
         .collection('blocks')
         .doc(blockIdToUse)
         .update({
-      'exerciseSettings.$exerciseId.$key': value
+      'exerciseSettings.$exerciseId.$key': value,
     })
         .catchError((e) {
       print("❌ Failed to save $key for $exerciseId: $e");
     });
   }
+
 
   @override
   void initState() {
@@ -3903,7 +3906,24 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   ),
                 ),
 
-                const SizedBox(height: 5),
+                _smallInput(
+                  "Weekly Frequency",
+                  controller: _weeklyFrequencyController,
+                  width: 158,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    FilteringTextInputFormatter.allow(RegExp(r'^[0-9]{0,2}$')),
+                    TextInputFormatter.withFunction((oldValue, newValue) {
+                      final intVal = int.tryParse(newValue.text);
+                      if (intVal != null && intVal > 14) {
+                        return oldValue;
+                      }
+                      return newValue;
+                    }),
+                  ],
+                ),
+
+
 
                 const SizedBox(height: 6, width:400),
 
@@ -3978,22 +3998,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   ),
                 ),
 
-                _smallInput(
-                  "Weekly Frequency",
-                  controller: _weeklyFrequencyController,
-                  width: 158,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    FilteringTextInputFormatter.allow(RegExp(r'^[0-9]{0,2}$')),
-                    TextInputFormatter.withFunction((oldValue, newValue) {
-                      final intVal = int.tryParse(newValue.text);
-                      if (intVal != null && intVal > 14) {
-                        return oldValue;
-                      }
-                      return newValue;
-                    }),
-                  ],
-                ),
+
                 SizedBox(
                   width: 158, height: 48,
                   child: GestureDetector(
@@ -4056,6 +4061,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                 const SizedBox(height: 6, width:400),
 
+
+                //RIR Alert Dialog
                 SizedBox(
                   width: 158,
                   child: Theme(
@@ -4110,7 +4117,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                           _cachedRirPlan = null;
                           print("🧹 [CACHE RESET] Cleared cached RIR plan due to model change to '$value'");
                           // ✅ Clear or update RIR summary box
-                          _rirDisplayController.text = 'W1 → [Not generated]';
+                          _rirDisplayController.text = '[Defaults for Model]';
 
                           // ✅ Save to Firestore via onUpdateSetting
                           widget.onUpdateSetting(widget.exerciseId, 'rirModel', value);
@@ -4133,6 +4140,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   ),
                 ),
 
+
+                //RIR Targets Alert Dialog
                 SizedBox(
                   width: 158,
                   height: 48,
