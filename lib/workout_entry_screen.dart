@@ -1065,7 +1065,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final pageLoadTimer = Stopwatch()..start(); // Optional timer
 
     _initialLoad = Future.wait([
-      _fetchActiveBlockThenMeta(), // ✅ ensures _blockStartDate/_endDate
+      _fetchActiveBlockThenMeta(),
       _loadAllBlocks(),
     ]).then((_) async {
       if (_activeBlockId == null || _blockStartDate == null || _blockEndDate == null) {
@@ -1073,7 +1073,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         return;
       }
 
-      // ✅ Set selected block ID
+      // ✅ Moved this above the BB2 call
       _selectedBlockId = _allBlocks.firstWhere(
             (b) => b.id == _activeBlockId,
         orElse: () => _allBlocks.first,
@@ -1083,9 +1083,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       print("📅 [WES] blockStartDate: $_blockStartDate");
       print("📅 [WES] blockEndDate: $_blockEndDate");
 
+      await _loadExercisesFromBB2ForDay(); // ✅ blockId now available here
       await _loadInitialData();
       await _fetchLastWorkoutTopSetReps();
-      await _loadExercisesFromBB2ForDay();
       _debugPrintBlockDates();
 
       _cachedProgressedValues.clear();
@@ -1103,7 +1103,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       });
     });
 
-
     // ✅ Preserve “wasSavedFromWES” flag logic
     Future.microtask(() async {
       final prefs = await SharedPreferences.getInstance();
@@ -1117,6 +1116,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     print('🚀 [WES] initState complete → kicking off block + meta load');
   }
+
 
 
 
@@ -1199,7 +1199,22 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null || _selectedBlockId == null || _selectedDate == null) return;
 
+    if (user == null) {
+      print('❌ [WES] No user found, skipping BB2 load.');
+      return;
+    }
+
+    if (_selectedBlockId == null) {
+      print('❌ [WES] _selectedBlockId is null, can’t load BB2 exercises.');
+      return;
+    }
+    if (_selectedDate == null) {
+      print('❌ [WES] _selectedDate is null, can’t load BB2 exercises.');
+      return;
+    }
+
     final dateKey = DateFormat('yyyy-MM-dd').format(_selectedDate);
+    print('📅 [WES] Loading BB2 exercises for $dateKey (block: $_selectedBlockId)');
     final doc = await FirebaseFirestore.instance
         .collection('planned_blocks')
         .doc(user.uid)
@@ -3287,6 +3302,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     );
 
     if (pickedDate == null || pickedDate == _selectedDate) return;
+
     await _mergeNewBB2ExercisesIntoDraft();
 
     // 1️⃣ Save current draft
@@ -3304,12 +3320,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     // 4️⃣ Always merge BB2 exercises after loading draft
     await Future.delayed(const Duration(milliseconds: 50));
 
+    // 🆕 NEW: Always reload BB2-planned exercises for selected date
+    await _loadExercisesFromBB2ForDay();
 
     // 5️⃣ If no draft, try planned BB2 fallback
     if (!draftLoaded) {
       await _loadPlannedBlockBuilderExercisesIfAny();
     }
   }
+
 
 
   String _formatWorkoutDate(DateTime date) {
