@@ -3128,62 +3128,19 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   }
 
   Future<void> _mergeNewBB2ExercisesIntoDraft() async {
-    print(
-        '[WES] Attempting to merge BB2 exercises into draft for $_selectedDate');
+    print('[WES] Attempting to merge BB2 exercises into draft for $_selectedDate');
 
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      print('[WES] No user signed in');
-      return;
-    }
+    if (user == null || _selectedBlockId == null || _selectedDate == null) return;
 
-    // 1️⃣ Make sure we have a blockId
-    final blockId = _selectedBlockId;
-
-    if (blockId == null || blockId.isEmpty) {
-      print('[WES] No blockId provided – skipping BB2 merge');
-      return;
-    }
-
-    // 2️⃣ Load the block‐meta doc under planned_blocks/{uid}/blocks/{blockId}
-    final blockDoc = await FirebaseFirestore.instance
-        .collection('planned_blocks')
-        .doc(user.uid)
-        .collection('blocks')
-        .doc(blockId)
-        .get();
-    if (!blockDoc.exists) {
-      print('[WES] No such block in planned_blocks');
-      return;
-    }
-
-    // 3️⃣ Pull out your saved start date
-    if (blockStartDate == null) {
-      print('[WES] _blockStartDate is null — cannot continue merge');
-      return;
-    }
-    final blockStart = blockStartDate!;
-
-
-    if (blockStartDate == null) {
-      print('[WES] _blockStartDate is null — cannot compute day offset');
-      return;
-    }
-
+    final blockId = _selectedBlockId!;
     final daysSinceStart = _selectedDate.difference(blockStartDate!).inDays;
-    if (daysSinceStart < 0) {
-      print('[WES] selectedDate is before block start');
-      return;
-    }
-
+    if (daysSinceStart < 0) return;
 
     final weekIndex = (daysSinceStart / 7).floor();
     final dayIndex = daysSinceStart % 7;
 
-    print('[WES] Fetching week_$weekIndex / day_$dayIndex from BB2');
-
-
-    // 4️⃣ Now point at weeks/day under planned_blocks/{uid}/blocks/{blockId}
+    // Try modern BB2 source: weeks > days
     final dayDoc = await FirebaseFirestore.instance
         .collection('planned_blocks')
         .doc(user.uid)
@@ -3195,48 +3152,63 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         .doc('day_$dayIndex')
         .get();
 
-    if (!dayDoc.exists) {
-      print('[WES] No BB2 day doc found');
-      return;
+    List<Map<String, dynamic>> bb2Exercises = [];
+
+    if (dayDoc.exists && dayDoc.data()?['exercises'] != null) {
+      bb2Exercises = List<Map<String, dynamic>>.from(dayDoc.data()!['exercises']);
+      print('[WES] BB2 day doc exercises (weeks/days): ${bb2Exercises.length}');
     }
 
-    final data = dayDoc.data();
-    print('[WES] BB2 day doc data: $data');
-
-    final bb2Exercises =
-        List<Map<String, dynamic>>.from(data?['exercises'] ?? []);
+    // 🔁 Fallback to block_data if no new BB2 exercises found
     if (bb2Exercises.isEmpty) {
-      print('[WES] No exercises in BB2 day doc');
+      final dateKey = DateFormat('yyyy-MM-dd').format(_selectedDate);
+      final blockDataDoc = await FirebaseFirestore.instance
+          .collection('planned_blocks')
+          .doc(user.uid)
+          .collection('blocks')
+          .doc(blockId)
+          .collection('block_data')
+          .doc(dateKey)
+          .get();
+
+      if (blockDataDoc.exists && blockDataDoc.data()?['rows'] != null) {
+        bb2Exercises = List<Map<String, dynamic>>.from(blockDataDoc.data()!['rows']);
+        print('[WES] BB2 fallback exercises (block_data): ${bb2Exercises.length}');
+      }
+    }
+
+    if (bb2Exercises.isEmpty) {
+      print('[WES] No BB2 exercises to merge for $_selectedDate');
       return;
     }
 
-    // 5️⃣ Find which ones aren’t already in our draft
-    final existingNames =
-        _selectedExercisesWithCircuits.map((e) => e['name']).toSet();
-    final newOnes = bb2Exercises
-        .where((ex) => !existingNames.contains(ex['name']))
-        .toList();
+    // Merge logic
+    final existingNames = _selectedExercisesWithCircuits.map((e) => e['name']).toSet();
+    final newOnes = bb2Exercises.where((ex) => !existingNames.contains(ex['name'])).toList();
 
-    print('[WES] Found ${newOnes.length} new BB2 exercises');
+    print('[WES] Found ${newOnes.length} new BB2 exercises to merge');
 
     if (newOnes.isNotEmpty) {
-      // 6️⃣ Merge them in
       setState(() {
-        _selectedExercisesWithCircuits.addAll(newOnes.map((e) => {
-              'name': e['name'],
-              'circuitIndex': e['circuitIndex'] ?? 0,
-            }));
+        for (final newEx in newOnes) {
+          _selectedExercisesWithCircuits.add({
+            'name': newEx['name'],
+            'circuitIndex': newEx['circuitIndex'] ?? 0,
+          });
 
-        _workoutSets.addAll(List.generate(newOnes.length,
-            (_) => List.generate(_defaultSets, (_) => SetDetails())));
+          _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
+          _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+          _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+          _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+        }
       });
 
       print("[WES] Merged ${newOnes.length} new BB2 exercises into draft");
       await _saveWorkoutDraftToCache();
-    } else {
-      print('[WES] No new exercises to merge');
     }
+
   }
+
 
   void addSet(int exerciseIndex) {
     setState(() {
@@ -3303,31 +3275,31 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     if (pickedDate == null || pickedDate == _selectedDate) return;
 
-    await _mergeNewBB2ExercisesIntoDraft();
-
     // 1️⃣ Save current draft
     await _saveWorkoutDraftToCache();
 
-    // 2️⃣ Switch date
+    // 2️⃣ Change selected date
     setState(() {
       _selectedDate = pickedDate;
       _workoutNameController.text = _formatWorkoutDate(_selectedDate);
     });
 
-    // 3️⃣ Load draft (if any)
+    // 3️⃣ Load draft (if it exists)
     final draftLoaded = await _loadWorkoutDraftFromCache();
 
-    // 4️⃣ Always merge BB2 exercises after loading draft
-    await Future.delayed(const Duration(milliseconds: 50));
+    // 4️⃣ 🧠 Always try merging in new BB2 exercises (even if draft exists)
+    await _mergeNewBB2ExercisesIntoDraft();
 
-    // 🆕 NEW: Always reload BB2-planned exercises for selected date
+    // 5️⃣ Visual extras: load block_data (read-only hints, etc)
     await _loadExercisesFromBB2ForDay();
 
-    // 5️⃣ If no draft, try planned BB2 fallback
+    // 6️⃣ Fallback: if no draft, load old BB2 plan directly
     if (!draftLoaded) {
       await _loadPlannedBlockBuilderExercisesIfAny();
     }
   }
+
+
 
 
 
@@ -3656,22 +3628,30 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 onReorder: _onReorderExercises,
-                children:
-                    List.generate(_selectedExercisesWithCircuits.length, (i) {
+                children: List.generate(_selectedExercisesWithCircuits.length, (i) {
+                  // 🛡 Defensive check for list mismatches
+                  if (i >= _selectedExercisesWithCircuits.length ||
+                      i >= _workoutSets.length ||
+                      i >= _repsControllers.length ||
+                      i >= _weightControllers.length ||
+                      i >= _rirControllers.length) {
+                    print("⚠️ Skipping index $i due to mismatched list lengths");
+                    return  SizedBox(
+                      key: ValueKey('skipped_$i'), // 🔑 Ensure even placeholder has a key
+                    );
+                  }
+
                   final current = _selectedExercisesWithCircuits[i];
-                  final prev =
-                      i > 0 ? _selectedExercisesWithCircuits[i - 1] : null;
-                  final isNewCircuit = i == 0 ||
-                      current['circuitIndex'] != prev?['circuitIndex'];
+                  final prev = i > 0 ? _selectedExercisesWithCircuits[i - 1] : null;
+                  final isNewCircuit = i == 0 || current['circuitIndex'] != prev?['circuitIndex'];
 
                   return Column(
-                    key: ValueKey("column_$i"),
+                    key: ValueKey("column_$i"), // 🔑 Required for ReorderableListView
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       if (isNewCircuit)
                         Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 6, vertical: 6),
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
                           child: Text(
                             'Circuit ${current['circuitIndex'] + 1}',
                             style: const TextStyle(
