@@ -342,7 +342,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 width: kFeatureCardWidth,
                                 child: _buildFeatureCard(
                                   Icons.fitness_center,
-                                  'New\nWorkout',
+                                  'Enter\nWorkout',
                                   '/workout_entry',
                                 ),
                               ),
@@ -350,7 +350,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 width: kFeatureCardWidth,
                                 child: _buildFeatureCard(
                                   Icons.calendar_month,
-                                  'Training\nSchedule',
+                                  'Week\nPlanner',
                                   '/week_planner_b',
                                 ),
                               ),
@@ -358,18 +358,61 @@ class _HomeScreenState extends State<HomeScreen> {
                                 width: kFeatureCardWidth,
                                 child: _buildFeatureCard(
                                   Icons.history,
-                                  'Saved\nWorkouts',
+                                  'Workout\nHistory',
                                   '/saved_workouts',
                                 ),
                               ),
                               SizedBox(
                                 width: kFeatureCardWidth,
-                                child: _buildFeatureCard(
-                                  Icons.monitor_weight,
-                                  'Weight\nTracker',
-                                  '/body_weight',
+                                height: 125,
+                                child: GestureDetector(
+                                  onTap: () => Navigator.pushNamed(context, '/body_weight'),
+                                  child: Card(
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    color: Colors.blueGrey.shade800,
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(12),
+                                      child: Stack(
+                                        children: [
+                                          // ✅ Top-left icon
+                                          Positioned(
+                                            top: 0,
+                                            left: 0,
+                                            child: Icon(
+                                              Icons.monitor_weight,
+                                              size: 48,
+                                              color: Colors.cyanAccent,
+
+                                            ),
+                                          ),
+                                          // ✅ Bottom-right text
+                                          Positioned(
+                                            bottom: 0,
+                                            right: 0,
+                                            left: 50, // ⬅️ slight left constraint so text doesn’t run under the icon
+                                            child: Text(
+                                              'Body\nWeight\nTracker',
+                                              textAlign: TextAlign.center,
+                                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                                color: Colors.white,
+                                                height: 1.3,
+                                                fontWeight: FontWeight.bold, // ✅ Make it bold
+                                              ),
+                                              maxLines: 3,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+
+
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
                                 ),
                               ),
+
+
+
                             ],
                           ),
                         ),

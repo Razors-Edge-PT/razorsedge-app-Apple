@@ -2932,9 +2932,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                                     ? roundToNearestHalf(baseRir).toString()
                                     : roundToNearestHalf((baseRir + 1 + (setIndex - 1) * 0.5).clamp(0, 4)).toString();
 
-                                final defaultReps = setIndex == 0
-                                    ? set1Reps.toString()
-                                    : (set1Reps - setIndex).clamp(1, set1Reps).toString();
+                                final defaultReps = set1Reps.toString();
+
 
                                 _cachedRirPlan ??= {};
                                 _cachedRirPlan!.putIfAbsent(weekKey, () => {});
@@ -3142,6 +3141,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                             final set1Reps = int.tryParse(repMatch?.group(1) ?? '10') ?? 10;
                             final setsPerSession = int.tryParse(repMatch?.group(2) ?? '3') ?? 3;
+                            print('🔍 [WaveRIR] Rep string for session ${sessionIndex + 1} = "$sessionRepString" → match = ${repMatch?.group(0)}');
+
 
                             print('📘 [WaveRIR] $exerciseName → Week $currentWeek, Session ${sessionIndex + 1} = $sessionRepString → $setsPerSession sets');
 
@@ -3376,8 +3377,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                             final sKey = 'session${sessionIndex + 1}';
                             final instanceKey = 'instance${sessionIndex + 1}';
                             final repMatch = RegExp(r'^(\d+)\s*x\s*(\d+)').firstMatch(instanceMap[instanceKey] ?? '');
-
-                            final set1Reps = int.tryParse(repMatch?.group(1) ?? '10') ?? 10;
                             final setsPerSession = int.tryParse(repMatch?.group(2) ?? '3') ?? 3;
 
                             return ExpansionTile(
@@ -3405,7 +3404,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                                     : 3.0;
 
                                 final defaultRir = defaultRirFromPattern.toString();
-                                final defaultReps = '10';
+                                final defaultReps = repMatch?.group(1) ?? '10';
+
 // Ensure cache entry exists
                                 _cachedRirPlan ??= {};
                                 _cachedRirPlan!.putIfAbsent(weekKey, () => {});
@@ -3675,28 +3675,34 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                             final totalSessionIndex = (weekIndex * weeklyFrequency) + sessionIndex;
                             final sessionRir = rirPattern[(totalSessionIndex % rirPattern.length).toInt()];
 
+                            final instanceKey = 'instance${sessionIndex + 1}';
+                            final repMatch = RegExp(r'^(\d+)\s*x\s*(\d+)').firstMatch(instanceMap[instanceKey] ?? '');
+                            final plannedReps = int.tryParse(repMatch?.group(1) ?? '10') ?? 10;
+                            final setsPerSession = int.tryParse(repMatch?.group(2) ?? '3') ?? 3;
 
 
                             return ExpansionTile(
                               title: Text('Session ${sessionIndex + 1}'),
                               children: List.generate(setsPerSession, (setIndex) {
                                 final setKey = 'set${setIndex + 1}';
-
                                 final defaultRir = sessionRir.toString();
-                                final defaultReps = '10';
 
                                 _cachedRirPlan ??= {};
                                 _cachedRirPlan!.putIfAbsent(weekKey, () => {});
                                 _cachedRirPlan![weekKey]!.putIfAbsent(sKey, () => {});
-                                _cachedRirPlan![weekKey]![sKey]!.putIfAbsent(setKey, () {
-                                  return {
+                                final isWeek1Set1 = weekIndex == 0 && setIndex == 0;
+
+                                if (isWeek1Set1 || !_cachedRirPlan![weekKey]![sKey]!.containsKey(setKey)) {
+                                  _cachedRirPlan![weekKey]![sKey]![setKey] = {
                                     'rir': defaultRir,
-                                    'reps': defaultReps,
+                                    'reps': plannedReps.toString(), // ✅ Use reps from the rep target model
                                   };
-                                });
+                                }
+
 
                                 final currentSetData = _cachedRirPlan![weekKey]![sKey]![setKey]!;
-                                final repsValue = currentSetData['reps'] ?? defaultReps;
+                                final repsValue = plannedReps.toString(); // ✅ Use same reps for all sets
+
                                 final rirValue = currentSetData['rir'] ?? defaultRir;
 
                                 final controllerKey = '$weekKey-$sKey-$setKey';
@@ -3723,6 +3729,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                                           ),
                                         ),
                                       ),
+
                                       const SizedBox(width: 12),
                                       Expanded(
                                         child: TextField(
@@ -4143,8 +4150,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   height: 48,
                   child: GestureDetector(
                     onTap: () {
-                      final model = _selectedRirModel[widget.exerciseName];
                       final exerciseId = PeriodizationModelUtils.nameToId[widget.exerciseName];
+                      final model = _selectedRirModel[exerciseId];
                       final settings = widget.exerciseSettings[exerciseId];
                       final weeklyFrequency = settings?['weeklyFrequency'];
 
