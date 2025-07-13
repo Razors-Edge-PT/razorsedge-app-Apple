@@ -144,6 +144,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   Map<String, List<int>> scheduledRepTargets = {}; // 🆕
   Map<String, List<Map<String, dynamic>>> topSetsByExercise = {};
   Map<String, List<Map<String, dynamic>>> completedWesRows = {};
+  final Set<String> _loadedDays = {};
+
 
   late DateTime selectedWeekMonday;
   late DateTime blockStartDate;
@@ -888,9 +890,16 @@ class _BlockBuilder2State extends State<Camp_BB2> {
             continue;
           }
 
-          _trimEmptyExerciseRows(week, day); // ✅ Trim before saving
-          saveDayToFirestore(week, day);     // ✅ Save only filled row
+          final dayKey = 'w${week}_d${day}';
+          if (!_loadedDays.contains(dayKey)) {
+            print('⏩ Skipping unload day $dayKey — was never loaded.');
+            continue;
+          }
+
+          _trimEmptyExerciseRows(week, day); // ✅ Trim only loaded days
+          saveDayToFirestore(week, day);     // ✅ Save only loaded days
         }
+
       }
     }
 
@@ -1288,6 +1297,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
       exerciseRows[weekIndex][dayIndex] = loadedRows;
       print('[BLOCK LOAD] Week $weekIndex, Day $dayIndex loaded ${loadedRows.length} rows from block_data');
+
+      _loadedDays.add('w${weekIndex}_d${dayIndex}'); // ✅ Track that we’ve loaded this day
 
       for (final row in loadedRows) {
         print('  • ${row.exercise} | weight: ${row.weightController.text} | reps: ${row.repsController.text} | RIR: ${row.rirController.text}');

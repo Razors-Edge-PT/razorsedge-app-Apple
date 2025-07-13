@@ -1083,10 +1083,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       print("📅 [WES] blockStartDate: $_blockStartDate");
       print("📅 [WES] blockEndDate: $_blockEndDate");
 
+
       await _loadExercisesFromBB2ForDay(); // ✅ blockId now available here
       await _loadInitialData();
       await _fetchLastWorkoutTopSetReps();
       _debugPrintBlockDates();
+
+      await _initializeDayDocIfNeeded(_selectedDate);
+
+      await _mergeNewBB2ExercisesIntoDraft(); // 🧩 Safely merge BB2 exercises into draft
 
       _cachedProgressedValues.clear();
       _isInitialized = true;
@@ -1194,6 +1199,54 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       _allBlocks = blocks;
     });
   }
+
+  Future<void> _initializeDayDocIfNeeded(DateTime date) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || _selectedBlockId == null || blockStartDate == null) return;
+
+    final blockId = _selectedBlockId!;
+    final daysSinceStart = date.difference(blockStartDate!).inDays;
+    if (daysSinceStart < 0) return;
+
+    final weekIndex = (daysSinceStart / 7).floor();
+    final dayIndex = daysSinceStart % 7;
+
+    final dayDocRef = FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(user.uid)
+        .collection('blocks')
+        .doc(blockId)
+        .collection('weeks')
+        .doc('week_$weekIndex')
+        .collection('days')
+        .doc('day_$dayIndex');
+
+    final doc = await dayDocRef.get();
+    if (!doc.exists) {
+      // Look for fallback data
+      final dateKey = DateFormat('yyyy-MM-dd').format(date);
+      final blockDataDoc = await FirebaseFirestore.instance
+          .collection('planned_blocks')
+          .doc(user.uid)
+          .collection('blocks')
+          .doc(blockId)
+          .collection('block_data')
+          .doc(dateKey)
+          .get();
+
+      if (blockDataDoc.exists && blockDataDoc.data()?['rows'] != null) {
+        print('[WES Init] Populating missing week/day doc from fallback block_data...');
+        await dayDocRef.set({
+          'exercises': blockDataDoc.data()!['rows'],
+        });
+      } else {
+        print('[WES Init] No fallback block_data to populate day doc');
+      }
+    } else {
+      print('[WES Init] Day doc already exists → no action needed');
+    }
+  }
+
 
   Future<void> _loadExercisesFromBB2ForDay() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -3161,6 +3214,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final blockId = _selectedBlockId!;
     final daysSinceStart = _selectedDate.difference(blockStartDate!).inDays;
     if (daysSinceStart < 0) return;
+    print('[WES Merge] daysSinceStart = $daysSinceStart');
+
 
     final weekIndex = (daysSinceStart / 7).floor();
     final dayIndex = daysSinceStart % 7;
@@ -3176,6 +3231,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         .collection('days')
         .doc('day_$dayIndex')
         .get();
+
+    print('[DEBUG] WES fetched day_$dayIndex → exists = ${dayDoc.exists}');
+    print('[DEBUG] WES data = ${dayDoc.data()}');
 
     List<Map<String, dynamic>> bb2Exercises = [];
 
