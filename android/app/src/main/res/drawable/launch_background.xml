@@ -1,10 +1,14 @@
-<?xml version="1.0" encoding="utf-8"?><!-- Modify this file to customize your launch splash screen -->
+<?xml version="1.0" encoding="utf-8"?>
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:drawable="@android:color/white" />
-    <!-- Centered splash image -->
+    <!-- 🔲 Set solid background color here -->
+    <item android:drawable="@android:color/black" />
+
+    <!-- 🖼️ Optional splash image centered -->
     <item>
         <bitmap
+            android:gravity="center"
             android:src="@drawable/good_lift_splash_logo" />
     </item>
 </layer-list>
+
 

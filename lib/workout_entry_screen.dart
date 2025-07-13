@@ -2819,13 +2819,19 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   }
 
   Future<void> _loadPlannedBlockBuilderExercisesIfAny() async {
-    print('📥 [WES] Running _loadPlannedBlockBuilderExercisesIfAny()...');
+    print('📦 [WES] Entered _loadPlannedBlockBuilderExercisesIfAny() for ${DateFormat('yyyy-MM-dd').format(_selectedDate)}');
+
 
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    final blockId = widget.blockId;
-    if (blockId == null || blockId.isEmpty) return;
+    final blockId = _selectedBlockId;
+
+    if (blockId == null || blockId.isEmpty) {
+      print('❌ [WES] BB2 load failed: _selectedBlockId is null');
+      return;
+    }
+
 
     // 1️⃣ Reference the exact block document
     final blockRef = FirebaseFirestore.instance
@@ -2837,10 +2843,20 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     // 2️⃣ Fetch its metadata
     final blockSnap = await blockRef.get();
     if (!blockSnap.exists) return;
+    if (!blockSnap.exists) {
+      print('❌ [WES] Block snapshot does not exist.');
+      return;
+    }
+
 
     // 3️⃣ Read the `startDate` timestamp
     final ts = blockSnap.get('startDate') as Timestamp?;
     if (ts == null) return;
+    if (ts == null) {
+      print('❌ [WES] Block startDate is missing.');
+      return;
+    }
+
     final blockStart = ts.toDate();
 
     // 4️⃣ Compute how many days/weeks since block start
@@ -2857,11 +2873,21 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         .doc('day_$dayIndex')
         .get();
     if (!dayDoc.exists) return;
+    if (!dayDoc.exists) {
+      print('❌ [WES] No BB2 day document found for week_$weekIndex, day_$dayIndex');
+      return;
+    }
+
 
     // 6️⃣ Pull out your saved exercises
     final exercises = List<Map<String, dynamic>>.from(
         dayDoc.data()?['exercises'] ?? <Map<String, dynamic>>[]);
     if (exercises.isEmpty) return;
+    if (exercises.isEmpty) {
+      print('❌ [WES] BB2 day document exists but contains 0 exercises.');
+      return;
+    }
+
 
     // 7️⃣ Inject into your UI state exactly as before
     setState(() {
@@ -3074,18 +3100,17 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           print('[WES] Draft expired and had no usable data — discarded.');
           return false;
         } else {
-          print(
-              '[WES] Draft expired, but kept ${filteredExercises.length} non-empty exercises.');
+          print('[WES] Draft expired, but kept ${filteredExercises.length} non-empty exercises.');
         }
       } else {
-        // 🧠 Draft is still fresh, so keep everything
-        filteredExercises.clear();
-        filteredExercises.addAll(exercises);
-        filteredSets.clear();
-        filteredSets
-            .addAll(sets.map((s) => List<Map<String, dynamic>>.from(s)));
+        if (filteredExercises.isEmpty) {
+          print('[WES] Draft is fresh but has no real data — skipping.');
+          return false;
+        }
         print('[WES] Draft is fresh — all exercises kept.');
       }
+
+
 
       _selectedExercisesWithCircuits.clear();
       _selectedExercisesWithCircuits.addAll(filteredExercises);
@@ -3273,32 +3298,54 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       lastDate: DateTime(2101),
     );
 
-    if (pickedDate == null || pickedDate == _selectedDate) return;
+    if (pickedDate == null || pickedDate == _selectedDate) {
+      print('⛔️ [WES] Date selection cancelled or unchanged');
+      return;
+    }
 
-    // 1️⃣ Save current draft
+    print('📆 [WES] Date changed to: ${DateFormat('yyyy-MM-dd').format(pickedDate)}');
+
+    // 1️⃣ Save the draft for the current date
+    print('💾 [WES] Saving draft for previous date...');
     await _saveWorkoutDraftToCache();
 
-    // 2️⃣ Change selected date
+    // 2️⃣ Update selected date and clear UI state
+    print('🧼 [WES] Clearing UI and updating selected date...');
     setState(() {
       _selectedDate = pickedDate;
       _workoutNameController.text = _formatWorkoutDate(_selectedDate);
+      _selectedExercisesWithCircuits.clear();
+      _workoutSets.clear();
+      _repsControllers.clear();
+      _weightControllers.clear();
+      _rirControllers.clear();
     });
 
-    // 3️⃣ Load draft (if it exists)
+    // 3️⃣ Try loading a date-specific draft — will skip if no real data
+    print('📂 [WES] Attempting to load draft for new date...');
     final draftLoaded = await _loadWorkoutDraftFromCache();
+    print('📂 [WES] Draft loaded for new date: $draftLoaded');
 
-    // 4️⃣ 🧠 Always try merging in new BB2 exercises (even if draft exists)
+    // 4️⃣ Merge in BB2 exercises (this now acts as the **primary** loader)
+    print('🔁 [WES] Merging in BB2 exercises for selected date...');
     await _mergeNewBB2ExercisesIntoDraft();
 
-    // 5️⃣ Visual extras: load block_data (read-only hints, etc)
+    // 5️⃣ Always load read-only BB2 visual hints (e.g. pink fields)
+    print('🔍 [WES] Loading BB2 read-only visual hints...');
     await _loadExercisesFromBB2ForDay();
 
-    // 6️⃣ Fallback: if no draft, load old BB2 plan directly
-    if (!draftLoaded) {
-      await _loadPlannedBlockBuilderExercisesIfAny();
-    }
+    print('✅ [WES] Date switch complete.');
   }
 
+
+
+
+
+  Future<void> _clearWorkoutDraftForDate(DateTime date) async {
+    final prefs = await SharedPreferences.getInstance();
+    final dateKey = DateFormat('yyyy-MM-dd').format(date); // ✅ your format
+    await prefs.remove('workout_draft_$dateKey');
+  }
 
 
 

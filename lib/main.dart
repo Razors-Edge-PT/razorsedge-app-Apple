@@ -15,10 +15,18 @@ import 'planned_blocks_screen.dart';
 import 'Block_Planner.dart';
 import 'SavedWorkoutsScreen.dart';
 import 'Camp_BB2.dart';
+import 'dart:io';
+
+
+
+
+
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  print("📱 Android SDK version: ${Platform.version}");
 
+  runApp(MyApp());
   // Initialize Firebase for all platforms
   if (kIsWeb || Platform.isAndroid || Platform.isIOS) {
     await Firebase.initializeApp();
