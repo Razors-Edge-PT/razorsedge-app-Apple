@@ -303,21 +303,31 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         automaticallyImplyLeading: false,
         title: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          mainAxisAlignment: MainAxisAlignment.end, // ⬅️ Align to the right
           children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            Image.asset(
+               'assets/InApp/transparent_good_lift_logo_inApp.png',
+              height: 36,
+              fit: BoxFit.contain,
             ),
-            GestureDetector(
-              onTap: () => _scaffoldKey.currentState?.openDrawer(),
-              child: const CircleAvatar(
+          ],
+        ),
+
+        actions: [
+          GestureDetector(
+            onTap: () => _scaffoldKey.currentState?.openDrawer(),
+            child: const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12),
+              child: CircleAvatar(
                 radius: 20,
                 backgroundImage: AssetImage('assets/avatar.png'),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
+
+
       drawer: const AppDrawer(),
       body: isLoading
           ? const Center(child: CircularProgressIndicator())

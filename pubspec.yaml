@@ -42,6 +42,7 @@ dependencies:
   fl_chart: ^0.65.0
 
 
+
   flutter:
     sdk: flutter
 
@@ -55,6 +56,15 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  flutter_launcher_icons: ^0.13.1
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/icon/good_lift_logo2.png"
+
+
+
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
@@ -81,6 +91,9 @@ flutter:
     - assets/Razors Edge (large).png
     - assets/Razors_Edge_Black_transparent_background.png
     - assets/re_banner.png
+    - assets/InApp/good_lift_Appbar_logo.png
+    - assets/InApp/transparent_good_lift_logo_inApp.png
+    - assets/InApp/good_lift_splash_logo.png
 
 
   # An image asset can refer to one or more resolution-specific "variants", see

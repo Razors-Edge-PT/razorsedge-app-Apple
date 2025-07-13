@@ -1,0 +1,13 @@
+
+    <style name="Theme.GoodLift" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- 👇 Custom splash icon (your PNG or XML logo) -->
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/good_lift_splash_logo</item>
+
+        <!-- 👇 Splash screen background color -->
+        <item name="android:windowSplashScreenBackground">@android:color/white</item>
+
+        <!-- 👇 Optional: Remove icon mask so your image isn't cropped -->
+        <item name="android:windowSplashScreenIconBackgroundColor">@null</item>
+    </style>
+
+
