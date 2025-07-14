@@ -94,6 +94,7 @@ flutter:
     - assets/InApp/good_lift_Appbar_logo.png
     - assets/InApp/transparent_good_lift_logo_inApp.png
     - assets/InApp/good_lift_splash_logo.png
+    - assets/avatar.png
 
 
   # An image asset can refer to one or more resolution-specific "variants", see
