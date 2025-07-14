@@ -92,6 +92,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   final List<List<TextEditingController>> _rirControllers = [];
   final int _defaultSets = 3;
   VoidCallback? _lastUndoAction;
+  Set<String> _selectDateHintFields = {};
+
 
   // 🧠 Block metadata
   DateTime? _blockStartDate;
@@ -1145,10 +1147,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     print('🧠 [WES] initState complete — awaiting _initialLoad...');
   }
-
-
-
-
 
 
   Future<void> _fetchActiveBlockThenMeta() async {
@@ -2521,6 +2519,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
       movedExercise['circuitIndex'] = newCircuitIndex;
 
+      _cachedProgressedValues.clear();
+
       // Insert at new position
       _selectedExercisesWithCircuits.insert(newIndex, movedExercise);
       _workoutSets.insert(newIndex, movedSets);
@@ -3208,6 +3208,44 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         }
       });
 
+      for (final newEx in newOnes) {
+        final name = newEx['name']?.toString().trim().toLowerCase();
+        if (name == null || _resolvedBB2Values.containsKey(name)) continue;
+
+        // 🔍 Try modern flat structure first
+        final flatReps = newEx['reps'];
+        final flatWeight = newEx['weight'];
+        final flatRir = newEx['rir'];
+
+        if (flatReps != null || flatWeight != null || flatRir != null) {
+          _resolvedBB2Values[name] = {
+            'reps': flatReps,
+            'weight': flatWeight,
+            'rir': flatRir,
+          };
+          print('🧠 [WES Merge] Injected FLAT BB2 values for $name = ${_resolvedBB2Values[name]}');
+          continue;
+        }
+
+        // 🔁 Fallback to legacy sets[0] structure
+        final rawSets = newEx['sets'];
+        if (rawSets is List && rawSets.isNotEmpty) {
+          final firstSet = rawSets.first;
+          _resolvedBB2Values[name] = {
+            'reps': firstSet['reps'],
+            'weight': firstSet['weight'],
+            'rir': firstSet['rir'],
+          };
+          print('🧠 [WES Merge] Injected SETS[0] BB2 values for $name = ${_resolvedBB2Values[name]}');
+        } else {
+          print('❌ [WES Merge] No valid sets or flat fields found for $name');
+        }
+      }
+
+
+
+
+
       print("[WES] Merged ${newOnes.length} new BB2 exercises into draft");
       await _saveWorkoutDraftToCache();
     }
@@ -3289,6 +3327,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     print('💾 [WES] Saving draft for previous date...');
     await _saveWorkoutDraftToCache();
 
+    _cachedProgressedValues.clear(); // ✅ Main fix
+
     // 2️⃣ Update selected date and clear UI state
     print('🧼 [WES] Clearing UI and updating selected date...');
     setState(() {
@@ -3299,6 +3339,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       _repsControllers.clear();
       _weightControllers.clear();
       _rirControllers.clear();
+      _resolvedBB2Values.clear();
+
     });
 
     // 3️⃣ Try loading a date-specific draft — will skip if no real data
@@ -3310,12 +3352,17 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     print('🔁 [WES] Merging in BB2 exercises for selected date...');
     await _mergeNewBB2ExercisesIntoDraft();
 
+
+
     // 5️⃣ Always load read-only BB2 visual hints (e.g. pink fields)
     print('🔍 [WES] Loading BB2 read-only visual hints...');
     await _loadExercisesFromBB2ForDay();
 
     print('✅ [WES] Date switch complete.');
   }
+
+
+
 
   String _formatWorkoutDate(DateTime date) {
     final dayOfWeek = DateFormat('EEEE').format(date); // e.g., Tuesday
