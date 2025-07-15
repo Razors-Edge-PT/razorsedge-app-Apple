@@ -1008,31 +1008,22 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         rir: rirToUse,
       );
 
-      final double rounded =
-      PeriodizationModelUtils.roundToNearestValidIncrement(
+      final double rounded = PeriodizationModelUtils.roundToNearestValidIncrement(
         targetWeight: derived,
         exerciseName: exerciseName,
       );
 
-      final double newE1RM =
-      PeriodizationModelUtils.calculateE1RM(rounded, repsToUse, rirToUse);
+      final double newE1RM = PeriodizationModelUtils.calculateE1RM(
+        rounded,
+        repsToUse,
+        rirToUse,
+      );
 
-      if (userReps != null && userRir == null) {
-        print(
-            '📊 [WES] User reps = $userReps → updated weight = $rounded → new E1RM = ${newE1RM
-                .toStringAsFixed(2)}');
-      } else if (userRir != null && userReps == null) {
-        print(
-            '📈 [WES] User RIR = $userRir → updated weight = $rounded → new E1RM = ${newE1RM
-                .toStringAsFixed(2)}');
-      } else {
-        print(
-            '📊 [WES] User reps = $userReps & RIR = $userRir → updated weight = $rounded → new E1RM = ${newE1RM
-                .toStringAsFixed(2)}');
-      }
+      print('🔁 [WES] Derived weight = $rounded using reps = $repsToUse and RIR = $rirToUse → new E1RM = ${newE1RM.toStringAsFixed(2)}');
 
       return rounded;
     }
+
 
     // ✅ Step 7: No overrides — fallback to rounded base weight
     final double fallbackRounded =
