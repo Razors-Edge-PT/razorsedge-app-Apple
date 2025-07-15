@@ -301,32 +301,39 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       key: _scaffoldKey,
       appBar: AppBar(
+        title: null,
         automaticallyImplyLeading: false,
-        title: Row(
-          mainAxisAlignment: MainAxisAlignment.end, // ⬅️ Align to the right
-          children: [
-            Image.asset(
-               'assets/InApp/transparent_good_lift_logo_inApp.png',
-              height: 36,
-              fit: BoxFit.contain,
-            ),
-          ],
-        ),
-
         actions: [
-          GestureDetector(
-            onTap: () => _scaffoldKey.currentState?.openDrawer(),
-            child: const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 12),
-              child: CircleAvatar(
-                radius: 20,
-                backgroundImage: AssetImage('assets/avatar.png'),
-              ),
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Image.asset(
+                  'assets/InApp/transparent_good_lift_logo_inApp.png',
+                  height: 36,
+                  fit: BoxFit.contain,
+                ),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: () => _scaffoldKey.currentState?.openDrawer(),
+                  child: const Icon(
+                    Icons.menu,
+                    size: 28,
+                    color: Colors.grey,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
-      ),
 
+
+
+
+
+      ),
+      //backgroundImage: AssetImage('assets/avatar.png'),
 
       drawer: const AppDrawer(),
       body: isLoading
