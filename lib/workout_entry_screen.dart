@@ -683,42 +683,60 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final weightText = _weightControllers[exerciseIndex][0].text;
     final repsText = _repsControllers[exerciseIndex][0].text;
 
-    final rir = double.tryParse(rirText) ?? set1RIR(exerciseIndex);
-    final weight = double.tryParse(weightText);
-    final reps = double.tryParse(repsText);
     final normalizedKey = exerciseName.toLowerCase();
     final bb2Entry = _resolvedBB2Values[normalizedKey];
+
+    final double? reps = double.tryParse(repsText);
+    final double? weight = double.tryParse(weightText);
+    final double rawRIR = double.tryParse(rirText) ?? set1RIR(exerciseIndex);
     final double? bb2Reps = bb2Entry?['reps']?.toDouble();
+    final double? bb2Weight = bb2Entry?['weight']?.toDouble();
+    final dynamic bb2RirRaw = bb2Entry?['rir'];
+    final double? bb2Rir = (bb2RirRaw is num && bb2RirRaw > 0)
+        ? (bb2RirRaw as num).toDouble()
+        : null;
+
+    final double usedRIR = bb2Rir ?? rawRIR;
+    print('🧠 [WES] usedRIR for $exerciseName = $usedRIR (rawRIR = $rawRIR, bb2Rir = ${bb2Entry?['rir']})');
 
     final progressed = _getProgressedValues(exerciseIndex);
-    final baseWeight = (progressed['weight'] ?? 20.0).toDouble();
-    final baseReps = (progressed['reps'] ?? 10).toDouble();
-    final baseE1RM =
-    PeriodizationModelUtils.calculateE1RM(baseWeight, baseReps, rir);
+    final double baseWeight = (progressed['weight'] ?? 20.0).toDouble();
+    final double baseReps = (progressed['reps'] ?? 10).toDouble();
+    final double baseE1RM = PeriodizationModelUtils.calculateE1RM(baseWeight, baseReps, usedRIR);
 
-    // CASE 1: Reps already entered by user → use that
-    if (reps != null) return reps;
-    // CASE 1.5: Use BB2-entered reps if available
-    if (bb2Reps != null && bb2Reps > 0) {
+// Prioritization logic
+    final bool hasUserReps = reps != null;
+    final bool hasBB2Reps = bb2Reps != null && bb2Reps > 0;
+    final double? usedWeight = weight ?? (bb2Weight != null && bb2Weight > 0 ? bb2Weight : null);
+
+// CASE 1: Reps already entered by user → use it
+    if (hasUserReps) return reps!;
+
+// CASE 2: BB2-entered reps → use them
+    if (hasBB2Reps) {
       print('🔁 [WES] Using BB2-entered reps for $exerciseName = $bb2Reps');
-      return bb2Reps;
+      return bb2Reps!;
     }
 
-    // CASE 2: Weight is user-entered → derive reps
-    if (weight != null) {
+// CASE 3: Weight (from user or BB2) → derive reps
+    if (usedWeight != null) {
       final derivedReps = PeriodizationModelUtils.reverseCalculateReps(
         targetE1RM: baseE1RM * 1.02,
-        // ⛔ cap at +2%
-        weight: weight,
+        weight: usedWeight,
         baseWeight: baseWeight,
-        rir: rir,
+        rir: usedRIR,
         minReps: baseReps,
       );
-      print(
-          '🔁 [WES] User-entered weight $weight → adjusted reps = $derivedReps to stay near E1RM = $baseE1RM');
-      return derivedReps;
-      return derivedReps;
+
+      final double roundedReps = derivedReps % 1 >= 0.85
+          ? derivedReps.ceilToDouble()
+          : derivedReps.floorToDouble();
+
+      print('🔁 [WES] Using weight = $usedWeight & RIR = $usedRIR → derived reps = $derivedReps → rounded = $roundedReps (target E1RM = ${baseE1RM.toStringAsFixed(2)})');
+
+      return roundedReps;
     }
+
     debugPrint('🔍 [WES] Rep assignment for "$exerciseName" → using blockId: $_selectedBlockId');
 
     // CASE 3: No override → use model default
@@ -950,8 +968,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final String rirText = _rirControllers[exerciseIndex][0].text;
 
     final double? userWeight = double.tryParse(weightText);
-    final double? userReps = double.tryParse(repsText);
-    final double? userRir = double.tryParse(rirText);
+    final double? userReps = double.tryParse(repsText) ??
+        ((bb2Entry?['reps'] is num && (bb2Entry?['reps'] as num) > 0)
+            ? (bb2Entry?['reps'] as num).toDouble()
+            : null);
+
+    final double? userRir = double.tryParse(rirText) ??
+        ((bb2Entry?['rir'] is num && (bb2Entry?['rir'] as num) > 0)
+            ? (bb2Entry?['rir'] as num).toDouble()
+            : null);
+
 
     // 🛑 Step 3: Respect user-entered weight
     if (userWeight != null) {
