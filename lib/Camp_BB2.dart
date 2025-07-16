@@ -578,9 +578,10 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     }
 
     return sessionData.map((setKey, setValue) => MapEntry(setKey, {
-          'reps': setValue['reps'],
-          'rir': setValue['rir'],
-        }));
+      'reps': setValue['reps'],
+      'rir': (setValue['rir'] ?? 1.0),  // ✅ default to 1.0 if missing
+    }));
+
   }
 
   String? getRepTargetForExercise(
@@ -2024,15 +2025,16 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
 
         // 🧠 First define hintRir (safe to use afterward)
-        final String hintRir = (rirController.text.isEmpty && rirSetValues != null)
-            ? (rirSetValues['set1']?['rir']?.toString() ?? '0.5')
-            : rirController.text;
+        final String hintRir = rirController.text.isNotEmpty
+            ? rirController.text
+            : rirSetValues?['set1']?['rir']?.toString() ?? '1';
+
 
 
 // ✅ Then use it here
         final double rirValue = rirController.text.isNotEmpty
-            ? double.tryParse(rirController.text) ?? 0.5
-            : double.tryParse(hintRir) ?? 0.5;
+            ? double.tryParse(rirController.text) ?? 1
+            : double.tryParse(hintRir) ?? 1;
 
         final actual = PeriodizationModelUtils.getActualRepsAndRir(
           repsController: repsController,
@@ -2083,8 +2085,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
 // ✅ Use hintRir first to ensure effectiveRir is valid
         final double effectiveRir = rirController.text.isNotEmpty
-            ? double.tryParse(rirController.text) ?? double.tryParse(hintRir) ?? 0.5
-            : double.tryParse(hintRir) ?? 0.5;
+            ? double.tryParse(rirController.text) ?? double.tryParse(hintRir) ?? 1
+            : double.tryParse(hintRir) ?? 1;
 
         if (repsController.text.isNotEmpty) {
           print('[TRACE] Using manually entered reps');
@@ -2298,15 +2300,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                               // Do not set repsController.text — just clear it
                               repsController.clear();
                             }
-                            final hintRir = (() {
-                              final planned = getPlannedRirSetValues(
-                                exerciseName: exerciseName,
-                                week: weekIndex,
-                                day: dayIndex,
-                                row: rowIndex,
-                              );
-                              return planned?['set1']?['rir']?.toString() ?? '0.5';
-                            })();
+
                           });
                         },
                       );
@@ -3166,7 +3160,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
                                           final setWeight = (set['weight'] ?? 0).toDouble();
                                           final setReps = (set['reps'] ?? 0).toDouble();
-                                          final setRir = (set['rir'] ?? 0).toDouble();
+                                          final setRir = (set['rir'] ?? 1).toDouble();
+
                                           final setE1RM = PeriodizationModelUtils.calculateE1RM(setWeight, setReps, setRir);
 
                                           return Container(

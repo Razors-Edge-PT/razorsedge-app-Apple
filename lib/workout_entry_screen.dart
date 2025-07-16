@@ -696,7 +696,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         ? (bb2RirRaw as num).toDouble()
         : null;
 
-    final double usedRIR = bb2Rir ?? rawRIR;
+    final double usedRIR = bb2Rir ?? rawRIR?? 1.0;
     print('🧠 [WES] usedRIR for $exerciseName = $usedRIR (rawRIR = $rawRIR, bb2Rir = ${bb2Entry?['rir']})');
 
     final progressed = _getProgressedValues(exerciseIndex);
@@ -721,7 +721,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 // CASE 3: Weight (from user or BB2) → derive reps
     if (usedWeight != null) {
       final derivedReps = PeriodizationModelUtils.reverseCalculateReps(
-        targetE1RM: baseE1RM * 1.02,
+        targetE1RM: baseE1RM,
         weight: usedWeight,
         baseWeight: baseWeight,
         rir: usedRIR,
@@ -831,7 +831,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   }
 
   double getRirFromPlanOrInput(int exerciseIndex, int setNumber) {
-    if (setNumber < 1 || setNumber > 8) return 0.5; // Safety fallback
+    if (setNumber < 1 || setNumber > 8) return 1; // Safety fallback
 
     final exerciseName =
         _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
@@ -854,12 +854,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final exerciseId =
         PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
     final weekIndex = _getApplicableWeekIndex(exerciseId);
-    if (weekIndex == null) return setNumber == 1 ? 0.5 : 1.5;
+    if (weekIndex == null) return setNumber == 1 ? 1 : 1.5;
 
     if (blockStartDate == null) {
       print(
           '❌ [WES] RIR_blockStartDate is null in getRirFromPlanOrInput for $exerciseName');
-      return 2.0; // fallback RIR value
+      return 1; // fallback RIR value
     }
 
     final sessionIndex =
@@ -888,49 +888,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       return chosen;
     }
 
-    final fallback = (setNumber == 1 ? 0.5 : 1.5);
+    final fallback = 1.0;
+
     final finalRir = plannedRir ?? fallback;
     print(
         '📦 [WES] Final RIR used for "$exerciseName" set $setNumber → $finalRir');
     return finalRir;
   }
 
-  // ✅ Function to determine RIR for Set 1 (Default: 0.5, Modifiable in Future)
-  /*double set1RIR(int exerciseIndex) {
-    // ✅ Use user input if present
-    final text = _rirControllers[exerciseIndex][0].text;
-    if (text.isNotEmpty) {
-      return double.tryParse(text) ?? 0.5;
-    }
 
-    // ✅ Look up exercise ID
-    final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
-    final exerciseId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
-
-    // ✅ Get week index from WES utility
-    final weekIndex = _getApplicableWeekIndex(exerciseId);
-    if (weekIndex == null) return 0.5;
-
-    // ✅ Get session index (instance within week)
-    final sessionIndex = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
-      exerciseName: exerciseName,
-      savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
-      blockStartDate: _blockStartDate!,
-      weekIndex: weekIndex,
-    );
-
-    // ✅ Use core function to get RIR value
-    final rirString = PeriodizationModelUtils.getSet1RirByModel(
-      exerciseId: exerciseId,
-      weekIndex: weekIndex,
-      sessionIndex: sessionIndex,
-      plannedExerciseDetails: PeriodizationModelUtils.plannedExerciseDetails,
-    );
-
-    return double.tryParse(rirString) ?? 0.5;
-  }
-
-   */
 
   double set1RIR(int i) => getRirFromPlanOrInput(i, 1);
 
