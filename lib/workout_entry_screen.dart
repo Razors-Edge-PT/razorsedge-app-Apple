@@ -1107,7 +1107,26 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       await _initializeDayDocIfNeeded(_selectedDate);
       print("📄 [WES] Day doc initialized if needed");
 
-      await _mergeNewBB2ExercisesIntoDraft();
+      if (widget.initialDate != null) {
+        _cachedProgressedValues.clear();
+        _selectedDate = widget.initialDate!;
+        _workoutNameController.text = _formatWorkoutDate(_selectedDate);
+        _selectedExercisesWithCircuits.clear();
+        _workoutSets.clear();
+        _repsControllers.clear();
+        _weightControllers.clear();
+        _rirControllers.clear();
+        _resolvedBB2Values.clear();
+
+        final draftLoaded = await _loadWorkoutDraftFromCache();
+        print('📂 [WES Init] Draft loaded for ${_selectedDate.toIso8601String()}: $draftLoaded');
+
+        await _mergeNewBB2ExercisesIntoDraft();
+        await _loadExercisesFromBB2ForDay();
+      } else {
+        await _mergeNewBB2ExercisesIntoDraft();
+      }
+
       print("🔀 [WES] Merged BB2 into draft");
 
       _cachedProgressedValues.clear();

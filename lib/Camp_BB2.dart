@@ -2934,7 +2934,32 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                 row.repsController.text = entry['reps']?.toString() ?? '';
                                 row.rirController.text = entry['rir']?.toString() ?? '';
                               }
-                              await saveDayToFirestore(weekIndex, dayIndex);
+                              await saveDayToFirestore(weekIndex, dayIndex); // ✅ still needed for Firestore
+
+// 🧠 NEW: Also save BB2 in-memory values to SharedPrefs for WES
+                              final prefs = await SharedPreferences.getInstance();
+                              final dateKey = DateFormat('yyyy-MM-dd').format(workoutDate);
+
+                              final List<Map<String, dynamic>> bb2Exercises = [];
+                              for (final row in exerciseRows[weekIndex][dayIndex]) {
+                                final name = row.exerciseController.text.trim();
+                                if (name.isNotEmpty) {
+                                  bb2Exercises.add({
+                                    'name': name,
+                                    'circuitIndex': row.circuitIndex,
+                                    'sets': [
+                                      {
+                                        'reps': row.repsController.text,
+                                        'weight': row.weightController.text,
+                                        'rir': row.rirController.text,
+                                      }
+                                    ],
+                                  });
+                                }
+                              }
+                              await prefs.setString('bb2_dayData_$dateKey', jsonEncode({'exercises': bb2Exercises}));
+                              print('💾 [BB2 → SharedPrefs] Wrote ${bb2Exercises.length} exercises to cache for $dateKey');
+
                               setState(() {});
                             }
                             print('[BB2] Passing to WES:');
