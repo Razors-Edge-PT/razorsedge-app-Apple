@@ -90,6 +90,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   final List<List<TextEditingController>> _repsControllers = [];
   final List<List<TextEditingController>> _weightControllers = [];
   final List<List<TextEditingController>> _rirControllers = [];
+  List<List<TextEditingController>> _velocityControllers = [];
+  List<List<TextEditingController>> _notesControllers = [];
+
+  Map<String, bool> _showVelocityByExercise = {}; // exerciseName.toLowerCase() → true/false
+
+
   final int _defaultSets = 3;
   VoidCallback? _lastUndoAction;
   Set<String> _selectDateHintFields = {};
@@ -123,6 +129,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   late Future<void> _blockDateLoad;
   bool _delayRenderCards = true;
 
+  //UI bits
+  late ScrollController _horizontalScrollController;
+
+
 
 
 
@@ -132,6 +142,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       _isLoadingData = false; // ✅ Data has been fetched, UI can update
     });
   }
+
+  static const TextStyle _headerStyle = TextStyle(
+    fontSize: 10.0,
+    color: Colors.white70,
+    fontWeight: FontWeight.bold,
+  );
+
 
   Future<void> loadPlannedExercisesFromFirestore() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -1153,6 +1170,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       }
     });
 
+    _horizontalScrollController = ScrollController();
+
     print('🧠 [WES] initState complete — awaiting _initialLoad...');
   }
 
@@ -1370,6 +1389,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
           _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
           _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+          _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController())); // ✅ NEW
+          _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));   // ✅ NEW
+
         }
 
         _initializeControllers();
@@ -1551,17 +1573,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     return 10.0;
   }
 
-
-  void _populateControllers() {
-    _repsControllers.clear();
-    for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
-      _repsControllers.add([
-        TextEditingController(),
-        TextEditingController(),
-        TextEditingController(),
-      ]);
-    }
-  }
 
 
 
@@ -1951,6 +1962,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+
+    _horizontalScrollController.dispose();
   }
 
   void _initializeControllers() {
@@ -1963,6 +1976,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
     while (_rirControllers.length < _selectedExercisesWithCircuits.length) {
       _rirControllers.add([]);
+    }
+    while (_velocityControllers.length < _selectedExercisesWithCircuits.length) {
+      _velocityControllers.add([]);
+    }
+    while (_notesControllers.length < _selectedExercisesWithCircuits.length) {
+      _notesControllers.add([]);
     }
 
     for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
@@ -1988,8 +2007,22 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
               text: set.rir != null ? set.rir!.toStringAsFixed(1) : '');
         }).toList();
       }
+
+      if (_velocityControllers[i].isEmpty) {
+        _velocityControllers[i] = sets.map((set) {
+          return TextEditingController(
+              text: set.velocity != null ? set.velocity!.toStringAsFixed(2) : '');
+        }).toList();
+      }
+
+      if (_notesControllers[i].isEmpty) {
+        _notesControllers[i] = sets.map((set) {
+          return TextEditingController(text: set.notes ?? '');
+        }).toList();
+      }
     }
   }
+
 
   void _showExercisePickerDialog() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -3213,6 +3246,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
           _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
           _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+          _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController())); // ✅ NEW
+          _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));    // ✅ NEW
         }
       });
 
@@ -4078,7 +4113,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                         children: [
                           Padding(
                             padding: const EdgeInsets.only(
-                                left: 4, top: 3),
+                                left: 4, top: 5),
                             child: Text(
                               'Set ${j + 1}',
                               style: const TextStyle(
@@ -4106,270 +4141,268 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                     ),
 
                     // ✅ Header Row with aligned labels
-                    Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 4,
-                          vertical:
-                          1), // ✅ Align horizontally cleanly
-                      child: Row(
-                        mainAxisAlignment:
-                        MainAxisAlignment.start,
-                        crossAxisAlignment: CrossAxisAlignment
-                            .start, // ✅ Center vertically
+                    SingleChildScrollView(
+                      controller: _horizontalScrollController,
+                      scrollDirection: Axis.horizontal,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Expanded(
-                            child: Text(
-                              'Weight',
-                              textAlign: TextAlign.left,
-                              style: TextStyle(
-                                  fontSize: 10.0,
-                                  color: Colors.white70,
-                                  fontWeight:
-                                  FontWeight.bold),
-                            ),
+                          // 🟨 Header Row
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: const [
+                              SizedBox(width: 68, child: Padding(
+                                  padding: EdgeInsets.only(left: 3), // ⬅️ Shift the text slightly right
+                                  child: Text('Weight', style: _headerStyle))),
+                              SizedBox(width: 4),
+                              SizedBox(width: 50, child: Padding(
+                                  padding: EdgeInsets.only(left: 2), // ⬅️ Shift the text slightly right
+                                  child: Text('Reps', style: _headerStyle))),
+                              SizedBox(width: 4),
+                              SizedBox(width: 50, child: Padding(
+                                  padding: EdgeInsets.only(left: 3), // ⬅️ Shift the text slightly right
+                                  child: Text('RIR', style: _headerStyle))),
+                              SizedBox(width: 4),
+                              SizedBox(width: 45, child: Text('Vel.', style: _headerStyle)),
+                              SizedBox(width: 4),
+                              SizedBox(width: 55, child: Text('E1RM', style: _headerStyle)),
+                              SizedBox(width: 4),
+                              SizedBox(width: 120, child: Text('Notes', style: _headerStyle)),
+                            ],
                           ),
-                          const SizedBox(width: 4.0),
-                          const Expanded(
-                            child: Text(
-                              'Reps',
-                              textAlign: TextAlign.left,
-                              style: TextStyle(
-                                  fontSize: 10.0,
-                                  color: Colors.white70,
-                                  fontWeight:
-                                  FontWeight.bold),
-                            ),
-                          ),
-                          const SizedBox(width: 4.0),
-                          const Expanded(
-                            child: Text(
-                              'RIR',
-                              textAlign: TextAlign.left,
-                              style: TextStyle(
-                                  fontSize: 10.0,
-                                  color: Colors.white70,
-                                  fontWeight:
-                                  FontWeight.bold),
-                            ),
-                          ),
-                          const SizedBox(width: 4.0),
-                          const Expanded(
-                            child: Text(
-                              'E1RM',
-                              textAlign: TextAlign.left,
-                              style: TextStyle(
-                                  fontSize: 10.0,
-                                  color: Colors.white70,
-                                  fontWeight:
-                                  FontWeight.bold),
-                            ),
+
+                          const SizedBox(height: 2),
+
+                          // 🟩 Input Row
+                          Row(
+                            children: [
+                              // Weight
+                              SizedBox(
+                                width: 68,
+                                child: TextField(
+                                  controller: _weightControllers[i][j],
+                                  keyboardType: TextInputType.number,
+                                  decoration: InputDecoration(
+                                    hintText: !_isInitialized
+                                        ? ''
+                                        : (j == 0)
+                                        ? set1SuggestedWeight(i).toStringAsFixed(1)
+                                        : (j == 1)
+                                        ? set2SuggestedWeight(i).toStringAsFixed(1)
+                                        : (j == 2)
+                                        ? set3SuggestedWeight(i).toStringAsFixed(1)
+                                        : '25',
+                                    hintStyle: const TextStyle(
+                                      color: Colors.grey,
+                                      fontStyle: FontStyle.italic,
+                                      fontSize: 12,
+                                    ),
+                                    contentPadding: const EdgeInsets.only(left: 4),
+                                  ),
+                                  onChanged: (value) => setState(() {}),
+                                  style: TextStyle(
+                                    color: _weightControllers[i][j].text.isEmpty
+                                        ? Colors.grey
+                                        : Colors.white,
+                                  ),
+                                ),
+                              ),
+
+                              const SizedBox(width: 4),
+
+                              // Reps
+                              SizedBox(
+                                width: 50,
+                                child: TextField(
+                                  controller: _repsControllers[i][j],
+                                  keyboardType: TextInputType.number,
+                                  decoration: InputDecoration(
+                                    contentPadding: EdgeInsets.only(left: 3), // ⬅️ Increase this to shift right
+                                    hintText: (_isLoadingData || !_isInitialized)
+                                        ? ''
+                                        : (j == 0)
+                                        ? (set1SuggestedReps(i)?.toInt().toString() ?? '')
+                                        : (j == 1)
+                                        ? (set2SuggestedReps(i)?.toInt().toString() ?? '')
+                                        : (j == 2)
+                                        ? (set3SuggestedReps(i)?.toInt().toString() ?? '')
+                                        : '15',
+                                    hintStyle: const TextStyle(
+                                      color: Colors.grey,
+                                      fontStyle: FontStyle.italic,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                  onChanged: (value) => setState(() {}),
+                                  style: TextStyle(
+                                    color: _repsControllers[i][j].text.isEmpty
+                                        ? Colors.grey
+                                        : Colors.white,
+                                  ),
+                                ),
+                              ),
+
+                              const SizedBox(width: 4),
+
+                              // RIR
+                              SizedBox(
+                                width: 50,
+                                child: TextField(
+                                  controller: _rirControllers[i][j],
+                                  keyboardType: TextInputType.number,
+                                  decoration: InputDecoration(
+                                    contentPadding: EdgeInsets.only(left: 2), // ⬅️ Increase this to shift right
+                                    hintText: (j == 0)
+                                        ? set1RIR(i).toString()
+                                        : (j == 1)
+                                        ? set2RIR(i).toString()
+                                        : (j == 2)
+                                        ? set3RIR(i).toString()
+                                        : '1',
+                                    hintStyle: const TextStyle(
+                                      color: Colors.grey,
+                                      fontStyle: FontStyle.italic,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                  onChanged: (value) => setState(() {}),
+                                  style: TextStyle(
+                                    color: _rirControllers[i][j].text.isEmpty
+                                        ? Colors.grey
+                                        : Colors.white,
+                                  ),
+                                ),
+                              ),
+
+                              const SizedBox(width: 4),
+
+                              // Velocity
+                              SizedBox(
+                                width: 45,
+                                child: TextField(
+                                  controller: _velocityControllers[i][j],
+                                  keyboardType: TextInputType.number,
+                                  decoration: const InputDecoration(
+                                    hintText: '',
+                                    hintStyle: TextStyle(
+                                      color: Colors.grey,
+                                      fontStyle: FontStyle.italic,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                  onChanged: (value) => setState(() {}),
+                                  style: TextStyle(
+                                    color: _velocityControllers[i][j].text.isEmpty
+                                        ? Colors.grey
+                                        : Colors.white,
+                                  ),
+                                ),
+                              ),
+
+                              const SizedBox(width: 4),
+
+                              // E1RM
+                              SizedBox(
+                                width: 55,
+                                child: TextField(
+                                  controller: TextEditingController(
+                                    text: calculateE1RM(
+                                        double.tryParse(_weightControllers[i][j].text) ??
+                                            (j == 0
+                                                ? (_isInitialized ? set1SuggestedWeight(i) : 20.0)
+                                                : j == 1
+                                                ? (_isInitialized ? set2SuggestedWeight(i) : 20.0)
+                                                : (_isInitialized ? set3SuggestedWeight(i) : 20.0)),
+                                        (int.tryParse(_repsControllers[i][j].text) ??
+                                            (j == 0
+                                                ? (_isInitialized
+                                                ? set1SuggestedReps(i).toDouble()
+                                                : 15.0)
+                                                : j == 1
+                                                ? (_isInitialized
+                                                ? set2SuggestedReps(i).toDouble()
+                                                : 10.0)
+                                                : (_isInitialized
+                                                ? set3SuggestedReps(i).toDouble()
+                                                : 10.0)))
+                                            .toDouble(),
+                                        double.tryParse(_rirControllers[i][j].text) ??
+                                            (j == 0
+                                                ? (_isInitialized ? set1RIR(i) : 0.5)
+                                                : j == 1
+                                                ? (_isInitialized ? set2RIR(i) : 0.5)
+                                                : (_isInitialized ? set3RIR(i) : 0.5)))
+                                        .toStringAsFixed(1),
+                                  ),
+                                  enabled: false, // ✅ match visual style, but read-only
+                                  readOnly: true,
+                                  decoration: const InputDecoration(
+                                    hintText: '',
+                                    hintStyle: TextStyle(
+                                      color: Colors.grey,
+                                      fontStyle: FontStyle.italic,
+                                      fontSize: 12,
+                                    ),
+                                    contentPadding: EdgeInsets.only(left: 4),
+
+                                    // ✅ This controls the underline colors
+                                    enabledBorder: UnderlineInputBorder(
+                                      borderSide: BorderSide(color: Colors.white, width: 1),
+                                    ),
+                                    disabledBorder: UnderlineInputBorder(
+                                      borderSide: BorderSide(color: Colors.white, width: 1),
+                                    ),
+                                    focusedBorder: UnderlineInputBorder(
+                                      borderSide: BorderSide(color: Colors.white, width: 1.5),
+                                    ),
+                                  ),
+
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: (_weightControllers[i][j].text.isNotEmpty ||
+                                        _repsControllers[i][j].text.isNotEmpty ||
+                                        _rirControllers[i][j].text.isNotEmpty)
+                                        ? Colors.white
+                                        : Colors.grey,
+                                  ),
+                                ),
+                              ),
+
+
+
+
+                              const SizedBox(width: 4),
+
+                              // Notes
+                              SizedBox(
+                                width: 120,
+                                child: TextField(
+                                  controller: _notesControllers[i][j],
+                                  keyboardType: TextInputType.text,
+                                  decoration: const InputDecoration(
+                                    hintText: '',
+                                    hintStyle: TextStyle(
+                                      color: Colors.grey,
+                                      fontStyle: FontStyle.italic,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                  onChanged: (value) => setState(() {}),
+                                  style: TextStyle(
+                                    color: _notesControllers[i][j].text.isEmpty
+                                        ? Colors.grey
+                                        : Colors.white,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
                     ),
 
-                    const SizedBox(height: 0.0),
 
-                    // ✅ Input Row with aligned values
-
-                    Row(
-                      children: [
-                        // ✅ Weight Input Field with Suggested Weight for Each Set
-                        Expanded(
-                          child: TextField(
-                            controller: _weightControllers[i]
-                            [j],
-                            keyboardType:
-                            TextInputType.number,
-                            decoration: InputDecoration(
-                              hintText: !_isInitialized
-                                  ? '' // ✅ Don’t show fallback values while loading
-                                  : (j == 0)
-                                  ? set1SuggestedWeight(i).toStringAsFixed(1)
-                                  : (j == 1)
-                                  ? set2SuggestedWeight(i).toStringAsFixed(1)
-                                  : (j == 2)
-                                  ? set3SuggestedWeight(i).toStringAsFixed(1)
-                                  : '25',
-
-                              hintStyle: const TextStyle(
-                                color: Colors.grey,
-                                fontStyle: FontStyle.italic,
-                                fontSize: 12,
-                              ),
-                              contentPadding: EdgeInsets.only(
-                                  left:
-                                  4), // ✅ Add slight left padding inside field
-                            ),
-                            onChanged: (value) {
-                              setState(() {});
-                            },
-                            style: TextStyle(
-                              color: _weightControllers[i][j]
-                                  .text
-                                  .isEmpty
-                                  ? Colors.grey
-                                  : Colors.white,
-                            ),
-                          ),
-                        ),
-
-                        const SizedBox(width: 4.0),
-
-                        // ✅ Updated UI for Reps in all Sets
-                        Expanded(
-                          child: TextField(
-                            controller: _repsControllers[i]
-                            [j],
-                            keyboardType:
-                            TextInputType.number,
-                            decoration: InputDecoration(
-                              hintText: (_isLoadingData || !_isInitialized)
-                                  ? ''
-                                  : (j == 0)
-                                  ? (set1SuggestedReps(i)?.toInt().toString() ??
-                                  '')
-                                  : (j == 1)
-                                  ? (set2SuggestedReps(i)?.toInt().toString() ??
-                                  '')
-                                  : (j == 2)
-                                  ? (set3SuggestedReps(i)?.toInt().toString() ??
-                                  '')
-                                  : '15',
-
-                              hintStyle: const TextStyle(
-                                color: Colors.grey,
-                                fontStyle: FontStyle.italic,
-                                fontSize: 12,
-                              ),
-                            ),
-                            onChanged: (value) {
-                              setState(() {});
-                            },
-                            style: TextStyle(
-                              color: _repsControllers[i][j]
-                                  .text
-                                  .isEmpty
-                                  ? Colors.grey
-                                  : Colors.white,
-                            ),
-                          ),
-                        ),
-
-                        const SizedBox(width: 4.0),
-
-                        // ✅ Updated UI for RIR Input Field
-                        Expanded(
-                          child: Builder(
-                            builder: (context) {
-                              final rirText =
-                                  _rirControllers[i][j].text;
-                              final hint = (j == 0)
-                                  ? set1RIR(i).toString()
-                                  : (j == 1)
-                                  ? set2RIR(i).toString()
-                                  : (j == 2)
-                                  ? set3RIR(i)
-                                  .toString()
-                                  : '1';
-
-                              print(
-                                  '🧪 [WES RIR Field] Set $j for exercise $i → controller="$rirText", hint="$hint"');
-
-                              return TextField(
-                                controller: _rirControllers[i]
-                                [j],
-                                keyboardType:
-                                TextInputType.number,
-                                decoration: InputDecoration(
-                                  hintText: hint,
-                                  hintStyle: const TextStyle(
-                                    color: Colors.grey,
-                                    fontStyle:
-                                    FontStyle.italic,
-                                    fontSize: 14,
-                                  ),
-                                ),
-                                onChanged: (value) {
-                                  setState(() {});
-                                },
-                                style: TextStyle(
-                                  color: rirText.isEmpty
-                                      ? Colors.grey
-                                      : Colors.white,
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-
-                        const SizedBox(width: 4.0),
-
-                        // ✅ E1RM Display using Brzycki Formula with Suggested Weight, Reps, and RIR as Default
-                        Expanded(
-                          child: Text(
-                            calculateE1RM(
-                                double.tryParse(
-                                    _weightControllers[
-                                    i][j]
-                                        .text) ??
-                                    ((j == 0)
-                                        ? (_isInitialized ? set1SuggestedWeight(
-                                        i) : 20.0)
-                                        : (j == 1)
-                                        ? (_isInitialized ? set2SuggestedWeight(
-                                        i) : 20.0)
-                                        : (j == 2)
-                                        ? (_isInitialized ? set3SuggestedWeight(
-                                        i) : 20.0)
-                                        : 20.0),
-                                (int.tryParse(
-                                    _repsControllers[
-                                    i][j]
-                                        .text) ??
-                                    ((j == 0)
-                                        ? (_isInitialized ? set1SuggestedReps(i)
-                                        .toDouble() : 15.0)
-                                        : (j == 1)
-                                        ? (_isInitialized ? set2SuggestedReps(i)
-                                        .toDouble() : 10.0)
-                                        : (j == 2)
-                                        ? (_isInitialized ? set3SuggestedReps(i)
-                                        .toDouble() : 10.0)
-                                        : 10.0))
-                                    .toDouble(),
-                                double.tryParse(
-                                    _rirControllers[i]
-                                    [j]
-                                        .text) ??
-                                    ((j == 0)
-                                        ? (_isInitialized ? set1RIR(i) : 0.5)
-                                        : (j == 1)
-                                        ? (_isInitialized ? set2RIR(i) : 0.5)
-                                        : (j == 2)
-                                        ? (_isInitialized ? set3RIR(i) : 0.5)
-                                        : 0.5) // Now correctly using set-specific RIR
-                            )
-                                .toStringAsFixed(1),
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: (_weightControllers[i][j]
-                                  .text
-                                  .isNotEmpty ||
-                                  _repsControllers[i][j]
-                                      .text
-                                      .isNotEmpty ||
-                                  _rirControllers[i][j]
-                                      .text
-                                      .isNotEmpty)
-                                  ? Colors.white
-                                  : Colors.grey,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
                   ],
                 ),
               ),

@@ -1358,6 +1358,32 @@ class PeriodizationModelUtils {
     };
   }
 
+  static final Set<String> _velocityTrackedExercises = {
+    // Bench press variants
+    'bench press, barbell',
+    'bench press, narrow grip',
+    'bench press, larsen press',
+    'bench press, long pause',
+    'bench press, banded',
+    'bench press, pin press',
+    'bench press, touch n go',
+    'incline press, barbell',
+
+    // Deadlift variants
+    'deadlift, conventional',
+    'deadlift, sumo',
+
+    // Squat variants
+    'back squat, barbell',
+    'back squat, low bar',
+    'back squat, pin squat',
+    'back squat, paused squat',
+    'back squat, banded',
+  };
+
+  static bool isVelocityTracked(String exerciseName) {
+    return _velocityTrackedExercises.contains(exerciseName.trim().toLowerCase());
+  }
 
 
   static Map<String, dynamic> getWeightByProgressionModel({

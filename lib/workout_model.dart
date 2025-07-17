@@ -86,10 +86,16 @@ class SetDetails {
   double? weight;
   double? rir;
 
+  // ✅ New fields
+  double? velocity;
+  String? notes;
+
   SetDetails({
-    this.reps,  // ✅ Now nullable
-    this.weight,  // ✅ Now nullable
-    this.rir,  // ✅ Now nullable
+    this.reps,
+    this.weight,
+    this.rir,
+    this.velocity,
+    this.notes,
   });
 
   factory SetDetails.fromFirestore(Map<String, dynamic> data, int setNumber) {
@@ -98,24 +104,30 @@ class SetDetails {
           ? data['reps']
           : (data['reps'] is double)
           ? (data['reps'] as double).toInt()
-          : int.tryParse(data['reps']?.toString() ?? '') ?? 0, // ✅ Default to 0 if null
-
+          : int.tryParse(data['reps']?.toString() ?? ''),
       weight: (data['weight'] is num)
           ? (data['weight'] as num).toDouble()
-          : 0.0, // ✅ Default to 0.0
-
+          : null,
       rir: (data['rir'] is num)
           ? (data['rir'] as num).toDouble()
-          : 0.0, // ✅ Default to 0.0
+          : null,
+
+      // ✅ Handle velocity
+      velocity: (data['velocity'] is num)
+          ? (data['velocity'] as num).toDouble()
+          : double.tryParse(data['velocity']?.toString() ?? ''),
+
+      // ✅ Handle notes
+      notes: data['notes']?.toString(),
     );
   }
-
-
 
   Map<String, dynamic> toMap() => {
     'reps': reps,
     'weight': weight,
     'rir': rir,
+    'velocity': velocity,
+    'notes': notes,
   };
 
   /// ✅ Check if a SetDetails entry is empty (for hint text logic)
