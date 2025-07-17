@@ -1110,8 +1110,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
       print("🧱 [WES] Selected blockId: $_selectedBlockId");
 
-      await _loadExercisesFromBB2ForDay();
-      print("📋 [WES] BB2 exercises loaded → ${_selectedExercisesWithCircuits.length} exercises");
 
       await _loadInitialData();
       print("📥 [WES] Draft data loaded");
@@ -1139,9 +1137,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         print('📂 [WES Init] Draft loaded for ${_selectedDate.toIso8601String()}: $draftLoaded');
 
         await _mergeNewBB2ExercisesIntoDraft();
-        await _loadExercisesFromBB2ForDay();
+        _populateVelocityFlags();
+
+
+
       } else {
         await _mergeNewBB2ExercisesIntoDraft();
+        _populateVelocityFlags();
+
+
       }
 
       print("🔀 [WES] Merged BB2 into draft");
@@ -1217,6 +1221,17 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     // ❌ Still null after all attempts
     print('❌ [WES] Failed to fetch valid blockMeta after $maxAttempts attempts');
   }
+
+  void _populateVelocityFlags() {
+    for (final exercise in _selectedExercisesWithCircuits) {
+      final name = (exercise['name'] as String?)?.toLowerCase() ?? '';
+      final isTracked = PeriodizationModelUtils.isVelocityTracked(name); // ✅ declare it here
+      _showVelocityByExercise[name] = isTracked;
+
+      print('📈 Velocity Check → $name → $isTracked'); // ✅ now it exists
+    }
+  }
+
 
 
   Future<void> _loadBlockDatesOnly() async {
@@ -2318,6 +2333,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       );
 
       _initializeControllers();
+      _populateVelocityFlags();
     });
   }
 
@@ -2528,6 +2544,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     if (selected != null && selected.isNotEmpty) {
       setState(() {
         _selectedExercisesWithCircuits[index]['name'] = selected;
+        _populateVelocityFlags();
       });
     }
   }
@@ -4147,29 +4164,52 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // 🟨 Header Row
+                          // 🟨 Header Row (per exercise row)
                           Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
-                            children: const [
-                              SizedBox(width: 68, child: Padding(
-                                  padding: EdgeInsets.only(left: 3), // ⬅️ Shift the text slightly right
-                                  child: Text('Weight', style: _headerStyle))),
-                              SizedBox(width: 4),
-                              SizedBox(width: 50, child: Padding(
-                                  padding: EdgeInsets.only(left: 2), // ⬅️ Shift the text slightly right
-                                  child: Text('Reps', style: _headerStyle))),
-                              SizedBox(width: 4),
-                              SizedBox(width: 50, child: Padding(
-                                  padding: EdgeInsets.only(left: 3), // ⬅️ Shift the text slightly right
-                                  child: Text('RIR', style: _headerStyle))),
-                              SizedBox(width: 4),
-                              SizedBox(width: 45, child: Text('Vel.', style: _headerStyle)),
-                              SizedBox(width: 4),
-                              SizedBox(width: 55, child: Text('E1RM', style: _headerStyle)),
-                              SizedBox(width: 4),
-                              SizedBox(width: 120, child: Text('Notes', style: _headerStyle)),
+                            children: [
+                              const SizedBox(
+                                width: 68,
+                                child: Padding(
+                                  padding: EdgeInsets.only(left: 3),
+                                  child: Text('Weight', style: _headerStyle),
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+
+                              const SizedBox(
+                                width: 50,
+                                child: Padding(
+                                  padding: EdgeInsets.only(left: 2),
+                                  child: Text('Reps', style: _headerStyle),
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+
+                              const SizedBox(
+                                width: 50,
+                                child: Padding(
+                                  padding: EdgeInsets.only(left: 3),
+                                  child: Text('RIR', style: _headerStyle),
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+
+                              // ✅ Conditionally include Velocity (for this exercise only)
+                              if (_showVelocityByExercise[
+                              (_selectedExercisesWithCircuits[i]['name'] as String).toLowerCase()] ==
+                                  true) ...[
+                                const SizedBox(width: 45, child: Text('Vel.', style: _headerStyle)),
+                                const SizedBox(width: 4),
+                              ],
+
+                              const SizedBox(width: 55, child: Text('E1RM', style: _headerStyle)),
+                              const SizedBox(width: 4),
+                              const SizedBox(width: 120, child: Text('Notes', style: _headerStyle)),
                             ],
                           ),
+
+
 
                           const SizedBox(height: 2),
 
@@ -4201,13 +4241,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                                   ),
                                   onChanged: (value) => setState(() {}),
                                   style: TextStyle(
-                                    color: _weightControllers[i][j].text.isEmpty
-                                        ? Colors.grey
-                                        : Colors.white,
+                                    color: _weightControllers[i][j].text.isEmpty ? Colors.grey : Colors.white,
                                   ),
                                 ),
                               ),
-
                               const SizedBox(width: 4),
 
                               // Reps
@@ -4217,7 +4254,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                                   controller: _repsControllers[i][j],
                                   keyboardType: TextInputType.number,
                                   decoration: InputDecoration(
-                                    contentPadding: EdgeInsets.only(left: 3), // ⬅️ Increase this to shift right
+                                    contentPadding: const EdgeInsets.only(left: 3),
                                     hintText: (_isLoadingData || !_isInitialized)
                                         ? ''
                                         : (j == 0)
@@ -4235,13 +4272,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                                   ),
                                   onChanged: (value) => setState(() {}),
                                   style: TextStyle(
-                                    color: _repsControllers[i][j].text.isEmpty
-                                        ? Colors.grey
-                                        : Colors.white,
+                                    color: _repsControllers[i][j].text.isEmpty ? Colors.grey : Colors.white,
                                   ),
                                 ),
                               ),
-
                               const SizedBox(width: 4),
 
                               // RIR
@@ -4251,7 +4285,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                                   controller: _rirControllers[i][j],
                                   keyboardType: TextInputType.number,
                                   decoration: InputDecoration(
-                                    contentPadding: EdgeInsets.only(left: 2), // ⬅️ Increase this to shift right
+                                    contentPadding: const EdgeInsets.only(left: 2),
                                     hintText: (j == 0)
                                         ? set1RIR(i).toString()
                                         : (j == 1)
@@ -4267,39 +4301,37 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                                   ),
                                   onChanged: (value) => setState(() {}),
                                   style: TextStyle(
-                                    color: _rirControllers[i][j].text.isEmpty
-                                        ? Colors.grey
-                                        : Colors.white,
+                                    color: _rirControllers[i][j].text.isEmpty ? Colors.grey : Colors.white,
                                   ),
                                 ),
                               ),
-
                               const SizedBox(width: 4),
 
-                              // Velocity
-                              SizedBox(
-                                width: 45,
-                                child: TextField(
-                                  controller: _velocityControllers[i][j],
-                                  keyboardType: TextInputType.number,
-                                  decoration: const InputDecoration(
-                                    hintText: '',
-                                    hintStyle: TextStyle(
-                                      color: Colors.grey,
-                                      fontStyle: FontStyle.italic,
-                                      fontSize: 11,
+                              // ✅ Conditionally show Velocity
+                              if (_showVelocityByExercise[
+                              (_selectedExercisesWithCircuits[i]['name'] as String).toLowerCase()] ==
+                                  true) ...[
+                                SizedBox(
+                                  width: 45,
+                                  child: TextField(
+                                    controller: _velocityControllers[i][j],
+                                    keyboardType: TextInputType.number,
+                                    decoration: const InputDecoration(
+                                      hintText: '',
+                                      hintStyle: TextStyle(
+                                        color: Colors.grey,
+                                        fontStyle: FontStyle.italic,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                    onChanged: (value) => setState(() {}),
+                                    style: TextStyle(
+                                      color: _velocityControllers[i][j].text.isEmpty ? Colors.grey : Colors.white,
                                     ),
                                   ),
-                                  onChanged: (value) => setState(() {}),
-                                  style: TextStyle(
-                                    color: _velocityControllers[i][j].text.isEmpty
-                                        ? Colors.grey
-                                        : Colors.white,
-                                  ),
                                 ),
-                              ),
-
-                              const SizedBox(width: 4),
+                                const SizedBox(width: 4),
+                              ],
 
                               // E1RM
                               SizedBox(
@@ -4315,16 +4347,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                                                 : (_isInitialized ? set3SuggestedWeight(i) : 20.0)),
                                         (int.tryParse(_repsControllers[i][j].text) ??
                                             (j == 0
-                                                ? (_isInitialized
-                                                ? set1SuggestedReps(i).toDouble()
-                                                : 15.0)
+                                                ? (_isInitialized ? set1SuggestedReps(i).toDouble() : 15.0)
                                                 : j == 1
-                                                ? (_isInitialized
-                                                ? set2SuggestedReps(i).toDouble()
-                                                : 10.0)
-                                                : (_isInitialized
-                                                ? set3SuggestedReps(i).toDouble()
-                                                : 10.0)))
+                                                ? (_isInitialized ? set2SuggestedReps(i).toDouble() : 10.0)
+                                                : (_isInitialized ? set3SuggestedReps(i).toDouble() : 10.0)))
                                             .toDouble(),
                                         double.tryParse(_rirControllers[i][j].text) ??
                                             (j == 0
@@ -4334,7 +4360,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                                                 : (_isInitialized ? set3RIR(i) : 0.5)))
                                         .toStringAsFixed(1),
                                   ),
-                                  enabled: false, // ✅ match visual style, but read-only
+                                  enabled: false,
                                   readOnly: true,
                                   decoration: const InputDecoration(
                                     hintText: '',
@@ -4344,8 +4370,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                                       fontSize: 12,
                                     ),
                                     contentPadding: EdgeInsets.only(left: 4),
-
-                                    // ✅ This controls the underline colors
                                     enabledBorder: UnderlineInputBorder(
                                       borderSide: BorderSide(color: Colors.white, width: 1),
                                     ),
@@ -4356,7 +4380,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                                       borderSide: BorderSide(color: Colors.white, width: 1.5),
                                     ),
                                   ),
-
                                   style: TextStyle(
                                     fontSize: 12,
                                     color: (_weightControllers[i][j].text.isNotEmpty ||
@@ -4367,10 +4390,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                                   ),
                                 ),
                               ),
-
-
-
-
                               const SizedBox(width: 4),
 
                               // Notes
@@ -4389,15 +4408,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                                   ),
                                   onChanged: (value) => setState(() {}),
                                   style: TextStyle(
-                                    color: _notesControllers[i][j].text.isEmpty
-                                        ? Colors.grey
-                                        : Colors.white,
+                                    color: _notesControllers[i][j].text.isEmpty ? Colors.grey : Colors.white,
                                     fontSize: 12,
                                   ),
                                 ),
                               ),
                             ],
-                          ),
+                          )
+
                         ],
                       ),
                     ),
