@@ -702,7 +702,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final progressed = _getProgressedValues(exerciseIndex);
     final double baseWeight = (progressed['weight'] ?? 20.0).toDouble();
     final double baseReps = (progressed['reps'] ?? 10).toDouble();
-    final double baseE1RM = PeriodizationModelUtils.calculateE1RM(baseWeight, baseReps, usedRIR);
+    final double baseE1RM = progressed['e1rm'] ?? PeriodizationModelUtils.calculateE1RM(
+      baseWeight,
+      baseReps,
+      usedRIR,
+    );
+    print('🧠 [WES] Base E1RM used for ${exerciseName} = ${baseE1RM.toStringAsFixed(2)} '
+        '(weight = ${baseWeight.toStringAsFixed(1)}, reps = ${baseReps.toStringAsFixed(1)}, RIR = $usedRIR)');
 
 // Prioritization logic
     final bool hasUserReps = reps != null;

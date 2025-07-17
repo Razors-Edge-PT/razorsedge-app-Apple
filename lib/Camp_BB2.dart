@@ -2237,6 +2237,12 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           effectiveRir,
         );
 
+        print('🧠 [BB2] Final E1RM used for $exerciseName = ${e1rm?.toStringAsFixed(2)} '
+            '(weight = ${effectiveWeight?.toStringAsFixed(1) ?? "null"}, '
+            'reps = ${effectiveReps?.toStringAsFixed(1) ?? "null"}, '
+            'RIR = ${effectiveRir?.toStringAsFixed(1) ?? "null"})');
+
+
         print("🧠 [BB2 UI] Calculating E1RM from weight=$effectiveWeight, reps=$effectiveReps, rir=$effectiveRir → E1RM=$e1rm");
 
 
