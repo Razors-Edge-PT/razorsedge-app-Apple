@@ -141,6 +141,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   List<List<List<TextEditingController>>> e1rmControllers = [];
   List<List<List<int>>> circuitStartIndices = [];
   final ScrollController _horizontalScrollController = ScrollController();
+  final ScrollController _fieldScrollController = ScrollController();
   final ScrollController _verticalScrollController = ScrollController();
   Map<String, dynamic> repTargetsByExercise = {};
   Map<String, dynamic> plannedExerciseDetails = {};
@@ -236,6 +237,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   void initState() {
     super.initState();
     _repo = BlockPlannerRepository();
+
 
     final pageLoadTimer = Stopwatch()..start(); // ⏱️ Start timing
 
@@ -927,6 +929,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       node.dispose();
     }
     _focusNodes.clear();
+    _fieldScrollController.dispose();
 
     super.dispose();
   }
@@ -2297,108 +2300,54 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         print("🧠 [BB2 UI] Calculating E1RM from weight=$effectiveWeight, reps=$effectiveReps, rir=$effectiveRir → E1RM=$e1rm");
 
 
-        return Container(
-          height: exerciseRowHeight,
-          padding: const EdgeInsets.symmetric(horizontal: 2),
-          decoration: BoxDecoration(
-            color: getRowColor(weekIndex, dayIndex, rowIndex),
-            border: Border(
-              bottom: BorderSide(color: Colors.blueGrey.shade700, width: 0.5),
-            ),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
-                flex: 4,
-                child: ReorderableDelayedDragStartListener(
-                  index: rowIndex,
-                  child: GestureDetector(
-                    onTap: () async {
-                      await showCollapsibleExercisePicker(
-                        context: context,
-                        allGroupedExercises: groupedExercises,
-                        exerciseIdToName: _exerciseIdToName,
-                        onSelected: (selectedExerciseName) {
-                          final exerciseId = nameToIdMap[selectedExerciseName];
-                          final isPlanned = exerciseId != null &&
-                              plannedExercises.contains(exerciseId);
-
-                          setState(() {
-                            row.exercise = selectedExerciseName;
-                            exerciseController.text = selectedExerciseName;
-                            weightController.clear();
-                            repsController.clear();
-                            rirController.clear();
-                            velocityController.clear();  // ✅ NEW
-                            notesController.clear();     // ✅ NEW
-
-                            if (isPlanned) {
-                              // ✅ Normalize repTargets (flat → nested) for safety
-                              if (repTargetsByExercise?[exerciseId]?['repTargets'] is List) {
-                                final reps = repTargetsByExercise?[exerciseId]?['repTargets'];
-                                if (reps.isNotEmpty && reps.first is String) {
-                                  repTargetsByExercise?[exerciseId]?['repTargets'] = [List<String>.from(reps)];
-                                  print('🔄 [BB2] Normalized flat repTargets → nested for $exerciseId');
-                                }
-                              }
-
-                              final repTarget = PeriodizationModelUtils.getSuggestedRepTargetByModel(
-                                exerciseName: exerciseId!,
-                                plannedIndex: getExerciseCountInWeek(
-                                  selectedExerciseName,
-                                  weekIndex,
-                                  dayIndex,
-                                  rowIndex,
-                                ),
-                                weekIndex: weekIndex,
-                                repTargetsByExercise: repTargetsByExercise,
-                                plannedExerciseDetails: plannedExerciseDetails, // ✅ Pass it in here
-                              );
-
-                              // Do not set repsController.text — just clear it
-                              repsController.clear();
-                            }
-
-                          });
-                        },
-                      );
-                    },
-                    child: Container(
-                      width: 114,
-                      height: 30,
-                      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 1),
-                      decoration: BoxDecoration(
-                        color: getRowColor(weekIndex, dayIndex, rowIndex),
-                        border: Border.all(color: Colors.grey),
-                        borderRadius: BorderRadius.circular(4.0),
-                      ),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          row.exercise ?? 'Select Exercise',
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 11, color: Colors.white),
-                        ),
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 🟦 Fixed Exercise field
+            SizedBox(
+              width: 130,
+              child: ReorderableDelayedDragStartListener(
+                index: rowIndex,
+                child: GestureDetector(
+                  onTap: () async {
+                    // your existing exercise picker logic
+                  },
+                  child: Container(
+                    height: 30,
+                    padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 1),
+                    decoration: BoxDecoration(
+                      color: getRowColor(weekIndex, dayIndex, rowIndex),
+                      border: Border.all(color: Colors.grey),
+                      borderRadius: BorderRadius.circular(4.0),
+                    ),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        row.exercise ?? 'Select Exercise',
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 11, color: Colors.white),
                       ),
                     ),
                   ),
                 ),
               ),
+            ),
 
-              // Weight
-              _buildFieldBox(weightController, hintWeight, weekIndex, dayIndex, rowIndex, "weight", localSetState),
-
+            // 🟥 Scrollable fields
+            Expanded(
+            child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            controller: _fieldScrollController, // 👈 same controller used for all rows
+            child: Row(
+            children: [
+            _buildFieldBox(weightController, hintWeight, weekIndex, dayIndex, rowIndex, "weight", localSetState),
               // Reps
               _buildFieldBox(repsController, hintReps, weekIndex, dayIndex, rowIndex, "reps", localSetState),
-
               // RIR
               _buildFieldBox(rirController, hintRir, weekIndex, dayIndex, rowIndex, "rir", localSetState),
-
-
               // E1RM
-              Expanded(
-                flex: 2,
+              SizedBox(
+                width: 45,
                 child: Container(
                   alignment: Alignment.center,
                   child: Text(
@@ -2407,8 +2356,44 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                   ),
                 ),
               ),
-            ],
-          ),
+
+              // Velocity (plain TextField)
+              SizedBox(
+                width: 30,
+                child: TextField(
+                  controller: velocityController,
+                  decoration: const InputDecoration(
+                    hintText: 'm/s',
+                    isDense: true,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                    border: InputBorder.none,
+                  ),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 12),
+                  keyboardType: TextInputType.text,
+                ),
+              ),
+
+              // Notes
+              SizedBox(
+                width: 100,
+                child: TextField(
+                  controller: notesController,
+                  decoration: const InputDecoration(
+                    hintText: 'notes',
+                    isDense: true,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                    border: InputBorder.none,
+                  ),
+                  style: const TextStyle(fontSize: 12),
+                  keyboardType: TextInputType.text,
+                ),
+              ),
+                ],
+              ),
+                ),
+            ),
+          ],
         );
       },
     );
@@ -2444,8 +2429,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
     print('📝 hint="$hint" | controller="${controller.text}" for field: $fieldKey');
 
-    return Expanded(
-      flex: fieldKey == "weight" ? 2 : 1,
+    return SizedBox(
+      width: fieldKey == "weight" ? 40 : 40, // Adjust widths as needed
       child: TextField(
         controller: controller,
         focusNode: _getFocusNode(key),
@@ -2463,89 +2448,10 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         onEditingComplete: () => _getFocusNode(key).unfocus(),
       ),
     );
+
   }
 
-  Widget _buildReadOnlyRow(Map<String, dynamic> savedExercise, {Key? key}) {
-    final name = savedExercise['name'] ?? 'Unnamed';
-    final circuitIndex = savedExercise['circuitIndex'] ?? 0;
-    final sets = List<Map<String, dynamic>>.from(savedExercise['sets'] ?? []);
 
-    final topSet = sets.isNotEmpty
-        ? sets.reduce((a, b) {
-      final e1A = PeriodizationModelUtils.calculateE1RM(
-        (a['weight'] ?? 0).toDouble(),
-        (a['reps'] ?? 0).toDouble(),
-        (a['rir'] ?? 0).toDouble(),
-      );
-      final e1B = PeriodizationModelUtils.calculateE1RM(
-        (b['weight'] ?? 0).toDouble(),
-        (b['reps'] ?? 0).toDouble(),
-        (b['rir'] ?? 0).toDouble(),
-      );
-      return e1A >= e1B ? a : b;
-    })
-        : null;
-
-    final weight = (topSet?['weight'] ?? 0).toDouble();
-    final reps = (topSet?['reps'] ?? 0).toDouble();
-    final rir = (topSet?['rir'] ?? 0).toDouble();
-    final e1rm = PeriodizationModelUtils.calculateE1RM(weight, reps, rir);
-
-    return Container(
-      key: key, // ✅ attach the key here
-      height: exerciseRowHeight,
-      padding: const EdgeInsets.symmetric(horizontal: 2),
-      decoration: BoxDecoration(
-        color: Colors.blueGrey[200]!.withOpacity(0.15),
-        border: Border(bottom: BorderSide(color: Colors.blueGrey[500]!   , width: 0.5)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Expanded(
-            flex: 4,
-            child: Container(
-              alignment: Alignment.centerLeft,
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              child: Text(name,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  fontStyle: FontStyle.italic,
-                ),
-              ),
-            ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Text(weight.toStringAsFixed(1),
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 12, color: Colors.white,  fontStyle: FontStyle.italic)),
-          ),
-          Expanded(
-            flex: 1,
-            child: Text(reps.toStringAsFixed(0),
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 12, color: Colors.white,  fontStyle: FontStyle.italic)),
-          ),
-          Expanded(
-            flex: 1,
-            child: Text(rir.toStringAsFixed(1),
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 12, color: Colors.white,  fontStyle: FontStyle.italic)),
-          ),
-          Expanded(
-            flex: 2,
-            child: Text(e1rm.toStringAsFixed(1),
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 12, color: Colors.white70,  fontStyle: FontStyle.italic)),
-          ),
-        ],
-      ),
-    );
-  }
 
   /// A compact card showing “Rest Day” on a date that isn’t in `_selectedDays`.
   Widget _buildRestDayRow(String dayAbbrev, DateTime date) {
@@ -2977,57 +2883,92 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
               const SizedBox(height: 3),
 
-              // 🟣 Table Header
-              Container(
-                padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-                color: Colors.blueGrey.shade800,
-                child: Row(
-                  children: const [
-                    Expanded(
-                        flex: 4,
-                        child: Text("Exercise",
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white))),
-                    Expanded(
-                        flex: 2,
-                        child: Text("Weight",
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white))),
-                    Expanded(
-                        flex: 1,
-                        child: Text("Reps",
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white))),
-                    Expanded(
-                        flex: 1,
-                        child: Text("RIR",
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white))),
-                    Expanded(
-                        flex: 2,
-                        child: Text("E1RM",
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white))),
-                  ],
-                ),
-              ),
+                  // 🟣 Table Header
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    controller: _fieldScrollController, // ✅ Use same controller!
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+                      color: Colors.blueGrey.shade800,
+                      child: Row(
+                        children: const [
+                          // Exercise
+                          SizedBox(
+                            width: 122,
+                            child: Text("Exercise",
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white)),
+                          ),
+                          // Weight
+                          SizedBox(
+                            width: 52,
+                            child: Text("Weight",
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white)),
+                          ),
+                          // Reps
+                          SizedBox(
+                            width: 37,
+                            child: Text("Reps",
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white)),
+                          ),
+                          // RIR
+                          SizedBox(
+                            width: 40,
+                            child: Text("RIR",
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white)),
+                          ),
+                          // E1RM
+                          SizedBox(
+                            width: 42,
+                            child: Text("E1RM",
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white)),
+                          ),
+                          // Velocity
+                          SizedBox(
+                            width: 55,
+                            child: Text("Velocity",
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white)),
+                          ),
+                          // Notes
+                          SizedBox(
+                            width: 100,
+                            child: Text("Notes",
+                                textAlign: TextAlign.left,
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
 
-              // 🟣 Scrollable Exercise Table (~6.5 visible rows)
+
+                  // 🟣 Scrollable Exercise Table (~6.5 visible rows)
               const SizedBox(height: 6),
                   SizedBox(
                     height: 395,
@@ -3301,75 +3242,75 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
 
                         // ✅ Show planned exercises only if any exist
-                        if (exerciseRows[weekIndex][dayIndex].isNotEmpty)
-                          Expanded(
-                            child: ReorderableListView.builder(
-                              itemCount: exerciseRows[weekIndex][dayIndex].length,
-                  onReorder: (oldIndex, newIndex) {
-                    // Prevent reordering of read-only rows
-                    if (oldIndex < savedWesExercises.length || newIndex < savedWesExercises.length) return;
+          if (exerciseRows[weekIndex][dayIndex].isNotEmpty)
+          Expanded(
+          child: ReorderableListView.builder(
+          itemCount: exerciseRows[weekIndex][dayIndex].length,
+          onReorder: (oldIndex, newIndex) {
+          // Prevent reordering of read-only rows
+          if (oldIndex < savedWesExercises.length || newIndex < savedWesExercises.length) return;
 
-                    setState(() {
-                      final adjustedOld = oldIndex - savedWesExercises.length;
-                      var adjustedNew = newIndex - savedWesExercises.length;
-                      if (adjustedNew > adjustedOld) adjustedNew -= 1;
+          setState(() {
+          final adjustedOld = oldIndex - savedWesExercises.length;
+          var adjustedNew = newIndex - savedWesExercises.length;
+          if (adjustedNew > adjustedOld) adjustedNew -= 1;
 
-                      final movedRow = exerciseRows[weekIndex][dayIndex].removeAt(adjustedOld);
-                      exerciseRows[weekIndex][dayIndex].insert(adjustedNew, movedRow);
+          final movedRow = exerciseRows[weekIndex][dayIndex].removeAt(adjustedOld);
+          exerciseRows[weekIndex][dayIndex].insert(adjustedNew, movedRow);
 
-                      // ✅ Rebuild circuit structure and propagate
-                      final starts = <int>{};
-                      for (int i = 0; i < exerciseRows[weekIndex][dayIndex].length; i++) {
-                        if (i == 0 || exerciseRows[weekIndex][dayIndex][i].circuitIndex != exerciseRows[weekIndex][dayIndex][i - 1].circuitIndex) {
-                          starts.add(i);
-                        }
-                      }
-                      circuitStartIndices[weekIndex][dayIndex] = starts.toList()..sort();
+          // ✅ Rebuild circuit structure and propagate
+          final starts = <int>{};
+          for (int i = 0; i < exerciseRows[weekIndex][dayIndex].length; i++) {
+          if (i == 0 || exerciseRows[weekIndex][dayIndex][i].circuitIndex != exerciseRows[weekIndex][dayIndex][i - 1].circuitIndex) {
+          starts.add(i);
+          }
+          }
+          circuitStartIndices[weekIndex][dayIndex] = starts.toList()..sort();
 
-                      updateFutureDaysWithEditedDay(weekIndex, dayIndex);
-                    });
-                  },
-                  buildDefaultDragHandles: false,
-                  proxyDecorator: (child, index, animation) => Material(elevation: 2, child: child),
-                              itemBuilder: (context, index) {
-                                if (index < savedWesExercises.length) {
-                                  final skipped = savedWesExercises[index];
-                                  return SizedBox(
-                                    key: ValueKey('skipped_saved_row_${skipped['name']}_${skipped['circuitIndex']}'),
-                                  );
-                                }
+          updateFutureDaysWithEditedDay(weekIndex, dayIndex);
+          });
+          },
+          buildDefaultDragHandles: false,
+          proxyDecorator: (child, index, animation) => Material(elevation: 2, child: child),
+          itemBuilder: (context, index) {
+          if (index < savedWesExercises.length) {
+          final skipped = savedWesExercises[index];
+          return SizedBox(
+          key: ValueKey('skipped_saved_row_${skipped['name']}_${skipped['circuitIndex']}'),
+          );
+          }
 
-                                final rowIndex = index - savedWesExercises.length;
-                                final rows = exerciseRows[weekIndex][dayIndex];
-                                final row = rows[rowIndex];
-                                final isFirstInCircuit = rowIndex == 0 || row.circuitIndex != rows[rowIndex - 1].circuitIndex;
-                                final currentCircuit = row.circuitIndex;
-                                final isLastInCircuit = rowIndex == rows.lastIndexWhere((r) => r.circuitIndex == currentCircuit);
+          final rowIndex = index - savedWesExercises.length;
+          final rows = exerciseRows[weekIndex][dayIndex];
+          final row = rows[rowIndex];
+          final isFirstInCircuit = rowIndex == 0 || row.circuitIndex != rows[rowIndex - 1].circuitIndex;
+          final currentCircuit = row.circuitIndex;
+          final isLastInCircuit = rowIndex == rows.lastIndexWhere((r) => r.circuitIndex == currentCircuit);
 
-                                print('📦 Editable Row: ${row.exercise} (week $weekIndex day $dayIndex row $rowIndex)');
+          print('📦 Editable Row: ${row.exercise} (week $weekIndex day $dayIndex row $rowIndex)');
 
-                                return Column(
-                                  key: ValueKey('row_wrapper_${row.id}'),
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    if (isFirstInCircuit)
-                                      Transform.translate(
-                                        offset: const Offset(0, -6), // 👈 Shift upward by 6 pixels
-                                        child: Padding(
-                                          padding: const EdgeInsets.only(left: 2, bottom: 1), // no top needed now
-                                          child: Text(
-                                            '  Circuit ${row.circuitIndex + 1}',
-                                            style: const TextStyle(
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.bold,
-                                              color: Colors.lightBlueAccent,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
+          return Column(
+          key: ValueKey('row_wrapper_${row.id}'),
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+          if (isFirstInCircuit)
+          Transform.translate(
+          offset: const Offset(0, -6),
+          child: Padding(
+          padding: const EdgeInsets.only(left: 2, bottom: 1),
+          child: Text(
+          '  Circuit ${row.circuitIndex + 1}',
+          style: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
+          color: Colors.lightBlueAccent,
+          ),
+          ),
+          ),
+          ),
+          Dismissible(
 
-                        Dismissible(
-                          key: ValueKey(row.id),
+          key: ValueKey(row.id),
                           direction: DismissDirection.endToStart,
                           background: Container(
                             color: Colors.red,
@@ -3507,7 +3448,9 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
                   },
                 ),
-              ),
+
+
+          ),
 
 
               const SizedBox(height: 8),
@@ -3554,9 +3497,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                   ),
                 ),
               ),
-
-
-            ],
+                      ],
           ),
         ),
           ],
