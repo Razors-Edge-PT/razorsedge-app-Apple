@@ -82,6 +82,8 @@ class ExerciseRow {
   TextEditingController weightController = TextEditingController();
   TextEditingController repsController = TextEditingController();
   TextEditingController rirController = TextEditingController();
+  TextEditingController velocityController = TextEditingController(); // ✅ NEW
+  TextEditingController notesController = TextEditingController();    // ✅ NEW
   int circuitIndex;
 
   ExerciseRow({String? id, this.exercise, required this.circuitIndex})
@@ -132,6 +134,9 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   List<List<String?>> selectedTemplateIds = [];
   List<List<List<ExerciseRow>>> exerciseRows = [];
   final Map<String, bool> _savedFields = {}; // key = 'w0_d1_r2_weight'
+  List<List<TextEditingController>> _velocityControllers = [];
+  List<List<TextEditingController>> _notesControllers = [];
+
 
   List<List<List<TextEditingController>>> e1rmControllers = [];
   List<List<List<int>>> circuitStartIndices = [];
@@ -904,6 +909,20 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       }
     }
 
+    // ✅ Dispose TextEditingControllers
+    for (final week in exerciseRows) {
+      for (final day in week) {
+        for (final row in day) {
+          row.exerciseController.dispose();
+          row.weightController.dispose();
+          row.repsController.dispose();
+          row.rirController.dispose();
+          row.velocityController.dispose();
+          row.notesController.dispose();
+        }
+      }
+    }
+
     for (final node in _focusNodes.values) {
       node.dispose();
     }
@@ -1250,9 +1269,26 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         );
         row.exerciseController.text = name;
 
+        final rowIndex = loadedRows.length;
+        final baseKey = 'w${weekIndex}_d${dayIndex}_r${rowIndex}';
+
         final dynamic rawWeight = ex['weight'];
         final dynamic rawReps = ex['reps'];
         final dynamic rawRIR = ex['rir'];
+        // ✅ Restore velocity (if available)
+        final dynamic rawVelocity = ex['velocity'];
+        if (rawVelocity != null && rawVelocity.toString().trim().isNotEmpty) {
+          row.velocityController.text = rawVelocity.toString().trim();
+          _savedFields['${baseKey}_velocity'] = true;
+        }
+
+// ✅ Restore notes (if available)
+        final dynamic rawNotes = ex['notes'];
+        if (rawNotes != null && rawNotes.toString().trim().isNotEmpty) {
+          row.notesController.text = rawNotes.toString().trim();
+          _savedFields['${baseKey}_notes'] = true;
+        }
+
 
         final double? weightVal = rawWeight != null ? double.tryParse(rawWeight.toString()) : null;
         final int? repsVal = rawReps != null ? int.tryParse(rawReps.toString()) : null;
@@ -1267,9 +1303,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         if (rirVal != null && rirVal != 0.0) {
           row.rirController.text = rirVal.toString();
         }
-
-        final rowIndex = loadedRows.length;
-        final baseKey = 'w${weekIndex}_d${dayIndex}_r${rowIndex}';
 
         if (row.weightController.text.trim().isNotEmpty &&
             double.tryParse(row.weightController.text.trim()) != null &&
@@ -1291,9 +1324,12 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         loadedRows.add(row);
 
         print("Loaded: ${row.exercise}, "
-            "${row.weightController.text}, "
-            "${row.repsController.text}, "
-            "${row.rirController.text}");
+            "weight: ${row.weightController.text}, "
+            "reps: ${row.repsController.text}, "
+            "RIR: ${row.rirController.text}, "
+            "velocity: ${row.velocityController.text}, "
+            "notes: ${row.notesController.text}");
+
       }
 
       exerciseRows[weekIndex][dayIndex] = loadedRows;
@@ -1302,7 +1338,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       _loadedDays.add('w${weekIndex}_d${dayIndex}'); // ✅ Track that we’ve loaded this day
 
       for (final row in loadedRows) {
-        print('  • ${row.exercise} | weight: ${row.weightController.text} | reps: ${row.repsController.text} | RIR: ${row.rirController.text}');
+        print('  • ${row.exercise} | weight: ${row.weightController.text} | reps: ${row.repsController.text} | RIR: ${row.rirController.text} | velocity: ${row.velocityController.text} | notes: ${row.notesController.text}');
+
       }
 
       final List<int> newStarts = [];
@@ -1365,15 +1402,23 @@ class _BlockBuilder2State extends State<Camp_BB2> {
               sets[0]['weight']?.toString() ?? '';
           matchingRow.repsController.text = sets[0]['reps']?.toString() ?? '';
           matchingRow.rirController.text = sets[0]['rir']?.toString() ?? '';
+          matchingRow.velocityController.text = sets[0]['velocity']?.toString() ?? '';
+          matchingRow.notesController.text = sets[0]['notes']?.toString() ?? '';
+
 
           _savedFields['${baseKey}_weight'] = true;
           _savedFields['${baseKey}_reps'] = true;
           _savedFields['${baseKey}_rir'] = true;
+          _savedFields['${baseKey}_velocity'] = true;
+          _savedFields['${baseKey}_notes'] = true;
 
           print("Overrode with WES: ${matchingRow.exercise}, "
-              "${matchingRow.weightController.text}, "
-              "${matchingRow.repsController.text}, "
-              "${matchingRow.rirController.text}");
+              "weight: ${matchingRow.weightController.text}, "
+              "reps: ${matchingRow.repsController.text}, "
+              "RIR: ${matchingRow.rirController.text}, "
+              "velocity: ${matchingRow.velocityController.text}, "
+              "notes: ${matchingRow.notesController.text}");
+
           print('[Override Attempt] Exercise: $name, Circuit: $circuit, Sets: $sets');
         }
       }
@@ -1661,6 +1706,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         'weight': double.tryParse(row.weightController.text) ?? 0.0,
         'reps': int.tryParse(row.repsController.text) ?? 0,
         'rir': double.tryParse(row.rirController.text) ?? 0.0,
+        'velocity': row.velocityController.text.trim(), // ✅ NEW
+        'notes': row.notesController.text.trim(),       // ✅ NEW
         'circuitIndex': row.circuitIndex,
       });
     }
@@ -1714,6 +1761,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         'weight': double.tryParse(row.weightController.text) ?? 0.0,
         'reps': int.tryParse(row.repsController.text) ?? 0,
         'rir': double.tryParse(row.rirController.text) ?? 0.0,
+        'velocity': row.velocityController.text.trim(), // ✅ NEW
+        'notes': row.notesController.text.trim(),       // ✅ NEW
         'circuitIndex': row.circuitIndex,
       });
     }
@@ -1983,6 +2032,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     final weightController = row.weightController;
     final repsController = row.repsController;
     final rirController = row.rirController;
+    final velocityController = row.velocityController;
+    final notesController = row.notesController;
     final exerciseController = row.exerciseController;
 
     return StatefulBuilder(
@@ -2279,6 +2330,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                             weightController.clear();
                             repsController.clear();
                             rirController.clear();
+                            velocityController.clear();  // ✅ NEW
+                            notesController.clear();     // ✅ NEW
 
                             if (isPlanned) {
                               // ✅ Normalize repTargets (flat → nested) for safety
@@ -2606,65 +2659,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                       color: Colors.white70,
                                     ),
                                   ),
-                                  /*Builder(
-                                      builder: (_) {
-                                        final rows = exerciseRows[weekIndex][dayIndex];
-                                        final firstExercise = rows.isNotEmpty ? rows[0].exercise : null;
-                                        if (firstExercise == null || !PeriodizationModelUtils.exercisePreviousTopSetReps.containsKey(firstExercise)) {
-                                          return const Text(
-                                            "  Upcoming reps: None",
-                                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.white70  ),
-                                          );
-                                        }
-                                        final range = PeriodizationModelUtils.getDupSignatureRepRange(firstExercise);
-                                        final int min = range?['min'] ?? 2;
-                                        final int max = range?['max'] ?? 10;
-
-                                        final upcoming = PeriodizationModelUtils.REsignatureRepsByExercise(
-                                          exerciseName: firstExercise,
-                                          min: min,
-                                          max: max,
-                                          count: 5,
-                                        );
-
-                                        // 🧾 Print the 5 reps that will appear in the UI
-                                        print('🔮 [BB2 UI] Upcoming 5 reps for $firstExercise → ${upcoming.join(', ')}');
-
-                                        return Text(
-                                          "  Upcoming reps: ${upcoming.join(', ')}",
-                                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.white70   ),
-                                        );
-                                      }
-
-                                  ),*/
                                 ],
                               ),
-
-                              /*
-                              Builder(
-                                builder: (_) {
-                                  final rows = exerciseRows[weekIndex][dayIndex];
-                                  final firstExercise = rows.isNotEmpty ? rows[0].exercise : null;
-
-                                  if (firstExercise == null || !PeriodizationModelUtils.exercisePreviousTopSetReps.containsKey(firstExercise)) {
-                                    return const Text(
-                                      "Top set history: None",
-                                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.white70  ),
-                                    );
-                                  }
-
-                                  final history = PeriodizationModelUtils.exercisePreviousTopSetReps[firstExercise]!;
-
-                                  // 🔍 Print to console
-                                  print('🧠 [BB2 UI] Top set history for $firstExercise → ${history.join(', ')}');
-
-                                  return Text(
-                                    "Top set history: ${history.reversed.join(', ')}",
-                                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.white70  ),
-                                  );
-
-                                },
-                              ),*/
                             ],
                           ),
 
@@ -2838,15 +2834,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                             final String formattedWorkoutName =
                                 "${DateFormat('EEE d MMM').format(workoutDate)} - Week ${weekIndex + 1}";
 
-                            // 2️⃣ (Optional) If you actually want to read BB2 SharedPrefs:
-                            // final prefs = await SharedPreferences.getInstance();
-                            // final dateKey = DateFormat('yyyy-MM-dd').format(workoutDate);
-                            // final raw = prefs.getString('bb2_dayData_$dateKey');
-                            // if (raw != null) {
-                            //   final dayData = jsonDecode(raw);
-                            //   // extract exercises from dayData['exercises']…
-                            // }
-
                             // 3️⃣ Build your prefilled list from the in-memory rows
                             final rows = exerciseRows[weekIndex][dayIndex];
                             final List<Map<String, dynamic>> prefilled = [];
@@ -2933,6 +2920,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                 row.weightController.text = entry['weight']?.toString() ?? '';
                                 row.repsController.text = entry['reps']?.toString() ?? '';
                                 row.rirController.text = entry['rir']?.toString() ?? '';
+                                row.velocityController.text = entry['velocity']?.toString() ?? '';
+                                row.notesController.text = entry['notes']?.toString() ?? '';
                               }
                               await saveDayToFirestore(weekIndex, dayIndex); // ✅ still needed for Firestore
 
@@ -2952,6 +2941,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                         'reps': row.repsController.text,
                                         'weight': row.weightController.text,
                                         'rir': row.rirController.text,
+                                        'velocity': row.velocityController.text, // ✅ NEW
+                                        'notes': row.notesController.text,       // ✅ NEW
                                       }
                                     ],
                                   });
