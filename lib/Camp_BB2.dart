@@ -2305,7 +2305,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           children: [
             // 🟦 Fixed Exercise field
             SizedBox(
-              width: 130,
+              width: 134,
               child: ReorderableDelayedDragStartListener(
                 index: rowIndex,
                 child: GestureDetector(
@@ -2340,37 +2340,25 @@ class _BlockBuilder2State extends State<Camp_BB2> {
             controller: _fieldScrollController, // 👈 same controller used for all rows
             child: Row(
             children: [
+              SizedBox(width: 3),
             _buildFieldBox(weightController, hintWeight, weekIndex, dayIndex, rowIndex, "weight", localSetState),
+              SizedBox(width: 1),
               // Reps
               _buildFieldBox(repsController, hintReps, weekIndex, dayIndex, rowIndex, "reps", localSetState),
+              SizedBox(width: 3),
               // RIR
               _buildFieldBox(rirController, hintRir, weekIndex, dayIndex, rowIndex, "rir", localSetState),
+
+
               // E1RM
               SizedBox(
-                width: 45,
+                width: 48,
                 child: Container(
                   alignment: Alignment.center,
                   child: Text(
                     e1rm != null && e1rm > 0 ? e1rm.toStringAsFixed(1) : '',
                     style: const TextStyle(color: Colors.white, fontSize: 12),
                   ),
-                ),
-              ),
-
-              // Velocity (plain TextField)
-              SizedBox(
-                width: 30,
-                child: TextField(
-                  controller: velocityController,
-                  decoration: const InputDecoration(
-                    hintText: 'm/s',
-                    isDense: true,
-                    contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-                    border: InputBorder.none,
-                  ),
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 12),
-                  keyboardType: TextInputType.text,
                 ),
               ),
 
@@ -2422,15 +2410,24 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     final String key = 'w${week}_d${day}_r${row}_$fieldKey';
     final String value = controller.text.trim();
 
-    // Determine whether user typed something
     final bool wasManuallyEntered = value.isNotEmpty;
     final String state = wasManuallyEntered ? 'user' : 'hint';
     final color = _getFieldColor(state);
 
     print('📝 hint="$hint" | controller="${controller.text}" for field: $fieldKey');
 
+    // 🔧 Widths per field
+    final fieldWidths = {
+      "weight": 42.0,
+      "reps": 34.0,
+      "rir": 34.0,
+      "velocity": 30.0,
+      "notes": 100.0,
+    };
+    final width = fieldWidths[fieldKey] ?? 40.0;
+
     return SizedBox(
-      width: fieldKey == "weight" ? 40 : 40, // Adjust widths as needed
+      width: width,
       child: TextField(
         controller: controller,
         focusNode: _getFocusNode(key),
@@ -2448,8 +2445,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         onEditingComplete: () => _getFocusNode(key).unfocus(),
       ),
     );
-
   }
+
 
 
 
@@ -2894,7 +2891,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                         children: const [
                           // Exercise
                           SizedBox(
-                            width: 122,
+                            width: 126,
                             child: Text("Exercise",
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
@@ -2902,9 +2899,10 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                     fontWeight: FontWeight.bold,
                                     color: Colors.white)),
                           ),
+                          SizedBox(width: 2),
                           // Weight
                           SizedBox(
-                            width: 52,
+                            width: 54,
                             child: Text("Weight",
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
@@ -2912,9 +2910,10 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                     fontWeight: FontWeight.bold,
                                     color: Colors.white)),
                           ),
+
                           // Reps
                           SizedBox(
-                            width: 37,
+                            width: 30,
                             child: Text("Reps",
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
@@ -2922,9 +2921,10 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                     fontWeight: FontWeight.bold,
                                     color: Colors.white)),
                           ),
+                          SizedBox(width: 3),
                           // RIR
                           SizedBox(
-                            width: 40,
+                            width: 33,
                             child: Text("RIR",
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
@@ -2932,6 +2932,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                     fontWeight: FontWeight.bold,
                                     color: Colors.white)),
                           ),
+                          SizedBox(width: 2),
                           // E1RM
                           SizedBox(
                             width: 42,
@@ -2942,16 +2943,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                     fontWeight: FontWeight.bold,
                                     color: Colors.white)),
                           ),
-                          // Velocity
-                          SizedBox(
-                            width: 55,
-                            child: Text("Velocity",
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white)),
-                          ),
+                          SizedBox(width: 10),
                           // Notes
                           SizedBox(
                             width: 100,
