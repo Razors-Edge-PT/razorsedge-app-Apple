@@ -2368,16 +2368,21 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                 child: TextField(
                   controller: notesController,
                   decoration: const InputDecoration(
-                    hintText: 'notes',
+                    hintText: 'Notes',
                     isDense: true,
                     contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 8),
                     border: InputBorder.none,
+                    hintStyle: TextStyle(
+                      color: Colors.grey, // 👈 greyed out hint
+                      fontSize: 12,
+                    ),
                   ),
                   style: const TextStyle(fontSize: 12),
                   keyboardType: TextInputType.text,
                 ),
-              ),
-                ],
+              )
+
+            ],
               ),
                 ),
             ),
@@ -2994,7 +2999,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                   return e1 >= e2 ? a : b;
                                 });
 
-                                final remainingSets = sets.where((s) => s != topSet).toList();
+                                final allSets = List<Map<String, dynamic>>.from(sets);
+
                                 final name = exercise['name'] ?? 'Unnamed';
                                 final weight = (topSet['weight'] ?? 0).toDouble();
                                 final reps = (topSet['reps'] ?? 0).toDouble();
@@ -3035,69 +3041,86 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                             wesExpansionStates[name] = isExpanded; // ✅ track per exercise
                                           });
                                         },
-                                        title: Row(
-                                          crossAxisAlignment: CrossAxisAlignment.center,
-                                          children: [
-                                            Expanded(
-                                              flex: 8,
-                                              child: Container(
-                                                alignment: Alignment.centerLeft,
-                                                padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 0),
+                                          title: Row(
+                                            crossAxisAlignment: CrossAxisAlignment.center,
+                                            children: [
+                                              // Name
+                                              SizedBox(
+                                                width: 125,
+                                                child: Container(
+                                                  alignment: Alignment.centerLeft,
+                                                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                                                  child: Text(
+                                                    name,
+                                                    overflow: TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                      color: Colors.white,
+                                                      fontSize: 11,
+                                                      fontWeight: FontWeight.w600,
+                                                      fontStyle: FontStyle.italic,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+
+                                              // Weight
+                                              SizedBox(
+                                                width: 60,
+                                                child: Container(
+                                                  alignment: Alignment.center,
+                                                  child: Text(
+                                                    weight.toStringAsFixed(1),
+                                                    textAlign: TextAlign.center,
+                                                    style: const TextStyle(
+                                                      fontSize: 12,
+                                                      color: Colors.white,
+                                                      fontStyle: FontStyle.italic,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+
+                                              const SizedBox(width: 1),
+
+                                              // Reps
+                                              SizedBox(
+                                                width: 25,
                                                 child: Text(
-                                                  name,
-                                                  overflow: TextOverflow.ellipsis,
+                                                  reps.toStringAsFixed(0),
+                                                  textAlign: TextAlign.center,
                                                   style: const TextStyle(
+                                                    fontSize: 12,
                                                     color: Colors.white,
-                                                    fontSize: 11,
-                                                    fontWeight: FontWeight.w600,
                                                     fontStyle: FontStyle.italic,
                                                   ),
                                                 ),
                                               ),
-                                            ),
-                                            Expanded(
-                                              flex: 3,
-                                              child: Container(
-                                                alignment: Alignment.centerLeft,
-                                                padding: const EdgeInsets.only(left: 8),
-                                                child: Text(
-                                                  weight.toStringAsFixed(1),
-                                                  textAlign: TextAlign.center,
-                                                  style: const TextStyle(fontSize: 12, color: Colors.white, fontStyle: FontStyle.italic),
-                                                ),
-                                              ),
-                                            ),
-                                            const SizedBox(width: 6),
-                                            Expanded(
-                                              flex: 2,
-                                              child: Padding(
-                                                padding: const EdgeInsets.only(left: 8),
-                                                child: Text(
-                                                  reps.toStringAsFixed(0),
-                                                  textAlign: TextAlign.center,
-                                                  style: const TextStyle(fontSize: 12, color: Colors.white, fontStyle: FontStyle.italic),
-                                                ),
-                                              ),
-                                            ),
-                                            Expanded(
-                                              flex: 2,
-                                              child: Padding(
-                                                padding: const EdgeInsets.only(left: 6),
+
+                                              const SizedBox(width: 8),
+
+                                              // RIR
+                                              SizedBox(
+                                                width: 30,
                                                 child: Text(
                                                   rir.toStringAsFixed(1),
                                                   textAlign: TextAlign.center,
-                                                  style: const TextStyle(fontSize: 12, color: Colors.white, fontStyle: FontStyle.italic),
+                                                  style: const TextStyle(
+                                                    fontSize: 12,
+                                                    color: Colors.white,
+                                                    fontStyle: FontStyle.italic,
+                                                  ),
                                                 ),
                                               ),
-                                            ),
-                                            Expanded(
-                                              flex: 3,
-                                              child: Padding(
-                                                padding: const EdgeInsets.only(left: 10),
+
+                                              const SizedBox(width: 2),
+
+                                              // E1RM
+                                              SizedBox(
+                                                width: 38,
                                                 child: Align(
                                                   alignment: Alignment.centerRight,
                                                   child: Text(
-                                                    ' ${e1rm.toStringAsFixed(1)}', // 👈 added space before the value
+                                                    ' ${e1rm.toStringAsFixed(1)}', // 👈 space before value
                                                     style: const TextStyle(
                                                       fontSize: 12,
                                                       color: Colors.white70,
@@ -3106,16 +3129,108 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                                   ),
                                                 ),
                                               ),
-                                            ),
-                                          ],
+                                            ],
+                                          ),
+
+                                          children: [
+                                        // 🟦 Header Row
+                                        Container(
+                                        height: 28,
+                                        padding: const EdgeInsets.symmetric(horizontal: 2),
+                                        decoration: BoxDecoration(
+                                          color: Colors.blueGrey[300]!.withOpacity(0.25),
+                                          border: Border(bottom: BorderSide(color: Colors.blueGrey[500]!, width: 0.5)),
                                         ),
-                                        children: remainingSets.asMap().entries.map((entry) {
+                                          child: Row(
+                                            crossAxisAlignment: CrossAxisAlignment.center,
+                                            children: const [
+                                              // Set #
+                                              SizedBox(
+                                                width: 30,
+                                                child: Padding(
+                                                  padding: EdgeInsets.symmetric(horizontal: 6),
+                                                  child: Text(
+                                                    'Set',
+                                                    style: TextStyle(
+                                                      fontSize: 11,
+                                                      fontWeight: FontWeight.bold,
+                                                      color: Colors.white,
+                                                      fontStyle: FontStyle.italic,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+
+                                              // Weight
+                                              SizedBox(
+                                                width: 60,
+                                                child: Text(
+                                                  'Weight',
+                                                  textAlign: TextAlign.center,
+                                                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
+                                                ),
+                                              ),
+
+                                              // Reps
+                                              SizedBox(
+                                                width: 40,
+                                                child: Text(
+                                                  'Reps',
+                                                  textAlign: TextAlign.center,
+                                                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 2),
+                                              // RIR
+                                              SizedBox(
+                                                width: 40,
+                                                child: Text(
+                                                  'RIR',
+                                                  textAlign: TextAlign.center,
+                                                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
+                                                ),
+                                              ),
+                                              SizedBox(width: 8),
+                                              // E1RM
+                                              SizedBox(
+                                                width: 40,
+                                                child: Text(
+                                                  'E1RM',
+                                                  textAlign: TextAlign.center,
+                                                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white70),
+                                                ),
+                                              ),
+                                              SizedBox(width: 13),
+                                              // 🟩 Velocity
+                                              SizedBox(
+                                                width: 22,
+                                                child: Text(
+                                                  'Vel',
+                                                  textAlign: TextAlign.center,
+                                                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white70),
+                                                ),
+                                              ),
+                                              SizedBox(width: 6),
+                                              // 🟪 Notes
+                                              SizedBox(
+                                                width: 50,
+                                                child: Text(
+                                                  'Notes',
+                                                  textAlign: TextAlign.center,
+                                                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white70),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+
+                                        ),
+                                      ...allSets.asMap().entries.map((entry) {
                                           final i = entry.key;
                                           final set = entry.value;
 
                                           final setWeight = (set['weight'] ?? 0).toDouble();
                                           final setReps = (set['reps'] ?? 0).toDouble();
-                                          final setRir = (set['rir'] ?? 1).toDouble();
+                                          final setRir = (set['rir'] ?? 0).toDouble();
 
                                           final setE1RM = PeriodizationModelUtils.calculateE1RM(setWeight, setReps, setRir);
 
@@ -3129,13 +3244,13 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                             child: Row(
                                               crossAxisAlignment: CrossAxisAlignment.center,
                                               children: [
-                                                Expanded(
-                                                  flex: 4,
-                                                  child: Container(
-                                                    alignment: Alignment.centerLeft,
-                                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
+                                                // Set #
+                                                SizedBox(
+                                                  width: 30,
+                                                  child: Padding(
+                                                    padding: const EdgeInsets.symmetric(horizontal: 6),
                                                     child: Text(
-                                                      'Set ${i + 2}',
+                                                      '${i + 1}',
                                                       overflow: TextOverflow.ellipsis,
                                                       style: const TextStyle(
                                                         color: Colors.white,
@@ -3146,42 +3261,92 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                                     ),
                                                   ),
                                                 ),
-                                                Expanded(
-                                                  flex: 2,
+
+                                                // Weight
+                                                SizedBox(
+                                                  width: 60,
                                                   child: Text(
                                                     setWeight.toStringAsFixed(1),
                                                     textAlign: TextAlign.center,
                                                     style: const TextStyle(fontSize: 12, color: Colors.white, fontStyle: FontStyle.italic),
                                                   ),
                                                 ),
-                                                Expanded(
-                                                  flex: 1,
+
+                                                // Reps
+                                                SizedBox(
+                                                  width: 40,
                                                   child: Text(
                                                     setReps.toStringAsFixed(0),
                                                     textAlign: TextAlign.center,
                                                     style: const TextStyle(fontSize: 12, color: Colors.white, fontStyle: FontStyle.italic),
                                                   ),
                                                 ),
-                                                Expanded(
-                                                  flex: 1,
+                                                const SizedBox(width: 2),
+                                                // RIR
+                                                SizedBox(
+                                                  width: 40,
                                                   child: Text(
                                                     setRir.toStringAsFixed(1),
                                                     textAlign: TextAlign.center,
                                                     style: const TextStyle(fontSize: 12, color: Colors.white, fontStyle: FontStyle.italic),
                                                   ),
                                                 ),
-                                                Expanded(
-                                                  flex: 2,
+
+                                                // Spacer before E1RM
+                                                const SizedBox(width: 8),
+
+                                                // E1RM
+                                                SizedBox(
+                                                  width: 40,
                                                   child: Text(
                                                     setE1RM.toStringAsFixed(1),
                                                     textAlign: TextAlign.center,
                                                     style: const TextStyle(fontSize: 12, color: Colors.white70, fontStyle: FontStyle.italic),
                                                   ),
                                                 ),
+
+                                                // Spacer before Velocity
+                                                const SizedBox(width: 10),
+
+                                                // Velocity
+                                                SizedBox(
+                                                  width: 28,
+                                                  child: Text(
+                                                    (set['velocity'] ?? '').toString(),
+                                                    textAlign: TextAlign.center,
+                                                    style: const TextStyle(fontSize: 12, color: Colors.white70, fontStyle: FontStyle.italic),
+                                                  ),
+                                                ),
+
+                                                // Spacer before Notes
+                                                const SizedBox(width: 11),
+
+                                                // Notes
+                                                // Notes (scrollable only if overflow)
+                                                SizedBox(
+                                                  width: 50,
+                                                  child: SingleChildScrollView(
+                                                    scrollDirection: Axis.horizontal,
+                                                    child: Text(
+                                                      (set['notes'] ?? '').toString(),
+                                                      textAlign: TextAlign.left,
+                                                      style: const TextStyle(
+                                                        fontSize: 11,
+                                                        color: Colors.white70,
+                                                        fontStyle: FontStyle.italic,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+
                                               ],
                                             ),
+
+
                                           );
                                         }).toList(),
+
+                                      ]
                                       ),
                                     ),
                                   ),

@@ -2656,11 +2656,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
               final setList = List<Map<String, dynamic>>.from(ex['sets']);
               final sets = setList
                   .map((s) => SetDetails(
-                        reps: s['reps'],
-                        weight: (s['weight'] as num?)?.toDouble(),
-                        rir: (s['rir'] as num?)?.toDouble(),
-                      ))
+                reps: s['reps'],
+                weight: (s['weight'] as num?)?.toDouble(),
+                rir: (s['rir'] as num?)?.toDouble(),
+                velocity: (s['velocity'] as num?)?.toDouble(), // ✅ even if null, fine
+                notes: s['notes']?.toString(),                // ✅ string or null
+              ))
                   .toList();
+
 
               _workoutSets.add(sets);
             }
@@ -2682,6 +2685,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         final repsText = _repsControllers[i][j].text.trim();
         final weightText = _weightControllers[i][j].text.trim();
         final rirText = _rirControllers[i][j].text.trim();
+        final velocityText = _velocityControllers[i][j].text.trim();
+        final notesText = _notesControllers[i][j].text.trim();
 
         _workoutSets[i][j].reps =
             repsText.isNotEmpty ? int.tryParse(repsText) : null;
@@ -2689,6 +2694,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
             weightText.isNotEmpty ? double.tryParse(weightText) : null;
         _workoutSets[i][j].rir =
             rirText.isNotEmpty ? double.tryParse(rirText) : null;
+        _workoutSets[i][j].velocity =
+        velocityText.isNotEmpty ? double.tryParse(velocityText) : null;
+        _workoutSets[i][j].notes = notesText.isNotEmpty ? notesText : null;
       }
     }
 
@@ -2723,7 +2731,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                   'reps': set.reps ?? 0,
                   'weight': weight,
                   'rir': set.rir ?? 0.0,
+                  'velocity': set.velocity,
+                  'notes': set.notes,
                 });
+
               }
             }
 
@@ -2827,17 +2838,28 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                 return (currE1RM > prevE1RM) ? curr : prev;
               });
 
-              if (bestSet != null &&
-                  bestSet.weight != null &&
-                  bestSet.reps != null) {
-                updatedExercises.add({
+              if (bestSet != null && bestSet.weight != null && bestSet.reps != null) {
+                final topSetData = {
                   'name': name,
                   'circuitIndex': circuitIndex,
                   'weight': bestSet.weight,
                   'reps': bestSet.reps,
                   'rir': bestSet.rir ?? 0.0,
-                });
+                };
+
+                // ✅ Include velocity if available
+                if (bestSet.velocity != null && bestSet.velocity! > 0) {
+                  topSetData['velocity'] = bestSet.velocity;
+                }
+
+                // ✅ Include notes if available
+                if (bestSet.notes != null && bestSet.notes!.isNotEmpty) {
+                  topSetData['notes'] = bestSet.notes;
+                }
+
+                updatedExercises.add(topSetData);
               }
+
             }
 
             // Fetch current day data
@@ -2897,12 +2919,23 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
           if (bestSet == null) return null;
 
-          return {
+          final topSet = {
             'exercise': _selectedExercisesWithCircuits[i],
             'weight': bestSet.weight,
             'reps': bestSet.reps,
             'rir': bestSet.rir,
           };
+
+// ✅ Optionally include velocity and notes
+          if (bestSet.velocity != null && bestSet.velocity! > 0) {
+            topSet['velocity'] = bestSet.velocity;
+          }
+          if (bestSet.notes != null && bestSet.notes!.isNotEmpty) {
+            topSet['notes'] = bestSet.notes;
+          }
+
+          return topSet;
+
         }).where((e) => e != null).toList(),
         // ← collection-if: only include when date actually changed
         if (_selectedDate != widget.initialDate)
@@ -2947,6 +2980,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         if ((set.rir ?? 0) > 0) {
           savedFieldKeys.add('w${weekIndex}_d${dayIndex}_r${i}_rir');
         }
+        if ((set.velocity ?? 0) > 0) {
+          savedFieldKeys.add('w${weekIndex}_d${dayIndex}_r${i}_velocity');
+        }
+        if ((set.notes ?? '').toString().trim().isNotEmpty) {
+          savedFieldKeys.add('w${weekIndex}_d${dayIndex}_r${i}_notes');
+        }
+
       }
 
       await prefs.setStringList(
