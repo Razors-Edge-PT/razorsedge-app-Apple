@@ -1493,6 +1493,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   double _currentE1RM = 0.0;
 
   String _selectedModel = 'DUP, Signature'; // default or load from Firestore
+  PeriodizationModelType? _lastOpenedModel;
+
 
   PeriodizationModelType _mapLabelToModelType(String label) {
     switch (label) {
@@ -2395,7 +2397,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                           .where((r) => r.isNotEmpty)
                           .join(' | ') +
                       (instanceMap.length > 5 ? ' ...' : '');
+                  print('🧠 [DUP Exposure Save] Preview Text → $preview');
                   _repTargetsDisplayController.text = preview;
+
                 });
 
                 Navigator.pop(ctx);
@@ -2438,118 +2442,116 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         int tempMin = min;
         int tempMax = max;
 
-        return AlertDialog(
-          backgroundColor: Colors.blueGrey.shade900,
-          title: Text("Set Rep Range for $exerciseName",
-              style: const TextStyle(color: Colors.white)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: Colors.blueGrey.shade900,
+              title: Text("Set Rep Range for $exerciseName",
+                  style: const TextStyle(color: Colors.white)),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text("Min Reps:",
-                      style: TextStyle(color: Colors.white)),
-                  const SizedBox(width: 10),
-                  DropdownButton<int>(
-                      value: tempMin,
-                      dropdownColor: Colors.blueGrey.shade800,
-                      items: List.generate(12, (i) => i + 1).map((rep) {
-                        return DropdownMenuItem(
-                          value: rep,
-                          child: Text("$rep",
-                              style: const TextStyle(color: Colors.white)),
-                        );
-                      }).toList(),
-                      onChanged: (val) {
-                        if (val != null) {
-                          setState(() {
-                            tempMin = val;
-                            _repTargetsDisplayController.text =
-                                "$tempMin – $tempMax reps";
-                          });
-                        }
-                      }),
+                  Row(
+                    children: [
+                      const Text("Min Reps:",
+                          style: TextStyle(color: Colors.white)),
+                      const SizedBox(width: 10),
+                      DropdownButton<int>(
+                        value: tempMin,
+                        dropdownColor: Colors.blueGrey.shade800,
+                        items: List.generate(12, (i) => i + 1).map((rep) {
+                          return DropdownMenuItem(
+                            value: rep,
+                            child: Text("$rep",
+                                style: const TextStyle(color: Colors.white)),
+                          );
+                        }).toList(),
+                        onChanged: (val) {
+                          if (val != null) {
+                            setDialogState(() {
+                              tempMin = val;
+                            });
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      const Text("Max Reps:",
+                          style: TextStyle(color: Colors.white)),
+                      const SizedBox(width: 10),
+                      DropdownButton<int>(
+                        value: tempMax,
+                        dropdownColor: Colors.blueGrey.shade800,
+                        items: List.generate(20, (i) => i + 1).map((rep) {
+                          return DropdownMenuItem(
+                            value: rep,
+                            child: Text("$rep",
+                                style: const TextStyle(color: Colors.white)),
+                          );
+                        }).toList(),
+                        onChanged: (val) {
+                          if (val != null) {
+                            setDialogState(() {
+                              tempMax = val;
+                            });
+                          }
+                        },
+                      ),
+                    ],
+                  ),
                 ],
               ),
-              Row(
-                children: [
-                  const Text("Max Reps:",
-                      style: TextStyle(color: Colors.white)),
-                  const SizedBox(width: 10),
-                  DropdownButton<int>(
-                      value: tempMax,
-                      dropdownColor: Colors.blueGrey.shade800,
-                      items: List.generate(20, (i) => i + 1).map((rep) {
-                        return DropdownMenuItem(
-                          value: rep,
-                          child: Text("$rep",
-                              style: const TextStyle(color: Colors.white)),
-                        );
-                      }).toList(),
-                      onChanged: (val) {
-                        if (val != null) {
-                          setState(() {
-                            tempMax = val;
-                            _repTargetsDisplayController.text =
-                                "$tempMin – $tempMax reps";
-                          });
-                        }
-                      }),
-                ],
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text("Cancel"),
-            ),
-            TextButton(
-              onPressed: () {
-                final firestoreResult = {
-                  'repRange': {
-                    'min': tempMin.toString(),
-                    'max': tempMax.toString(),
-                  },
-                  'week1': {
-                    'instance1': "$tempMin – $tempMax reps",
-                  }
-                };
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text("Cancel"),
+                ),
+                TextButton(
+                  onPressed: () {
+                    final firestoreResult = {
+                      'repRange': {
+                        'min': tempMin.toString(),
+                        'max': tempMax.toString(),
+                      },
+                      'week1': {
+                        'instance1': "$tempMin – $tempMax reps",
+                      }
+                    };
 
-                final memoryCache = {
-                  'repRange': {
-                    'min': tempMin.toString(),
-                    'max': tempMax.toString(),
-                  }
-                };
+                    final memoryCache = {
+                      'repRange': {
+                        'min': tempMin.toString(),
+                        'max': tempMax.toString(),
+                      }
+                    };
 
-                _cachedRepTargetMap = memoryCache;
-                print("💾 [DUP Signature] Saving min=$tempMin, max=$tempMax");
-                print(
-                    "💾 [DUP Signature] Final repTargets structure: ${jsonEncode(firestoreResult)}"); // 👈 Add here
+                    _cachedRepTargetMap = memoryCache;
+                    print("💾 [DUP Signature] Saving min=$tempMin, max=$tempMax");
+                    print(
+                        "💾 [DUP Signature] Final repTargets structure: ${jsonEncode(firestoreResult)}");
 
-                print("💾 [DUP Signature] Saving min=$tempMin, max=$tempMax");
-
-                setState(() {
-                  print(
-                      "🧾 Final repTargets structure: ${jsonEncode(firestoreResult)}");
-
-                  widget.onUpdateSetting(
-                      exerciseName, 'repTargets', firestoreResult);
-                  widget.onUpdateSetting(
-                      exerciseName, 'periodizationModel', 'DUP, Signature');
-                  _repTargetsDisplayController.text =
+                    setState(() {
+                      widget.onUpdateSetting(
+                          exerciseName, 'repTargets', firestoreResult);
+                      widget.onUpdateSetting(
+                          exerciseName, 'periodizationModel', 'DUP, Signature');
+                      _repTargetsDisplayController.text =
                       "$tempMin – $tempMax reps";
-                });
+                    });
 
-                Navigator.pop(ctx);
-              },
-              child: const Text("Save"),
-            ),
-          ],
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text("Save"),
+                ),
+              ],
+            );
+          },
         );
       },
     );
+
   }
 
   void _showLinearExposureRepTargetDialog(String exerciseName) async {
@@ -4012,41 +4014,41 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   child: GestureDetector(
                     onTap: () {
                       final model = _mapLabelToModelType(_selectedModel);
+
+                      // 🧼 Clear stale repTargets if the model changed since last open
+                      if (_lastOpenedModel != null && _lastOpenedModel != model) {
+                        print("🧼 Model changed from $_lastOpenedModel → $model. Clearing stale repTargets.");
+                        widget.onUpdateSetting(widget.exerciseName, 'repTargets', null);
+                      }
+
+                      // 🧠 Store this model as last used
+                      _lastOpenedModel = model;
+
                       switch (model) {
                         case PeriodizationModelType.dailyUndulatingExposure:
-                          _showDailyUndulatingExposureRepTargetDialog(
-                              widget.exerciseName);
+                          _showDailyUndulatingExposureRepTargetDialog(widget.exerciseName);
                           break;
-
                         case PeriodizationModelType.dupSignature:
                           _showDupSignatureRepTargetDialog(widget.exerciseName);
                           break;
-
                         case PeriodizationModelType.linearClassic:
-                          print(
-                              "➡ Opening Linear Classic rep dialog"); // 👈 Debug
-                          _showLinearClassicRepTargetDialog(
-                              widget.exerciseName);
+                          print("➡ Opening Linear Classic rep dialog");
+                          _showLinearClassicRepTargetDialog(widget.exerciseName);
                           break;
                         case PeriodizationModelType.linearExposure:
-                          print(
-                              "➡ Opening Linear Exposure rep dialog"); // ✅ ADD THIS
-                          _showLinearExposureRepTargetDialog(
-                              widget.exerciseName);
+                          print("➡ Opening Linear Exposure rep dialog");
+                          _showLinearExposureRepTargetDialog(widget.exerciseName);
                           break;
-
                         case PeriodizationModelType.dailyUndulatingWeek:
-                          _showDailyUndulatingWeekRepTargetDialog(
-                              widget.exerciseName);
+                          _showDailyUndulatingWeekRepTargetDialog(widget.exerciseName);
                           break;
                         default:
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                                content: Text(
-                                    'Model "$_selectedModel" not supported yet')),
+                            SnackBar(content: Text('Model "$_selectedModel" not supported yet')),
                           );
                       }
                     },
+
                     child: AbsorbPointer(
                       child: TextFormField(
                         controller: _repTargetsDisplayController,
