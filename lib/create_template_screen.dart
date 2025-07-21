@@ -7,6 +7,7 @@ import 'exercise_model.dart';
 import 'template_model.dart'; // Assuming your template model is in this file
 import 'template_utils.dart'; // Import the shared methods
 import 'package:firebase_auth/firebase_auth.dart';
+import 'block_repository.dart';
 
 class CreateTemplateScreen extends StatefulWidget {
   final VoidCallback onTemplateCreated; // Callback to refresh template list
@@ -26,6 +27,9 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
       'template_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(1000)}';
 
   bool _plannedOnly = false;
+  bool _isLoading = true;
+  String? _activeBlockId;
+
   List<String> plannedExercises = []; // This will hold your planned exercise IDs
   Set<String> _plannedExerciseIds = {}; // stores planned exercise IDs
 
@@ -33,29 +37,76 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
   @override
   void initState() {
     super.initState();
-    _fetchExercises();
-    _fetchPlannedExercises(); // <-- 🔥 Add this!
+    _fetchActiveBlockAndPlannedExercises(); // ✅ New method
+    _loadData(); // Combined async loader
   }
+
+  Future<void> _loadData() async {
+    await _fetchExercises();
+    await _fetchPlannedExercises();
+    setState(() => _isLoading = false);
+  }
+
   Future<void> _fetchPlannedExercises() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    final doc = await FirebaseFirestore.instance
-        .collection('users')
+    final blockId = _activeBlockId;
+    if (blockId == null) {
+      print('❌ [CreateTemplate] Cannot proceed — no active blockId found.');
+      return;
+    }
+
+
+    final docSnap = await FirebaseFirestore.instance
+        .collection('planned_blocks')
         .doc(user.uid)
-        .collection('block_planner')
-        .doc('current_block')
+        .collection('blocks')
+        .doc(blockId)
         .get();
 
-    if (doc.exists && doc.data() != null && doc.data()!.containsKey('plannedExercises')) {
-      final List<dynamic> plannedList = doc.data()!['plannedExercises'];
+    if (docSnap.exists && docSnap.data()!.containsKey('plannedExercises')) {
+      final List<dynamic> plannedList = docSnap.data()!['plannedExercises'];
       setState(() {
         _plannedExerciseIds = plannedList.cast<String>().toSet();
       });
-      print('✅ Planned exercise IDs fetched: $_plannedExerciseIds'); // 👈 Add this
+      print('✅ Planned exercise IDs fetched: $_plannedExerciseIds');
+    } else {
+      print('⚠️ No planned exercises found in block.');
     }
   }
 
+  Future<void> _fetchActiveBlockAndPlannedExercises() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    // Step 1: Fetch active block ID
+    _activeBlockId = await BlockRepository().fetchActiveBlockId();
+    print('🎯 [CreateTemplate] Active Block ID = $_activeBlockId');
+
+    if (_activeBlockId == null) {
+      print('❌ No active block ID found.');
+      return;
+    }
+
+    // Step 2: Fetch block document and get plannedExercises
+    final docSnap = await FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(user.uid)
+        .collection('blocks')
+        .doc(_activeBlockId!)
+        .get();
+
+    if (docSnap.exists && docSnap.data()!.containsKey('plannedExercises')) {
+      final List<dynamic> plannedList = docSnap.data()!['plannedExercises'];
+      setState(() {
+        _plannedExerciseIds = plannedList.cast<String>().toSet();
+      });
+      print('✅ [CreateTemplate] Planned exercise IDs = $_plannedExerciseIds');
+    } else {
+      print('⚠️ [CreateTemplate] No plannedExercises field found.');
+    }
+  }
 
   Future<void> _fetchExercises() async {
     try {
@@ -150,6 +201,13 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
   @override
   Widget build(BuildContext context) {
     // 👇 First decide which exercises to display based on toggle
+
+    print('🔍 [BUILD] _plannedOnly = $_plannedOnly');
+    print('🔍 [BUILD] Total exercises = ${exercises.length}');
+    print('🔍 [BUILD] Planned IDs = $_plannedExerciseIds');
+    final matchingPlanned = exercises.where((e) => _plannedExerciseIds.contains(e.id)).toList();
+    print('🔍 [BUILD] Matching planned exercises = ${matchingPlanned.length}');
+
     final displayedExercises = _plannedOnly
         ? exercises.where((e) => _plannedExerciseIds.contains(e.id)).toList()
         : exercises;
@@ -201,7 +259,7 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
               const SizedBox(height: 16),
 
               Expanded(
-                child: exercises.isEmpty
+                child: _isLoading
                     ? const Center(child: CircularProgressIndicator())
                     : displayedExercises.isEmpty
                     ? const Center(child: Text('No exercises available'))
@@ -209,6 +267,7 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
                   children: _buildGroupedExerciseList(displayedExercises),
                 ),
               ),
+
             ],
           ),
         ),
