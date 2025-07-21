@@ -270,7 +270,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       loadedWeekIndices.add(_currentWeekPage);
 
       await loadPlannedExercisesFromFirestore();
-      await _loadRepTargets();
+     // await _loadRepTargets();    // not sure this actually does anything?
       // 6) Finally trigger a rebuild
       setState(() {});
     });
@@ -1453,6 +1453,9 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     print('✅ [BB2] loadVisibleWeeksOnly completed in ${stopwatch.elapsedMilliseconds}ms');
   }
 
+
+
+
   int _getCircuitIndexForRow(int rowIndex, List<int> circuitStartIndices) {
     int index = 0;
     for (int i = 0; i < circuitStartIndices.length; i++) {
@@ -1954,10 +1957,10 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     required void Function(String selectedExercise) onSelected,
   }) async {
     bool showPlannedOnly = true;
+    String searchQuery = '';
 
-    // Derive a set of the planned exercise *names*:
     final plannedNames = plannedExerciseDetails.keys
-        .where((id) => id != 'blockMeta') // skip the meta‐entry
+        .where((id) => id != 'blockMeta')
         .map((id) => exerciseIdToName[id])
         .whereType<String>()
         .toSet();
@@ -1965,7 +1968,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     await showDialog<void>(
       context: context,
       builder: (_) => StatefulBuilder(builder: (ctx, setState) {
-        // Only filter if the user really wants "planned only" *and* we actually have some
         final filtered = <String, List<String>>{};
         allGroupedExercises.forEach((cat, list) {
           final keep = (showPlannedOnly && plannedNames.isNotEmpty)
@@ -1974,21 +1976,58 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           if (keep.isNotEmpty) filtered[cat] = keep;
         });
 
+        final Map<String, List<String>> searched = {};
+        filtered.forEach((cat, list) {
+          final matches = list
+              .where((name) =>
+              name.toLowerCase().contains(searchQuery.toLowerCase()))
+              .toList();
+          if (matches.isNotEmpty) searched[cat] = matches;
+        });
+
+        final Map<String, bool> expandedGroups = {
+          for (var cat in searched.keys) cat: false,
+        };
+
         return AlertDialog(
+          backgroundColor: Colors.blueGrey.shade900,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 2),
+          contentPadding:
+          const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           title: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('Select Exercise', style: TextStyle(fontSize: 12)),
+              const Text('Select Exercise',
+                  style: TextStyle(fontSize: 13, color: Colors.white)),
               Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(showPlannedOnly ? 'Planned Only' : 'All'),
+                  Text(
+                    showPlannedOnly ? 'Planned Only' : 'All Exercises',
+                    style: const TextStyle(fontSize: 12, color: Colors.white70),
+                  ),
                   Switch(
                     value: showPlannedOnly,
                     onChanged: (v) => setState(() => showPlannedOnly = v),
+                    activeColor: Colors.lightBlueAccent,
                   ),
                 ],
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  hintText: 'Search exercises...',
+                  hintStyle: const TextStyle(color: Colors.white54),
+                  filled: true,
+                  fillColor: Colors.blueGrey.shade800,
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8.0)),
+                  contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                ),
+                onChanged: (val) =>
+                    setState(() => searchQuery = val.toLowerCase()),
               ),
             ],
           ),
@@ -1996,32 +2035,51 @@ class _BlockBuilder2State extends State<Camp_BB2> {
             width: double.maxFinite,
             height: 400,
             child: ListView(
-              children: filtered.entries.map((e) {
-                return ExpansionTile(
-                  title: Text(e.key,
-                      style: const TextStyle(fontWeight: FontWeight.bold)),
-                  children: e.value.map((name) {
-                    return ListTile(
-                      title: Text(name),
-                      onTap: () {
-                        Navigator.pop(context);
-                        onSelected(name);
-                      },
-                    );
-                  }).toList(),
-                );
-              }).toList(),
+              children: [
+                ...searched.entries.map((e) {
+                  final isExpanded = searchQuery.isNotEmpty || (expandedGroups[e.key] ?? false);
+                  expandedGroups[e.key] = isExpanded; // Ensure it's tracked
+
+                  return ExpansionTile(
+                    initiallyExpanded: isExpanded,
+                    tilePadding: const EdgeInsets.symmetric(horizontal: 10),
+                    collapsedBackgroundColor: Colors.blueGrey.shade800,
+                    backgroundColor: Colors.blueGrey.shade700,
+                    title: Text(
+                      e.key,
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                    onExpansionChanged: (expanded) {
+                      setState(() => expandedGroups[e.key] = expanded);
+                    },
+                    children: e.value.map((name) {
+                      return ListTile(
+                        title: Text(name, style: const TextStyle(color: Colors.white70)),
+                        onTap: () {
+                          Navigator.pop(context);
+                          onSelected(name);
+                        },
+                        dense: true,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+                      );
+                    }).toList(),
+                  );
+                }),
+              ],
             ),
+
+
           ),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel')),
+                child: const Text('Cancel', style: TextStyle(color: Colors.white70))),
           ],
         );
       }),
     );
   }
+
 
 
   Widget _buildExerciseRow(int weekIndex, int dayIndex, int rowIndex, Map<String, dynamic> repTargetsByExercise) {
@@ -2310,8 +2368,66 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                 index: rowIndex,
                 child: GestureDetector(
                   onTap: () async {
-                    // your existing exercise picker logic
+                    await showCollapsibleExercisePicker(
+                      context: context,
+                      allGroupedExercises: groupedExercises,
+                      exerciseIdToName: _exerciseIdToName,
+                      onSelected: (selectedExerciseName) {
+                        final exerciseId = nameToIdMap[selectedExerciseName];
+                        final isPlanned = exerciseId != null && plannedExercises.contains(exerciseId);
+
+                        setState(() {
+                          row.exercise = selectedExerciseName;
+                          row.exerciseController.text = selectedExerciseName;
+                          row.weightController.clear();
+                          row.repsController.clear();
+                          row.rirController.clear();
+
+                          if (isPlanned) {
+                            // ✅ Normalize repTargets if flat
+                            if (repTargetsByExercise?[exerciseId]?['repTargets'] is List) {
+                              final reps = repTargetsByExercise?[exerciseId]?['repTargets'];
+                              if (reps.isNotEmpty && reps.first is String) {
+                                repTargetsByExercise?[exerciseId]?['repTargets'] = [List<String>.from(reps)];
+                                print('🔄 [BB2] Normalized flat repTargets → nested for $exerciseId');
+                              }
+                            }
+
+                            final repTarget = PeriodizationModelUtils.getSuggestedRepTargetByModel(
+                              exerciseName: exerciseId!,
+                              plannedIndex: getExerciseCountInWeek(
+                                selectedExerciseName,
+                                weekIndex,
+                                dayIndex,
+                                rowIndex,
+                              ),
+                              weekIndex: weekIndex,
+                              repTargetsByExercise: repTargetsByExercise,
+                              plannedExerciseDetails: plannedExerciseDetails,
+                            );
+
+                            // 🧠 You could use this value if needed — but right now, we just clear reps field.
+                            print('🎯 [BB2] Suggested rep target for $selectedExerciseName = $repTarget');
+                          }
+
+                          // ✅ Always inject planned RIR if available
+                          final hintRir = (() {
+                            final planned = getPlannedRirSetValues(
+                              exerciseName: selectedExerciseName,
+                              week: weekIndex,
+                              day: dayIndex,
+                              row: rowIndex,
+                            );
+                            return planned?['set1']?['rir']?.toString() ?? '0.5';
+                          })();
+
+                          row.rirController.text = hintRir;
+                        });
+                      },
+                    );
                   },
+
+
                   child: Container(
                     height: 30,
                     padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 1),
