@@ -425,7 +425,7 @@ class PeriodizationModelUtils {
     DateTime? blockStartDate,   // ✅ NEW
     DateTime? blockEndDate,     // ✅ NEW
   }) {
-    print('🧠 [BB2] Rep target requested for: $exerciseName');
+
     print('🧠 Model detected: ${exercisePeriodizationModels[exerciseName]}');
 
     final model = exercisePeriodizationModels[exerciseName] ?? PeriodizationModelType.dupSignature;

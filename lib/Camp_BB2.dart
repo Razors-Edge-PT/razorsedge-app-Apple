@@ -693,7 +693,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     }
 
     final result = count - 1; // ✅ zero-based index
-    print('📊 getExerciseCountInWeek → "$exerciseName" → index $result');
+
     print('🧠 getExerciseCountInWeek("$exerciseName", week: $week, day: $day, row: $row) = $result');
 
     return result;
@@ -800,11 +800,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       if (updatedEntry is Map && updatedEntry.containsKey('repTargets')) {
       } else {}
 
-      if (updatedEntry != null) {
-        print('🧠 [BB2] Rep targets found for $exerciseId → $updatedEntry');
-      } else {
-        print('⚠️ [BB2] repTargets entry missing for $exerciseId');
-      }
     });
 
     print("✅ [BB2] exercisePeriodizationModels mapped: ${PeriodizationModelUtils.exercisePeriodizationModels.length}");
@@ -821,28 +816,43 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     required double defaultWeight,
     required double rir,
   }) {
-    print('📞 [BB2] _getCachedProgressedValues called for $exerciseName');
 
     final String cacheKey = '$exerciseId-$weekIndex-$dayIndex-$rowIndex';
 
     if (_cachedProgressedValues.containsKey(cacheKey)) {
       return _cachedProgressedValues[cacheKey]!;
     }
-
+    final double baseWeight = defaultWeight;
+    final int baseReps = repTarget;
+    final double baseRir = rir;
     final progressionModelName = plannedExerciseDetails[exerciseId]?['progressionModel'];
     final progressionModel = PeriodizationModelUtils.parseProgressionModel(progressionModelName);
 
-    final progressed = PeriodizationModelUtils.getWeightByProgressionModel(
-      model: progressionModel,
-      exerciseName: exerciseName,
-      repTarget: repTarget,
-      defaultWeight: defaultWeight,
-      rirValue: rir,
-      increments: PeriodizationModelUtils.getIncrementsForExercise(exerciseId ?? ''),
-      maxWeightByReps: plannedExerciseDetails[exerciseId]?['maxWeightByReps'],
-      topSetHistory: PeriodizationModelUtils.topSetsByExercise[exerciseName],
-      weekIndex: weekIndex,
+    final double? e1rm = PeriodizationModelUtils.calculateE1RM(
+      baseWeight,
+      baseReps.toDouble(),
+      baseRir,
     );
+
+    print('🔬 [BB2] Progression model input for $exerciseName');
+    print('     → repTarget: $repTarget');
+    print('     → baseWeight: $defaultWeight');
+    print('     → RIR: $rir');
+
+
+    print('📦 [BB2] Using baseWeight = $baseWeight, baseReps = $baseReps, baseRIR = $baseRir');
+    print('📦 [BB2] Final E1RM = ${e1rm?.toStringAsFixed(2)}');
+
+    final Map<String, dynamic> progressed = {
+      'weight': baseWeight,
+      'reps': baseReps,
+      'e1rm': e1rm,
+    };
+
+    print('✅ [BB2] Progressed weight: ${progressed['weight']}');
+    print('✅ [BB2] Progressed reps: ${progressed['reps']}');
+    print('✅ [BB2] Progressed E1RM: ${progressed['e1rm']}');
+
 
     final double? weight = progressed['weight'];
     final int? reps = progressed['reps'];
@@ -850,14 +860,17 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     print('🔍 [DEBUG] progressed["weight"] = $weight');
     print('🔍 [DEBUG] progressed["reps"] = $reps');
 
-    final double? e1rm = (weight != null && reps != null)
-        ? PeriodizationModelUtils.calculateE1RM(weight, reps.toDouble(), rir)
-        : null;
+    print('🧪 [BB2] Raw progressed map: $progressed');
+    print('🧪 progressed[weight] type = ${progressed['weight']?.runtimeType}');
+    print('🧪 progressed[reps] type = ${progressed['reps']?.runtimeType}');
+
+
 
     print('📦 [BB2] Caching progression E1RM for $exerciseName → $e1rm');
 
     progressed['e1rm'] = e1rm;
     _cachedProgressedValues[cacheKey] = progressed;
+
 
     return progressed;
   }

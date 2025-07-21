@@ -467,24 +467,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
   Map<String, dynamic> _getProgressedValues(int exerciseIndex) {
 
-    print('🚨 ENTERED _getProgressedValues for index $exerciseIndex');
-    print('🧪 getProgressedValues() called — _blockStartDate = $blockStartDate');
-
     // 🧠 STEP 1: If we already cached a GOOD value, return it
     final cached = _cachedProgressedValues[exerciseIndex];
     if (cached != null && blockStartDate != null && blockEndDate != null) {
       return cached;
     }
 
-    if (blockStartDate == null || blockEndDate == null) {
-      print('❌ [WES] Missing blockStartDate or blockEndDate — skipping progression');
-
-    }
     _debugPrintBlockDates();
     // Get exercise info.
     final exerciseName =
         _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
-    print('🔍 [WES] _getProgressedValues CALLED for index $exerciseIndex — $exerciseName');
     final exerciseId =
         PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
 
@@ -558,7 +550,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
         if (sorted.isNotEmpty) {
           if (blockStartDate == null) {
-            print('❌ [WES] Prog_blockStartDate is null for $exerciseName — returning default repTarget');
             repTarget = 10.0;
           } else {
             final count = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
@@ -597,7 +588,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       print('🧠 [WES] LinearClassic → exerciseId = $exerciseId');
       print('📌 repTargets = $repTargets');
       print('📆 weekIndex = $weekIndex');
-      print('📆 blockStartDate = $blockStartDate, blockEndDate = $blockEndDate');
 
       final weekStart = repTargets?['week1'];
       final week = weekIndex ?? 0;
@@ -664,7 +654,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     // Call the progression model (which contains its internal logic).
     final increments = PeriodizationModelUtils.getIncrementsForExercise(exerciseId);
     if (increments == null || increments.isEmpty) {
-      print('❌ [WES] No increments found for $exerciseId → using fallback [2.5]');
     }
 
     final Map<String, dynamic> progressed =
@@ -714,7 +703,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         : null;
 
     final double usedRIR = bb2Rir ?? rawRIR?? 1.0;
-    print('🧠 [WES] usedRIR for $exerciseName = $usedRIR (rawRIR = $rawRIR, bb2Rir = ${bb2Entry?['rir']})');
 
     final progressed = _getProgressedValues(exerciseIndex);
     final double baseWeight = (progressed['weight'] ?? 20.0).toDouble();
@@ -760,7 +748,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       return roundedReps;
     }
 
-    debugPrint('🔍 [WES] Rep assignment for "$exerciseName" → using blockId: $_selectedBlockId');
 
     // CASE 3: No override → use model default
     return baseReps;
