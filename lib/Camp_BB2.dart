@@ -1322,9 +1322,12 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         }
 
         if (row.rirController.text.trim().isNotEmpty &&
-            double.tryParse(row.rirController.text.trim()) != null) {
+            double.tryParse(row.rirController.text.trim()) != null &&
+            rawRIR != null &&
+            rawRIR.toString().trim().isNotEmpty) {
           _savedFields['${baseKey}_rir'] = true;
         }
+
 
         loadedRows.add(row);
 
@@ -2107,9 +2110,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         final exerciseId = nameToIdMap[exerciseName];
         print('🔍 ID for $exerciseName: $exerciseId');
 
-        if (exerciseId != null) {
-          print('🔍 repTargets entry for $exerciseId: ${jsonEncode(repTargetsByExercise[exerciseId])}');
-        }
         final String? plannedRep = getRepTargetForExercise(
           exerciseName,
           weekIndex,
@@ -2423,7 +2423,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                             return planned?['set1']?['rir']?.toString() ?? '0.5';
                           })();
 
-                          row.rirController.text = hintRir;
+                          row.rirController.text = '';
+
                         });
                       },
                     );

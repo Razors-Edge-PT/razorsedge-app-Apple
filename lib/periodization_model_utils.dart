@@ -673,7 +673,7 @@ class PeriodizationModelUtils {
 
     print('🧪 [BB2] Top set E1RM history for $exerciseName → $e1rms');
     print('🎯 [BB2] Rounded $suggestedWeight → $rounded using custom increments');
-    print('🧩 [BB2] Increments for $exerciseName: ${_exerciseSettings[exerciseName]?['increments']}');
+
 
 
     return rounded;
