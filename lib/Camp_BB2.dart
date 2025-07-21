@@ -261,6 +261,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       final today = DateTime.now();
       _currentWeekPage = (today.difference(_displayStart).inDays ~/ 7)
           .clamp(0, totalWeeks - 1);
+      await _loadRepTargets();
 
       // 4) Create your PageController
       _weekPageController = PageController(initialPage: _currentWeekPage);
@@ -454,6 +455,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     await PeriodizationModelUtils.fetchLastWorkoutTopSetReps();
     print('🧪 [BB2] Top set reps loaded: ${PeriodizationModelUtils.exercisePreviousTopSetReps.keys.length} exercises');
     print('🧪 [BB2] Top set reps loaded: ${PeriodizationModelUtils.exercisePreviousTopSetReps.keys.toList()}');
+
 
 
     await Future.wait([
