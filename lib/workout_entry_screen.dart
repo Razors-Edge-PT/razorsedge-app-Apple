@@ -4222,6 +4222,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                               ),
                               const SizedBox(width: 4),
 
+
+
+                              const SizedBox(width: 55, child: Text('E1RM', style: _headerStyle)),
+                              const SizedBox(width: 4),
+
                               // ✅ Conditionally include Velocity (for this exercise only)
                               if (_showVelocityByExercise[
                               (_selectedExercisesWithCircuits[i]['name'] as String).toLowerCase()] ==
@@ -4229,9 +4234,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                                 const SizedBox(width: 45, child: Text('Vel.', style: _headerStyle)),
                                 const SizedBox(width: 4),
                               ],
-
-                              const SizedBox(width: 55, child: Text('E1RM', style: _headerStyle)),
-                              const SizedBox(width: 4),
                               const SizedBox(width: 120, child: Text('Notes', style: _headerStyle)),
                             ],
                           ),
@@ -4334,31 +4336,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                               ),
                               const SizedBox(width: 4),
 
-                              // ✅ Conditionally show Velocity
-                              if (_showVelocityByExercise[
-                              (_selectedExercisesWithCircuits[i]['name'] as String).toLowerCase()] ==
-                                  true) ...[
-                                SizedBox(
-                                  width: 45,
-                                  child: TextField(
-                                    controller: _velocityControllers[i][j],
-                                    keyboardType: TextInputType.number,
-                                    decoration: const InputDecoration(
-                                      hintText: '',
-                                      hintStyle: TextStyle(
-                                        color: Colors.grey,
-                                        fontStyle: FontStyle.italic,
-                                        fontSize: 11,
-                                      ),
-                                    ),
-                                    onChanged: (value) => setState(() {}),
-                                    style: TextStyle(
-                                      color: _velocityControllers[i][j].text.isEmpty ? Colors.grey : Colors.white,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 4),
-                              ],
+
 
                               // E1RM
                               SizedBox(
@@ -4418,6 +4396,32 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                                 ),
                               ),
                               const SizedBox(width: 4),
+
+                              // ✅ Conditionally show Velocity
+                              if (_showVelocityByExercise[
+                              (_selectedExercisesWithCircuits[i]['name'] as String).toLowerCase()] ==
+                                  true) ...[
+                                SizedBox(
+                                  width: 45,
+                                  child: TextField(
+                                    controller: _velocityControllers[i][j],
+                                    keyboardType: TextInputType.number,
+                                    decoration: const InputDecoration(
+                                      hintText: '',
+                                      hintStyle: TextStyle(
+                                        color: Colors.grey,
+                                        fontStyle: FontStyle.italic,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                    onChanged: (value) => setState(() {}),
+                                    style: TextStyle(
+                                      color: _velocityControllers[i][j].text.isEmpty ? Colors.grey : Colors.white,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                              ],
 
                               // Notes
                               SizedBox(
