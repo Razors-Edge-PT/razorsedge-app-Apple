@@ -16,27 +16,20 @@ import 'Block_Planner.dart';
 import 'SavedWorkoutsScreen.dart';
 import 'Camp_BB2.dart';
 import 'dart:io';
-
-
+import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 
 
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  print("📱 Android SDK version: ${Platform.version}");
 
-  runApp(MyApp());
-  // Initialize Firebase for all platforms
-  if (kIsWeb || Platform.isAndroid || Platform.isIOS) {
+  // ✅ Check if Firebase already initialized (avoids hot reload crash)
+  if (Firebase.apps.isEmpty) {
     await Firebase.initializeApp();
-  } else {
-    // Avoid crashing on unsupported platforms (e.g. desktop)
-    try {
-      await Firebase.initializeApp();
-    } catch (e) {
-      debugPrint("Firebase not supported on this platform.");
-    }
   }
 
   runApp(const MyApp());

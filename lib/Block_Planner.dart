@@ -20,7 +20,6 @@ class Block_Planner extends StatefulWidget {
   @override
   State<Block_Planner> createState() => _BlockPlannerState();
 
-
 }
 
 class _BlockPlannerState extends State<Block_Planner> {

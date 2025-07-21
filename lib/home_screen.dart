@@ -34,45 +34,53 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _fetchRecentData();
-    _fetchTrainingDaysForMonth(_focusedDay);
 
-    // 🔔 Listen for any change in which block is active, and refresh the calendar
-    FirebaseFirestore.instance
-        .collection('planned_blocks')
-        .doc(FirebaseAuth.instance.currentUser!.uid)
-        .collection('blocks')
-        .where('isActive', isEqualTo: true)
-        .snapshots()
-        .listen((_) {
+    _ensureAtLeastOneBlockExists().then((_) {
+      _fetchRecentData();
       _fetchTrainingDaysForMonth(_focusedDay);
+
+      FirebaseFirestore.instance
+          .collection('planned_blocks')
+          .doc(FirebaseAuth.instance.currentUser!.uid)
+          .collection('blocks')
+          .where('isActive', isEqualTo: true)
+          .snapshots()
+          .listen((_) {
+        _fetchTrainingDaysForMonth(_focusedDay);
+      });
     });
   }
 
-  Future<void> _fetchTrainingDays() async {
+  Future<void> _ensureAtLeastOneBlockExists() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    final snapshot = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .collection('workouts')
-        .get();
+    final uid = user.uid;
+    final blocksRef = FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(uid)
+        .collection('blocks');
 
-    final days = snapshot.docs
-        .map((doc) {
-          final date = doc['date'];
-          if (date is Timestamp) {
-            return DateTime(
-                date.toDate().year, date.toDate().month, date.toDate().day);
-          }
-          return null;
-        })
-        .whereType<DateTime>()
-        .toSet();
+    final existingBlocks = await blocksRef.get();
 
-    setState(() => _trainingDays = days);
+    if (existingBlocks.docs.isEmpty) {
+      print('🆕 [Home] No blocks found — creating default "1st Block"...');
+      final now = DateTime.now();
+      final defaultBlock = {
+        'name': '1st Block',
+        'isActive': true,
+        'createdAt': Timestamp.now(),
+        'startDate': Timestamp.fromDate(now),
+        'endDate': Timestamp.fromDate(now.add(const Duration(days: 42))),
+        'selectedDays': ['Mon', 'Wed', 'Fri'],
+        'exercises': [],
+      };
+
+      await blocksRef.add(defaultBlock);
+      print('✅ [Home] Default block created');
+    }
   }
+
 
   Future<void> _fetchTrainingDaysForMonth(DateTime month) async {
     final user = FirebaseAuth.instance.currentUser;
