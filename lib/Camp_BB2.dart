@@ -240,6 +240,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
 
     final pageLoadTimer = Stopwatch()..start(); // ⏱️ Start timing
+    print("⏱️ BB2 initState started...");
+
 
     // 1) Kick off both meta‐loads
     _initialLoad = Future.wait([
@@ -247,6 +249,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       _loadAllBlocks(), // loads your list of all blocks into _allBlocks
     ]).then((_) async {
       // 2) Pick the selected block
+      print("✅ Meta loaded. Block list and active block ID ready.");
+
       setState(() {
         _selectedBlockId = _allBlocks
             .firstWhere((b) => b.id == _activeBlockId,
@@ -261,6 +265,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       final today = DateTime.now();
       _currentWeekPage = (today.difference(_displayStart).inDays ~/ 7)
           .clamp(0, totalWeeks - 1);
+      print("📊 Rep targets loaded.");
+
       await _loadRepTargets();
 
       // 4) Create your PageController
@@ -268,12 +274,17 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
       // 5) Load that week’s data
       await loadBlockDataForWeek(_currentWeekPage);
+      print("📦 Week $_currentWeekPage data loaded.");
+
       loadedWeekIndices.add(_currentWeekPage);
 
       await loadPlannedExercisesFromFirestore();
      // await _loadRepTargets();    // not sure this actually does anything?
       // 6) Finally trigger a rebuild
       setState(() {});
+      pageLoadTimer.stop();
+      print("✅ BB2 initState completed in ${pageLoadTimer.elapsedMilliseconds} ms");
+
     });
 
     // Preserve your WES‐save flag logic
@@ -324,6 +335,23 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   Future<void> _fetchActiveBlockThenMeta() async {
     // 1️⃣ fetch the active blockId
     _activeBlockId = widget.blockId ?? await BlockRepository().fetchActiveBlockId();
+
+// 🔁 Fallback: try block_planner if block_data is missing
+    if (_activeBlockId == null) {
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid != null) {
+        final plannerSnap = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(uid)
+            .collection('block_planner')
+            .doc('current_block')
+            .get();
+
+        _activeBlockId = plannerSnap.data()?['blockId'];
+        print("🔁 Fallback blockId from block_planner → $_activeBlockId");
+      }
+    }
+
 
 
     // 2️⃣ guard against “no active block”
@@ -1260,9 +1288,23 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       print('❌ Week $weekIndex does not exist under planned_blocks.');
       return;
     }
+    print('🔍 [loadBlockData] Using UID = $uid for week_$weekIndex');
 
     final daySnapshots = await weekDocRef.collection('days').get();
     print('📆 Week $weekIndex → ${daySnapshots.docs.length} day docs');
+
+    // ✅ Auto-create placeholder day docs if missing
+    if (daySnapshots.docs.isEmpty) {
+      print('📭 Week $weekIndex has no day docs. Creating day_0 to day_6...');
+      final daysCollectionRef = weekDocRef.collection('days');
+      for (int day = 0; day < 7; day++) {
+        await daysCollectionRef.doc('day_$day').set({'exists': true});
+      }
+      // 🔁 Re-fetch daySnapshots now that we created them
+      final refreshedDaySnapshots = await daysCollectionRef.get();
+      daySnapshots.docs.addAll(refreshedDaySnapshots.docs);
+    }
+
 
     for (final dayDoc in daySnapshots.docs) {
       final dayIndex = int.tryParse(dayDoc.id.replaceFirst('day_', '')) ?? 0;
@@ -1463,6 +1505,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
     for (final weekIndex in weeksToLoad) {
       if (!loadedWeekIndices.contains(weekIndex)) {
+        print('📦 [BB2] Requesting load for week_$weekIndex...');
         await loadBlockDataForWeek(weekIndex);
         loadedWeekIndices.add(weekIndex);
       }
@@ -1749,7 +1792,24 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         .collection('weeks')
         .doc('week_$weekIndex');
 
-    await weekDocRef.set({'exists': true}, SetOptions(merge: true));
+// Check if the week doc already exists
+    final weekSnapshot = await weekDocRef.get();
+
+    if (!weekSnapshot.exists) {
+      // 🆕 First time writing → include metadata
+      await weekDocRef.set({
+        'exists': true,
+        'startDate': Timestamp.fromDate(
+            blockStartDate.add(Duration(days: weekIndex * 7))),
+        'endDate': Timestamp.fromDate(
+            blockStartDate.add(Duration(days: (weekIndex + 1) * 7 - 1))),
+        'createdAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } else {
+      // 📝 Already exists → just update flag
+      await weekDocRef.set({'exists': true}, SetOptions(merge: true));
+    }
+
 
     final date = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
     final workoutName = "${DateFormat('EEE d MMM').format(date)} - Week ${weekIndex + 1}";

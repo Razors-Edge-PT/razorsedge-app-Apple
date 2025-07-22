@@ -324,6 +324,44 @@ class _BlockPlannerState extends State<Block_Planner> {
         SnackBar(content: Text('✅ Block saved${setActive ? ' and activated' : ''}.')),
       );
     }
+
+    if (setActive) {
+      final blockDataRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(userId)
+          .collection('block_data')
+          .doc('current_block')
+          .collection('weeks')
+          .doc('week_0')
+          .collection('days')
+          .doc('day_0');
+
+      final existingDay0 = await blockDataRef.get();
+      if (!existingDay0.exists) {
+        final start = _blockStartDate;
+        String workoutName = 'Week 1';
+        if (start != null) {
+          final day = start.day;
+          final month = [
+            'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+            'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+          ][start.month - 1];
+          workoutName = 'Mon $day $month - Week 1';
+        }
+
+        await blockDataRef.set({
+          'date': start != null ? Timestamp.fromDate(start) : null,
+
+          'circuitStartIndices': [0],
+          'exercises': [],
+          'workoutName': workoutName,
+        });
+
+        print('✅ [BlockPlanner] Stub week_0/day_0 created under block_data/current_block');
+      }
+    }
+
+
   }
 
   Future<void> _loadRepHistoryAndGenerateReps() async {
@@ -804,6 +842,33 @@ class _BlockPlannerState extends State<Block_Planner> {
 
       print('📌 Updated current_block → ID: $blockIdToUse');
     }
+
+    // 🧱 Ensure week docs exist for BB2 compatibility
+    if (_blockStartDate != null && _blockEndDate != null) {
+      final int totalWeeks = _blockEndDate!
+          .difference(_blockStartDate!)
+          .inDays ~/ 7 + 1;
+
+      final weeksCollection = FirebaseFirestore.instance
+          .collection('planned_blocks')
+          .doc(user.uid)
+          .collection('blocks')
+          .doc(blockIdToUse!)
+          .collection('weeks');
+
+      for (int i = 0; i < totalWeeks; i++) {
+        final weekDocRef = weeksCollection.doc('week_$i');
+
+        await weekDocRef.set({
+          'exists': true,
+        }, SetOptions(merge: true));
+        print("📤 Creating weeks under blockId: $blockIdToUse");
+
+
+        print("📅 Created week_$i doc");
+      }
+    }
+
 
 
     if (mounted) {

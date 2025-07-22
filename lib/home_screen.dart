@@ -78,8 +78,30 @@ class _HomeScreenState extends State<HomeScreen> {
 
       await blocksRef.add(defaultBlock);
       print('✅ [Home] Default block created');
+
+      // 🧱 Add stub block_data → week_0 → day_0
+      final blockDataRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('block_data')
+          .doc('current_block')
+          .collection('weeks')
+          .doc('week_0')
+          .collection('days')
+          .doc('day_0');
+
+      await blockDataRef.set({
+        'date': Timestamp.fromDate(now),
+        'circuitStartIndices': [0],
+        'exercises': [],
+        'workoutName': 'Mon ${now.day} ${[
+          'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+          'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+        ][now.month - 1]} - Week 1',
+      });
     }
   }
+
 
 
   Future<void> _fetchTrainingDaysForMonth(DateTime month) async {
