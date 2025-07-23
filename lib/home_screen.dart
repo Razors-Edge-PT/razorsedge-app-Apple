@@ -66,41 +66,88 @@ class _HomeScreenState extends State<HomeScreen> {
     if (existingBlocks.docs.isEmpty) {
       print('🆕 [Home] No blocks found — creating default "1st Block"...');
       final now = DateTime.now();
+      final startDate = now;
+      final endDate = now.add(const Duration(days: 42));
+
       final defaultBlock = {
         'name': '1st Block',
         'isActive': true,
         'createdAt': Timestamp.now(),
-        'startDate': Timestamp.fromDate(now),
-        'endDate': Timestamp.fromDate(now.add(const Duration(days: 42))),
+        'startDate': Timestamp.fromDate(startDate),
+        'endDate': Timestamp.fromDate(endDate),
         'selectedDays': ['Mon', 'Wed', 'Fri'],
-        'exercises': [],
       };
 
-      await blocksRef.add(defaultBlock);
-      print('✅ [Home] Default block created');
+      final newBlockRef = await blocksRef.add(defaultBlock);
+      final newBlockId = newBlockRef.id;
+      print('✅ [Home] Default block created with ID: $newBlockId');
 
-      // 🧱 Add stub block_data → week_0 → day_0
-      final blockDataRef = FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .collection('block_data')
-          .doc('current_block')
-          .collection('weeks')
-          .doc('week_0')
-          .collection('days')
-          .doc('day_0');
+      // ✅ Create week_0 to week_5 and day_0 to day_6 in each
+      for (int week = 0; week < 6; week++) {
+        final weekRef = newBlockRef.collection('weeks').doc('week_$week');
+        await weekRef.set({'exists': true}, SetOptions(merge: true));
 
-      await blockDataRef.set({
-        'date': Timestamp.fromDate(now),
-        'circuitStartIndices': [0],
-        'exercises': [],
-        'workoutName': 'Mon ${now.day} ${[
-          'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-          'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-        ][now.month - 1]} - Week 1',
-      });
+        final daysRef = weekRef.collection('days');
+        for (int day = 0; day < 7; day++) {
+          final currentDate = now.add(Duration(days: week * 7 + day));
+          final weekday = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][day];
+          final monthName = [
+            'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+            'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+          ][currentDate.month - 1];
+
+          await daysRef.doc('day_$day').set({
+            'date': Timestamp.fromDate(currentDate),
+            'circuitStartIndices': [0],
+            'exercises': [],
+            'workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}',
+            'exists': true,
+          });
+        }
+      }
+
+      // ✅ Inject a planned exercise with Static RIR and periodization
+      final exerciseId = 'AmfUWbF1DH3I7qPAdh5k'; // Bench Press, Barbell
+      final defaultRirPlan = {
+        for (int w = 1; w <= 6; w++)
+          'week$w': {
+            'session1': {
+              'set1': {'reps': '10', 'rir': '1'},
+              'set2': {'reps': '10', 'rir': '1'},
+              'set3': {'reps': '10', 'rir': '1'},
+            }
+          }
+      };
+
+      final plannedExerciseDetails = {
+        exerciseId: {
+          'rirModel': 'Static RIR',
+          'rirPlan': defaultRirPlan,
+          'periodizationModel': 'DUP, Custom',
+          'progressionModel': 'Add Reps',
+          'weeklyFrequency': 3,
+          'increments': {'week': 2.5, 'block': 5.0},
+          'notes': '',
+          'maxWeightXReps': '',
+        },
+        'blockMeta': {
+          'blockStartDate': startDate.toIso8601String(),
+          'blockEndDate': endDate.toIso8601String(),
+          'selectedDays': ['Mon', 'Wed', 'Fri'],
+        }
+      };
+
+      await newBlockRef.set({
+        'plannedExerciseDetails': plannedExerciseDetails,
+      }, SetOptions(merge: true));
     }
   }
+
+
+
+
+
+
 
 
 
@@ -165,10 +212,12 @@ class _HomeScreenState extends State<HomeScreen> {
       _fetchMostRecentWeight(),
       _fetchMostRecentWorkout(),
     ]);
+    if (!mounted) return;
     setState(() {
       isLoading = false;
     });
   }
+
 
   Future<void> _fetchMostRecentWeight() async {
     try {

@@ -3899,14 +3899,19 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                         size: 16,
                                         color: Colors.lightGreenAccent,
                                       ),
-                                    if (b.id == _activeBlockId)
-                                      const SizedBox(width: 4),
-                                    Text(b.name,
-                                        style: const TextStyle(
-                                            color: Colors.white)),
+                                    if (b.id == _activeBlockId) const SizedBox(width: 4),
+                                    Expanded(
+                                      child: Text(
+                                        b.name,
+                                        style: const TextStyle(color: Colors.white),
+                                        overflow: TextOverflow.ellipsis,
+                                        softWrap: false,
+                                      ),
+                                    ),
                                   ],
                                 ),
                               );
+
                             }).toList(),
 
                             // 4️⃣ also show the check-icon in the closed header
@@ -3920,15 +3925,23 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                         size: 16,
                                         color: Colors.lightGreenAccent,
                                       ),
-                                    if (b.id == _activeBlockId)
-                                      const SizedBox(width: 4),
-                                    Text(b.name,
-                                        style: const TextStyle(
-                                            color: Colors.white)),
+                                    if (b.id == _activeBlockId) const SizedBox(width: 4),
+                                    Expanded(
+                                      child: SingleChildScrollView(
+                                        scrollDirection: Axis.horizontal,
+                                        child: Text(
+                                          b.name,
+                                          style: const TextStyle(color: Colors.white),
+                                          overflow: TextOverflow.ellipsis,
+                                          softWrap: false,
+                                        ),
+                                      ),
+                                    ),
                                   ],
                                 );
                               }).toList();
                             },
+
 
                             // 5️⃣ on change remains the same
                             onChanged: (newId) {
