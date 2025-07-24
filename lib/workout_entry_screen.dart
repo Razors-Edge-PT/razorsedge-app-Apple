@@ -1057,6 +1057,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     _blockDateLoad = _loadBlockDatesOnly();
     _repo = BlockPlannerRepository();
+    WidgetsBinding.instance.addObserver(this);
+
 
     _selectedDate = widget.initialDate ?? DateTime.now();
     print('📅 [WES] Selected date: $_selectedDate');
@@ -1120,11 +1122,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         _rirControllers.clear();
         _resolvedBB2Values.clear();
 
-        final draftLoaded = await _loadWorkoutDraftFromCache();
-        print('📂 [WES Init] Draft loaded for ${_selectedDate.toIso8601String()}: $draftLoaded');
-
-        await _mergeNewBB2ExercisesIntoDraft();
+        await _loadDraftLocallyIfAvailable(); // new version only
+        await _mergeNewBB2ExercisesIntoDraft(); // still needed
         _populateVelocityFlags();
+
 
 
 
@@ -1134,6 +1135,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
 
       }
+
+      await _loadDraftLocallyIfAvailable();
+
 
       print("🔀 [WES] Merged BB2 into draft");
 
@@ -1805,6 +1809,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         }
       }
     }
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      print('📦 [WES] App paused — saving draft');
+      _persistDraftLocally();
+    }
   }
 
   void _loadWorkout(Workout workout) {
@@ -1944,7 +1952,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
-    _saveWorkoutDraftToCache(); // ✅ Auto-save workout on screen exit
+    _persistDraftLocally();
 
     _workoutNameController.dispose();
     for (var controllers in _repsControllers) {
@@ -1963,9 +1971,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       }
     }
     WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
 
     _horizontalScrollController.dispose();
+    super.dispose();
   }
 
   void _initializeControllers() {
@@ -2023,6 +2031,92 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         }).toList();
       }
     }
+  }
+
+  //Values persisting block: start
+
+  String get _draftKey {
+    final dateKey = DateFormat('yyyy-MM-dd').format(_selectedDate);
+    return 'wes_draft_$dateKey';
+  }
+
+  Future<void> _persistDraftLocally() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      // Sync current TextField values into _workoutSets
+      for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+        for (int j = 0; j < _workoutSets[i].length; j++) {
+          _workoutSets[i][j].reps = int.tryParse(_repsControllers[i][j].text.trim());
+          _workoutSets[i][j].weight = double.tryParse(_weightControllers[i][j].text.trim());
+          _workoutSets[i][j].rir = double.tryParse(_rirControllers[i][j].text.trim());
+          _workoutSets[i][j].velocity = double.tryParse(_velocityControllers[i][j].text.trim());
+          _workoutSets[i][j].notes = _notesControllers[i][j].text.trim();
+        }
+      }
+
+      final draft = {
+        'workoutName': _workoutNameController.text,
+        'exercises': List.generate(_selectedExercisesWithCircuits.length, (i) => {
+          'name': _selectedExercisesWithCircuits[i]['name'],
+          'circuitIndex': _selectedExercisesWithCircuits[i]['circuitIndex'],
+          'sets': _workoutSets[i].map((set) => set.toMap()).toList(),
+        }),
+      };
+
+      await prefs.setString(_draftKey, jsonEncode(draft));
+      // print('💾 Draft saved: $_draftKey');
+    } catch (e) {
+      print('❌ Failed to persist WES draft: $e');
+    }
+  }
+
+  Future<void> _loadDraftLocallyIfAvailable() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonStr = prefs.getString(_draftKey);
+      if (jsonStr == null) return;
+
+      final decoded = jsonDecode(jsonStr);
+      final List exercises = decoded['exercises'] ?? [];
+
+      _selectedExercisesWithCircuits.clear();
+      _workoutSets.clear();
+      _repsControllers.clear();
+      _weightControllers.clear();
+      _rirControllers.clear();
+      _velocityControllers.clear();
+      _notesControllers.clear();
+
+      _workoutNameController.text = decoded['workoutName'] ?? _formatWorkoutDate(_selectedDate);
+
+      for (final e in exercises) {
+        _selectedExercisesWithCircuits.add({
+          'name': e['name'],
+          'circuitIndex': e['circuitIndex'] ?? 0,
+        });
+
+        final List<Map<String, dynamic>> setMaps = List<Map<String, dynamic>>.from(e['sets'] ?? []);
+        final sets = setMaps.map((s) => SetDetails(
+          reps: (s['reps'] is int) ? s['reps'] : int.tryParse(s['reps']?.toString() ?? ''),
+          weight: (s['weight'] is num) ? (s['weight'] as num).toDouble() : null,
+          rir: (s['rir'] is num) ? (s['rir'] as num).toDouble() : null,
+          velocity: (s['velocity'] is num) ? (s['velocity'] as num).toDouble() : null,
+          notes: s['notes']?.toString(),
+        )).toList();
+
+        _workoutSets.add(sets);
+      }
+
+      _initializeControllers();
+    } catch (e) {
+      print('❌ Failed to load WES draft: $e');
+    }
+  }
+
+  Future<void> _clearDraft() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_draftKey);
   }
 
 
@@ -2980,13 +3074,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         'savedFields_${_selectedDate.toIso8601String().substring(0, 10)}',
         savedFieldKeys,
       );
-    } catch (error) {
-      print("❌ Failed to save workout: $error");
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to save workout: $error')),
-      );
     }
+    await _clearDraft(); // ✅ Only clear draft once saved successfully
+
   }
 
   Future<Map<String, dynamic>?> getBB2ExerciseValuesForDate({
@@ -3410,11 +3500,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     print('📆 [WES] Date changed to: ${DateFormat('yyyy-MM-dd').format(pickedDate)}');
 
-    // 1️⃣ Save the draft for the current date
-    print('💾 [WES] Saving draft for previous date...');
-    await _saveWorkoutDraftToCache();
 
     _cachedProgressedValues.clear(); // ✅ Main fix
+
+    await _persistDraftLocally(); // ✅ Save previous date before switching
+
 
     // 2️⃣ Update selected date and clear UI state
     print('🧼 [WES] Clearing UI and updating selected date...');
@@ -3430,10 +3520,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     });
 
-    // 3️⃣ Try loading a date-specific draft — will skip if no real data
-    print('📂 [WES] Attempting to load draft for new date...');
-    final draftLoaded = await _loadWorkoutDraftFromCache();
-    print('📂 [WES] Draft loaded for new date: $draftLoaded');
+// 3️⃣ Load locally saved draft (if available)
+    print('📂 [WES] Attempting to load local draft for new date...');
+    await _loadDraftLocallyIfAvailable();
+
 
     // 4️⃣ Merge in BB2 exercises (this now acts as the **primary** loader)
     print('🔁 [WES] Merging in BB2 exercises for selected date...');
@@ -4260,7 +4350,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                                         ? set2SuggestedWeight(i).toStringAsFixed(1)
                                         : (j == 2)
                                         ? set3SuggestedWeight(i).toStringAsFixed(1)
-                                        : '25',
+                                        : '20',
                                     hintStyle: const TextStyle(
                                       color: Colors.grey,
                                       fontStyle: FontStyle.italic,
