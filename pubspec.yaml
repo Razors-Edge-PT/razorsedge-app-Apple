@@ -41,6 +41,7 @@ dependencies:
   string_similarity: ^2.0.0
   fl_chart: ^0.65.0
   device_info_plus: ^10.1.0
+  image_picker: ^1.0.0 # or latest
 
 
   flutter:

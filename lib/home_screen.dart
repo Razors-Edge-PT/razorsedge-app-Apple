@@ -5,6 +5,9 @@ import 'workout_entry_screen.dart';
 import 'workout_model.dart';
 import 'app_drawer.dart';
 import 'package:table_calendar/table_calendar.dart';
+import 'dart:io';
+import 'package:image_picker/image_picker.dart';
+
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -28,6 +31,8 @@ class _HomeScreenState extends State<HomeScreen> {
   DateTime _focusedDay = DateTime.now();
   DateTime? _selectedDay;
   Set<DateTime> _trainingDays = {};
+  File? _profileImage;
+  final ImagePicker _picker = ImagePicker();
 
   HomeSection _currentSection = HomeSection.calendar;
 
@@ -142,13 +147,6 @@ class _HomeScreenState extends State<HomeScreen> {
       }, SetOptions(merge: true));
     }
   }
-
-
-
-
-
-
-
 
 
   Future<void> _fetchTrainingDaysForMonth(DateTime month) async {
@@ -343,6 +341,19 @@ class _HomeScreenState extends State<HomeScreen> {
         .toList();
   }
 
+  Future<void> _pickProfileImage() async {
+    print("📸 Picker tapped");
+    final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
+    if (pickedFile != null) {
+      setState(() {
+        _profileImage = File(pickedFile.path);
+      });
+      print("✅ Image picked: ${pickedFile.path}");
+    } else {
+      print("❌ No image selected");
+    }
+  }
+
   Widget _buildFeatureCard(IconData icon, String label, String route) {
     return GestureDetector(
       onTap: () => Navigator.pushNamed(context, route),
@@ -381,37 +392,64 @@ class _HomeScreenState extends State<HomeScreen> {
       key: _scaffoldKey,
       appBar: AppBar(
         title: null,
+        backgroundColor: Colors.blueGrey,
         automaticallyImplyLeading: false,
         actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Image.asset(
-                  'assets/InApp/transparent_good_lift_logo_inApp.png',
-                  height: 36,
-                  fit: BoxFit.contain,
+          Row(
+            mainAxisSize: MainAxisSize.min, // ⬅️ Important to avoid tap overlap
+            children: [
+              // 👤 Profile picture (tappable to upload)
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: () {
+                    print('📸 Picker tapped');
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.all(4.0),
+                    child: CircleAvatar(
+                      radius: 18,
+                      backgroundColor: Colors.grey.shade300,
+                      backgroundImage: _profileImage != null
+                          ? FileImage(_profileImage!)
+                          : null,
+                      child: _profileImage == null
+                          ? const Icon(Icons.fitness_center, color: Colors.black54, size: 20)
+
+                          : null,
+                    ),
+                  ),
                 ),
-                const SizedBox(width: 8),
-                GestureDetector(
-                  onTap: () => _scaffoldKey.currentState?.openDrawer(),
-                  child: const Icon(
+              ),
+              const SizedBox(width: 12),
+
+              // App logo
+              Image.asset(
+                'assets/InApp/transparent_good_lift_logo_inApp.png',
+                height: 36,
+                fit: BoxFit.contain,
+              ),
+              const SizedBox(width: 8),
+
+              // Menu icon
+              GestureDetector(
+                onTap: () => _scaffoldKey.currentState?.openDrawer(),
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 8.0),
+                  child: Icon(
                     Icons.menu,
                     size: 28,
                     color: Colors.grey,
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ],
-
-
-
-
-
       ),
+
+
       //backgroundImage: AssetImage('assets/avatar.png'),
 
       drawer: const AppDrawer(),
