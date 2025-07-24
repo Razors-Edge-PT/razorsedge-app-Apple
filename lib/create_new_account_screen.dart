@@ -1,26 +1,24 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:google_sign_in/google_sign_in.dart';
-import 'create_new_account_screen.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:localtest222/login_screen.dart';
 
-
-
-class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+class CreateNewAccountScreen extends StatefulWidget {
+  const CreateNewAccountScreen({super.key});
 
   @override
-  State<LoginScreen> createState() => _LoginScreenState();
+  State<CreateNewAccountScreen> createState() => _CreateNewAccountScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen> {
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
+class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
   final _formKey = GlobalKey<FormState>();
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+  final TextEditingController _confirmPasswordController = TextEditingController();
+
   bool _isLoading = false;
-  bool _obscurePassword = true;
   String? _errorMessage;
 
-  Future<void> signInWithEmailAndPassword() async {
+  void _register() async {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() {
@@ -29,55 +27,51 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
-      await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: _emailController.text.trim(),
-        password: _passwordController.text.trim(),
+      final email = _emailController.text.trim();
+      final password = _passwordController.text.trim();
+
+      // ✅ Create the user
+      await FirebaseAuth.instance.createUserWithEmailAndPassword(
+        email: email,
+        password: password,
       );
-      Navigator.pushReplacementNamed(context, '/home');
+
+      // ✅ Navigate directly to Home screen after successful registration
+      if (mounted) {
+        Navigator.pushReplacementNamed(context, '/home'); // adjust this route if needed
+      }
     } on FirebaseAuthException catch (e) {
+      String message;
+      switch (e.code) {
+        case 'email-already-in-use':
+          message = 'This email is already in use.';
+          break;
+        case 'invalid-email':
+          message = 'Invalid email format.';
+          break;
+        case 'weak-password':
+          message = 'Password is too weak.';
+          break;
+        default:
+          message = 'Registration failed. (${e.message})';
+      }
+
       setState(() {
-        _errorMessage = e.message;
+        _errorMessage = message;
+      });
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'An unexpected error occurred.';
       });
     } finally {
-      setState(() {
-        _isLoading = false;
-      });
-    }
-  }
-
-  Future<void> signInWithGoogle() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
-
-    try {
-      final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();
-      if (googleUser == null) {
+      if (mounted) {
         setState(() {
           _isLoading = false;
         });
-        return;
       }
-
-      final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
-      final OAuthCredential credential = GoogleAuthProvider.credential(
-        accessToken: googleAuth.accessToken,
-        idToken: googleAuth.idToken,
-      );
-
-      await FirebaseAuth.instance.signInWithCredential(credential);
-      Navigator.pushReplacementNamed(context, '/home');
-    } on FirebaseAuthException catch (e) {
-      setState(() {
-        _errorMessage = e.message;
-      });
-    } finally {
-      setState(() {
-        _isLoading = false;
-      });
     }
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -92,7 +86,7 @@ class _LoginScreenState extends State<LoginScreen> {
             'assets/login_fill.png',
             fit: BoxFit.cover,
           ),
-          // Foreground content in a scrollable view
+          // Foreground content
           SafeArea(
             child: SingleChildScrollView(
               child: ConstrainedBox(
@@ -129,13 +123,15 @@ class _LoginScreenState extends State<LoginScreen> {
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 const Text(
-                                  "Welcome Back",
+                                  "Create Account",
                                   style: TextStyle(
                                       fontSize: 24,
                                       fontWeight: FontWeight.bold,
                                       color: Colors.black54),
                                 ),
                                 const SizedBox(height: 16),
+
+                                // Email
                                 TextFormField(
                                   controller: _emailController,
                                   keyboardType: TextInputType.emailAddress,
@@ -171,15 +167,18 @@ class _LoginScreenState extends State<LoginScreen> {
                                     if (value == null || value.isEmpty)
                                       return 'Please enter your email';
                                     if (!RegExp(r'^[^@]+@[^@]+\.[^@]+')
-                                        .hasMatch(value))
+                                        .hasMatch(value)) {
                                       return 'Enter a valid email';
+                                    }
                                     return null;
                                   },
                                 ),
                                 const SizedBox(height: 12),
+
+                                // Password
                                 TextFormField(
                                   controller: _passwordController,
-                                  obscureText: _obscurePassword,
+                                  obscureText: true,
                                   style: const TextStyle(color: Colors.black54),
                                   decoration: InputDecoration(
                                     labelText: 'Password',
@@ -189,9 +188,6 @@ class _LoginScreenState extends State<LoginScreen> {
                                     hintStyle: TextStyle(
                                         color: Colors.blueAccent.withOpacity(0.6),
                                         fontSize: 16),
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
                                     enabledBorder: OutlineInputBorder(
                                       borderRadius: BorderRadius.circular(12),
                                       borderSide:
@@ -211,29 +207,59 @@ class _LoginScreenState extends State<LoginScreen> {
                                       borderSide: const BorderSide(
                                           color: Colors.redAccent, width: 2),
                                     ),
-                                    suffixIcon: IconButton(
-                                      icon: Icon(
-                                        _obscurePassword
-                                            ? Icons.visibility
-                                            : Icons.visibility_off,
-                                        color: Colors.blueAccent,
-                                      ),
-                                      onPressed: () {
-                                        setState(() {
-                                          _obscurePassword = !_obscurePassword;
-                                        });
-                                      },
-                                    ),
                                   ),
                                   validator: (value) {
                                     if (value == null || value.isEmpty)
-                                      return 'Please enter your password';
+                                      return 'Please enter a password';
                                     if (value.length < 6)
-                                      return 'Password must be at least 6 characters';
+                                      return 'Minimum 6 characters';
                                     return null;
                                   },
                                 ),
                                 const SizedBox(height: 12),
+
+                                // Confirm Password
+                                TextFormField(
+                                  controller: _confirmPasswordController,
+                                  obscureText: true,
+                                  style: const TextStyle(color: Colors.black54),
+                                  decoration: InputDecoration(
+                                    labelText: 'Confirm Password',
+                                    labelStyle:
+                                    const TextStyle(color: Colors.blueAccent),
+                                    hintText: 'Re-enter your password',
+                                    hintStyle: TextStyle(
+                                        color: Colors.blueAccent.withOpacity(0.6),
+                                        fontSize: 16),
+                                    enabledBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      borderSide:
+                                      const BorderSide(color: Colors.blueAccent),
+                                    ),
+                                    focusedBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      borderSide: const BorderSide(
+                                          color: Colors.lightBlue, width: 2),
+                                    ),
+                                    errorBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      borderSide: const BorderSide(color: Colors.red),
+                                    ),
+                                    focusedErrorBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      borderSide: const BorderSide(
+                                          color: Colors.redAccent, width: 2),
+                                    ),
+                                  ),
+                                  validator: (value) {
+                                    if (value != _passwordController.text)
+                                      return "Passwords do not match";
+                                    return null;
+                                  },
+                                ),
+
+                                const SizedBox(height: 12),
+
                                 if (_errorMessage != null)
                                   Padding(
                                     padding: const EdgeInsets.symmetric(vertical: 8),
@@ -242,6 +268,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                       style: const TextStyle(color: Colors.red),
                                     ),
                                   ),
+
                                 SizedBox(
                                   width: double.infinity,
                                   child: ElevatedButton(
@@ -250,41 +277,16 @@ class _LoginScreenState extends State<LoginScreen> {
                                       const EdgeInsets.symmetric(vertical: 14),
                                       backgroundColor: Colors.blueAccent,
                                       shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                          BorderRadius.circular(12)),
+                                          borderRadius: BorderRadius.circular(12)),
                                     ),
-                                    onPressed: _isLoading
-                                        ? null
-                                        : signInWithEmailAndPassword,
+                                    onPressed: _isLoading ? null : _register,
                                     child: _isLoading
                                         ? const CircularProgressIndicator(
                                         color: Colors.white)
                                         : const Text(
-                                      'Login',
+                                      'Sign Up',
                                       style: TextStyle(fontSize: 18),
                                     ),
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                SizedBox(
-                                  width: double.infinity,
-                                  child: GestureDetector(
-                                    onTap: _isLoading ? null : signInWithGoogle,
-                                    child: Image.asset(
-                                      'assets/google_sign_in.png',
-                                      height: 50,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                TextButton(
-                                  onPressed: () {
-                                    // TODO: Navigate to Forgot Password Screen
-                                  },
-                                  child: const Text(
-                                    "Forgot Password?",
-                                    style: TextStyle(
-                                        color: Colors.blueAccent, fontSize: 16),
                                   ),
                                 ),
                               ],
@@ -292,20 +294,15 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                         ),
                       ),
-                      // NEW: Create Account option
+
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 20.0),
                         child: TextButton(
                           onPressed: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => const CreateNewAccountScreen(),
-                              ),
-                            );
+                            Navigator.pop(context);
                           },
                           child: const Text(
-                            "Don't have an account? Create one",
+                            "Already have an account? Log in",
                             style: TextStyle(
                               color: Colors.blueAccent,
                               fontSize: 16,
@@ -313,7 +310,6 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                         ),
                       ),
-
 
                       const Spacer(flex: 3),
                     ],
@@ -325,7 +321,6 @@ class _LoginScreenState extends State<LoginScreen> {
         ],
       ),
     );
-
   }
-}
 
+}
