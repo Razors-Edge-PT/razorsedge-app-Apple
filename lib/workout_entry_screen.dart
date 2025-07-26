@@ -1111,32 +1111,30 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       await _initializeDayDocIfNeeded(_selectedDate);
       print("📄 [WES] Day doc initialized if needed");
 
+      // ✅ Override _selectedDate if provided
       if (widget.initialDate != null) {
-        _cachedProgressedValues.clear();
         _selectedDate = widget.initialDate!;
         _workoutNameController.text = _formatWorkoutDate(_selectedDate);
-        _selectedExercisesWithCircuits.clear();
-        _workoutSets.clear();
-        _repsControllers.clear();
-        _weightControllers.clear();
-        _rirControllers.clear();
-        _resolvedBB2Values.clear();
-
-        await _loadDraftLocallyIfAvailable(); // new version only
-        await _mergeNewBB2ExercisesIntoDraft(); // still needed
-        _populateVelocityFlags();
-
-
-
-
-      } else {
-        await _mergeNewBB2ExercisesIntoDraft();
-        _populateVelocityFlags();
-
-
       }
 
-      await _loadDraftLocallyIfAvailable();
+// ✅ Clear cached values and UI state before load
+      _cachedProgressedValues.clear();
+      _selectedExercisesWithCircuits.clear();
+      _workoutSets.clear();
+      _repsControllers.clear();
+      _weightControllers.clear();
+      _rirControllers.clear();
+      _velocityControllers.clear();
+      _notesControllers.clear();
+      _resolvedBB2Values.clear();
+
+// ✅ Load in proper order
+      await _loadDraftLocallyIfAvailable();        // 1️⃣ Load local draft first
+      await _mergeNewBB2ExercisesIntoDraft();      // 2️⃣ Merge new BB2 exercises
+      await _loadExercisesFromBB2ForDay();         // 3️⃣ Load pink read-only BB2 data
+      _initializeControllers();                    // 4️⃣ Rebuild controllers
+      _populateVelocityFlags();                    // 5️⃣ Finalize flags and UI
+
 
 
       print("🔀 [WES] Merged BB2 into draft");
@@ -3075,7 +3073,19 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         savedFieldKeys,
       );
     }
-    await _clearDraft(); // ✅ Only clear draft once saved successfully
+    await _clearDraft();
+    setState(() {
+      _selectedExercisesWithCircuits.clear();
+      _workoutSets.clear();
+      _repsControllers.clear();
+      _weightControllers.clear();
+      _rirControllers.clear();
+      _velocityControllers.clear();
+      _notesControllers.clear();
+      _resolvedBB2Values.clear();
+      _workoutNameController.text = _formatWorkoutDate(_selectedDate);
+    });
+
 
   }
 

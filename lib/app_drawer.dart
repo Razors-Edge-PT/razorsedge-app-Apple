@@ -24,9 +24,12 @@ class AppDrawer extends StatelessWidget {
             ),
             child: Row(
               children: [
-                const CircleAvatar(
-                  radius: 28,
-                  backgroundImage: AssetImage('assets/avatar.png'),
+                Padding(
+                  padding: const EdgeInsets.only(top: 14), // adjust this value to move it lower
+                  child: const CircleAvatar(
+                    radius: 28,
+                    backgroundImage: AssetImage('assets/avatar.png'),
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(

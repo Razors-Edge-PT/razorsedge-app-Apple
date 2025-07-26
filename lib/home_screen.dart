@@ -389,6 +389,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final userEmail = FirebaseAuth.instance.currentUser?.email ?? '';
 
     return Scaffold(
+
       key: _scaffoldKey,
       appBar: AppBar(
         title: null,
@@ -403,8 +404,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 color: Colors.transparent,
                 child: InkWell(
                   customBorder: const CircleBorder(),
-                  onTap: () {
+                  onTap: () async {
                     print('📸 Picker tapped');
+                    await _pickProfileImage();
                   },
                   child: Padding(
                     padding: const EdgeInsets.all(4.0),
@@ -415,9 +417,16 @@ class _HomeScreenState extends State<HomeScreen> {
                           ? FileImage(_profileImage!)
                           : null,
                       child: _profileImage == null
-                          ? const Icon(Icons.fitness_center, color: Colors.black54, size: 20)
-
+                          ? ClipOval(
+                        child: Image.asset(
+                          'assets/InApp/Placeholder_profilepic.png',
+                          fit: BoxFit.cover,
+                          width: 36,
+                          height: 36,
+                        ),
+                      )
                           : null,
+
                     ),
                   ),
                 ),
@@ -472,6 +481,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           scrollDirection: Axis.horizontal,
                           child: Row(
                             children: [
+
+
                               SizedBox(
                                 width: kFeatureCardWidth,
                                 child: _buildFeatureCard(

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 import 'package:localtest222/login_screen.dart';
 
 class CreateNewAccountScreen extends StatefulWidget {
@@ -35,6 +37,18 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
         email: email,
         password: password,
       );
+
+      // ✅ Store user email in Firestore
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .set({
+          'email': user.email,
+          'createdAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
 
       // ✅ Navigate directly to Home screen after successful registration
       if (mounted) {
