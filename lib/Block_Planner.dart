@@ -464,6 +464,235 @@ class _BlockPlannerState extends State<Block_Planner> {
       groupedExercises = groupExercisesByCategory(exercises);
     });
   }
+//Handles Default Settings for most Exercises
+
+  Map<String, double> parseIncrements(String incString) {
+    final parts = incString
+        .split(',')
+        .map((s) => double.tryParse(s.trim()))
+        .whereType<double>()
+        .toList();
+
+    final keys = ['primary', 'secondary', 'tertiary', 'quaternary'];
+    final map = <String, double>{};
+
+    for (int i = 0; i < parts.length && i < keys.length; i++) {
+      map[keys[i]] = parts[i];
+    }
+
+    return map;
+  }
+
+
+  Map<String, dynamic> getDefaultSettings(String name, String category, String bodyPart) {
+    Map<String, dynamic> sanitize(Map<String, dynamic> def) {
+      return {
+        'weeklyFrequency': def['weeklyFrequency'],
+        'increments': parseIncrements(def['increments']),
+        'periodizationModel': def['periodizationModel'],
+        'repTargets': _buildRepTargetMap(def['repTargets']),
+        'rirModel': def['rirModel'],
+        'rirPlan': _buildRirPlan(def['rirTargets']),
+        'progressionModel': def['progressionModel'],
+      };
+    }
+
+    // --- Tier 1: Named overrides ---
+    if (_explicitDefaults.containsKey(name)) {
+      final def = _explicitDefaults[name]!;
+      return sanitize(def);
+    }
+
+    // --- Tier 2: Isolation override ---
+    if (_isIsolation(bodyPart)) {
+      final def = _defaultsByGroup['isolation']!;
+      return sanitize(def);
+    }
+
+    // --- Tier 3: Group/category fallback ---
+    if (_defaultsByGroup.containsKey(category)) {
+      final def = _defaultsByGroup[category]!;
+      return sanitize(def);
+    }
+
+    // 🔸 Fallback if unmatched
+    return {};
+  }
+
+
+  bool _isIsolation(String bodyPart) {
+    return bodyPart.split(',').length == 1;
+  }
+
+  Map<String, Map<String, String>> _buildRepTargetMap(List<int> reps) {
+    final map = <String, Map<String, String>>{};
+    final instanceMap = <String, String>{};
+    for (int i = 0; i < reps.length; i++) {
+      instanceMap['instance${i + 1}'] = reps[i].toString();
+    }
+    map['week1'] = instanceMap;
+    return map;
+  }
+
+  Map<String, Map<String, Map<String, Map<String, String>>>> _buildRirPlan(List<num> rirTargets) {
+    final weekMap = <String, Map<String, Map<String, String>>>{};
+
+    for (int i = 0; i < rirTargets.length; i++) {
+      weekMap['session${i + 1}'] = {
+        'set1': {
+          'rir': rirTargets[i].toStringAsFixed(1),
+        }
+      };
+    }
+
+    return {
+      'week1': weekMap,
+    };
+  }
+
+
+
+  final Map<String, Map<String, dynamic>> _explicitDefaults = {
+    'Bench Press, Barbell': {
+      'weeklyFrequency': 4,
+      'increments': '2.5, 1',
+      'periodizationModel': 'DUP, By Exposure',
+      'repTargets': [9, 5, 12, 3],
+      'rirModel': 'Static RIR',
+      'rirTargets': [2, 2, 2, 2],
+      'progressionModel': 'Smart Progression',
+    },
+    'Back Squat, Barbell': {
+      'weeklyFrequency': 2,
+      'increments': '2.5, 1',
+      'periodizationModel': 'DUP, By Exposure',
+      'repTargets': [8, 3],
+      'rirModel': 'Static RIR',
+      'rirTargets': [2, 3],
+      'progressionModel': 'Smart Progression',
+    },
+    'Deadlift, Conventional': {
+      'weeklyFrequency': 4,
+      'increments': '2.5, 1',
+      'periodizationModel': 'DUP, By Exposure',
+      'repTargets': [9, 5, 3, 1],
+      'rirModel': 'Static RIR',
+      'rirTargets': [3.5, 3, 2, 2],
+      'progressionModel': 'Smart Progression',
+    },
+    'Deadlift, Sumo': {
+      'weeklyFrequency': 4,
+      'increments': '2.5, 1',
+      'periodizationModel': 'DUP, By Exposure',
+      'repTargets': [9, 5, 3, 1],
+      'rirModel': 'Static RIR',
+      'rirTargets': [3.5, 3, 2, 2],
+      'progressionModel': 'Smart Progression',
+    },
+    'Bulgarian Split Squat': {
+      'weeklyFrequency': 2,
+      'increments': '2.5',
+      'periodizationModel': 'DUP, By Exposure',
+      'repTargets': [6, 8],
+      'rirModel': 'Static RIR',
+      'rirTargets': [3, 2],
+      'progressionModel': 'Smart Progression',
+    },
+    'Chin-Up': {
+      'weeklyFrequency': 3,
+      'increments': '2.5, 1.25',
+      'periodizationModel': 'DUP, By Exposure',
+      'repTargets': [8, 3, 1],
+      'rirModel': 'Static RIR',
+      'rirTargets': [2, 3, 1.5],
+      'progressionModel': 'Smart Progression',
+    },
+    'Overhead Dumbbell Press, Unilateral': {
+      'weeklyFrequency': 3,
+      'increments': '2.5',
+      'periodizationModel': 'DUP, By Week',
+      'repTargets': [15, 9, 6],
+      'rirModel': 'Static RIR',
+      'rirTargets': [1, 1.5, 2],
+      'progressionModel': 'Add reps',
+    },
+  };
+
+  final Map<String, Map<String, dynamic>> _defaultsByGroup = {
+    'Squat Pattern': {
+      'weeklyFrequency': 1,
+      'increments': '1.3',
+      'periodizationModel': 'DUP, By Week',
+      'repTargets': [15, 9, 6],
+      'rirModel': 'Static RIR',
+      'rirTargets': [2, 1.5, 2],
+      'progressionModel': 'Add reps',
+    },
+    'Hip Hinge': {
+      'weeklyFrequency': 1,
+      'increments': '1.3',
+      'periodizationModel': 'DUP, By Week',
+      'repTargets': [15, 9, 6],
+      'rirModel': 'Static RIR',
+      'rirTargets': [2, 1.5, 2],
+      'progressionModel': 'Add reps',
+    },
+    'Horizontal Press': {
+      'weeklyFrequency': 3,
+      'increments': '2.5, 1',
+      'periodizationModel': 'DUP, By Exposure',
+      'repTargets': [9, 15, 5],
+      'rirModel': 'Static RIR',
+      'rirTargets': [1, 1, 1],
+      'progressionModel': 'Add reps',
+    },
+    'Vertical Press': {
+      'weeklyFrequency': 3,
+      'increments': '2.5, 1',
+      'periodizationModel': 'DUP, By Exposure',
+      'repTargets': [9, 15, 5],
+      'rirModel': 'Static RIR',
+      'rirTargets': [1, 1, 1],
+      'progressionModel': 'Add reps',
+    },
+    'Vertical Pull': {
+      'weeklyFrequency': 3,
+      'increments': '2.5, 1',
+      'periodizationModel': 'DUP, By Exposure',
+      'repTargets': [9, 15, 5],
+      'rirModel': 'Static RIR',
+      'rirTargets': [1, 1, 1],
+      'progressionModel': 'Add reps',
+    },
+    'Horizontal Pull': {
+      'weeklyFrequency': 3,
+      'increments': '2.5, 1',
+      'periodizationModel': 'DUP, By Exposure',
+      'repTargets': [9, 15, 5],
+      'rirModel': 'Static RIR',
+      'rirTargets': [1, 1, 1],
+      'progressionModel': 'Add reps',
+    },
+    'Core': {
+      'weeklyFrequency': 4,
+      'increments': '2.5, 1',
+      'periodizationModel': 'DUP, By Exposure',
+      'repTargets': [9, 14, 6, 18],
+      'rirModel': 'Static RIR',
+      'rirTargets': [1, 1, 1, 0.5],
+      'progressionModel': 'Add reps',
+    },
+    'isolation': {
+      'weeklyFrequency': 4,
+      'increments': '2.5, 1',
+      'periodizationModel': 'DUP, By Exposure',
+      'repTargets': [9, 14, 6, 18],
+      'rirModel': 'Static RIR',
+      'rirTargets': [1, 1, 1, 0.5],
+      'progressionModel': 'Add reps',
+    },
+  };
+//Default Settings Block End
 
   // 🧠 Group exercises by category for dropdown UI
   Map<String, List<String>> groupExercisesByCategory(
@@ -686,9 +915,34 @@ class _BlockPlannerState extends State<Block_Planner> {
           );
 
           if (match.isNotEmpty) {
-            _exerciseIdToName[id] = match['name']!;
-            exerciseSettings.putIfAbsent(id, () => {});
+            final name = match['name']!;
+            final category = match['category'] ?? 'Other';
+            final bodyPart = match['bodyPart'] ?? '';
+
+            _exerciseIdToName[id] = name;
+
+            // 🧠 Get default settings
+            final defaults = getDefaultSettings(name, category, bodyPart);
+
+            // 🛡️ Sanitize repTargets if needed
+            final repTargets = defaults['repTargets'];
+            if (repTargets is! Map<String, Map<String, String>>) {
+              defaults['repTargets'] = _convertToMap(repTargets);
+              print("🔧 Normalized repTargets for $name");
+            }
+
+            // 🛡️ Optional: ensure rirPlan is Map (avoids crash if broken upstream)
+            final rirPlan = defaults['rirPlan'];
+            if (rirPlan is! Map<String, dynamic>) {
+              defaults['rirPlan'] = {};
+              print("⚠️ Fallback: Empty rirPlan injected for $name");
+            }
+
+            exerciseSettings[id] = defaults;
+            print("🧠 Assigned sanitized defaults for $name → $defaults");
           }
+
+
         }
       });
     }
@@ -1559,6 +1813,12 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   String _selectedModel = 'DUP, Signature'; // default or load from Firestore
   PeriodizationModelType? _lastOpenedModel;
 
+  final List<String> supportedModels = [
+    'Linear Weight Increase',
+    'Add reps',
+    'Smart Progression',
+  ];
+
 
   PeriodizationModelType _mapLabelToModelType(String label) {
     switch (label) {
@@ -1620,6 +1880,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       }
 
       final model = settings['periodizationModel'];
+      print('📋 Found model in settings: $model');
       if (model != null &&
           [
             'DUP, By Exposure',
@@ -1629,6 +1890,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             'Linear, by Exposure',
           ].contains(model)) {
         _selectedModel = model;
+        print('✅ Applied model to _selectedModel: $_selectedModel');
       }
 
 
@@ -1722,13 +1984,34 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       _rirDisplayController.text = 'W1 → ${summary.join(' | ')}';
     }
 
+    final supportedModels = [
+      'Linear Weight Increase',
+      'Add reps',
+      'Smart Progression',
+    ];
+
     final savedProgressionModel = widget.exerciseSettings[widget.exerciseId]?['progressionModel'];
+
     if (savedProgressionModel is String && savedProgressionModel.isNotEmpty) {
-      final normalized = (savedProgressionModel == 'linear')
+      final normalized = savedProgressionModel.trim() == 'linear'
           ? 'Linear Weight Increase'
-          : savedProgressionModel;
-      _selectedProgressionModel[widget.exerciseId] = normalized; // ✅ FIXED
+          : savedProgressionModel.trim();
+
+      if (supportedModels.contains(normalized)) {
+        _selectedProgressionModel[widget.exerciseId] = normalized;
+      } else {
+        final fallback = supportedModels.first;
+        _selectedProgressionModel[widget.exerciseId] = fallback;
+
+        // 🧼 One-time cleanup of bad saved value
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          widget.onUpdateSetting(widget.exerciseId, 'progressionModel', fallback);
+          print("🧼 Cleaned up invalid progressionModel: '$savedProgressionModel' → '$fallback'");
+        });
+      }
     }
+
+
 
 
     _maxWeightController.addListener(_updateE1RM);
@@ -1752,6 +2035,15 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     }
   }
 
+  void safeSave(String key, dynamic value) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        widget.onUpdateSetting(widget.exerciseId, key, value);
+      }
+    });
+  }
+
+
   @override
   void dispose() {
     print("🧹 [DISPOSE] Called for ${widget.exerciseName}");
@@ -1762,17 +2054,17 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
     final value = int.tryParse(_weeklyFrequencyController.text.trim());
     if (value != null) {
-      widget.onUpdateSetting(widget.exerciseId, 'weeklyFrequency', value);
-      print(
-          "💾 [DISPOSE] Saved weeklyFrequency for ${widget.exerciseName}: $value");
+      safeSave('weeklyFrequency', value);
+      print("💾 [DISPOSE] Saved weeklyFrequency for ${widget.exerciseName}: $value");
     }
+
 
     final model = _selectedModel;
     if (model.isNotEmpty) {
-      widget.onUpdateSetting(widget.exerciseId, 'periodizationModel', model);
-      print(
-          "💾 [DISPOSE] Saved periodizationModel for ${widget.exerciseName}: $model");
+      safeSave('periodizationModel', model);
+      print("💾 [DISPOSE] Saved periodizationModel for ${widget.exerciseName}: $model");
     }
+
 
     // ✅ Save repTargets from display text as week → instance → value
     final repText = _repTargetsDisplayController.text.trim();
@@ -1818,11 +2110,12 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
         // ✅ Save RIR plan from cache
         if (_cachedRirPlan != null) {
-          widget.onUpdateSetting(widget.exerciseId, 'rirPlan', _cachedRirPlan);
+          safeSave('rirPlan', _cachedRirPlan);
           print("💾 [DISPOSE] Saved DUP Signature rirPlan → $_cachedRirPlan");
         } else {
           print("⚠️ [DISPOSE] No cached RIR plan found for DUP Signature");
         }
+
 
       } else {
         // ✅ All other models (DUP-week, exposure, etc.)
@@ -1839,8 +2132,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         result['week1'] = instanceMap;
       }
 
-      widget.onUpdateSetting(widget.exerciseId, 'repTargets', result);
+      safeSave('repTargets', result);
       print("💾 [DISPOSE] Saved repTargets for ${widget.exerciseName} using model $model → $result");
+
 
     }
 
@@ -1874,21 +2168,22 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         incrementsMap['quaternary'] = parsedIncrements[3];
       }
 
-      widget.onUpdateSetting(widget.exerciseId, 'increments', incrementsMap);
-      print(
-          "💾 [DISPOSE] Saved increments for ${widget.exerciseName}: $incrementsMap");
+      safeSave('increments', incrementsMap);
+      print("💾 [DISPOSE] Saved increments for ${widget.exerciseName}: $incrementsMap");
+
     }
 
     final progressionModel = _selectedProgressionModel[widget.exerciseName];
     if (progressionModel != null && progressionModel.isNotEmpty) {
-      widget.onUpdateSetting(widget.exerciseId, 'progressionModel', progressionModel);
+      safeSave('progressionModel', progressionModel);
       print("💾 [DISPOSE] Saved progression model for ${widget.exerciseName}: $progressionModel");
+
     }
 
-
     final notes = _notesController.text.trim();
-    widget.onUpdateSetting(widget.exerciseId, 'notes', notes);
+    safeSave('notes', notes);
     print("💾 [DISPOSE] Saved notes for ${widget.exerciseName}: $notes");
+
 
     final kg = _maxWeightController.text.trim();
     final reps = _maxRepsController.text.trim();
@@ -1900,9 +2195,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     if (kgDouble != null && repsDouble != null) {
       final combined =
           '${kgDouble.toStringAsFixed(1)} x ${repsDouble.toStringAsFixed(0)}';
-      widget.onUpdateSetting(widget.exerciseId, 'maxWeightXReps', combined);
-      print(
-          "💾 [DISPOSE] Saved maxWeightXReps for ${widget.exerciseName}: $combined");
+      safeSave('maxWeightXReps', combined);
+      print("💾 [DISPOSE] Saved maxWeightXReps for ${widget.exerciseName}: $combined");
     } else {
       print("⚠️ [DISPOSE] Skipped saving maxWeightXReps due to invalid input.");
     }
@@ -1911,14 +2205,16 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     print("🧪 [DISPOSE] Checking RIR model for ${widget.exerciseName}: ${_selectedRirModel[widget.exerciseName]}");
 
     if (rirModel != null && rirModel.isNotEmpty) {
-      widget.onUpdateSetting(widget.exerciseId, 'rirModel', rirModel);
+      safeSave('rirModel', rirModel);
       print("💾 [DISPOSE] Saved RIR model for ${widget.exerciseName}: $rirModel");
+
     }
 
 
     if (_cachedRirPlan != null && _cachedRirPlan!.isNotEmpty) {
-      widget.onUpdateSetting(widget.exerciseId, 'rirPlan', _cachedRirPlan);
+      safeSave('rirPlan', _cachedRirPlan);
       print("💾 [DISPOSE] Saved rirPlan for ${widget.exerciseName}: ${jsonEncode(_cachedRirPlan)}");
+
     }
 
 
@@ -2042,6 +2338,11 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       });
     }
   }
+
+  //Handles Default Settings for most Exercises
+
+
+// Model Begin
 
   List<List<String>> getDefaultReps(String model, int frequency) {
     switch (model) {
@@ -4281,7 +4582,16 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                       canvasColor: Colors.blueGrey.shade700,
                     ),
                     child: DropdownButtonFormField<String>(
-                      value: _selectedProgressionModel[widget.exerciseId], // ✅ FIXED
+                      // ✅ Safe assignment for value
+                      value: [
+                        'Linear Weight Increase',
+                        'Smart Progression',
+                        'Add Reps',
+                        'None',
+                      ].contains(_selectedProgressionModel[widget.exerciseId])
+                          ? _selectedProgressionModel[widget.exerciseId]
+                          : null,
+
                       isExpanded: true,
                       items: [
                         DropdownMenuItem<String>(
@@ -4342,11 +4652,13 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         }).toList();
                       },
                       onChanged: (value) {
-                        setState(() {
-                          _selectedProgressionModel[widget.exerciseId] = value!; // ✅ FIXED
-                          widget.onUpdateSetting(widget.exerciseId, 'progressionModel', value);
-                          print("💾 [UI] Saved progression model '$value' for ${widget.exerciseId}"); // ✅ FIXED
-                        });
+                        if (value != null) {
+                          setState(() {
+                            _selectedProgressionModel[widget.exerciseId] = value;
+                            widget.onUpdateSetting(widget.exerciseId, 'progressionModel', value);
+                            print("💾 [UI] Saved progression model '$value' for ${widget.exerciseId}");
+                          });
+                        }
                       },
                       style: const TextStyle(color: Colors.white, fontSize: 12),
                       decoration: InputDecoration(
@@ -4360,14 +4672,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                       ),
                     ),
-
-
-
-
-
                   ),
                 ),
-
 
 
                 // Add spacing if needed

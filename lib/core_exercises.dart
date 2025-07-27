@@ -6,103 +6,118 @@ final List<Map<String, String>> coreExercises = [
   {
     'name': 'Bench Press, Barbell',
     'category': 'Horizontal Press',
-    'bodyPart': 'Chest, Triceps, Anterior Delts',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
   },
   {
     'name': 'Bench Press, Narrow Grip',
     'category': 'Horizontal Press',
-    'bodyPart': 'Chest, Triceps, Anterior Delts',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
   },
   {
     'name': 'Bench Press, Larsen Press',
     'category': 'Horizontal Press',
-    'bodyPart': 'Chest, Triceps, Anterior Delts',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
   },
   {
     'name': 'Bench Press, Long Pause',
     'category': 'Horizontal Press',
-    'bodyPart': 'Chest, Triceps, Anterior Delts',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
   },
   {
     'name': 'Bench Press, Banded',
     'category': 'Horizontal Press',
-    'bodyPart': 'Chest, Triceps, Anterior Delts',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
   },
   {
     'name': 'Bench Press, Pin Press',
     'category': 'Horizontal Press',
-    'bodyPart': 'Chest, Triceps, Anterior Delts',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
   },
   {
     'name': 'Bench Press, Touch n Go',
     'category': 'Horizontal Press',
-    'bodyPart': 'Chest, Triceps, Anterior Delts',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
   },
   {
     'name': 'Incline Press, Barbell',
     'category': 'Horizontal Press',
-    'bodyPart': 'Chest, Triceps, Anterior Delts',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
   },
   {
     'name': 'Flat Bench Dumbbell Press',
     'category': 'Horizontal Press',
-    'bodyPart': 'Chest, Triceps, Anterior Delts',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
   },
   {
     'name': 'Incline Bench Dumbbell Press',
     'category': 'Horizontal Press',
-    'bodyPart': 'Chest, Triceps, Anterior Delts',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
   },
   {
     'name': 'Decline Bench Press, Barbell',
     'category': 'Horizontal Press',
-    'bodyPart': 'Chest, Triceps, Anterior Delts',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
   },
   {
     'name': 'Decline Dumbbell Bench Press',
     'category': 'Horizontal Press',
-    'bodyPart': 'Chest, Triceps, Anterior Delts',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
   },
 
   {
     'name': 'Push Up, Suspended ',
     'category': 'Horizontal Press',
-    'bodyPart': 'Chest, Triceps, Anterior Delts',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
   },
   {
     'name': 'Banded Push Up, Suspended',
     'category': 'Horizontal Press',
-    'bodyPart': 'Chest, Triceps, Anterior Delts',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
   },
   {
     'name': 'Push Up, Deficit',
     'category': 'Horizontal Press',
-    'bodyPart': 'Chest, Triceps, Anterior Delts',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
   },
   {
     'name': 'Push Up, Decline',
     'category': 'Horizontal Press',
-    'bodyPart': 'Chest, Triceps, Anterior Delts',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
   },
   {
     'name': 'Push Up Off Bench',
     'category': 'Horizontal Press',
-    'bodyPart': 'Chest, Triceps, Anterior Delts',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
   },
   {
     'name': 'Push Up, Banded',
     'category': 'Horizontal Press',
-    'bodyPart': 'Chest, Triceps, Anterior Delts',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
   },
   {
     'name': 'Push Up, Weighted',
     'category': 'Horizontal Press',
-    'bodyPart': 'Chest, Triceps, Anterior Delts',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
   },
   {
     'name': 'Weighted Push Up, Deficit ',
     'category': 'Horizontal Press',
-    'bodyPart': 'Chest, Triceps, Anterior Delts',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
+  },
+  {
+    'name': 'Machine Chest Press, Plate Loaded',
+    'category': 'Vertical Press',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
+  },
+  {
+    'name': 'Machine Chest Press, Pin Loaded',
+    'category': 'Vertical Press',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
+  },
+  {
+    'name': 'Chest Press, Smith Machine',
+    'category': 'Vertical Press',
+    'bodyPart': 'Chest, Anterior Delts, Triceps',
   },
   {
     'name': 'Cable Fly',
@@ -177,62 +192,62 @@ final List<Map<String, String>> coreExercises = [
   {
     'name': 'Overhead Barbell Press',
     'category': 'Vertical Press',
-    'bodyPart': 'Shoulders, Triceps',
+    'bodyPart': 'Anterior Delts, Lateral Delts, Triceps',
   },
   {
     'name': 'Overhead Dumbbell Press, Unilateral',
     'category': 'Vertical Press',
-    'bodyPart': 'Shoulders, Triceps',
+    'bodyPart': 'Lateral Delts, Anterior Delts, Triceps',
   },
   {
     'name': 'Overhead Dumbbell Press',
     'category': 'Vertical Press',
-    'bodyPart': 'Shoulders, Triceps',
+    'bodyPart': 'Lateral Delts, Anterior Delts, Triceps',
   },
   {
     'name': 'Hand Stand Press Up',
     'category': 'Vertical Press',
-    'bodyPart': 'Shoulders, Triceps',
+    'bodyPart': 'Anterior Delts, Lateral Delts, Triceps',
   },
   {
     'name': 'Deficit Hand Stand Press Up',
     'category': 'Vertical Press',
-    'bodyPart': 'Shoulders, Triceps',
+    'bodyPart': 'Anterior Delts, Lateral Delts, Triceps',
   },
   {
     'name': 'Circus Dumbbell Press',
     'category': 'Vertical Press',
-    'bodyPart': 'Shoulders, Triceps',
+    'bodyPart': 'Lateral Delts, Anterior Delts, Triceps',
   },
   {
     'name': 'Log Press',
     'category': 'Vertical Press',
-    'bodyPart': 'Shoulders, Triceps',
+    'bodyPart': 'Anterior Delts, Lateral Delts, Triceps',
   },
   {
     'name': 'Triceps Dip',
     'category': 'Arm Extension',
-    'bodyPart': 'Triceps, Shoulders',
+    'bodyPart': 'Triceps, Chest',
   },
   {
     'name': 'Land Mine Press',
     'category': 'Vertical Press',
-    'bodyPart': 'Shoulders, Triceps',
+    'bodyPart': 'Lateral Delts, Anterior Delts, Triceps',
   },
   {
-    'name': 'Machine Chest Press, Plate Loaded',
+    'name': 'Machine Shoulder Press, Plate Loaded',
     'category': 'Vertical Press',
-    'bodyPart': 'Shoulders, Triceps',
+    'bodyPart': 'Anterior Delts, Lateral Delts, Triceps',
   },
   {
-    'name': 'Machine Chest Press, Pin Loaded',
+    'name': 'Machine Shoulder Press, Pin Loaded',
     'category': 'Vertical Press',
-    'bodyPart': 'Shoulders, Triceps',
+    'bodyPart': 'Anterior Delts, Lateral Delts, Triceps',
   },
   {
-    'name': 'Chest Press, Smith Machine',
+    'name': 'Shoulder Press, Smith Machine',
     'category': 'Vertical Press',
-    'bodyPart': 'Shoulders, Triceps',
+    'bodyPart': 'Anterior Delts, Lateral Delts, Triceps',
   },
 
 
@@ -259,6 +274,16 @@ final List<Map<String, String>> coreExercises = [
   },
   {
     'name': 'Lat Pull Down, Unilateral ',
+    'category': 'Vertical Pull',
+    'bodyPart': 'Lats, Biceps',
+  },
+  {
+    'name': 'Machine Lat Pull Down',
+    'category': 'Vertical Pull',
+    'bodyPart': 'Lats, Biceps',
+  },
+  {
+    'name': 'Lat Pull Over, Machine',
     'category': 'Vertical Pull',
     'bodyPart': 'Lats, Biceps',
   },
@@ -305,6 +330,16 @@ final List<Map<String, String>> coreExercises = [
     'category': 'Lateral Raise',
     'bodyPart': 'Lateral Delts, Anterior Delts',
   },
+  {
+    'name': 'Seated Lateral Raise Machine',
+    'category': 'Lateral Raise',
+    'bodyPart': 'Lateral Delts, Anterior Delts',
+  },
+  {
+    'name': 'Standing Lateral Raise Machine',
+    'category': 'Lateral Raise',
+    'bodyPart': 'Lateral Delts, Anterior Delts',
+  },
 
   //Arm Extension
 
@@ -340,6 +375,11 @@ final List<Map<String, String>> coreExercises = [
   },
   {
     'name': 'Skull Crusher, Barbell',
+    'category': 'Arm Extension',
+    'bodyPart': 'Triceps',
+  },
+  {
+    'name': 'Skull Crusher, Dumbbells',
     'category': 'Arm Extension',
     'bodyPart': 'Triceps',
   },
@@ -391,10 +431,20 @@ final List<Map<String, String>> coreExercises = [
     'category': 'Arm Curl',
     'bodyPart': 'Biceps',
   },
+  {
+    'name': 'Machine Biceps Curl',
+    'category': 'Arm Curl',
+    'bodyPart': 'Biceps',
+  },
 
   //Hip Hinge
   {
     'name': 'Deadlift, Conventional',
+    'category': 'Hip Hinge',
+    'bodyPart': 'Hamstrings, Glutes, Lower Back',
+  },
+  {
+    'name': 'Deadlift, Deficit',
     'category': 'Hip Hinge',
     'bodyPart': 'Hamstrings, Glutes, Lower Back',
   },
@@ -404,7 +454,17 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Hamstrings, Glutes, Lower Back',
   },
   {
+    'name': 'Deadlift, Sumo, Deficit',
+    'category': 'Hip Hinge',
+    'bodyPart': 'Hamstrings, Glutes, Lower Back',
+  },
+  {
     'name': 'Romanian Deadlift',
+    'category': 'Hip Hinge',
+    'bodyPart': 'Hamstrings, Glutes, Lower Back',
+  },
+  {
+    'name': 'Romanian Deadlift, Deficit',
     'category': 'Hip Hinge',
     'bodyPart': 'Hamstrings, Glutes, Lower Back',
   },
@@ -438,6 +498,11 @@ final List<Map<String, String>> coreExercises = [
     'category': 'Hip Hinge',
     'bodyPart': 'Hamstrings, Glutes',
   },
+  {
+    'name': 'Machine Hip Thrust',
+    'category': 'Hip Hinge',
+    'bodyPart': 'Hamstrings, Glutes',
+  },
 
 
   //Squat Pattern
@@ -468,6 +533,11 @@ final List<Map<String, String>> coreExercises = [
   },
   {
     'name': 'Bulgarian Split Squat',
+    'category': 'Squat Pattern',
+    'bodyPart': 'Quads, Glutes',
+  },
+  {
+    'name': 'Bulgarian Split Squat, Deficit',
     'category': 'Squat Pattern',
     'bodyPart': 'Quads, Glutes',
   },
@@ -519,6 +589,11 @@ final List<Map<String, String>> coreExercises = [
   },
   {
     'name': 'Smith Machine Squat',
+    'category': 'Squat Pattern',
+    'bodyPart': 'Quads, Glutes',
+  },
+  {
+    'name': 'Smith Machine Leg Press',
     'category': 'Squat Pattern',
     'bodyPart': 'Quads, Glutes',
   },
