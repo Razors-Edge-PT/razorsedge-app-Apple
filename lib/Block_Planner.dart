@@ -13,6 +13,7 @@ import 'periodization_model_utils.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'week_planner.dart';
 import 'package:uuid/uuid.dart';
+import 'user_context.dart';
 
 class Block_Planner extends StatefulWidget {
   const Block_Planner({super.key});
@@ -34,6 +35,8 @@ class _BlockPlannerState extends State<Block_Planner> {
   bool _isSavedBlock = false;
   bool _didRunInitOnce = false;
   bool _initialBlockIsActive = false;
+  String get userId => UserContext.of(context, listen: false).currentUid;
+
 
   @override
   void dispose() {
@@ -49,7 +52,7 @@ class _BlockPlannerState extends State<Block_Planner> {
 
       final plannedBlock = await FirebaseFirestore.instance
           .collection('users')
-          .doc(user.uid)
+          .doc(userId)
           .collection('planned_blocks')
           .doc('current_block')
           .get();
@@ -64,7 +67,7 @@ class _BlockPlannerState extends State<Block_Planner> {
 
           await FirebaseFirestore.instance
               .collection('users')
-              .doc(user.uid)
+              .doc(userId)
               .collection('plannedExerciseDetails')
               .doc(exerciseId)
               .set({
@@ -88,7 +91,7 @@ class _BlockPlannerState extends State<Block_Planner> {
     super.didChangeDependencies();
     if (_didRunInitOnce) return;
 
-    final args = ModalRoute.of(context)?.settings.arguments as Map?;
+    final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
     blockIdToUse = args?['blockId'];
 
     if (blockIdToUse != null) {
@@ -214,7 +217,7 @@ class _BlockPlannerState extends State<Block_Planner> {
 
     final doc = await FirebaseFirestore.instance
         .collection('planned_blocks')
-        .doc(user.uid)
+        .doc(userId)
         .collection('blocks')
         .doc(blockId)
         .get();
@@ -407,7 +410,7 @@ class _BlockPlannerState extends State<Block_Planner> {
 
     final doc = await FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(userId)
         .collection('block_planner')
         .doc('current_block')
         .get();
@@ -956,7 +959,7 @@ class _BlockPlannerState extends State<Block_Planner> {
     // 🔄 Now writing into the *same* collection as savePlannedBlock
     final docRef = FirebaseFirestore.instance
         .collection('planned_blocks')
-        .doc(user.uid)
+        .doc(userId)
         .collection('blocks')
         .doc(blockIdToUse);
 
@@ -1082,7 +1085,7 @@ class _BlockPlannerState extends State<Block_Planner> {
     if (user != null && blockIdToUse != null) {
       await FirebaseFirestore.instance
           .collection('users')
-          .doc(user.uid)
+          .doc(userId)
           .collection('block_planner')
           .doc('current_block')
           .set({
@@ -1105,7 +1108,7 @@ class _BlockPlannerState extends State<Block_Planner> {
 
       final weeksCollection = FirebaseFirestore.instance
           .collection('planned_blocks')
-          .doc(user.uid)
+          .doc(userId)
           .collection('blocks')
           .doc(blockIdToUse!)
           .collection('weeks');
@@ -1167,7 +1170,7 @@ class _BlockPlannerState extends State<Block_Planner> {
 
     final snapshot = await FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(userId)
         .collection('block_planner')
         .doc('current_block')
         .get();
@@ -1216,7 +1219,7 @@ class _BlockPlannerState extends State<Block_Planner> {
 
     final docRef = FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(userId)
         .collection('block_planner')
         .doc('current_block');
 
@@ -1597,7 +1600,7 @@ class _BlockPlannerState extends State<Block_Planner> {
                     if (user != null) {
                       await FirebaseFirestore.instance
                           .collection('users')
-                          .doc(user.uid)
+                          .doc(userId)
                           .collection('block_planner')
                           .doc('current_block')
                           .set({
@@ -1806,6 +1809,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   Map<String, String> _selectedProgressionModel = {};
 
   Map<String, Map<String, Map<String, Map<String, String>>>>? _cachedRirPlan;
+  String get userId => UserContext.of(context, listen: false).currentUid;
+
 
 
   double _currentE1RM = 0.0;
@@ -2925,7 +2930,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
     final snapshot = await FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(userId)
         .collection('block_planner')
         .doc('current_block')
         .get();

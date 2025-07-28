@@ -1,6 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../SavedWorkoutsScreen.dart';
+import 'user_context.dart';
+import 'coach_home_screen.dart';
+import 'main.dart';
+import 'planned_blocks_screen.dart';
+import 'package:provider/provider.dart';
+import 'block_planner.dart';
+import 'Camp_BB2.dart';
+import 'templates.dart';
+import 'exercises.dart';
+import 'body_weight_tracker.dart';
 
 class AppDrawer extends StatelessWidget {
   const AppDrawer({super.key});
@@ -52,36 +62,103 @@ class AppDrawer extends StatelessWidget {
           // 🗂️ Planning section
           const DrawerSectionHeader(title: "Planning"),
           _drawerTile(context, Icons.view_module, 'Planned Blocks', () {
-            Navigator.pushNamed(context, '/planned_blocks');
-          }),
-          _drawerTile(context, Icons.extension, 'Block Planner', () {
-            Navigator.pushNamed(
-              context,
-              '/block_builder',
-              arguments: {'newBlock': true},
+            final userContext = UserContext.of(context, listen: false);
+
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                  value: userContext,
+                  child: const PlannedBlocksScreen(),
+                ),
+              ),
             );
           }),
+
+          _drawerTile(context, Icons.extension, 'Block Planner', () {
+            final userContext = UserContext.of(context, listen: false);
+
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                  value: userContext,
+                  child: const Block_Planner(),
+                ),
+                settings: RouteSettings(
+                  arguments: {'newBlock': true}, // 👈 preserve your arguments
+                ),
+              ),
+            );
+          }),
+
           _drawerTile(context, Icons.schedule, 'Week Planner', () {
-            Navigator.pushNamed(context, '/week_planner');
+            final userContext = UserContext.of(context, listen: false);
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                  value: userContext,
+                  child: const Camp_BB2(), // Assuming this is your Week Planner screen
+                ),
+              ),
+            );
           }),
+
           _drawerTile(context, Icons.auto_graph, 'Workout Planner', () {
-            Navigator.pushNamed(context, '/templates');
+            final userContext = UserContext.of(context, listen: false);
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                  value: userContext,
+                  child: const TemplatesScreen(),
+                ),
+              ),
+            );
           }),
+
 
           // 📊 Tracking section
-          const DrawerSectionHeader(title: "Tracking"),
           _drawerTile(context, Icons.fitness_center, 'Exercises', () {
-            Navigator.pushNamed(context, '/exercises');
-          }),
-          _drawerTile(context, Icons.monitor_weight, 'Weigh In', () {
-            Navigator.pushNamed(context, '/body_weight_tracker');
+            final userContext = UserContext.of(context, listen: false);
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                  value: userContext,
+                  child: const ExercisesScreen(),
+                ),
+              ),
+            );
           }),
 
-          // 🕓 History section
-          const DrawerSectionHeader(title: "History"),
-          _drawerTile(context, Icons.bookmark, 'Saved Workouts', () {
-            Navigator.push(context, MaterialPageRoute(builder: (context) => const SavedWorkoutsScreen()));
+          _drawerTile(context, Icons.monitor_weight, 'Weigh In', () {
+            final userContext = UserContext.of(context, listen: false);
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                  value: userContext,
+                  child: const BodyWeightTracker(),
+                ),
+              ),
+            );
           }),
+
+
+          // 🕓 History section
+          _drawerTile(context, Icons.bookmark, 'Saved Workouts', () {
+            final userContext = UserContext.of(context, listen: false);
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                  value: userContext,
+                  child: const SavedWorkoutsScreen(),
+                ),
+              ),
+            );
+          }),
+
 
           // ⚙️ Utilities section
           const DrawerSectionHeader(title: "Utilities"),

@@ -7,6 +7,12 @@ import 'app_drawer.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
+import 'user_context.dart';
+import 'coach_home_screen.dart';
+import 'approve_requests_screen.dart';
+
+
 
 
 class HomeScreen extends StatefulWidget {
@@ -39,6 +45,10 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+
+    final userContext = Provider.of<UserContext>(context, listen: false);
+    print("🏠 Home loaded for ${userContext.actingAsUid} "
+        "(actor: ${userContext.actorUid}, coach: ${userContext.isCoach})");
 
     _ensureAtLeastOneBlockExists().then((_) {
       _fetchRecentData();
@@ -482,6 +492,63 @@ class _HomeScreenState extends State<HomeScreen> {
                           child: Row(
                             children: [
 
+                              //if (UserContext.of(context).isCoach)
+                              SizedBox(
+                                width: kFeatureCardWidth,
+                                height: 125,
+                                child: GestureDetector(
+                                  onTap: () {
+                                    final userContext = context.read<UserContext>();
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                          value: userContext,
+                                          child: const CoachHomeScreen(),
+                                        ),
+                                      ),
+                                    );
+                                  },
+
+                                  child: Card(
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    color: Colors.blueGrey.shade800,
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(12),
+                                      child: Stack(
+                                        children: [
+                                          // ✅ Top-left icon
+                                          const Positioned(
+                                            top: 0,
+                                            left: 0,
+                                            child: Icon(
+                                              Icons.supervisor_account,
+                                              size: 48,
+                                              color: Colors.cyanAccent,
+                                            ),
+                                          ),
+                                          // ✅ Bottom-right text
+                                          Positioned(
+                                            bottom: 0,
+                                            right: 0,
+                                            left: 50,
+                                            child: Text(
+                                              'Coach\nDashboard',
+                                              textAlign: TextAlign.center,
+                                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                                color: Colors.white,
+                                                height: 1.3,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
 
                               SizedBox(
                                 width: kFeatureCardWidth,
@@ -555,6 +622,61 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                 ),
                               ),
+
+                              //if (!UserContext.of(context).isCoach)
+                                SizedBox(
+                                  width: kFeatureCardWidth,
+                                  height: 125,
+                                  child: GestureDetector(
+                                    onTap: () {
+                                      final userContext = context.read<UserContext>();
+                                      Navigator.of(context).push(
+                                        MaterialPageRoute(
+                                          builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                            value: userContext,
+                                            child: const ApproveRequestsScreen(),
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                    child: Card(
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                      color: Colors.blueGrey.shade800,
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(12),
+                                        child: Stack(
+                                          children: [
+                                            const Positioned(
+                                              top: 0,
+                                              left: 0,
+                                              child: Icon(
+                                                Icons.mail,
+                                                size: 48,
+                                                color: Colors.cyanAccent,
+                                              ),
+                                            ),
+                                            Positioned(
+                                              bottom: 0,
+                                              right: 0,
+                                              left: 50,
+                                              child: Text(
+                                                'Access\nRequests',
+                                                textAlign: TextAlign.center,
+                                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                                  color: Colors.white,
+                                                  height: 1.3,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
 
 
 

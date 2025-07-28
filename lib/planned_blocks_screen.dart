@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
+import 'user_context.dart';
+import 'Block_Planner.dart';
+import 'package:provider/provider.dart';
+
 
 class PlannedBlocksScreen extends StatefulWidget {
   const PlannedBlocksScreen({super.key});
@@ -11,7 +15,10 @@ class PlannedBlocksScreen extends StatefulWidget {
 }
 
 class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
-  final userId = FirebaseAuth.instance.currentUser!.uid;
+  String get userId => UserContext.of(context, listen: false).currentUid;
+
+
+
 
   Future<void> _setBlockAsActive(String blockId) async {
     final blocksRef = FirebaseFirestore.instance
@@ -76,12 +83,20 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
   }
 
   void _editBlock(String blockId) {
-    Navigator.pushNamed(
+    final userContext = UserContext.of(context, listen: false);
+
+    Navigator.push(
       context,
-      '/block_builder',
-      arguments: {'blockId': blockId},
+      MaterialPageRoute(
+        builder: (_) => ChangeNotifierProvider<UserContext>.value(
+          value: userContext,
+          child: const Block_Planner(),
+        ),
+        settings: RouteSettings(arguments: {'blockId': blockId}),
+      ),
     );
   }
+
 
   @override
   Widget build(BuildContext context) {
