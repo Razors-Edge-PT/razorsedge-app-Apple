@@ -94,8 +94,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   final List<List<TextEditingController>> _rirControllers = [];
   List<List<TextEditingController>> _velocityControllers = [];
   List<List<TextEditingController>> _notesControllers = [];
-
   Map<String, bool> _showVelocityByExercise = {}; // exerciseName.toLowerCase() → true/false
+
+  String get userId => UserContext.of(context, listen: false).currentUid;
 
 
   final int _defaultSets = 3;
@@ -158,7 +159,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     final doc = await FirebaseFirestore.instance
         .collection('planned_blocks')
-        .doc(user.uid)
+        .doc(userId)
         .collection('blocks')
         .doc(widget.blockId)
         .get();
@@ -283,7 +284,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     final snapshot = await FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(userId)
         .collection('workouts')
         .orderBy('date', descending: true) // ✅ Fetch newest first
         .limit(12) // ✅ Get last 12 workouts
@@ -1233,7 +1234,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
 
     final meta = await _repo.loadBlockMeta(
-      userId: FirebaseAuth.instance.currentUser!.uid,
+      userId: UserContext.of(context, listen: false).currentUid,
       blockId: blockId,
     );
 
@@ -1251,7 +1252,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     final snap = await FirebaseFirestore.instance
         .collection('planned_blocks')
-        .doc(user.uid)
+        .doc(userId)
         .collection('blocks')
         .get();
 
@@ -1285,7 +1286,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     final dayDocRef = FirebaseFirestore.instance
         .collection('planned_blocks')
-        .doc(user.uid)
+        .doc(userId)
         .collection('blocks')
         .doc(blockId)
         .collection('weeks')
@@ -1299,7 +1300,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       final dateKey = DateFormat('yyyy-MM-dd').format(date);
       final blockDataDoc = await FirebaseFirestore.instance
           .collection('planned_blocks')
-          .doc(user.uid)
+          .doc(userId)
           .collection('blocks')
           .doc(blockId)
           .collection('block_data')
@@ -1337,7 +1338,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     print('📅 [WES] Loading BB2 exercises for $dateKey (block: $_selectedBlockId)');
     final doc = await FirebaseFirestore.instance
         .collection('planned_blocks')
-        .doc(user.uid)
+        .doc(userId)
         .collection('blocks')
         .doc(_selectedBlockId)
         .collection('block_data')
@@ -1606,7 +1607,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     // ✅ 1. Load from BB2-style Firestore path using _selectedBlockId
     final doc = await FirebaseFirestore.instance
         .collection('planned_blocks')
-        .doc(user.uid)
+        .doc(userId)
         .collection('blocks')
         .doc(_selectedBlockId!)
         .get();
@@ -1674,7 +1675,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     final doc = await FirebaseFirestore.instance
         .collection('planned_blocks') // ← your real root
-        .doc(user.uid)
+        .doc(userId)
         .collection('blocks')
         .doc(widget.blockId)
         .get();
@@ -1748,7 +1749,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     final snapshot = await FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(userId)
         .collection('workouts')
         .get();
 
@@ -1878,7 +1879,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     final snapshot = await FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(userId)
         .collection('templates')
         .get();
 
@@ -2846,7 +2847,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
       await FirebaseFirestore.instance
           .collection('users')
-          .doc(user.uid)
+          .doc(userId)
           .collection('workouts')
           .add(workoutData);
 
@@ -2862,14 +2863,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
       // ✅ Push workout into BlockBuilder day (block_data)
       final userDoc =
-          FirebaseFirestore.instance.collection('users').doc(user.uid);
+          FirebaseFirestore.instance.collection('users').doc(userId);
 
 // 1️⃣ Reference your actual block document:
       final blockId = widget.blockId;
       if (blockId != null && blockId.isNotEmpty) {
         final blockRef = FirebaseFirestore.instance
             .collection('planned_blocks')
-            .doc(user.uid)
+            .doc(userId)
             .collection('blocks')
             .doc(blockId);
 
@@ -3042,7 +3043,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
         final blockDoc = await FirebaseFirestore.instance
             .collection('planned_blocks')
-            .doc(user.uid)
+            .doc(userId)
             .collection('blocks')
             .doc(blockId)
             .get();
@@ -3112,7 +3113,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     // 3️⃣ Point at planned_blocks/{uid}/blocks/{blockId}/weeks/week_<i>
     final blockRef = FirebaseFirestore.instance
         .collection('planned_blocks')
-        .doc(user.uid)
+        .doc(userId)
         .collection('blocks')
         .doc(blockId);
 
@@ -3332,7 +3333,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     // Try modern BB2 source: weeks > days
     final dayDoc = await FirebaseFirestore.instance
         .collection('planned_blocks')
-        .doc(user.uid)
+        .doc(userId)
         .collection('blocks')
         .doc(blockId)
         .collection('weeks')
@@ -3356,7 +3357,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       final dateKey = DateFormat('yyyy-MM-dd').format(_selectedDate);
       final blockDataDoc = await FirebaseFirestore.instance
           .collection('planned_blocks')
-          .doc(user.uid)
+          .doc(userId)
           .collection('blocks')
           .doc(blockId)
           .collection('block_data')
@@ -3591,7 +3592,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     final snapshot = await FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(userId)
         .collection('workouts')
         .orderBy('date', descending: true)
         .limit(20)
@@ -3635,7 +3636,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       // ✅ Fetch last 12 workouts from Firestore
       final snapshot = await FirebaseFirestore.instance
           .collection('users')
-          .doc(user.uid)
+          .doc(userId)
           .collection('workouts')
           .orderBy('date', descending: true)
           .limit(12)

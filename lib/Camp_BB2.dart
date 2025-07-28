@@ -17,7 +17,10 @@ import 'dart:convert';
 import 'block_planner_repository.dart';
 import 'block_repository.dart';
 import 'package:collection/collection.dart';
+import 'package:uuid/uuid.dart';
+import 'user_context.dart';
 part 'block_data_loader.dart';
+
 
 Map<String, List<String>> groupExercisesByCategory(
     List<Map<String, String>> allExercises) {
@@ -123,7 +126,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   String? _selectedBlockId;
   List<Map<String, dynamic>> _selectedExercisesWithCircuits = [];
 
-  late PageController _weekPageController;
+  PageController? _weekPageController;
   int _currentWeekPage = 0;
 
   final int initialWeeks = 12;
@@ -156,9 +159,11 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   late DateTime selectedWeekMonday;
   late DateTime blockStartDate;
   late DateTime blockEndDate;
-
   late DateTime _displayStart;
   late DateTime _displayEnd;
+
+  String get userId => UserContext.of(context, listen: false).currentUid;
+
 
   int? _draggedRowIndex;
   List<Map<String, String>> allExercisesFromFirestore = []; // 🔥 Full list
@@ -302,12 +307,13 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
 
   Future<void> _loadAllBlocks() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    final userContext = UserContext.of(context, listen: false);
+    final userId = userContext.currentUid;
+
 
     final snap = await FirebaseFirestore.instance
         .collection('planned_blocks') // ✅ correct root
-        .doc(user.uid)
+        .doc(userId)
         .collection('blocks')
         .get();
 
@@ -334,12 +340,16 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
   Future<void> _fetchActiveBlockThenMeta() async {
     // 1️⃣ fetch the active blockId
+    print("🧱 fetchActiveBlockThenMeta started");
     _activeBlockId = widget.blockId ?? await BlockRepository().fetchActiveBlockId();
 
 // 🔁 Fallback: try block_planner if block_data is missing
     if (_activeBlockId == null) {
-      final uid = FirebaseAuth.instance.currentUser?.uid;
-      if (uid != null) {
+      print("🧩 Initial activeBlockId: $_activeBlockId");
+      final userContext = UserContext.of(context, listen: false);
+      final uid = userContext.currentUid;
+       {
+         print("🔄 Trying fallback block_planner for uid: $uid");
         final plannerSnap = await FirebaseFirestore.instance
             .collection('users')
             .doc(uid)
@@ -352,7 +362,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       }
     }
 
-
+    print("✅ Using active blockId = $_activeBlockId");
 
     // 2️⃣ guard against “no active block”
     if (_activeBlockId == null) {
@@ -361,9 +371,10 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
     // 3️⃣ load only the meta you care about first
     final meta = await _repo.loadBlockMeta(
-      userId: FirebaseAuth.instance.currentUser!.uid,
+      userId: userId, // 👈 Uses context-aware getter
       blockId: _activeBlockId!,
     );
+    print("📦 Meta loaded: start=${meta.startDate}, end=${meta.endDate}");
 
     // 4️⃣ stash the dates & selected days
     blockStartDate = meta.startDate;
@@ -371,7 +382,15 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     _selectedDays = meta.selectedDays;
 
     // ← compute your Mon→Sun bounds, totalWeeks and weekIndices
+    // ← compute your Mon→Sun bounds, totalWeeks and weekIndices
     _computeWeekBounds();
+
+// ✅ Init page controller now that we know how many weeks exist
+    final today = DateTime.now();
+    _currentWeekPage = (today.difference(_displayStart).inDays ~/ 7).clamp(0, totalWeeks - 1);
+    _weekPageController = PageController(initialPage: _currentWeekPage);
+    print("📖 _weekPageController initialized to week $_currentWeekPage");
+
 
     // 5️⃣ initialize your per-week/day arrays using the now-correct totalWeeks
     exerciseRows = List.generate(
@@ -511,9 +530,9 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   }
 
   Future<void> _fetchTemplates() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
+    final userId = UserContext.of(context, listen: false).currentUid;
+    {
+      final userDoc = FirebaseFirestore.instance.collection('users').doc(userId);
       final snapshot = await userDoc.collection('templates').get();
 
       templates = snapshot.docs.map((doc) {
@@ -753,14 +772,15 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
 
   Future<void> _loadRepTargets() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    final userId = UserContext.of(context, listen: false).currentUid;
+    if (userId.isEmpty) return; // Fallback in case something goes wrong
+
 
     final blockId = _selectedBlockId!;
 
     final doc = await FirebaseFirestore.instance
         .collection('planned_blocks')
-        .doc(user.uid)
+        .doc(userId)
         .collection('blocks')
         .doc(blockId)
         .get();
@@ -904,13 +924,14 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   }
 
   Future<void> loadPlannedExercisesFromFirestore() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    final userId = UserContext.of(context, listen: false).currentUid;
+    if (userId.isEmpty) return; // Fallback in case something goes wrong
+
     final blockId = _selectedBlockId!;
 
     final docSnap = await FirebaseFirestore.instance
         .collection('planned_blocks')
-        .doc(user.uid)
+        .doc(userId)
         .collection('blocks')
         .doc(blockId)
         .get();
@@ -924,9 +945,10 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
   @override
   void dispose() {
-    _weekPageController.dispose();
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
+    _weekPageController?.dispose(); // ✅ only dispose if it was initialized
+    final userId = UserContext.of(context, listen: false).currentUid;
+    if (userId.isEmpty) return; // Fallback in case something goes wrong
+    {
       for (int week = 0; week < weekIndices.length; week++) {
         final weekStartDate = _displayStart.add(Duration(days: week * 7));
         if (weekStartDate.isAfter(blockEndDate)) {
@@ -1075,12 +1097,13 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   Future<void> loadBlockDataFromFirestore() async {
     final stopwatch = Stopwatch()..start();
     print('⏳ [BB2] Starting loadBlockDataFromFirestore');
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null || _selectedBlockId == null) return;
+    final userId = UserContext.of(context, listen: false).currentUid;
+    if (userId.isEmpty || _selectedBlockId == null) return;
+
 
     final weeksSnapshot = await FirebaseFirestore.instance
         .collection('planned_blocks')
-        .doc(user.uid)
+        .doc(userId)
         .collection('blocks')
         .doc(_selectedBlockId!)
         .collection('weeks')
@@ -1201,7 +1224,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
         final workoutDoc = await FirebaseFirestore.instance
             .collection('users')
-            .doc(user.uid)
+            .doc(userId)
             .collection('workouts')
             .doc(dateKey)
             .get();
@@ -1269,9 +1292,11 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     final stopwatch = Stopwatch()..start();
     print('⏳ [BB2] Starting loadBlockDataForWeek($weekIndex)');
 
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null || _selectedBlockId == null) return;
-    final uid = user.uid;
+    final userId = UserContext.of(context, listen: false).currentUid;
+    if (userId.isEmpty || _selectedBlockId == null) return;
+
+    final uid = UserContext.of(context, listen: false).currentUid;
+
 
     print("🧱 [BB2 loadBlockDataForWeek] Loaded blockId: $_selectedBlockId (should match active: $_activeBlockId)");
 
@@ -1424,7 +1449,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
       final workoutDoc = await FirebaseFirestore.instance
           .collection('users')
-          .doc(user.uid)
+          .doc(userId)
           .collection('workouts')
           .doc(dateKey)
           .get();
@@ -1530,15 +1555,15 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   }
 
   Future<void> loadCompletedWorkoutsForDay(DateTime date) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    final uid = UserContext.of(context, listen: false).currentUid;
+
 
     final String dateKey = DateFormat('yyyy-MM-dd').format(date);
     if (completedWesRows.containsKey(dateKey)) return; // already loaded
 
     final snapshot = await FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(uid) // ✅ now using the selected athlete
         .collection('workouts')
         .where('date', isGreaterThanOrEqualTo: date.toIso8601String())
         .where('date', isLessThan: date.add(const Duration(days: 1)).toIso8601String())
@@ -1573,12 +1598,12 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   }
 
   Future<void> loadTopSetsFromWorkouts() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    final uid = UserContext.of(context, listen: false).currentUid;
+
 
     final snapshot = await FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(uid) // ✅ now using the selected athlete
         .collection('workouts')
         .get();
 
@@ -1586,7 +1611,13 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
     for (final doc in snapshot.docs) {
       final data = doc.data();
-      final topSets = List<Map<String, dynamic>>.from(data['topSets'] ?? []);
+      final topSetsRaw = data['topSets'] as List<dynamic>? ?? [];
+
+      final topSets = topSetsRaw
+          .whereType<Map>() // ensure each is a map
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+
 
       for (final set in topSets) {
         final name = set['exercise'];
@@ -1689,7 +1720,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
     // 2) load the new block’s meta
     final meta = await _repo.loadBlockMeta(
-      userId: FirebaseAuth.instance.currentUser!.uid,
+      userId: UserContext.of(context, listen: false).currentUid,
       blockId: blockId,
     );
 
@@ -1752,8 +1783,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   }
 
   Future<void> saveDayToFirestore(int weekIndex, int dayIndex) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    final uid = UserContext.of(context, listen: false).currentUid;
+
 
     // 🛡️ Guard against index errors
     if (weekIndex >= exerciseRows.length ||
@@ -1786,7 +1817,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
     final weekDocRef = FirebaseFirestore.instance
         .collection('planned_blocks')
-        .doc(user.uid)
+        .doc(userId)
         .collection('blocks')
         .doc(_selectedBlockId!)
         .collection('weeks')
@@ -1893,9 +1924,10 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   }
 
   Future<void> deleteAllBlockAndWorkoutData() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null || _selectedBlockId == null) return;
-    final uid = user.uid;
+    final userContext = UserContext.of(context, listen: false);
+    if (_selectedBlockId == null) return;
+    final uid = userContext.currentUid;
+
 
     // 1️⃣ Delete all workouts
     final workoutsSnapshot = await FirebaseFirestore.instance
@@ -1929,9 +1961,10 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   }
 
   Future<void> deleteBlockBuilderDataOnly() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null || _selectedBlockId == null) return;
-    final uid = user.uid;
+    final userContext = UserContext.of(context, listen: false);
+    if (_selectedBlockId == null) return;
+    final uid = userContext.currentUid;
+
 
     // Reference to weeks under the active block
     final weeksColl = FirebaseFirestore.instance
@@ -2718,7 +2751,9 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
     return StatefulBuilder(
         builder: (context, localSetState) {
-          final meta = (plannedExerciseDetails['blockMeta'] ?? {}) as Map<String, dynamic>;
+          final metaRaw = plannedExerciseDetails['blockMeta'];
+          final meta = metaRaw is Map ? Map<String, dynamic>.from(metaRaw) : {};
+
           final blockStart = DateTime.tryParse(meta['blockStartDate'] ?? '');
           final blockEnd = DateTime.tryParse(meta['blockEndDate'] ?? '');
           final blockLength = PeriodizationModelUtils.getBlockLength(
@@ -2961,12 +2996,14 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                             final bool isOlderThanYesterday = workoutDate.isBefore(yesterday);
 
                             if (isOlderThanYesterday) {
-                              final user = FirebaseAuth.instance.currentUser!;
+                              final userContext = UserContext.of(context, listen: false);
+                              final userId = userContext.currentUid;
+
                               final blockId =
                                   _selectedBlockId!; // or however you’re storing the active block
                               final dayDoc = await FirebaseFirestore.instance
                                   .collection('planned_blocks')
-                                  .doc(user.uid)
+                                  .doc(userId)
                                   .collection('blocks')
                                   .doc(blockId)
                                   .collection('weeks')
@@ -3868,8 +3905,15 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           body: Center(child: CircularProgressIndicator()),
         );
       }
+      if (_weekPageController == null) {
+        return const Scaffold(
+          backgroundColor: Colors.black,
+          body: Center(child: CircularProgressIndicator()),
+        );
+      }
 
-        return Scaffold(
+
+      return Scaffold(
           appBar: AppBar(
             title: _allBlocks.isEmpty
                 ? const Text("Block Builder 2")
@@ -4004,7 +4048,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                   child: Stack(
                     children: [
                       PageView.builder(
-                        controller: _weekPageController,
+                        controller: _weekPageController!,
                         itemCount: weekIndices.length,
                         onPageChanged: (newPage) async {
                           setState(() => _currentWeekPage = newPage);
@@ -4031,7 +4075,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                           icon: Icon(Icons.chevron_left, color: Colors.white70),
                           onPressed: () {
                             if (_currentWeekPage > 0) {
-                              _weekPageController.previousPage(
+                              _weekPageController!.previousPage(
                                 duration: Duration(milliseconds: 300),
                                 curve: Curves.easeInOut,
                               );
@@ -4050,7 +4094,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                               Icon(Icons.chevron_right, color: Colors.white70),
                           onPressed: () {
                             if (_currentWeekPage < weekIndices.length - 1) {
-                              _weekPageController.nextPage(
+                              _weekPageController!.nextPage(
                                 duration: Duration(milliseconds: 300),
                                 curve: Curves.easeInOut,
                               );

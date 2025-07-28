@@ -11,6 +11,7 @@ import 'package:provider/provider.dart';
 import 'user_context.dart';
 import 'coach_home_screen.dart';
 import 'approve_requests_screen.dart';
+import 'Camp_BB2.dart';
 
 
 
@@ -552,20 +553,114 @@ class _HomeScreenState extends State<HomeScreen> {
 
                               SizedBox(
                                 width: kFeatureCardWidth,
-                                child: _buildFeatureCard(
-                                  Icons.fitness_center,
-                                  'Enter\nWorkout',
-                                  '/workout_entry',
+                                child: GestureDetector(
+                                  onTap: () {
+                                    final userContext = UserContext.of(context, listen: false);
+
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                          value: userContext,
+                                          child: const WorkoutPage(), // <- Your workout entry screen
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  child: Card(
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    color: Colors.blueGrey.shade800,
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(12),
+                                      child: Stack(
+                                        children: [
+                                          const Positioned(
+                                            top: 0,
+                                            left: 0,
+                                            child: Icon(
+                                              Icons.fitness_center,
+                                              size: 48,
+                                              color: Colors.cyanAccent,
+                                            ),
+                                          ),
+                                          Positioned(
+                                            bottom: 0,
+                                            right: 0,
+                                            left: 50,
+                                            child: Text(
+                                              'Enter\nWorkout',
+                                              textAlign: TextAlign.center,
+                                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                                color: Colors.white,
+                                                height: 1.3,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
                                 ),
                               ),
+
                               SizedBox(
                                 width: kFeatureCardWidth,
-                                child: _buildFeatureCard(
-                                  Icons.calendar_month,
-                                  'Week\nPlanner',
-                                  '/week_planner_b',
+                                child: GestureDetector(
+                                  onTap: () {
+                                    final userContext = UserContext.of(context, listen: false);
+
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                          value: userContext,
+                                          child: const Camp_BB2(), // your week planner screen
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  child: Card(
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    color: Colors.blueGrey.shade800,
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(12),
+                                      child: Stack(
+                                        children: [
+                                          const Positioned(
+                                            top: 0,
+                                            left: 0,
+                                            child: Icon(
+                                              Icons.calendar_month,
+                                              size: 48,
+                                              color: Colors.cyanAccent,
+                                            ),
+                                          ),
+                                          Positioned(
+                                            bottom: 0,
+                                            right: 0,
+                                            left: 50,
+                                            child: Text(
+                                              'Week\nPlanner',
+                                              textAlign: TextAlign.center,
+                                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                                color: Colors.white,
+                                                height: 1.3,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
                                 ),
                               ),
+
                               SizedBox(
                                 width: kFeatureCardWidth,
                                 child: _buildFeatureCard(
