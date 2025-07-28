@@ -12,8 +12,8 @@ class BlockRepository {
         _auth = auth ?? FirebaseAuth.instance;
 
   /// Returns the ID of the block where `isActive == true`, or null if none.
-  Future<String?> fetchActiveBlockId() async {
-    final uid = _auth.currentUser?.uid;
+  Future<String?> fetchActiveBlockId([String? userId]) async {
+    final uid = userId ?? _auth.currentUser?.uid;
     if (uid == null) return null;
 
     final snap = await _firestore
@@ -30,7 +30,8 @@ class BlockRepository {
     }
 
     final id = snap.docs.first.id;
-    print('🎯 [Repo] Active block ID for $uid = $id'); // ✅ Debug print
+    print('🎯 [Repo] Active block ID for $uid = $id');
     return id;
   }
+
 }

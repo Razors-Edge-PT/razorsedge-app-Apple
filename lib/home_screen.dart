@@ -12,6 +12,7 @@ import 'user_context.dart';
 import 'coach_home_screen.dart';
 import 'approve_requests_screen.dart';
 import 'Camp_BB2.dart';
+import 'update_exercises.dart';
 
 
 
@@ -46,6 +47,8 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+
+
 
     final userContext = Provider.of<UserContext>(context, listen: false);
     print("🏠 Home loaded for ${userContext.actingAsUid} "

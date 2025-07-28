@@ -651,7 +651,16 @@ final List<Map<String, String>> coreExercises = [
   },
 
   //Hip Abduction/Adduction
-
+  {
+    'name': 'Machine Hip Abduction',
+    'category': 'Hip Abduction',
+    'bodyPart': 'Glutes',
+  },
+  {
+    'name': 'Machine Hip Adduction',
+    'category': 'Hip Adduction',
+    'bodyPart': 'Inner Thigh',
+  },
   //Calf Raise
   {
     'name': 'Standing Calf Raise',

@@ -163,6 +163,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   late DateTime _displayEnd;
 
   String get userId => UserContext.of(context, listen: false).currentUid;
+  late final String _cachedUid;
 
 
   int? _draggedRowIndex;
@@ -241,6 +242,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   @override
   void initState() {
     super.initState();
+    _cachedUid = UserContext.of(context, listen: false).currentUid;
     _repo = BlockPlannerRepository();
 
 
@@ -248,25 +250,23 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     print("⏱️ BB2 initState started...");
 
 
-    // 1) Kick off both meta‐loads
     _initialLoad = Future.wait([
-      _fetchActiveBlockThenMeta(), // sets blockStartDate, _displayStart, totalWeeks, etc.
-      _loadAllBlocks(), // loads your list of all blocks into _allBlocks
+      _fetchActiveBlockThenMeta(),
+      _loadAllBlocks(),
     ]).then((_) async {
+      print('🟢 [BB2] _initialLoad.then started');
+
       // 2) Pick the selected block
       print("✅ Meta loaded. Block list and active block ID ready.");
 
       setState(() {
         _selectedBlockId = _allBlocks
-            .firstWhere((b) => b.id == _activeBlockId,
-                orElse: () => _allBlocks.first)
+            .firstWhere((b) => b.id == _activeBlockId, orElse: () => _allBlocks.first)
             .id;
 
         print("🧱 [BB2 Init] Loaded blockId: $_selectedBlockId (should match active: $_activeBlockId)");
-
       });
 
-      // 3) Now that _displayStart & totalWeeks are valid, compute today’s week
       final today = DateTime.now();
       _currentWeekPage = (today.difference(_displayStart).inDays ~/ 7)
           .clamp(0, totalWeeks - 1);
@@ -274,23 +274,23 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
       await _loadRepTargets();
 
-      // 4) Create your PageController
       _weekPageController = PageController(initialPage: _currentWeekPage);
+      print("⏳ Calling loadBlockDataForWeek($_currentWeekPage)...");
 
-      // 5) Load that week’s data
       await loadBlockDataForWeek(_currentWeekPage);
       print("📦 Week $_currentWeekPage data loaded.");
 
       loadedWeekIndices.add(_currentWeekPage);
 
       await loadPlannedExercisesFromFirestore();
-     // await _loadRepTargets();    // not sure this actually does anything?
-      // 6) Finally trigger a rebuild
-      setState(() {});
-      pageLoadTimer.stop();
-      print("✅ BB2 initState completed in ${pageLoadTimer.elapsedMilliseconds} ms");
 
+      setState(() {});
+      print("✅ BB2 initState completed.");
+    }).catchError((e, stack) {
+      print('❌ [BB2 INIT] Future.wait failed: $e');
+      print(stack);
     });
+
 
     // Preserve your WES‐save flag logic
     Future.microtask(() async {
@@ -321,14 +321,28 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         '🔍 Loaded ${snap.docs.length} blocks: ${snap.docs.map((d) => d.id)}');
 
     final blocks = snap.docs
-        .map((d) => BlockMeta(
-              id: d.id,
-              name: d['name'],
-              startDate: (d['startDate'] as Timestamp).toDate(),
-              endDate: (d['endDate'] as Timestamp).toDate(),
-              selectedDays: List<String>.from(d['selectedDays'] ?? []),
-            ))
+        .where((d) {
+      final data = d.data();
+      final hasAllFields = data.containsKey('name') &&
+          data.containsKey('startDate') &&
+          data.containsKey('endDate');
+      if (!hasAllFields) {
+        print('⚠️ Skipping block ${d.id} due to missing required fields.');
+      }
+      return hasAllFields;
+    })
+        .map((d) {
+      final data = d.data();
+      return BlockMeta(
+        id: d.id,
+        name: data['name'],
+        startDate: (data['startDate'] as Timestamp).toDate(),
+        endDate: (data['endDate'] as Timestamp).toDate(),
+        selectedDays: List<String>.from(data['selectedDays'] ?? []),
+      );
+    })
         .toList();
+
 
     setState(() {
       _allBlocks = blocks;
@@ -340,8 +354,12 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
   Future<void> _fetchActiveBlockThenMeta() async {
     // 1️⃣ fetch the active blockId
+    print('👀 [DEBUG] Using userId = $userId in fetchActiveBlockThenMeta');
+
     print("🧱 fetchActiveBlockThenMeta started");
-    _activeBlockId = widget.blockId ?? await BlockRepository().fetchActiveBlockId();
+    final uid = UserContext.of(context, listen: false).currentUid;
+    _activeBlockId = widget.blockId ?? await BlockRepository().fetchActiveBlockId(uid);
+
 
 // 🔁 Fallback: try block_planner if block_data is missing
     if (_activeBlockId == null) {
@@ -946,7 +964,9 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   @override
   void dispose() {
     _weekPageController?.dispose(); // ✅ only dispose if it was initialized
-    final userId = UserContext.of(context, listen: false).currentUid;
+    final userId = _cachedUid;
+    print('🧹 [DISPOSE] Called for userId: $userId');
+
     if (userId.isEmpty) return; // Fallback in case something goes wrong
     {
       for (int week = 0; week < weekIndices.length; week++) {
@@ -968,9 +988,17 @@ class _BlockBuilder2State extends State<Camp_BB2> {
             print('⏩ Skipping unload day $dayKey — was never loaded.');
             continue;
           }
+          print('📤 Proceeding to save w$week d$day...');
+          saveDayToFirestore(week, day).catchError((e, stack) {
+            print('❌ Failed to save week $week day $day during dispose: $e');
+          });
+
 
           _trimEmptyExerciseRows(week, day); // ✅ Trim only loaded days
-          saveDayToFirestore(week, day);     // ✅ Save only loaded days
+          saveDayToFirestore(week, day).catchError((e, stack) {
+            print('❌ Failed to save week $week day $day during dispose: $e');
+          });
+
         }
 
       }
@@ -1292,8 +1320,12 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     final stopwatch = Stopwatch()..start();
     print('⏳ [BB2] Starting loadBlockDataForWeek($weekIndex)');
 
-    final userId = UserContext.of(context, listen: false).currentUid;
-    if (userId.isEmpty || _selectedBlockId == null) return;
+    final userId = _cachedUid;
+    if (userId.isEmpty || _selectedBlockId == null) {
+      print('❌ [LOAD_ABORT] userId or selectedBlockId is missing');
+      return;
+    }
+
 
     final uid = UserContext.of(context, listen: false).currentUid;
 
@@ -1783,9 +1815,22 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   }
 
   Future<void> saveDayToFirestore(int weekIndex, int dayIndex) async {
-    final uid = UserContext.of(context, listen: false).currentUid;
+    final uid = _cachedUid; // ✅ safe, cached in initState()
 
+    print('🧠 [SAVE] Attempting save for w$weekIndex d$dayIndex | currentUid: $uid');
 
+    if (uid.isEmpty) {
+      print('❌ [SAVE_ABORT] UID is empty — skipping save');
+      return;
+    }
+
+    print('🧠 [SAVE_START] currentUid = $uid');
+    print('📦 Saving to block: $_selectedBlockId');
+    print('📅 Target = week_$weekIndex → day_$dayIndex');
+    if (_selectedBlockId == null) {
+      print('❌ saveDayToFirestore called with null _selectedBlockId');
+      return;
+    }
     // 🛡️ Guard against index errors
     if (weekIndex >= exerciseRows.length ||
         weekIndex >= circuitStartIndices.length) return;
@@ -1817,12 +1862,13 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
     final weekDocRef = FirebaseFirestore.instance
         .collection('planned_blocks')
-        .doc(userId)
+        .doc(uid) // ✅ use uid
         .collection('blocks')
         .doc(_selectedBlockId!)
         .collection('weeks')
         .doc('week_$weekIndex');
 
+    print('💾 [SAVE_PATH] writing to: planned_blocks/$uid/blocks/$_selectedBlockId/weeks/week_$weekIndex/days/day_$dayIndex');
 // Check if the week doc already exists
     final weekSnapshot = await weekDocRef.get();
 
