@@ -48,8 +48,6 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
 
-
-
     final userContext = Provider.of<UserContext>(context, listen: false);
     print("🏠 Home loaded for ${userContext.actingAsUid} "
         "(actor: ${userContext.actorUid}, coach: ${userContext.isCoach})");

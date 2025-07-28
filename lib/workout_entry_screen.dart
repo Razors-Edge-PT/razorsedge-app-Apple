@@ -40,19 +40,20 @@ Future<void> deleteAllUserWorkouts() async {
 
 class BlockMeta {
   final String id;
-  final String name;
-  final DateTime startDate;
-  final DateTime endDate;
+  final String? name; // ✅ Now nullable
+  final DateTime? startDate; // ✅ nullable
+  final DateTime? endDate;   // ✅ nullable
   final List<String> selectedDays;
 
   BlockMeta({
     required this.id,
-    required this.name,
-    required this.startDate,
-    required this.endDate,
+    this.name,
+    this.startDate, // ✅ optional
+    this.endDate,   // ✅ optional
     required this.selectedDays,
   });
 }
+
 
 
 class WorkoutPage extends StatefulWidget {
@@ -1066,95 +1067,81 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     _selectedDate = widget.initialDate ?? DateTime.now();
     print('📅 [WES] Selected date: $_selectedDate');
 
-    final pageLoadTimer = Stopwatch()..start();
 
     _initialLoad = _fetchActiveBlockThenMeta().then((_) async {
-      await _blockDateLoad; // ⏳ Ensure blockStartDate/endDate are populated
+      try {
+        await _blockDateLoad;
 
-      print('⏳ [WES] fetchActiveBlockThenMeta() completed');
+        print('⏳ [WES] fetchActiveBlockThenMeta() completed');
 
-      if (_activeBlockId == null) {
-        print('❌ [WES] _activeBlockId is null');
-      }
-      if (_blockStartDate == null) {
-        print('❌ [WES] _blockStartDate is null');
-      }
-      if (_blockEndDate == null) {
-        print('❌ [WES] _blockEndDate is null');
-      }
-
-      if (_activeBlockId == null || _blockStartDate == null || _blockEndDate == null) {
-        print('❌ [WES Init] Missing required block meta. Exiting...');
-        return;
-      }
-
-      print('✅ [WES] Block ID: $_activeBlockId');
-      print('✅ [WES] Block start: $_blockStartDate');
-      print('✅ [WES] Block end: $_blockEndDate');
-
-      await _loadAllBlocks();
-      print('📦 [WES] _loadAllBlocks complete, total blocks: ${_allBlocks.length}');
-
-      _selectedBlockId = _allBlocks.firstWhere(
-            (b) => b.id == _activeBlockId,
-        orElse: () => _allBlocks.first,
-      ).id;
-
-      print("🧱 [WES] Selected blockId: $_selectedBlockId");
-
-
-      await _loadInitialData();
-      print("📥 [WES] Draft data loaded");
-
-      await _fetchLastWorkoutTopSetReps();
-      print("📈 [WES] Top set reps fetched");
-
-      _debugPrintBlockDates();
-
-      await _initializeDayDocIfNeeded(_selectedDate);
-      print("📄 [WES] Day doc initialized if needed");
-
-      // ✅ Override _selectedDate if provided
-      if (widget.initialDate != null) {
-        _selectedDate = widget.initialDate!;
-        _workoutNameController.text = _formatWorkoutDate(_selectedDate);
-      }
-
-// ✅ Clear cached values and UI state before load
-      _cachedProgressedValues.clear();
-      _selectedExercisesWithCircuits.clear();
-      _workoutSets.clear();
-      _repsControllers.clear();
-      _weightControllers.clear();
-      _rirControllers.clear();
-      _velocityControllers.clear();
-      _notesControllers.clear();
-      _resolvedBB2Values.clear();
-
-// ✅ Load in proper order
-      await _loadDraftLocallyIfAvailable();        // 1️⃣ Load local draft first
-      await _mergeNewBB2ExercisesIntoDraft();      // 2️⃣ Merge new BB2 exercises
-      await _loadExercisesFromBB2ForDay();         // 3️⃣ Load pink read-only BB2 data
-      _initializeControllers();                    // 4️⃣ Rebuild controllers
-      _populateVelocityFlags();                    // 5️⃣ Finalize flags and UI
-
-
-
-      print("🔀 [WES] Merged BB2 into draft");
-
-      _cachedProgressedValues.clear();
-      _isInitialized = true;
-
-      Future.delayed(const Duration(milliseconds: 10), () {
-        if (_selectedExercisesWithCircuits.isNotEmpty) {
-          final testExercise = _selectedExercisesWithCircuits.first['name']?.trim() ?? '';
-          final rep = getRepTargetForExerciseWES(testExercise, 0);
-          print('🧪 [WES Init] Test rep target for "$testExercise" = $rep');
-        } else {
-          print('⚠️ [WES Init] No exercises in _selectedExercisesWithCircuits');
+        if (_activeBlockId == null || _blockStartDate == null || _blockEndDate == null) {
+          print('❌ [WES Init] Missing required block meta. Exiting...');
+          return;
         }
-      });
+
+        await _loadAllBlocks();
+        print('📦 [WES] _loadAllBlocks complete, total blocks: ${_allBlocks.length}');
+
+        _selectedBlockId = _allBlocks.firstWhere(
+              (b) => b.id == _activeBlockId,
+          orElse: () => _allBlocks.first,
+        ).id;
+
+        print("🧱 [WES] Selected blockId: $_selectedBlockId");
+
+        await _loadInitialData();
+        print("📥 [WES] Draft data loaded");
+
+        await _fetchLastWorkoutTopSetReps();
+        print("📈 [WES] Top set reps fetched");
+
+        _debugPrintBlockDates();
+
+        await _initializeDayDocIfNeeded(_selectedDate);
+        print("📄 [WES] Day doc initialized if needed");
+
+        if (widget.initialDate != null) {
+          _selectedDate = widget.initialDate!;
+          _workoutNameController.text = _formatWorkoutDate(_selectedDate);
+        }
+
+        _cachedProgressedValues.clear();
+        _selectedExercisesWithCircuits.clear();
+        _workoutSets.clear();
+        _repsControllers.clear();
+        _weightControllers.clear();
+        _rirControllers.clear();
+        _velocityControllers.clear();
+        _notesControllers.clear();
+        _resolvedBB2Values.clear();
+
+        await _loadDraftLocallyIfAvailable();
+        await _mergeNewBB2ExercisesIntoDraft();
+        await _loadExercisesFromBB2ForDay();
+        _initializeControllers();
+        _populateVelocityFlags();
+
+        print("🔀 [WES] Merged BB2 into draft");
+
+        _cachedProgressedValues.clear();
+        _isInitialized = true;
+
+        Future.delayed(const Duration(milliseconds: 10), () {
+          if (_selectedExercisesWithCircuits.isNotEmpty) {
+            final testExercise = _selectedExercisesWithCircuits.first['name']?.trim() ?? '';
+            final rep = getRepTargetForExerciseWES(testExercise, 0);
+            print('🧪 [WES Init] Test rep target for "$testExercise" = $rep');
+          } else {
+            print('⚠️ [WES Init] No exercises in _selectedExercisesWithCircuits');
+          }
+        });
+
+      } catch (e, stack) {
+        print('💥 [WES Init] Exception caught: $e');
+        print(stack);
+      }
     });
+
 
     Future.microtask(() async {
       final prefs = await SharedPreferences.getInstance();
@@ -1176,7 +1163,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    _activeBlockId = await BlockRepository().fetchActiveBlockId();
+    _activeBlockId = await BlockRepository().fetchActiveBlockId(userId);
     print('🎯 [WES] Active Block ID from Firestore = $_activeBlockId');
 
     if (_activeBlockId == null) {
@@ -1258,15 +1245,22 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     print('🔍 [WES] Loaded ${snap.docs.length} blocks: ${snap.docs.map((d) => d.id)}');
 
-    final blocks = snap.docs
-        .map((d) => BlockMeta(
-      id: d.id,
-      name: d['name'],
-      startDate: (d['startDate'] as Timestamp).toDate(),
-      endDate: (d['endDate'] as Timestamp).toDate(),
-      selectedDays: List<String>.from(d['selectedDays'] ?? []),
-    ))
-        .toList();
+    final blocks = snap.docs.map((d) {
+      final data = d.data();
+
+      final Timestamp? startTs = data.containsKey('startDate') ? data['startDate'] as Timestamp? : null;
+      final Timestamp? endTs = data.containsKey('endDate') ? data['endDate'] as Timestamp? : null;
+
+      return BlockMeta(
+        id: d.id,
+        name: data['name'], // nullable is fine now
+        startDate: startTs?.toDate(),
+        endDate: endTs?.toDate(),
+        selectedDays: List<String>.from(data['selectedDays'] ?? []),
+      );
+    }).toList();
+
+
 
     setState(() {
       _allBlocks = blocks;
