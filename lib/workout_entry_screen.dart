@@ -1054,12 +1054,20 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     );
   }
 
+  void _debugUid(String where) {
+    final ctx = UserContext.of(context, listen: false);
+    print('👤 [$where] actorUid=${ctx.actorUid} actingAsUid=${ctx.actingAsUid} currentUid=${ctx.currentUid}');
+  }
+
+
   @override
   void initState() {
     super.initState();
     print('🚀 [WES] initState started');
+    _debugUid('WES.initState');
 
-    _blockDateLoad = _loadBlockDatesOnly();
+    _blockDateLoad = _loadBlockDatesOnly(userId); // ✅ actingAsUid
+
     _repo = BlockPlannerRepository();
     WidgetsBinding.instance.addObserver(this);
 
@@ -1177,9 +1185,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     for (int attempt = 1; attempt <= maxAttempts; attempt++) {
       final meta = await _repo.loadBlockMeta(
-        userId: user.uid,
+        userId: userId, // ✅ actingAsUid
         blockId: _activeBlockId!,
       );
+
 
       final start = meta.startDate;
       final end = meta.endDate;
@@ -1213,25 +1222,24 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
 
 
-  Future<void> _loadBlockDatesOnly() async {
-    final blockId = await BlockRepository().fetchActiveBlockId();
+  Future<void> _loadBlockDatesOnly(String userId) async {
+    final blockId = await BlockRepository().fetchActiveBlockId(userId);
 
     if (blockId == null) {
       throw StateError("No active block found");
     }
 
     final meta = await _repo.loadBlockMeta(
-      userId: UserContext.of(context, listen: false).currentUid,
+      userId: userId, // ✅ now passed in
       blockId: blockId,
     );
 
     _blockStartDate = meta.startDate;
     _blockEndDate = meta.endDate;
 
-
     print('✅ [WES] Loaded block dates: $_blockStartDate → $_blockEndDate');
-
   }
+
 
   Future<void> _loadAllBlocks() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -3308,6 +3316,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       return false;
     }
   }
+
+
 
   Future<void> _mergeNewBB2ExercisesIntoDraft() async {
     print('[WES] Attempting to merge BB2 exercises into draft for $_selectedDate');
