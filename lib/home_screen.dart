@@ -41,6 +41,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Set<DateTime> _trainingDays = {};
   File? _profileImage;
   final ImagePicker _picker = ImagePicker();
+  String? _actingAsEmail;
+
 
   HomeSection _currentSection = HomeSection.calendar;
 
@@ -51,6 +53,13 @@ class _HomeScreenState extends State<HomeScreen> {
     final userContext = Provider.of<UserContext>(context, listen: false);
     print("🏠 Home loaded for ${userContext.actingAsUid} "
         "(actor: ${userContext.actorUid}, coach: ${userContext.isCoach})");
+
+    // Delay the email fetch until after build
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      print('🧩 Post-frame callback fired');
+      _loadAthleteEmail();
+    });
+
 
     _ensureAtLeastOneBlockExists().then((_) {
       _fetchRecentData();
@@ -159,6 +168,26 @@ class _HomeScreenState extends State<HomeScreen> {
       }, SetOptions(merge: true));
     }
   }
+
+  Future<void> _loadAthleteEmail() async {
+    final uid = Provider.of<UserContext>(context, listen: false).actingAsUid;
+
+    print('📡 Attempting to fetch email for UID: $uid'); // 👈 move this up
+
+    if (uid == null) return;
+
+    final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+    final email = userDoc.data()?['email'];
+
+    print('📄 User doc data: ${userDoc.data()}');
+
+    if (email != null && mounted) {
+      setState(() {
+        _actingAsEmail = email;
+      });
+    }
+  }
+
 
 
   Future<void> _fetchTrainingDaysForMonth(DateTime month) async {
@@ -409,9 +438,35 @@ class _HomeScreenState extends State<HomeScreen> {
         automaticallyImplyLeading: false,
         actions: [
           Row(
-            mainAxisSize: MainAxisSize.min, // ⬅️ Important to avoid tap overlap
+            mainAxisSize: MainAxisSize.min,
             children: [
-              // 👤 Profile picture (tappable to upload)
+              // 👤 Logged-in / impersonated user banner
+              Padding(
+                padding: const EdgeInsets.only(right: 8.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+
+                    SizedBox(
+                      width: 120, // max width
+                      child: Text(
+                        _actingAsEmail ?? 'loading...',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        maxLines: 1,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+
+              // 👤 Profile picture
               Material(
                 color: Colors.transparent,
                 child: InkWell(
