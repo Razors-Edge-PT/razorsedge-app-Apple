@@ -98,6 +98,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   Map<String, bool> _showVelocityByExercise = {}; // exerciseName.toLowerCase() → true/false
 
   String get userId => UserContext.of(context, listen: false).currentUid;
+  String? _lastMergedUid;
+  late final String _cachedUid;
+
 
 
   final int _defaultSets = 3;
@@ -1065,6 +1068,18 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     super.initState();
     print('🚀 [WES] initState started');
     _debugUid('WES.initState');
+    _cachedUid = UserContext.of(context, listen: false).currentUid;
+
+    final contextUid = UserContext.of(context, listen: false).currentUid;
+    final formattedDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
+
+    final legacyDraftKey = 'workout_draft_$formattedDate';
+    final namespacedDraftKey = 'workout_draft_${contextUid}_$formattedDate';
+
+    print('🧪 [WES DraftKey] contextUid = $contextUid');
+    print('🧪 [WES DraftKey] legacy format = $legacyDraftKey');
+    print('🧪 [WES DraftKey] new namespaced = $namespacedDraftKey');
+
 
     _blockDateLoad = _loadBlockDatesOnly(userId); // ✅ actingAsUid
 
@@ -1123,9 +1138,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         _notesControllers.clear();
         _resolvedBB2Values.clear();
 
+        //101here
         await _loadDraftLocallyIfAvailable();
         await _mergeNewBB2ExercisesIntoDraft();
-        await _loadExercisesFromBB2ForDay();
+       // await _loadExercisesFromBB2ForDay();
         _initializeControllers();
         _populateVelocityFlags();
 
@@ -1244,6 +1260,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   Future<void> _loadAllBlocks() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
+
+    print('👤 [WES] _loadAllBlocks using userId=$userId and currentUser.uid=${FirebaseAuth.instance.currentUser?.uid}');
 
     final snap = await FirebaseFirestore.instance
         .collection('planned_blocks')
@@ -1418,6 +1436,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     await loadPlannedExercisesFromFirestore();
     await loadPreviousWorkoutData();
 
+    //101here
     // 🧠 Try to load a saved WES draft first
     final draftLoaded = await _loadWorkoutDraftFromCache();
 
@@ -1440,9 +1459,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       final values = await getBB2SavedValuesFromSharedPrefs(name, _selectedDate);
       if (values != null) {
         _resolvedBB2Values[name.toLowerCase()] = values;
+        print('🎯 [WES Hint] Resolved BB2 hints for "$name" on $_selectedDate → $values');
+
       }
     }
 
+    
     setState(() {
       _isLoadingData = false;
     });
@@ -1794,17 +1816,25 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           DateFormat('EEE d MMM yyyy').format(_selectedDate);
     }
   }
-
+//101here
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) async {
+    print('📱 [WES] AppLifecycleState changed: $state');
+    print('📱 [WES] mounted = $mounted');
+
     if (state == AppLifecycleState.resumed) {
       final prefs = await SharedPreferences.getInstance();
       final dateKey =
           '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
       final timestampStr = prefs.getString('draft_last_saved_$dateKey');
+
+      print('🔍 [WES] Checking last draft timestamp for key: $dateKey → $timestampStr');
+
       if (timestampStr != null) {
         final savedAt = DateTime.tryParse(timestampStr);
         final now = DateTime.now();
+        print('🕒 [WES] Draft last saved at: $savedAt — now: $now');
+
         if (savedAt != null && now.difference(savedAt).inHours < 2) {
           print('[WES] App resumed — refreshing draft with BB2 merge');
           await _mergeNewBB2ExercisesIntoDraft();
@@ -1812,11 +1842,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         }
       }
     }
+
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
-      print('📦 [WES] App paused — saving draft');
+      print('📦 [WES] App paused/inactive — attempting to save draft...');
       _persistDraftLocally();
     }
   }
+
 
   void _loadWorkout(Workout workout) {
     _workoutNameController.text = workout.name;
@@ -1955,6 +1987,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    //101here
+    print('🧹 [WES] dispose — saving draft for $_cachedUid');
     _persistDraftLocally();
 
     _workoutNameController.dispose();
@@ -2043,7 +2077,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     return 'wes_draft_$dateKey';
   }
 
+  //101here
   Future<void> _persistDraftLocally() async {
+    if (!mounted) {
+      print('🚫 [WES] Skipped draft save — widget is unmounted.');
+      return;
+    }
+
     try {
       final prefs = await SharedPreferences.getInstance();
 
@@ -2067,17 +2107,31 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         }),
       };
 
-      await prefs.setString(_draftKey, jsonEncode(draft));
+      final key = _getDraftKey(); // 👈 use your helper
+      await prefs.setString(key, jsonEncode(draft));
+      print('💾 [WES] Draft saved for ${_selectedDate.toIso8601String()} under key: $key');
+
       // print('💾 Draft saved: $_draftKey');
     } catch (e) {
       print('❌ Failed to persist WES draft: $e');
     }
   }
 
+  String _getDraftKey() {
+    final dateKey = DateFormat('yyyy-MM-dd').format(_selectedDate);
+    return 'workout_draft_${_cachedUid}_$dateKey';
+  }
+
+
+
+  //101here
   Future<void> _loadDraftLocallyIfAvailable() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final jsonStr = prefs.getString(_draftKey);
+      final key = _getDraftKey(); // 👈 use your helper
+      final jsonStr = prefs.getString(key);
+      print('📥 [WES] Loading draft using key: $key');
+
       if (jsonStr == null) return;
 
       final decoded = jsonDecode(jsonStr);
@@ -2117,10 +2171,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
   }
 
+
+  //101here
   Future<void> _clearDraft() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_draftKey);
+    final key = _getDraftKey(); // 👈 use helper
+    await prefs.remove(key);
+    print('🧹 [WES] Cleared draft for key: $key');
   }
+
 
 
   void _showExercisePickerDialog() async {
@@ -3322,8 +3381,27 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   Future<void> _mergeNewBB2ExercisesIntoDraft() async {
     print('[WES] Attempting to merge BB2 exercises into draft for $_selectedDate');
 
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null || _selectedBlockId == null || _selectedDate == null) return;
+    final uid = UserContext.of(context, listen: false).currentUid;
+    if (_selectedBlockId == null || _selectedDate == null) return;
+
+    print('👤 [BB2 Merge] Using uid=$uid for athlete merge');
+
+    // ✅ Clear state only if the selected athlete has changed
+    if (_lastMergedUid != uid) {
+      print('🔁 [WES] Athlete switch detected → clearing previous workout state');
+      setState(() {
+        _selectedExercisesWithCircuits.clear();
+        _workoutSets.clear();
+        _repsControllers.clear();
+        _weightControllers.clear();
+        _rirControllers.clear();
+        _velocityControllers.clear();
+        _notesControllers.clear();
+        _resolvedBB2Values.clear();
+      });
+      _lastMergedUid = uid;
+    }
+
 
     final blockId = _selectedBlockId!;
     final daysSinceStart = _selectedDate.difference(blockStartDate!).inDays;
@@ -3337,7 +3415,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     // Try modern BB2 source: weeks > days
     final dayDoc = await FirebaseFirestore.instance
         .collection('planned_blocks')
-        .doc(userId)
+        .doc(uid)
         .collection('blocks')
         .doc(blockId)
         .collection('weeks')
@@ -3361,7 +3439,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       final dateKey = DateFormat('yyyy-MM-dd').format(_selectedDate);
       final blockDataDoc = await FirebaseFirestore.instance
           .collection('planned_blocks')
-          .doc(userId)
+          .doc(uid)
           .collection('blocks')
           .doc(blockId)
           .collection('block_data')
@@ -3550,7 +3628,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     // 5️⃣ Always load read-only BB2 visual hints (e.g. pink fields)
     print('🔍 [WES] Loading BB2 read-only visual hints...');
-    await _loadExercisesFromBB2ForDay();
+    //await _loadExercisesFromBB2ForDay();
 
     print('✅ [WES] Date switch complete.');
   }
