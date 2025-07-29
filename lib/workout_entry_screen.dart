@@ -100,6 +100,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   String get userId => UserContext.of(context, listen: false).currentUid;
   String? _lastMergedUid;
   late final String _cachedUid;
+  DateTime? _lastMergedDate;
 
 
 
@@ -3387,8 +3388,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     print('👤 [BB2 Merge] Using uid=$uid for athlete merge');
 
     // ✅ Clear state only if the selected athlete has changed
-    if (_lastMergedUid != uid) {
-      print('🔁 [WES] Athlete switch detected → clearing previous workout state');
+    final shouldForceMerge = _lastMergedUid != uid || _lastMergedDate != _selectedDate;
+
+    if (shouldForceMerge) {
+      print('🔁 [WES] Triggering BB2 merge due to athlete/date switch');
       setState(() {
         _selectedExercisesWithCircuits.clear();
         _workoutSets.clear();
@@ -3400,7 +3403,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         _resolvedBB2Values.clear();
       });
       _lastMergedUid = uid;
+      _lastMergedDate = _selectedDate;
     }
+
 
 
     final blockId = _selectedBlockId!;
