@@ -514,30 +514,30 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   Future<void> loadAllData() async {
     print("🧪 [BB2] Starting loadAllData()...");
     final stopwatch = Stopwatch()..start();
-    // 🧠 Ensure full top set history is loaded before progression model logic
-    await PeriodizationModelUtils.fetchFullTopSetHistory();
-    // ✅ Load top sets from workout history (PMU global fetch)
-    await PeriodizationModelUtils.fetchLastWorkoutTopSetReps();
+    final uid = UserContext.of(context, listen: false).currentUid;
+
+    await PeriodizationModelUtils.fetchFullTopSetHistory(uid: uid);
+    await PeriodizationModelUtils.fetchLastWorkoutTopSetReps(uid: uid);
+
     print('🧪 [BB2] Top set reps loaded: ${PeriodizationModelUtils.exercisePreviousTopSetReps.keys.length} exercises');
     print('🧪 [BB2] Top set reps loaded: ${PeriodizationModelUtils.exercisePreviousTopSetReps.keys.toList()}');
-
-
 
     await Future.wait([
       _fetchTemplates(),
       loadExercisesFromFirestore(),
-      loadTopSetsFromWorkouts(),
+      loadTopSetsFromWorkouts(uid: uid),
       loadPlannedExercisesFromFirestore(),
       _loadRepTargets(),
-      PeriodizationModelUtils.loadPeriodizationModelsFromFirestore(),
+      PeriodizationModelUtils.loadPeriodizationModelsFromFirestore(uid: uid),
     ]);
 
     selectedTemplateIds = List.generate(totalWeeks, (_) => List.generate(7, (_) => null));
+
     Future.delayed(Duration(milliseconds: 100), () {
       _loadPersistedSavedFields();
     });
-    await loadVisibleWeeksOnly();
 
+    await loadVisibleWeeksOnly();
 
     print("✅ All data loaded for BB2.");
     print('⏱️ BB2 loadAllData + loadVisibleWeeksOnly took ${stopwatch.elapsedMilliseconds}ms');
@@ -546,6 +546,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     await loadBlockDataForWeek(initialWeek);
     loadedWeekIndices.add(initialWeek);
   }
+
 
   Future<void> _fetchTemplates() async {
     final userId = UserContext.of(context, listen: false).currentUid;
@@ -1629,13 +1630,12 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     }
   }
 
-  Future<void> loadTopSetsFromWorkouts() async {
-    final uid = UserContext.of(context, listen: false).currentUid;
-
+  Future<void> loadTopSetsFromWorkouts({String? uid}) async {
+    final resolvedUid = uid ?? FirebaseAuth.instance.currentUser!.uid;
 
     final snapshot = await FirebaseFirestore.instance
         .collection('users')
-        .doc(uid) // ✅ now using the selected athlete
+        .doc(resolvedUid)
         .collection('workouts')
         .get();
 

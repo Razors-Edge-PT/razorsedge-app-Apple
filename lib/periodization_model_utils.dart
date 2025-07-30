@@ -128,13 +128,13 @@ class PeriodizationModelUtils {
   }
 
 
-  static Future<void> loadPeriodizationModelsFromFirestore() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+  static Future<void> loadPeriodizationModelsFromFirestore({String? uid}) async {
+    final resolvedUid = uid ?? FirebaseAuth.instance.currentUser!.uid;
+    print('📦 [PMU] Loading periodization models for UID: $resolvedUid');
 
     final snapshot = await FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(resolvedUid)
         .collection('block_planner')
         .doc('current_block')
         .get();
@@ -1803,18 +1803,19 @@ class PeriodizationModelUtils {
     return exercisePreviousTopSetReps[exerciseName]!; // ✅ Return full list of stored reps
   }
 
-  static Future<void> fetchFullTopSetHistory() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+  static Future<void> fetchFullTopSetHistory({String? uid}) async {
+    final resolvedUid = uid ?? FirebaseAuth.instance.currentUser!.uid;
+    print('🧠 [SmartProgression] Fetching full top set history for $resolvedUid...');
 
-    print('🧠 [SmartProgression] Fetching full top set history...');
+
     final snapshot = await FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(resolvedUid)
         .collection('workouts')
         .orderBy('date', descending: true)
         .limit(20)
         .get();
+
 
     topSetsByExercise.clear();
 
@@ -1846,19 +1847,18 @@ class PeriodizationModelUtils {
     print('✅ [SmartProgression] Loaded sets for: ${topSetsByExercise.keys}');
   }
 
-  static Future<void> fetchLastWorkoutTopSetReps() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-    print('🧪 [PMU] Fetching top sets for: ${user.uid}');
-
+  static Future<void> fetchLastWorkoutTopSetReps({String? uid}) async {
+    final resolvedUid = uid ?? FirebaseAuth.instance.currentUser!.uid;
+    print('🧪 [PMU] Fetching top sets for: $resolvedUid');
 
     final snapshot = await FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(resolvedUid)
         .collection('workouts')
-        .orderBy('date', descending: true) // ✅ Fetch newest first
-        .limit(12) // ✅ Get last 12 workouts
+        .orderBy('date', descending: true)
+        .limit(12)
         .get();
+
     print('🧪 [PMU] Found ${snapshot.docs.length} workouts in Firestore.');
 
     if (snapshot.docs.isNotEmpty) {
@@ -2130,13 +2130,14 @@ class PeriodizationModelUtils {
     required String exerciseName,
     required DateTime blockStart,
     required DateTime blockEnd,
+    String? uid, // ✅ optional uid
   }) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return 0;
+    final resolvedUid = uid ?? FirebaseAuth.instance.currentUser!.uid;
+    print('🔁 [PMU] Fetching exposure count for "$exerciseName" for user: $resolvedUid');
 
     final snapshot = await FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(resolvedUid)
         .collection('workouts')
         .where('date', isGreaterThanOrEqualTo: blockStart.toIso8601String())
         .where('date', isLessThanOrEqualTo: blockEnd.toIso8601String())
@@ -2158,6 +2159,7 @@ class PeriodizationModelUtils {
 
     return count;
   }
+
 
   static int getDupSignatureRepTarget( //DUP signature
       String exerciseName, {

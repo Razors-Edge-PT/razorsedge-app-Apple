@@ -235,14 +235,14 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
                       text: TextSpan(
                         style: DefaultTextStyle.of(context).style,
                         children: [
-                          TextSpan(text: '${topSet.weight}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
+                          TextSpan(text: '${topSet.weight}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.lightBlue)),
                           TextSpan(text: 'kg ', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
                           TextSpan(text: 'x ', style: const TextStyle(color: Colors.blue)),
-                          TextSpan(text: '${topSet.reps}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
+                          TextSpan(text: '${topSet.reps}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.lightBlue)),
                           TextSpan(text: ', RIR: ', style: const TextStyle(color: Colors.blue)),
-                          TextSpan(text: '${topSet.rir}', style: const TextStyle(color: Colors.indigo)),
+                          TextSpan(text: '${topSet.rir}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.lightBlue)),
                           TextSpan(text: ' | E1RM: ', style: const TextStyle(color: Colors.blue)),
-                          TextSpan(text: '${highestE1RM.toStringAsFixed(1)} kg', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
+                          TextSpan(text: '${highestE1RM.toStringAsFixed(1)} kg', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.lightBlue)),
                         ],
                       ),
                     ),

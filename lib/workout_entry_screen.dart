@@ -145,7 +145,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
 
   Future<void> loadPreviousWorkoutData() async {
-    await PeriodizationModelUtils.fetchLastWorkoutTopSetReps();
+    await PeriodizationModelUtils.fetchLastWorkoutTopSetReps(
+      uid: UserContext.of(context, listen: false).currentUid,
+    );
+
     setState(() {
       _isLoadingData = false; // ✅ Data has been fetched, UI can update
     });
@@ -284,12 +287,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   }
 
   Future<void> _fetchLastWorkoutTopSetReps() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    final uid = UserContext.of(context, listen: false).currentUid;
+    if (uid == null) return;
+    print('📡 Fetching top sets for user: $uid');
 
     final snapshot = await FirebaseFirestore.instance
         .collection('users')
-        .doc(userId)
+        .doc(uid)
         .collection('workouts')
         .orderBy('date', descending: true) // ✅ Fetch newest first
         .limit(12) // ✅ Get last 12 workouts
@@ -356,7 +360,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
               }
             }
           }
-        }
+          // 🔍 Print final stored top sets for debugging
+          for (final entry in exercisePreviousE1RMs.entries) {
+            final name = entry.key;
+            final e1rms = entry.value.map((e) => e.toStringAsFixed(2)).join(', ');
+            final reps = exercisePreviousTopSetReps[name]?.join(', ') ?? '—';
+            print('🔍 Top sets for $name → E1RMs: [$e1rms], Reps: [$reps]');
+        }}
       });
     }
   }
@@ -1431,7 +1441,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     // 🔁 Normal flow (no prefilled BB2)
     await loadExercisesFromFirestoreForWES();
     await _buildNameToIdMapsFromFirestore();
-    await PeriodizationModelUtils.fetchFullTopSetHistory();
+    await PeriodizationModelUtils.fetchFullTopSetHistory(
+      uid: UserContext.of(context, listen: false).currentUid,
+    );
     await loadSavedWorkoutsForInstanceCount();
     await _loadPlannedExerciseDetails();
     await loadPlannedExercisesFromFirestore();
