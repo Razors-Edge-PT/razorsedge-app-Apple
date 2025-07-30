@@ -82,7 +82,7 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
     );
   }
 
-  void _editBlock(String blockId) {
+  void _editBlock(String blockId, [String? blockName]) {
     final userContext = UserContext.of(context, listen: false);
 
     Navigator.push(
@@ -92,7 +92,10 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
           value: userContext,
           child: const Block_Planner(),
         ),
-        settings: RouteSettings(arguments: {'blockId': blockId}),
+        settings: RouteSettings(arguments: {
+          'blockId': blockId,
+          if (blockName != null) 'blockName': blockName, // ✅ only include if provided
+        }),
       ),
     );
   }
@@ -180,7 +183,8 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
                 child: ListTile(
                   contentPadding:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  onTap: () => _editBlock(blockId),
+                  onTap: () => _editBlock(blockId, blockName),
+
                   title: Text(
                     blockName,
                     style: const TextStyle(

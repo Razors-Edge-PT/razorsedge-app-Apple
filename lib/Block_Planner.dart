@@ -12,6 +12,7 @@ import 'package:flutter/services.dart';
 import 'periodization_model_utils.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'week_planner.dart';
+import 'planned_blocks_screen.dart';
 import 'package:uuid/uuid.dart';
 import 'user_context.dart';
 
@@ -102,7 +103,8 @@ class _BlockPlannerState extends State<Block_Planner> {
   }
 
   Future<void> _loadExistingBlock(String blockId) async {
-    final userId = FirebaseAuth.instance.currentUser?.uid;
+    final userId = UserContext.of(context, listen: false).currentUid;
+
     if (userId == null) return;
 
     final doc = await FirebaseFirestore.instance
@@ -160,7 +162,7 @@ class _BlockPlannerState extends State<Block_Planner> {
     });
 
     // 2) push just that one field up to Firestore
-    final userId = FirebaseAuth.instance.currentUser!.uid;
+    final userId = UserContext.of(context, listen: false).currentUid;
     FirebaseFirestore.instance
         .collection('planned_blocks')
         .doc(userId)
@@ -210,8 +212,9 @@ class _BlockPlannerState extends State<Block_Planner> {
   }
 
   Future<void> _loadBlockFromFirestore(String blockId) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    final userId = UserContext.of(context, listen: false).currentUid;
+    if (userId == null) return;
+
 
     await loadExercisesFromFirestore(); // ✅ Ensure names are ready
 
@@ -253,8 +256,9 @@ class _BlockPlannerState extends State<Block_Planner> {
 
 // Call this when user wants to save the block permanently
   Future<void> _savePlannedBlock({ required bool setActive }) async {
-    final userId = FirebaseAuth.instance.currentUser?.uid;
+    final userId = UserContext.of(context, listen: false).currentUid;
     if (userId == null) return;
+
 
     final userBlocksRef = FirebaseFirestore.instance
         .collection('planned_blocks')
@@ -405,8 +409,9 @@ class _BlockPlannerState extends State<Block_Planner> {
   }
 
   Future<void> _loadBlockDatesFromFirestore() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    final userId = UserContext.of(context, listen: false).currentUid;
+    if (userId == null) return;
+
 
     final doc = await FirebaseFirestore.instance
         .collection('users')
@@ -953,8 +958,9 @@ class _BlockPlannerState extends State<Block_Planner> {
   }
 
   Future<void> _savePlannedExercises() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null || blockIdToUse == null) return;
+    final userId = UserContext.of(context, listen: false).currentUid;
+    if (userId == null || blockIdToUse == null) return;
+
 
     // 🔄 Now writing into the *same* collection as savePlannedBlock
     final docRef = FirebaseFirestore.instance
@@ -1082,7 +1088,8 @@ class _BlockPlannerState extends State<Block_Planner> {
     print("✅ Planned exercises and details saved safely.");
 
 // ✅ Also update the pointer at 'current_block'
-    if (user != null && blockIdToUse != null) {
+
+    if (userId != null && blockIdToUse != null) {
       await FirebaseFirestore.instance
           .collection('users')
           .doc(userId)
@@ -1100,6 +1107,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       print('📌 Updated current_block → ID: $blockIdToUse');
     }
 
+
     // 🧱 Ensure week docs exist for BB2 compatibility
     if (_blockStartDate != null && _blockEndDate != null) {
       final int totalWeeks = _blockEndDate!
@@ -1108,10 +1116,11 @@ class _BlockPlannerState extends State<Block_Planner> {
 
       final weeksCollection = FirebaseFirestore.instance
           .collection('planned_blocks')
-          .doc(userId)
+          .doc(userId) // ✅ selected athlete
           .collection('blocks')
           .doc(blockIdToUse!)
           .collection('weeks');
+
 
       for (int i = 0; i < totalWeeks; i++) {
         final weekDocRef = weeksCollection.doc('week_$i');
@@ -1165,8 +1174,9 @@ class _BlockPlannerState extends State<Block_Planner> {
   }
 
   Future<void> _loadPlannedExercises() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    final userId = UserContext.of(context, listen: false).currentUid;
+    if (userId == null) return;
+
 
     final snapshot = await FirebaseFirestore.instance
         .collection('users')
@@ -1212,10 +1222,9 @@ class _BlockPlannerState extends State<Block_Planner> {
     }
   }
 
-  Future<void> initializePlannedExerciseDetails(
-      List<String> plannedExercises) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+  Future<void> initializePlannedExerciseDetails(List<String> plannedExercises) async {
+    final userId = UserContext.of(context, listen: false).currentUid;
+    if (userId == null) return;
 
     final docRef = FirebaseFirestore.instance
         .collection('users')
@@ -1257,39 +1266,6 @@ class _BlockPlannerState extends State<Block_Planner> {
     }, SetOptions(merge: true));
   }
 
-  Future<void> _onPlanWeeklySchedule() async {
-    try {
-      final userId = FirebaseAuth.instance.currentUser?.uid;
-      if (userId == null) return;
-
-      final blockId = blockIdToUse ?? const Uuid().v4();
-      final blockName = _blockNameController.text.trim();
-
-      final blockData = {
-        'name': blockName.isEmpty ? 'Unnamed Block' : blockName,
-        'isActive': false,
-        'createdAt': Timestamp.now(),
-        'daysOfWeek': selectedDays,
-        'weeks': weekPlans,
-      };
-
-      await FirebaseFirestore.instance
-          .collection('planned_blocks')
-          .doc(userId)
-          .collection('blocks')
-          .doc(blockId)
-          .set(blockData);
-
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => WeekPlanner(blockId: blockIdToUse!),
-        ),
-      );
-    } catch (e) {
-      print('Failed to save and navigate: $e');
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
