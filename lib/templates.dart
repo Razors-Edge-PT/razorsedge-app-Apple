@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'create_template_screen.dart';
 import 'template_details.dart';
 import 'template_model.dart'; // Import Exercise model
+import 'package:provider/provider.dart';
+import 'user_context.dart';
 
 class TemplatesScreen extends StatefulWidget {
   const TemplatesScreen({super.key, this.fromWorkoutPage = false});
@@ -29,6 +31,10 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   final List<String> _selectedExercises = []; // List of selected exercise IDs
   Template? _lastDeletedTemplate;
 
+  String get userId => UserContext.of(context, listen: false).currentUid;
+
+
+
 
   @override
   void initState() {
@@ -48,52 +54,47 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   }
 
   Future<void> _fetchTemplates() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
-      templateSnapshot = await userDoc.collection('templates').get();
+    final userDoc = FirebaseFirestore.instance.collection('users').doc(userId);
+    templateSnapshot = await userDoc.collection('templates').get();
 
-      if (templateSnapshot != null) {
-        print("📦 Raw Firestore template snapshot: ${templateSnapshot!.docs.length} templates");
+    if (templateSnapshot != null) {
+      print("📦 Raw Firestore template snapshot: ${templateSnapshot!.docs.length} templates");
 
-        final templateList = templateSnapshot!.docs.map((doc) {
-          final rawExercises = doc.get('exercises');
+      final templateList = templateSnapshot!.docs.map((doc) {
+        final rawExercises = doc.get('exercises');
 
-          final parsedExercises = rawExercises is List && rawExercises.isNotEmpty
-              ? (rawExercises.first is Map
-              ? List<Map<String, dynamic>>.from(rawExercises)
-              : List<Map<String, dynamic>>.from(
-              (rawExercises).map((e) => {'name': e, 'circuitIndex': 0})))
-              : <Map<String, dynamic>>[];
+        final parsedExercises = rawExercises is List && rawExercises.isNotEmpty
+            ? (rawExercises.first is Map
+            ? List<Map<String, dynamic>>.from(rawExercises)
+            : List<Map<String, dynamic>>.from(
+            (rawExercises).map((e) => {'name': e, 'circuitIndex': 0})))
+            : <Map<String, dynamic>>[];
 
-          return Template(
-            id: doc.id,
-            name: doc.get('name') ?? 'Unnamed',
-            day: doc.data().containsKey('day') ? doc.get('day') : null,
-            exercises: parsedExercises,
-          );
-        }).toList();
+        return Template(
+          id: doc.id,
+          name: doc.get('name') ?? 'Unnamed',
+          day: doc.data().containsKey('day') ? doc.get('day') : null,
+          exercises: parsedExercises,
+        );
+      }).toList();
 
-        setState(() {
-          templates = templateList;
-          print("✅ Parsed templates: ${templates.length}");
-        });
-      }
+      setState(() {
+        templates = templateList;
+        print("✅ Parsed templates: ${templates.length}");
+      });
     }
   }
+
 
   Future<void> _undoDeleteTemplate() async {
     if (_lastDeletedTemplate == null) return;
 
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
-      await userDoc.collection('templates').doc(_lastDeletedTemplate!.id).set({
-        'name': _lastDeletedTemplate!.name,
-        'exercises': _lastDeletedTemplate!.exercises,
-        if (_lastDeletedTemplate!.day != null) 'day': _lastDeletedTemplate!.day,
-      });
-    }
+    final userDoc = FirebaseFirestore.instance.collection('users').doc(userId);
+    await userDoc.collection('templates').doc(_lastDeletedTemplate!.id).set({
+      'name': _lastDeletedTemplate!.name,
+      'exercises': _lastDeletedTemplate!.exercises,
+      if (_lastDeletedTemplate!.day != null) 'day': _lastDeletedTemplate!.day,
+    });
 
     setState(() {
       templates.add(_lastDeletedTemplate!);
@@ -104,7 +105,6 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       const SnackBar(content: Text('✅ Template restored')),
     );
   }
-
 
   Future<bool> _confirmDeleteTemplate(BuildContext context, String templateId) async {
     final shouldDelete = await showDialog(
@@ -155,35 +155,33 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     );
 
     if (shouldDelete == true) {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user != null) {
-        final batch = FirebaseFirestore.instance.batch();
-        final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
-        final templatesRef = userDoc.collection('templates');
+      final batch = FirebaseFirestore.instance.batch();
+      final userDoc = FirebaseFirestore.instance.collection('users').doc(userId);
+      final templatesRef = userDoc.collection('templates');
 
-        final snapshot = await templatesRef.get();
-        for (var doc in snapshot.docs) {
-          batch.delete(doc.reference);
-        }
-
-        await batch.commit();
-
-        setState(() {
-          templates.clear();
-          _lastDeletedTemplate = null;
-        });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('All templates deleted.'),
-            backgroundColor: Colors.red.shade400,
-            behavior: SnackBarBehavior.floating,
-            margin: const EdgeInsets.all(16),
-          ),
-        );
+      final snapshot = await templatesRef.get();
+      for (var doc in snapshot.docs) {
+        batch.delete(doc.reference);
       }
+
+      await batch.commit();
+
+      setState(() {
+        templates.clear();
+        _lastDeletedTemplate = null;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('All templates deleted.'),
+          backgroundColor: Colors.red.shade400,
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(16),
+        ),
+      );
     }
   }
+
 
 
 
@@ -202,14 +200,11 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   }
 
   Future<void> _deleteTemplateFromFirestore(String templateId) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      final userDoc =
-          FirebaseFirestore.instance.collection('users').doc(user.uid);
-      final templateRef = userDoc.collection('templates').doc(templateId);
-      await templateRef.delete();
-    }
+    final userDoc = FirebaseFirestore.instance.collection('users').doc(userId);
+    final templateRef = userDoc.collection('templates').doc(templateId);
+    await templateRef.delete();
   }
+
 
   @override
   Widget build(BuildContext context) {

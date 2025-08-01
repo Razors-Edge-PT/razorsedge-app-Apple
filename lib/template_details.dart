@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:uuid/uuid.dart';
-
+import 'package:provider/provider.dart';
+import 'user_context.dart';
 import 'template_model.dart';
 
 class ExerciseRow {
@@ -39,8 +40,7 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
   late TextEditingController _nameController;
   List<String> plannedExercises = [];
 
-
-
+  String get userId => UserContext.of(context, listen: false).currentUid;
 
   @override
   void initState() {
@@ -60,16 +60,13 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
       _loadTemplateFromFirestore();
     }
     _loadPlannedExercises();
-
   }
-
 
   @override
   void dispose() {
     _nameController.dispose();
     super.dispose();
   }
-
 
   Future<void> _loadPlannedExercises() async {
     final user = FirebaseAuth.instance.currentUser;
