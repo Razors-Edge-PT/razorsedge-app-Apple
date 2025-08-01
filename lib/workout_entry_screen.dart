@@ -1102,79 +1102,77 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     print('📅 [WES] Selected date: $_selectedDate');
 
 
-    _initialLoad = _fetchActiveBlockThenMeta().then((_) async {
-      try {
-        await _blockDateLoad;
+    _initialLoad = _fetchActiveBlockThenMeta().then((_) {
+      // ✅ Return an async function and immediately invoke it
+      return (() async {
+        try {
+          await _blockDateLoad;
 
-        print('⏳ [WES] fetchActiveBlockThenMeta() completed');
+          print('⏳ [WES] fetchActiveBlockThenMeta() completed');
 
-        if (_activeBlockId == null || _blockStartDate == null || _blockEndDate == null) {
-          print('❌ [WES Init] Missing required block meta. Exiting...');
-          return;
-        }
-
-        await _loadAllBlocks();
-        print('📦 [WES] _loadAllBlocks complete, total blocks: ${_allBlocks.length}');
-
-        _selectedBlockId = _allBlocks.firstWhere(
-              (b) => b.id == _activeBlockId,
-          orElse: () => _allBlocks.first,
-        ).id;
-
-        print("🧱 [WES] Selected blockId: $_selectedBlockId");
-
-        await _loadInitialData();
-        print("📥 [WES] Draft data loaded");
-
-        await _fetchLastWorkoutTopSetReps();
-        print("📈 [WES] Top set reps fetched");
-
-        _debugPrintBlockDates();
-
-        await _initializeDayDocIfNeeded(_selectedDate);
-        print("📄 [WES] Day doc initialized if needed");
-
-        if (widget.initialDate != null) {
-          _selectedDate = widget.initialDate!;
-          _workoutNameController.text = _formatWorkoutDate(_selectedDate);
-        }
-
-        _cachedProgressedValues.clear();
-        _selectedExercisesWithCircuits.clear();
-        _workoutSets.clear();
-        _repsControllers.clear();
-        _weightControllers.clear();
-        _rirControllers.clear();
-        _velocityControllers.clear();
-        _notesControllers.clear();
-        _resolvedBB2Values.clear();
-
-        //101here
-        await _loadDraftLocallyIfAvailable();
-        await _mergeNewBB2ExercisesIntoDraft();
-       // await _loadExercisesFromBB2ForDay();
-        _initializeControllers();
-        _populateVelocityFlags();
-
-        print("🔀 [WES] Merged BB2 into draft");
-
-        _cachedProgressedValues.clear();
-        _isInitialized = true;
-
-        Future.delayed(const Duration(milliseconds: 10), () {
-          if (_selectedExercisesWithCircuits.isNotEmpty) {
-            final testExercise = _selectedExercisesWithCircuits.first['name']?.trim() ?? '';
-            final rep = getRepTargetForExerciseWES(testExercise, 0);
-            print('🧪 [WES Init] Test rep target for "$testExercise" = $rep');
-          } else {
-            print('⚠️ [WES Init] No exercises in _selectedExercisesWithCircuits');
+          if (_activeBlockId == null || _blockStartDate == null || _blockEndDate == null) {
+            print('❌ [WES Init] Missing required block meta. Exiting...');
+            return;
           }
-        });
 
-      } catch (e, stack) {
-        print('💥 [WES Init] Exception caught: $e');
-        print(stack);
-      }
+          await _loadAllBlocks();
+          print('📦 [WES] _loadAllBlocks complete, total blocks: ${_allBlocks.length}');
+
+          _selectedBlockId = _allBlocks.firstWhere(
+                (b) => b.id == _activeBlockId,
+            orElse: () => _allBlocks.first,
+          ).id;
+
+          print("🧱 [WES] Selected blockId: $_selectedBlockId");
+
+          await _loadInitialData();
+          print("📥 [WES] Draft data loaded");
+
+          await _fetchLastWorkoutTopSetReps();
+          print("📈 [WES] Top set reps fetched");
+
+          _debugPrintBlockDates();
+
+          await _initializeDayDocIfNeeded(_selectedDate);
+          print("📄 [WES] Day doc initialized if needed");
+
+          if (widget.initialDate != null) {
+            _selectedDate = widget.initialDate!;
+            _workoutNameController.text = _formatWorkoutDate(_selectedDate);
+          }
+
+          _cachedProgressedValues.clear();
+          _selectedExercisesWithCircuits.clear();
+          _workoutSets.clear();
+          _repsControllers.clear();
+          _weightControllers.clear();
+          _rirControllers.clear();
+          _velocityControllers.clear();
+          _notesControllers.clear();
+          _resolvedBB2Values.clear();
+
+          await _loadDraftLocallyIfAvailable();
+          _populateVelocityFlags();
+          print("🔀 [WES] Merged BB2 into draft");
+
+          _cachedProgressedValues.clear();
+          await _mergeNewBB2ExercisesIntoDraft();
+
+          Future.delayed(const Duration(milliseconds: 10), () {
+            if (_selectedExercisesWithCircuits.isNotEmpty) {
+              final testExercise = _selectedExercisesWithCircuits.first['name']?.trim() ?? '';
+              final rep = getRepTargetForExerciseWES(testExercise, 0);
+              print('🧪 [WES Init] Test rep target for "$testExercise" = $rep');
+            } else {
+              print('⚠️ [WES Init] No exercises in _selectedExercisesWithCircuits');
+            }
+          });
+
+        } catch (e, stack) {
+          print('💥 [WES Init] Exception caught: $e');
+          print(stack);
+        }
+      })(); // ✅ ← This invokes and returns the async block
     });
 
 
@@ -1405,7 +1403,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   }
 
   Future<void> _loadInitialData() async {
+    print('🚀 [WES Init] Starting _loadInitialData');
+
     if (widget.prefilledExercisesWithCircuits?.isNotEmpty ?? false) {
+      print('🧠 [WES Init] Using widget.prefilledExercisesWithCircuits');
+
       setState(() {
         _selectedExercisesWithCircuits.clear();
         _workoutSets.clear();
@@ -1416,7 +1418,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         _blockStartDate = widget.initialDate;
         _blockEndDate = widget.initialDate;
 
-        // ✅ Copy BB2 prefilled exercises
         _selectedExercisesWithCircuits.addAll(
           widget.prefilledExercisesWithCircuits!
               .map((e) => Map<String, dynamic>.from(e)),
@@ -1427,18 +1428,22 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
           _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
           _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-          _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController())); // ✅ NEW
-          _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));   // ✅ NEW
-
+          _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+          _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
         }
 
-        _initializeControllers();
+        print('✅ [WES Init] Pre-filled exercises: ${_selectedExercisesWithCircuits.map((e) => e['name'])}');
+        print('✅ [WES Init] Skipping normal BB2 flow, returning early');
+
         _isLoadingData = false;
       });
+      print('🚫 [WES Init] BB2 hint loading skipped due to prefilledExercisesWithCircuits');
+
       return;
     }
 
-    // 🔁 Normal flow (no prefilled BB2)
+    // 🔁 Normal flow
+    print('🔁 [WES Init] Running full BB2 plan load');
     await loadExercisesFromFirestoreForWES();
     await _buildNameToIdMapsFromFirestore();
     await PeriodizationModelUtils.fetchFullTopSetHistory(
@@ -1449,39 +1454,43 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     await loadPlannedExercisesFromFirestore();
     await loadPreviousWorkoutData();
 
-    //101here
-    // 🧠 Try to load a saved WES draft first
+    // 💾 Draft Load
+    print('💾 [WES Init] Attempting to load draft from cache...');
     final draftLoaded = await _loadWorkoutDraftFromCache();
+    print('📦 [WES Init] Draft loaded: $draftLoaded');
 
     if (draftLoaded) {
-      print('📦 [WES] Loaded workout draft from cache');
-      await Future.delayed(const Duration(milliseconds: 1000));
-
-      // ✅ Merge BB2 exercises that were added after draft creation
+      await Future.delayed(const Duration(milliseconds: 10));
+      print('🔁 [WES Init] Merging BB2 exercises post-draft...');
       await _mergeNewBB2ExercisesIntoDraft();
     } else {
-      print('📭 [WES] No draft found → loading BB2 plan');
+      print('📭 [WES Init] No draft found → merging BB2 from scratch');
+      _selectedExercisesWithCircuits.clear(); // ensure fully fresh
+      print('[WES Init] Exercises before BB2 merge: ${_selectedExercisesWithCircuits.length}');
 
-      // ✅ No draft = pull initial planned exercises from BB2
       await _mergeNewBB2ExercisesIntoDraft();
+      print('[WES Init] Exercises after BB2 merge: ${_selectedExercisesWithCircuits.length}');
+
     }
 
-    // ✅ Final: resolve BB2 values into hint fields
-    for (final ex in _selectedExercisesWithCircuits) {
-      final name = ex['name']?.trim() ?? '';
-      final values = await getBB2SavedValuesFromSharedPrefs(name, _selectedDate);
-      if (values != null) {
-        _resolvedBB2Values[name.toLowerCase()] = values;
-        print('🎯 [WES Hint] Resolved BB2 hints for "$name" on $_selectedDate → $values');
+    print('🧠 [WES Init] Running final merge to reinforce BB2 values...');
+    await _mergeNewBB2ExercisesIntoDraft();
 
-      }
-    }
+    print('🧪 [WES Init] Resolved BB2 values:');
+    _resolvedBB2Values.forEach((name, values) {
+      print('    → $name → $values');
+    });
 
-    
     setState(() {
       _isLoadingData = false;
+      _isInitialized = true;
+      print('🟢 [WES Init] Final setState to force UI rebuild after BB2 exercise injection');
     });
+
+    print('✅ [WES Init] _loadInitialData complete');
+
   }
+
 
 
   double _calculateFallbackSet1Reps(int exerciseIndex) {
@@ -1888,7 +1897,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       );
     }
 
-    _initializeControllers();
+   // _initializeControllers();
   }
 
   void _loadTemplate(Template template) {
@@ -1916,7 +1925,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         ),
       ));
 
-      _initializeControllers();
+    //  _initializeControllers();
     });
   }
 
@@ -3791,13 +3800,17 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           if (snapshot.connectionState != ConnectionState.done) {
             return const Scaffold(
               body: Center(child: CircularProgressIndicator()),
-        );
-      }
+            );
+          }
+          // ✅ Once data is loaded, render full WES UI
+         // final exercises = widget.prefilledExercisesWithCircuits;
+          // ✅ DEBUG: Log what exercises we're rendering
+          print('🖼️ [WES UI] build() triggered — exercises in _selectedExercisesWithCircuits = ${_selectedExercisesWithCircuits.length}');
+          for (var ex in _selectedExercisesWithCircuits) {
+            print('     → ${ex['name']}');
+          }
 
-      // ✅ Once data is loaded, render full WES UI
-      final exercises = widget.prefilledExercisesWithCircuits;
-
-      return Scaffold(
+          return Scaffold(
       backgroundColor: Colors.blueGrey.shade900,
       appBar: AppBar(
         backgroundColor: Colors.blueGrey.shade800,
