@@ -69,12 +69,9 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
   }
 
   Future<void> _loadPlannedExercises() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
     final blockPlannerDoc = await FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(userId)
         .collection('block_planner')
         .doc('current_block')
         .get();
@@ -82,9 +79,11 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
     setState(() {
       plannedExercises = (blockPlannerDoc.data()?['plannedExercises'] as List<dynamic>?)
           ?.map((e) => e.toString())
-          .toList() ?? [];
+          .toList() ??
+          [];
     });
   }
+
 
   Future<String?> _showExercisePickerDialog(BuildContext context) async {
     final user = FirebaseAuth.instance.currentUser;
@@ -228,12 +227,9 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
 
 
   Future<void> _loadTemplateFromFirestore() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
     final docRef = FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(userId)
         .collection('templates')
         .doc(widget.template.id);
 
@@ -247,7 +243,7 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
     final loadedExercises = (data['exercises'] as List<dynamic>?) ?? [];
 
     setState(() {
-      _nameController.text = loadedName; // ✅ Set template name here
+      _nameController.text = loadedName;
       allRows = loadedExercises.map((e) {
         return ExerciseRow(
           name: e['name'] ?? '',
@@ -259,15 +255,13 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
 
 
 
-  Future<void> _saveTemplateToFirestore() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
 
+  Future<void> _saveTemplateToFirestore() async {
     final docRef = FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(userId)
         .collection('templates')
-        .doc(widget.template.id); // Use the existing template ID
+        .doc(widget.template.id);
 
     final exercises = allRows.map((row) => {
       'name': row.name,
@@ -277,7 +271,7 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
     await docRef.set({
       'name': _nameController.text.trim(),
       'exercises': exercises,
-      if (widget.template.day != null) 'day': widget.template.day, // ✅ preserve if present
+      if (widget.template.day != null) 'day': widget.template.day,
     });
 
     ScaffoldMessenger.of(context).showSnackBar(

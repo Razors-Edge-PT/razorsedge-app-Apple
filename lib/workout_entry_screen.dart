@@ -1936,7 +1936,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         ),
       ));
 
-    //  _initializeControllers();
+     _initializeControllers();
     });
   }
 
