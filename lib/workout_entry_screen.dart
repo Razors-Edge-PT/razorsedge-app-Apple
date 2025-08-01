@@ -1156,7 +1156,18 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           print("🔀 [WES] Merged BB2 into draft");
 
           _cachedProgressedValues.clear();
-          await _mergeNewBB2ExercisesIntoDraft();
+
+          final hasUserData = _weightControllers.any((controllerList) =>
+              controllerList.any((c) => c.text.trim().isNotEmpty));
+
+          if (!hasUserData) {
+            print('🔁 [WES Init] No user-entered data in WES → re-merging BB2 values');
+            _lastMergedUid = null;
+            await _mergeNewBB2ExercisesIntoDraft();
+          } else {
+            print('✅ [WES Init] Skipping BB2 re-merge — WES already has user-entered data');
+          }
+
 
           Future.delayed(const Duration(milliseconds: 10), () {
             if (_selectedExercisesWithCircuits.isNotEmpty) {
