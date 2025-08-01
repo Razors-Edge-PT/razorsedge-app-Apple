@@ -24,20 +24,54 @@ import 'package:provider/provider.dart';
 import 'user_context.dart';
 import 'coach_home_screen.dart';
 
+class AppRoot extends StatelessWidget {
+  const AppRoot({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const MaterialApp(home: LoginScreen());
+        }
+
+        final user = snapshot.data!;
+        return FutureBuilder<IdTokenResult>(
+          future: user.getIdTokenResult(),
+          builder: (context, tokenSnap) {
+            if (!tokenSnap.hasData) {
+              return const MaterialApp(home: Scaffold(body: Center(child: CircularProgressIndicator())));
+            }
+
+            final token = tokenSnap.data!;
+            const devCoachUids = {'Mxj2NXankQdVv4Xrj2sZzBBm4W92'};
+            final isCoachClaim = token.claims?['isCoach'] == true;
+            final isCoach = isCoachClaim || devCoachUids.contains(user.uid);
+
+            final userContext = UserContext(actorUid: user.uid, isCoach: isCoach);
+
+            return ChangeNotifierProvider<UserContext>.value(
+              value: userContext,
+              child: const MyApp(), // 🟢 Now provider wraps entire app
+            );
+          },
+        );
+      },
+    );
+  }
+}
 
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  // ✅ Check if Firebase already initialized (avoids hot reload crash)
   if (Firebase.apps.isEmpty) {
     await Firebase.initializeApp();
   }
 
-  runApp(const MyApp());
-
-
+  runApp(const AppRoot());
 }
+
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key});
 
@@ -143,7 +177,8 @@ class MyApp extends StatelessWidget {
         ),
       ),
 
-      home: AuthGate(), // 👈 this new widget decides where to go
+      // ✅ Provider< UserContext > is now already wrapping this via AppRoot
+      home: const HomeScreen(),
       routes: {
         '/login': (context) => const LoginScreen(),
         '/home': (context) => const HomeScreen(),
