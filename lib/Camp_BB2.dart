@@ -677,15 +677,20 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     print('📌 Rep targets for $exerciseId → $repTargets');
 
     if (repTargets == null) return null;
+    print('🧪 [DEBUG] From _exerciseSettings → ${_exerciseSettings[exerciseId]?['periodizationModel']}');
+    print('🧪 [DEBUG] From plannedExerciseDetails → ${plannedExerciseDetails[exerciseId]?['periodizationModel']}');
 
     final modelString = plannedExerciseDetails[exerciseId]?['periodizationModel'];
+
+    final normalizedModel = (modelString ?? '').trim().toLowerCase();
+
     final model = {
-      'DUP, By Exposure': PeriodizationModelType.dailyUndulatingExposure,
-      'DUP, by Week': PeriodizationModelType.dailyUndulatingWeek,
-      'Linear by Exposure': PeriodizationModelType.linearExposure,
-      'Linear by Week': PeriodizationModelType.linearClassic,
-      'DUP Signature': PeriodizationModelType.dupSignature,
-    }[modelString];
+      'dup, by exposure': PeriodizationModelType.dailyUndulatingExposure,
+      'dup, by week': PeriodizationModelType.dailyUndulatingWeek,
+      'linear by exposure': PeriodizationModelType.linearExposure,
+      'linear by week': PeriodizationModelType.linearClassic,
+      'dup signature': PeriodizationModelType.dupSignature,
+    }[normalizedModel];
 
 
 
@@ -695,6 +700,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       print('🔍 ENTERING getRepTargetForExercise → model = $model for $exerciseId');
 
       print('🔎 [BB2] About to enter switch → model = $model for $exerciseId');
+      print('🧠 [BB2] exerciseSettings model for $exerciseId → ${_exerciseSettings[exerciseId]?['periodizationModel']}');
 
       switch (model) {
         case PeriodizationModelType.linearExposure:
@@ -702,7 +708,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           final reps = PeriodizationModelUtils.getLinearExposureRepTarget(
             exerciseId: exerciseId,
             exposureIndex: exposureIndex,
-            repTargetsByExercise: {exerciseId: {'repTargets': repTargets}},
+            repTargetsByExercise: {exerciseId: repTargets},
             plannedExerciseDetails: plannedExerciseDetails,
           );
 
@@ -729,7 +735,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
             exerciseName: exerciseId,
             plannedIndex: indexInWeek, // ✅ resets each week
             weekIndex: week,
-            repTargetsByExercise: {exerciseId: _exerciseSettings[exerciseId]?['repTargets']},
+            repTargetsByExercise: {exerciseId: _exerciseSettings[exerciseId]},
+
             plannedExerciseDetails: plannedExerciseDetails, // Still needed for blockMeta if reused
           );
 

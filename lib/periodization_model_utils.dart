@@ -502,9 +502,7 @@ class PeriodizationModelUtils {
 
 
         case PeriodizationModelType.linearClassic:
-          final repTargetsRaw = repTargetsByExercise?[exerciseName]?['repTargets'] ??
-              plannedExerciseDetails?[exerciseName]?['repTargets'];
-
+          final repTargetsRaw = repTargetsByExercise?[exerciseName] ?? plannedExerciseDetails?[exerciseName]?['repTargets'];
           print('📦 repTargetsRaw for $exerciseName: ${jsonEncode(repTargetsRaw)}');
 
           if (repTargetsRaw == null || repTargetsRaw is! Map<String, dynamic>) {
@@ -575,12 +573,15 @@ class PeriodizationModelUtils {
           return reps;
 
         case PeriodizationModelType.dailyUndulatingWeek: // Now used as DUP by Week
-          final repTargetsRaw = plannedExerciseDetails?[exerciseName]?['repTargets'];
-          final weekKey = 'week${(weekIndex ?? 0) + 1}';
+          final repTargetsRaw = repTargetsByExercise?[exerciseName]?['repTargets']
+              ?? plannedExerciseDetails?[exerciseName]?['repTargets'];
 
-          final weekMap = repTargetsRaw is Map<String, dynamic>
-              ? (repTargetsRaw[weekKey] ?? repTargetsRaw['week1']) as Map<String, dynamic>?
-              : null;
+          final weekKey = 'week1'; // ✅ Always use week1 for DUP by Week
+
+          Map<String, dynamic>? weekMap;
+          if (repTargetsRaw is Map<String, dynamic>) {
+            weekMap = repTargetsRaw[weekKey] as Map<String, dynamic>?;
+          }
 
           if (weekMap == null || weekMap.isEmpty) {
             print('⚠️ [DUP by Week] No usable data in $weekKey for $exerciseName');
