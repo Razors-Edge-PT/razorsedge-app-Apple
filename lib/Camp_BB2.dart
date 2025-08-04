@@ -638,7 +638,11 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     final weekData = rirPlan[weekKey] as Map<String, dynamic>? ?? {};
     final maxSessions = weekData.keys.length;
 
-    final clampedSessionIndex = sessionIndex.clamp(0, maxSessions - 1);
+    final clampedSessionIndex = (maxSessions != null && maxSessions > 0)
+        ? sessionIndex.clamp(0, maxSessions - 1)
+        : 0;
+    print('📌 RIR Plan — sessionIndex: $sessionIndex, maxSessions: $maxSessions, clamped: $clampedSessionIndex');
+
     final sessionKey = 'session${clampedSessionIndex + 1}';
 
     print('🧪 Checking $weekKey → $sessionKey (original index $sessionIndex)');

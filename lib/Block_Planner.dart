@@ -36,8 +36,8 @@ class _BlockPlannerState extends State<Block_Planner> {
   bool _isSavedBlock = false;
   bool _didRunInitOnce = false;
   bool _initialBlockIsActive = false;
-  String get userId => UserContext.of(context, listen: false).currentUid;
 
+  String get userId => UserContext.of(context, listen: false).currentUid;
 
   @override
   void dispose() {
@@ -152,6 +152,18 @@ class _BlockPlannerState extends State<Block_Planner> {
 // 🔁 AUTO-SAVE & SAVE BLOCK FEATURES INTEGRATED
 // Add this inside your _BlockPlannerState class:
 
+  dynamic _sanitizeForFirestore(dynamic value) {
+    if (value is Map) {
+      return value.map((key, val) => MapEntry(key.toString(), _sanitizeForFirestore(val)));
+    } else if (value is List) {
+      return value.map(_sanitizeForFirestore).toList();
+    } else if (value is double && value.isNaN) {
+      return 0; // Firestore can't store NaN
+    }
+    return value;
+  }
+
+
   void _onUpdateSetting(String exerciseId, String key, dynamic value) {
     print("📤 [TOP] Writing to Firestore: $exerciseId → $key = $value");
 
@@ -161,7 +173,9 @@ class _BlockPlannerState extends State<Block_Planner> {
       exerciseSettings[exerciseId]![key] = value;
     });
 
-    // 2) push just that one field up to Firestore
+    // 🔁 2) Safely encode value before writing to Firestore
+    final safeValue = _sanitizeForFirestore(value);
+
     final userId = UserContext.of(context, listen: false).currentUid;
     FirebaseFirestore.instance
         .collection('planned_blocks')
@@ -169,12 +183,12 @@ class _BlockPlannerState extends State<Block_Planner> {
         .collection('blocks')
         .doc(blockIdToUse)
         .update({
-      'exerciseSettings.$exerciseId.$key': value,
-    })
-        .catchError((e) {
+      'exerciseSettings.$exerciseId.$key': safeValue,
+    }).catchError((e) {
       print("❌ Failed to save $key for $exerciseId: $e");
     });
   }
+
 
 
   @override
@@ -2622,8 +2636,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     final frequency = int.tryParse(_weeklyFrequencyController.text) ?? 3;
 
     // Load raw saved value
-    final existing = _cachedRepTargetMap ??
-        widget.exerciseSettings[exerciseName]?['repTargets'];
+    final existing = _cachedRepTargetMap ?? widget.exerciseSettings[widget.exerciseId]?['repTargets'];
+
     print("📍 [DUP Daily - By Week] Raw data: $existing");
 
     // Get fallback defaults
@@ -2727,7 +2741,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   final reps = repsControllers[i].text.trim();
                   final sets = setsControllers[i].text.trim();
                   final combined =
-                      reps.isNotEmpty && sets.isNotEmpty ? "$reps x $sets" : '';
+                  reps.isNotEmpty && sets.isNotEmpty ? "$reps x $sets" : '';
                   instanceMap['instance${i + 1}'] = combined;
                   print('✅ Saving instance${i + 1}: "$combined"');
                 }
@@ -2736,20 +2750,22 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                 print('🧠 Final saved map: ${jsonEncode(result)}');
 
                 setState(() {
-                  widget.onUpdateSetting(exerciseName, 'repTargets', result);
+                  _cachedRepTargetMap = result; // ✅ Cache it locally too
+
+                  widget.onUpdateSetting(widget.exerciseId, 'repTargets', result);
+
 
                   final preview = instanceMap.values
-                          .take(5)
-                          .where((r) => r.isNotEmpty)
-                          .join(' | ') +
+                      .take(5)
+                      .where((r) => r.isNotEmpty)
+                      .join(' | ') +
                       (instanceMap.length > 5 ? ' ...' : '');
                   print('🧠 [DUP Exposure Save] Preview Text → $preview');
                   _repTargetsDisplayController.text = preview;
-
                 });
 
                 Navigator.pop(ctx);
-              },
+              }              ,
               child: const Text("Save", style: TextStyle(color: Colors.white)),
             ),
           ],

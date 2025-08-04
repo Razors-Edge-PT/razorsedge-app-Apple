@@ -13,6 +13,7 @@ import 'coach_home_screen.dart';
 import 'approve_requests_screen.dart';
 import 'Camp_BB2.dart';
 import 'update_exercises.dart';
+import 'core_exercises.dart';
 
 
 
@@ -168,6 +169,53 @@ class _HomeScreenState extends State<HomeScreen> {
       }, SetOptions(merge: true));
     }
   }
+
+
+
+// cleaning function
+  Future<void> cleanAndSyncExercisesInFirestore() async {
+    final FirebaseFirestore firestore = FirebaseFirestore.instance;
+    final CollectionReference exercisesRef = firestore.collection('exercises');
+
+    // 🔍 1. Fetch all current exercises
+    final snapshot = await exercisesRef.get();
+    final existingDocs = snapshot.docs;
+
+    // 🔥 2. Delete any docs that used exercise name as doc ID
+    for (final doc in existingDocs) {
+      final id = doc.id;
+      final data = doc.data() as Map<String, dynamic>?;
+
+      // If the doc ID is the same as the 'name' field, it's likely incorrectly added
+      if (data != null && data['name'] == id) {
+        await doc.reference.delete();
+        print('🗑️ Deleted improperly added exercise: $id');
+      }
+    }
+
+    // 🔁 3. Get fresh list of existing names (after cleanup)
+    final refreshedSnapshot = await exercisesRef.get();
+    final existingNames = refreshedSnapshot.docs
+        .map((doc) => (doc.data() as Map<String, dynamic>?)?['name']?.toLowerCase().trim())
+        .whereType<String>()
+        .toSet();
+
+    // ➕ 4. Add any missing core exercises
+    for (final core in coreExercises) {
+      final name = core['name']?.toLowerCase().trim();
+      if (name != null && !existingNames.contains(name)) {
+        await exercisesRef.add({
+          'name': core['name'],
+          'category': core['category'] ?? '',
+          'bodyPart': core['bodyPart'] ?? '',
+        });
+        print('✅ Added missing exercise: ${core['name']}');
+      }
+    }
+
+    print('🎉 Finished syncing exercises with Firestore.');
+  }
+
 
   Future<void> _loadAthleteEmail() async {
     final uid = Provider.of<UserContext>(context, listen: false).actingAsUid;
