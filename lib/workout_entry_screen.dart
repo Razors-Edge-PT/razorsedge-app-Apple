@@ -140,10 +140,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   //UI bits
   late ScrollController _horizontalScrollController;
 
-
-
-
-
   Future<void> loadPreviousWorkoutData() async {
     await PeriodizationModelUtils.fetchLastWorkoutTopSetReps(
       uid: UserContext.of(context, listen: false).currentUid,
@@ -516,8 +512,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     if (model == PeriodizationModelType.dailyUndulatingExposure) {
       // (Assuming your existing model-specific logic is used here)
-      final week1 = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]
-      ?['repTargets']?['week1'];
+      final fullDetails = PeriodizationModelUtils.plannedExerciseDetails[exerciseId];
+      final week1 = fullDetails?['repTargets']?['week1'];
+
+      print('🔍 [WES] Checking DUP Exposure → exerciseId: $exerciseId, exerciseName: $exerciseName');
+      print('📦 Full plannedExerciseDetails[$exerciseId] = ${jsonEncode(fullDetails)}');
+      print('📦 repTargets = ${jsonEncode(fullDetails?['repTargets'])}');
+      print('📦 week1 = ${jsonEncode(week1)}');
+
       if (week1 is Map<String, dynamic>) {
         final sorted = week1.entries
             .where((e) => e.key.startsWith('instance'))
@@ -1457,11 +1459,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     print('🔁 [WES Init] Running full BB2 plan load');
     await loadExercisesFromFirestoreForWES();
     await _buildNameToIdMapsFromFirestore();
+    await _loadPlannedExerciseDetails();
     await PeriodizationModelUtils.fetchFullTopSetHistory(
       uid: UserContext.of(context, listen: false).currentUid,
     );
     await loadSavedWorkoutsForInstanceCount();
-    await _loadPlannedExerciseDetails();
+
     await loadPlannedExercisesFromFirestore();
     await loadPreviousWorkoutData();
 
@@ -1533,22 +1536,34 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       final week1 = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]
           ?['repTargets']?['week1'];
 
+      print("🔍 [DUP Exposure] Looking up reps for $exerciseName (ID: $exerciseId)");
+      print("📦 week1 = $week1");
+
       if (week1 is Map<String, dynamic>) {
         final sorted = week1.entries
             .where((e) => e.key.startsWith('instance'))
             .toList()
           ..sort((a, b) => a.key.compareTo(b.key));
 
+
+        print("📚 Found ${sorted.length} instances: ${sorted.map((e) => '${e.key}: ${e.value}').join(', ')}");
+        print("🔢 Instance count for this exercise in block: $count");
+
         final frequency = sorted.length;
-        if (frequency == 0) return 10;
+        if (frequency == 0) {
+          print("⚠️ No rep targets found — falling back to 10.");
+          return 10;
+        }
 
 
         final index = count % frequency;
         final raw = sorted[index].value?.toString() ?? '';
         final match = RegExp(r'^(\d+)').firstMatch(raw);
         final parsed = match != null ? int.tryParse(match.group(1)!) ?? 10 : 10;
-
+        print("🎯 Selected raw rep string: '$raw' → Parsed: $parsed");
         return parsed.toDouble();
+      } else {
+        print("⚠️ week1 is not a Map<String, dynamic> → got: ${week1.runtimeType}");
       }
     }
 
@@ -1638,8 +1653,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   }
 
 
-
-
   Future<void> loadExercisesFromFirestoreForWES() async {
     final snapshot =
         await FirebaseFirestore.instance.collection('exercises').get();
@@ -1668,11 +1681,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         .collection('blocks')
         .doc(_selectedBlockId!)
         .get();
+    print('🧾 [RAW] Full Firestore doc snapshot data: ${doc.data()}');
+
 
     if (!doc.exists) {
       print('❌ [WES] No plannedExerciseDetails found in block $_selectedBlockId');
       return {};
     }
+
 
     // ✅ 2. Extract data and handle blockMeta separately
     final data = doc.data()!;
@@ -1680,6 +1696,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     final details = Map<String, dynamic>.from(data['plannedExerciseDetails'] ?? {});
     print('📦 [WES] Firestore plannedExerciseDetails keys: ${details.keys}');
+    print('🧪 [WES] Raw plannedExerciseDetails contents:');
+    details.forEach((exerciseId, entry) {
+      print('  🔍 $exerciseId → $entry');
+    });
 
     // ✅ 3. Do NOT setState() with plannedExercises — skipped by request
 
@@ -1720,6 +1740,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       _progressionModelsByExercise[exerciseId] = progressionModel;
       print('🏗️ [WES] Progression model for $exerciseId: $progressionModel');
     });
+
 
     print('📄 [WES] Full plannedExerciseDetails loaded: ${details.keys}');
     return details;
