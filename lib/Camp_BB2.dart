@@ -148,6 +148,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   final ScrollController _verticalScrollController = ScrollController();
   Map<String, dynamic> repTargetsByExercise = {};
   Map<String, dynamic> plannedExerciseDetails = {};
+  Map<String, Map<String, dynamic>> _exerciseSettings = {};
 
   Map<String, dynamic> _repTargetsByExercise = {};
   Map<String, List<int>> scheduledRepTargets = {}; // 🆕
@@ -672,12 +673,29 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     final details = plannedExerciseDetails[exerciseId];
     if (details == null) return null;
 
-    final repTargets = details['repTargets'];
+    final repTargets = _exerciseSettings[exerciseId]?['repTargets'];
+    print('📌 Rep targets for $exerciseId → $repTargets');
+
     if (repTargets == null) return null;
 
-    final model = PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
-    print('🔍 Model for $exerciseId → $model');
+    final modelString = plannedExerciseDetails[exerciseId]?['periodizationModel'];
+    final model = {
+      'DUP, By Exposure': PeriodizationModelType.dailyUndulatingExposure,
+      'DUP, by Week': PeriodizationModelType.dailyUndulatingWeek,
+      'Linear by Exposure': PeriodizationModelType.linearExposure,
+      'Linear by Week': PeriodizationModelType.linearClassic,
+      'DUP Signature': PeriodizationModelType.dupSignature,
+    }[modelString];
+
+
+
+    print('🔍 [BB2] Model from exerciseSettings for $exerciseId → $model');
+
     try {
+      print('🔍 ENTERING getRepTargetForExercise → model = $model for $exerciseId');
+
+      print('🔎 [BB2] About to enter switch → model = $model for $exerciseId');
+
       switch (model) {
         case PeriodizationModelType.linearExposure:
           final exposureIndex = getExercisePlannedCountBefore(exerciseName, week, day, row);
@@ -706,14 +724,18 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
         case PeriodizationModelType.dailyUndulatingWeek:
           final indexInWeek = getExerciseCountInWeek(exerciseName, week, day, row);
+
           final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
             exerciseName: exerciseId,
             plannedIndex: indexInWeek, // ✅ resets each week
             weekIndex: week,
-            plannedExerciseDetails: plannedExerciseDetails,
+            repTargetsByExercise: {exerciseId: _exerciseSettings[exerciseId]?['repTargets']},
+            plannedExerciseDetails: plannedExerciseDetails, // Still needed for blockMeta if reused
           );
+
           print('🔁 DUP by Week rep: $rep for $exerciseId (week $week, index $indexInWeek)');
           return rep.toString();
+
 
         case PeriodizationModelType.dupSignature:
           final globalIndex = getExercisePlannedCountBefore(exerciseName, week, day, row);
@@ -728,14 +750,22 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           return rep.toString();
 
         case PeriodizationModelType.dailyUndulatingExposure:
+          print('🔍 Entering getRepTargetForExercise → model = $model for $exerciseId');
+
           final globalIndex = getExercisePlannedCountBefore(exerciseName, week, day, row);
+          final repTargetsRaw = _exerciseSettings[exerciseId]?['repTargets'];
+          print('🧪 repTargets runtimeType for $exerciseId = ${repTargetsRaw.runtimeType}');
+          print('🧪 repTargets keys for $exerciseId = ${repTargetsRaw?.keys}');
           final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
             exerciseName: exerciseId,
             plannedIndex: globalIndex,
             weekIndex: week,
-            repTargetsByExercise: {exerciseId: {'repTargets': repTargets}},
+            repTargetsByExercise: {exerciseId: repTargets},
+
             plannedExerciseDetails: plannedExerciseDetails,
           );
+          print('📦 [DEBUG] Passing repTargetsByExercise: ${jsonEncode({exerciseId: repTargets})}');
+
           print('🔁 Model-based rep: $rep for $exerciseId using $model (index $globalIndex)');
           return rep.toString();
 
@@ -1351,6 +1381,24 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       return;
     }
     print('🔍 [loadBlockData] Using UID = $uid for week_$weekIndex');
+
+    final parentBlockDoc = await FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(uid)
+        .collection('blocks')
+        .doc(_selectedBlockId)
+        .get();
+
+    final blockData = parentBlockDoc.data();
+    final settings = blockData?['exerciseSettings'];
+    if (settings != null) {
+      _exerciseSettings = Map<String, Map<String, dynamic>>.from(
+        (settings as Map).map((key, value) =>
+            MapEntry(key.toString(), Map<String, dynamic>.from(value as Map))),
+      );
+      print('📦 [BB2] Loaded exerciseSettings for ${_exerciseSettings.length} exercises');
+    }
+
 
     final daySnapshots = await weekDocRef.collection('days').get();
     print('📆 Week $weekIndex → ${daySnapshots.docs.length} day docs');

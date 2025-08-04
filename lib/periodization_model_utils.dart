@@ -434,11 +434,18 @@ class PeriodizationModelUtils {
     try {
       switch (model) {
         case PeriodizationModelType.dailyUndulatingExposure:
-          final repTargetsRaw = plannedExerciseDetails?[exerciseName]?['repTargets'];
+          Map<String, dynamic>? exerciseEntry;
+          if (repTargetsByExercise != null) {
+            final entry = repTargetsByExercise[exerciseName];
+            if (entry is Map<String, dynamic>) {
+              exerciseEntry = entry;
+            }
+          }
+
+          final repTargetsRaw = exerciseEntry; // 🔧 FIXED: no ['repTargets']
           final weekMap = repTargetsRaw is Map<String, dynamic>
               ? repTargetsRaw['week1'] as Map<String, dynamic>?
               : null;
-
           if (weekMap == null || weekMap.isEmpty) {
             print('⚠️ [DUP By Week] No usable data in week1 for $exerciseName');
             return 10;
@@ -453,7 +460,7 @@ class PeriodizationModelUtils {
           final int frequency = sortedInstances.length;
 
           if (frequency == 0) {
-            print('⚠️ [DUP By Week] No instances found for $exerciseName');
+            print('⚠️ [DUP By exposure] No instances found for $exerciseName');
             return 10;
           }
 
@@ -462,12 +469,13 @@ class PeriodizationModelUtils {
           final instanceEntry = sortedInstances[instanceIndex];
           final raw = instanceEntry.value?.toString() ?? '';
 
-          print('📦 [DUP By Week] Using instance${instanceIndex + 1} = $raw');
+          print('📦 [DUP By exposure] Using instance${instanceIndex + 1} = $raw');
 
           final match = RegExp(r'^(\d+)').firstMatch(raw);
           final parsed = match != null ? int.tryParse(match.group(1)!) ?? 10 : 10;
 
-          print('📈 [DUP By Week] Parsed → $parsed reps (cycled instance ${instanceIndex + 1})');
+          print('📈 [DUP By exposure] Parsed → $parsed reps (cycled instance ${instanceIndex + 1})');
+
           return parsed;
 
 
