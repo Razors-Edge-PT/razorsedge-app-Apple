@@ -2418,8 +2418,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     final defaultEnd = List.generate(frequency, (i) => '1 x 3');
 
     // Load any saved data
-    final raw = _cachedRepTargetMap ??
-        widget.exerciseSettings[exerciseName]?['repTargets'];
+    final raw = _cachedRepTargetMap ?? widget.exerciseSettings[widget.exerciseId]?['repTargets'];
+
     final saved =
         raw is Map<String, dynamic> ? Map<String, dynamic>.from(raw) : {};
 
@@ -2614,7 +2614,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                 }
 
                 setState(() {
-                  widget.onUpdateSetting(exerciseName, 'repTargets', result);
+                  widget.onUpdateSetting(widget.exerciseId, 'repTargets', result);
                   _repTargetsDisplayController.text =
                       result['week1']!.values.join(' | ');
                 });
@@ -2779,7 +2779,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     int max = 10;
 
     final existing = _cachedRepTargetMap ??
-        widget.exerciseSettings[exerciseName]?['repTargets'];
+        widget.exerciseSettings[widget.exerciseId]?['repTargets'];
     print("🧪 [DUP Signature] Raw repTargets: $existing");
 
     if (existing is Map<String, dynamic> && existing.containsKey('repRange')) {
@@ -2896,12 +2896,13 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                     setState(() {
                       widget.onUpdateSetting(
-                          exerciseName, 'repTargets', firestoreResult);
+                          widget.exerciseId, 'repTargets', firestoreResult);
                       widget.onUpdateSetting(
-                          exerciseName, 'periodizationModel', 'DUP, Signature');
+                          widget.exerciseId, 'periodizationModel', 'DUP, Signature');
                       _repTargetsDisplayController.text =
                       "$tempMin – $tempMax reps";
                     });
+
 
                     Navigator.pop(ctx);
                   },
@@ -2938,7 +2939,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     final exposureCount = (totalWeeks * weeklyFreq).clamp(1, 36);
 
     final existing = _cachedRepTargetMap ??
-        widget.exerciseSettings[exerciseName]?['repTargets'];
+        widget.exerciseSettings[widget.exerciseId]?['repTargets'];
 
     print("📍 [LE] Raw data: $existing");
     print('🧪 [LinearExposure] Raw existing: ${jsonEncode(existing)}');
@@ -3067,11 +3068,12 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                 // ✅ Save to state and update display controller
                 setState(() {
-                  widget.onUpdateSetting(exerciseName, 'repTargets', result);
+                  widget.onUpdateSetting(widget.exerciseId, 'repTargets', result);
                   _repTargetsDisplayController.text =
                       updated.take(5).join(' | ') +
                           (updated.length > 5 ? ' ...' : '');
                 });
+
 
                 Navigator.pop(ctx);
               },
@@ -3089,7 +3091,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
     // Load saved or default data
     final raw = _cachedRepTargetMap ??
-        widget.exerciseSettings[exerciseName]?['repTargets'];
+        widget.exerciseSettings[widget.exerciseId]?['repTargets'];
     final savedMap = raw is Map<String, dynamic>
         ? Map<String, dynamic>.from(raw['week1'] ?? {})
         : {};
@@ -3191,7 +3193,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                 final result = {'week1': instanceMap};
 
                 setState(() {
-                  widget.onUpdateSetting(exerciseName, 'repTargets', result);
+                  widget.onUpdateSetting(widget.exerciseId, 'repTargets', result);
                   _repTargetsDisplayController.text =
                       instanceMap.values.where((v) => v.isNotEmpty).join(' | ');
                 });
@@ -3221,7 +3223,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     final model = settings?['periodizationModel'];
     final weeklyFrequency = settings?['weeklyFrequency'];
 
-    final details = widget.exerciseSettings[exerciseName] ?? {}; // ✅ consistent with wave
+    final details = widget.exerciseSettings[widget.exerciseId] ?? {};
 
     final blockLengthWeeks = widget.blockStartDate != null && widget.blockEndDate != null
         ? PeriodizationModelUtils.getBlockLength(
@@ -3394,7 +3396,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                       ElevatedButton(
                         onPressed: () {
                           widget.onUpdateSetting(
-                            exerciseName,
+                            widget.exerciseId,
                             'rirPlan',
                             _cachedRirPlan ?? {},
                           );
@@ -3445,7 +3447,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     print("🧪 [RIR Tap] Settings for $exerciseName: $settings");
     print("📆 [RIR Tap] Weekly Frequency from settings = $weeklyFrequency hello");
     print("🧪 [RIR Tap] $exerciseName → Selected model: $model");
-    final details = widget.exerciseSettings[exerciseName] ?? {}; // ✅ consistent with wave
+    final details = widget.exerciseSettings[widget.exerciseId] ?? {};
 
     print("🆔 Checking keys → ID: $exerciseId | Name: $exerciseName");
     print("📦 Settings keys: ${widget.exerciseSettings.keys}");
@@ -3465,10 +3467,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     final match = RegExp(r'x\s*(\d+)').firstMatch(repString);
     final setsPerSession = int.tryParse(match?.group(1) ?? '3') ?? 3;
 
-
     final wave = [3.0, 2.0, 1.0];
-
-
 
     showDialog(
       context: context,
@@ -3643,10 +3642,11 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                           // ✅ Save to Firestore
                           widget.onUpdateSetting(
-                            exerciseName,
+                            widget.exerciseId,
                             'rirPlan',
                             _cachedRirPlan ?? {},
                           );
+
                           final weekData = _cachedRirPlan?['week1'] as Map<String, dynamic>?;
 
                           if (weekData != null) {
@@ -3691,7 +3691,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
     final settings = widget.exerciseSettings[exerciseId];
     final weeklyFrequency = settings?['weeklyFrequency'];
-    final details = widget.exerciseSettings[exerciseName] ?? {};
+    final details = widget.exerciseSettings[widget.exerciseId] ?? {};
 
     final blockLengthWeeks = widget.blockStartDate != null && widget.blockEndDate != null
         ? PeriodizationModelUtils.getBlockLength(
@@ -3901,10 +3901,11 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                           }
 
                           widget.onUpdateSetting(
-                            exerciseName,
+                            widget.exerciseId,
                             'rirPlan',
                             _cachedRirPlan ?? {},
                           );
+
 
                           final weekData = _cachedRirPlan?['week1'] as Map<String, dynamic>?;
                           if (weekData != null) {
@@ -3992,7 +3993,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     final exerciseId = PeriodizationModelUtils.nameToId[exerciseName];
     final settings = widget.exerciseSettings[exerciseId];
     final weeklyFrequency = settings?['weeklyFrequency'] ?? 3;
-    final details = widget.exerciseSettings[exerciseName] ?? {};
+    final details = widget.exerciseSettings[widget.exerciseId] ?? {};
 
     final blockLengthWeeks = widget.blockStartDate != null && widget.blockEndDate != null
         ? PeriodizationModelUtils.getBlockLength(
@@ -4148,7 +4149,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                             };
                           }
 
-                          widget.onUpdateSetting(exerciseName, 'rirPlan', _cachedRirPlan ?? {});
+                          widget.onUpdateSetting(widget.exerciseId, 'rirPlan', _cachedRirPlan ?? {});
 
                           final weekData = _cachedRirPlan?['week1'] as Map<String, dynamic>?;
                           if (weekData != null) {
