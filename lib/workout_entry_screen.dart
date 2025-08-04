@@ -88,6 +88,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   late DateTime _selectedDate;
   final List<Map<String, dynamic>> _selectedExercisesWithCircuits = [];
   List<String> plannedExercises = [];
+  Map<String, Map<String, dynamic>> _exerciseSettings = {};
   Map<String, String> nameToIdMap = {}; // 🧠 Exercise name ➔ ID
   final List<List<SetDetails>> _workoutSets = [];
   final List<List<TextEditingController>> _repsControllers = [];
@@ -478,12 +479,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     print('🗓️ [DEBUG] _blockEndDate: $blockEndDate');
   }
 
-  Future<void> debugPrintRepTargetsFromFirestore(
+  Future<void> debugPrintRepTargetsFromExerciseSettings(
       BuildContext context,
       String blockId,
       String exerciseId,
       ) async {
-    final uid = UserContext.of(context).currentUid;
+    final uid = UserContext.of(context, listen: false).currentUid;
+
     if (uid == null) {
       print('🚫 [DEBUG] No user selected in UserContext.');
       return;
@@ -496,24 +498,29 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         .doc(blockId);
 
     final docSnap = await docRef.get();
+    if (!docSnap.exists) {
+      print('🚫 [DEBUG] Block document not found for $blockId');
+      return;
+    }
+
     final data = docSnap.data();
-    if (data == null) {
-      print('🚫 [DEBUG] No document data at path.');
+    if (data == null || !data.containsKey('exerciseSettings')) {
+      print('🚫 [DEBUG] No exerciseSettings field in block document.');
       return;
     }
 
-    final exerciseData = data['plannedExerciseDetails']?[exerciseId];
-    if (exerciseData == null) {
-      print('🚫 [DEBUG] No exercise data found for $exerciseId in plannedExerciseDetails.');
+    final settings = data['exerciseSettings'][exerciseId];
+    if (settings == null) {
+      print('🚫 [DEBUG] No exerciseSettings found for $exerciseId');
       return;
     }
 
-    final repTargets = exerciseData['repTargets'];
-    print('🔍 [DEBUG] repTargets for $exerciseId = ${jsonEncode(repTargets)}');
+    final repTargets = settings['repTargets'];
+    print('🔍 [DEBUG] repTargets from exerciseSettings for $exerciseId:\n${jsonEncode(repTargets)}');
 
     final week1 = repTargets?['week1'];
     if (week1 is! Map<String, dynamic>) {
-      print('❌ [DEBUG] No repTargets → week1 for $exerciseId');
+      print('❌ [DEBUG] week1 not found in repTargets for $exerciseId');
       return;
     }
 
@@ -527,13 +534,17 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
   }
 
-  Map<String, dynamic> _getProgressedValues(int exerciseIndex) {
-    debugPrintRepTargetsFromFirestore(
-      context,
-      'RSIxR5dTovAkvm2o11qn',
-      'iPaRtXsLXcXHQg5vmVA0',
-    );
 
+  Map<String, dynamic> _getProgressedValues(int exerciseIndex) {
+
+    Future.microtask(() async {
+      print('🐛 [WES] Triggering debugPrintRepTargetsFromExerciseSettings...');
+      await debugPrintRepTargetsFromExerciseSettings(
+        context,
+        'RSIxR5dTovAkvm2o11qn',
+        'iPaRtXsLXcXHQg5vmVA0',
+      );
+    });
 
 
     // 🧠 STEP 1: If we already cached a GOOD value, return it
@@ -567,11 +578,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     if (model == PeriodizationModelType.dailyUndulatingExposure) {
       // (Assuming your existing model-specific logic is used here)
-      final fullDetails = PeriodizationModelUtils.plannedExerciseDetails[exerciseId];
+      final fullDetails = _exerciseSettings[exerciseId];
       final week1 = fullDetails?['repTargets']?['week1'];
 
+
       print('🔍 [WES] Checking DUP Exposure → exerciseId: $exerciseId, exerciseName: $exerciseName');
-      print('📦 Full plannedExerciseDetails[$exerciseId] = ${jsonEncode(fullDetails)}');
+      print('📦 Full exerciseSettings[$exerciseId] = ${jsonEncode(fullDetails)}');
       print('📦 repTargets = ${jsonEncode(fullDetails?['repTargets'])}');
       print('📦 week1 = ${jsonEncode(week1)}');
 
@@ -614,8 +626,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       }
     } else if (model == PeriodizationModelType.dailyUndulatingWeek) {
       final weekKey = 'week${(weekIndex ?? 0) + 1}';
-      final weekMap = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]
-      ?['repTargets']?[weekKey];
+      final weekMap = _exerciseSettings[exerciseId]?['repTargets']?[weekKey];
 
       if (weekMap is Map<String, dynamic>) {
         final sorted = weekMap.entries
@@ -658,8 +669,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     } else if (model == PeriodizationModelType.linearClassic) {
 
-      final repTargets = PeriodizationModelUtils
-          .plannedExerciseDetails[exerciseId]?['repTargets'];
+      final repTargets = _exerciseSettings[exerciseId]?['repTargets'];
+
       print('🧠 [WES] LinearClassic → exerciseId = $exerciseId');
       print('📌 repTargets = $repTargets');
       print('📆 weekIndex = $weekIndex');
@@ -713,8 +724,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
 
     // Get the progression model info.
-    final String? progressionModelName = PeriodizationModelUtils
-        .plannedExerciseDetails[exerciseId]?['progressionModel'];
+    final String? progressionModelName = _exerciseSettings[exerciseId]?['progressionModel'];
+    print('🔧 [WES] progressionModelName for $exerciseId = $progressionModelName');
+    print('📦 [WES] Full _exerciseSettings for $exerciseId: ${jsonEncode(_exerciseSettings[exerciseId])}');
+
     final progressionModel =
     PeriodizationModelUtils.parseProgressionModel(progressionModelName);
     final double rir = getRirFromPlanOrInput(exerciseIndex, 1);
@@ -739,8 +752,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       defaultWeight: defaultWeight,
       rirValue: rir,
       increments: increments ?? [2.5], // ✅ fallback
-      maxWeightByReps: PeriodizationModelUtils
-          .plannedExerciseDetails[exerciseId]?['maxWeightByReps'],
+      maxWeightByReps: _exerciseSettings[exerciseId]?['maxWeightByReps'],
+
       topSetHistory: PeriodizationModelUtils.topSetsByExercise[exerciseName],
       weekIndex: weekIndex ?? 0,
     );
@@ -1633,8 +1646,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         weekIndex: weekIndex ?? 0,
       );
 
-      final repTargets = PeriodizationModelUtils
-          .plannedExerciseDetails[exerciseId]?['repTargets'];
+      final repTargets = _exerciseSettings[exerciseId]?['repTargets'];
+
       final weekKey = 'week${(weekIndex ?? 0) + 1}';
       final weekMap = repTargets?[weekKey];
 
@@ -1658,8 +1671,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     // linearClassic
     if (model == PeriodizationModelType.linearClassic) {
-      final repTargets = PeriodizationModelUtils
-          .plannedExerciseDetails[exerciseId]?['repTargets'];
+      final repTargets = _exerciseSettings[exerciseId]?['repTargets'];
+
       final weekStart = repTargets?['week1'];
 
       if (weekStart is Map<String, dynamic>) {
@@ -1757,6 +1770,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     details.forEach((exerciseId, entry) {
       print('  🔍 $exerciseId → $entry');
     });
+    _exerciseSettings = Map<String, Map<String, dynamic>>.from(
+      (data['exerciseSettings'] ?? {}).map(
+            (k, v) => MapEntry(k.toString(), Map<String, dynamic>.from(v)),
+      ),
+    );
+    print('📦 [WES] Firestore exerciseSettings keys: ${_exerciseSettings.keys}');
+
 
     // ✅ 3. Do NOT setState() with plannedExercises — skipped by request
 
