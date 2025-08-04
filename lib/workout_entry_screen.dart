@@ -478,8 +478,63 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     print('🗓️ [DEBUG] _blockEndDate: $blockEndDate');
   }
 
+  Future<void> debugPrintRepTargetsFromFirestore(
+      BuildContext context,
+      String blockId,
+      String exerciseId,
+      ) async {
+    final uid = UserContext.of(context).currentUid;
+    if (uid == null) {
+      print('🚫 [DEBUG] No user selected in UserContext.');
+      return;
+    }
+
+    final docRef = FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(uid)
+        .collection('blocks')
+        .doc(blockId);
+
+    final docSnap = await docRef.get();
+    final data = docSnap.data();
+    if (data == null) {
+      print('🚫 [DEBUG] No document data at path.');
+      return;
+    }
+
+    final exerciseData = data['plannedExerciseDetails']?[exerciseId];
+    if (exerciseData == null) {
+      print('🚫 [DEBUG] No exercise data found for $exerciseId in plannedExerciseDetails.');
+      return;
+    }
+
+    final repTargets = exerciseData['repTargets'];
+    print('🔍 [DEBUG] repTargets for $exerciseId = ${jsonEncode(repTargets)}');
+
+    final week1 = repTargets?['week1'];
+    if (week1 is! Map<String, dynamic>) {
+      print('❌ [DEBUG] No repTargets → week1 for $exerciseId');
+      return;
+    }
+
+    final sorted = week1.entries
+        .where((e) => e.key.startsWith('instance'))
+        .toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+
+    for (final e in sorted) {
+      print('✅ [DEBUG] $exerciseId → ${e.key}: ${e.value}');
+    }
+  }
 
   Map<String, dynamic> _getProgressedValues(int exerciseIndex) {
+    debugPrintRepTargetsFromFirestore(
+      context,
+      'RSIxR5dTovAkvm2o11qn',
+      'iPaRtXsLXcXHQg5vmVA0',
+    );
+
+
 
     // 🧠 STEP 1: If we already cached a GOOD value, return it
     final cached = _cachedProgressedValues[exerciseIndex];
@@ -1079,6 +1134,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+
+
     print('🚀 [WES] initState started');
     _debugUid('WES.initState');
     _cachedUid = UserContext.of(context, listen: false).currentUid;
@@ -1770,6 +1827,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         '📦 [WES] [Firestore Function] Full raw Firestore data: ${jsonEncode(data)}');
     print(
         '📦 [WES] Extracted plannedExerciseDetails: ${jsonEncode(rawDetails)}');
+
+
 
     // ✅ Inject into PMU
     PeriodizationModelUtils.setExerciseSettings(rawDetails);
