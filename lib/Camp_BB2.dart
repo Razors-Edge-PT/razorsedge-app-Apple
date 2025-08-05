@@ -951,16 +951,20 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     print('📦 [BB2] Using baseWeight = $baseWeight, baseReps = $baseReps, baseRIR = $baseRir');
     print('📦 [BB2] Final E1RM = ${e1rm?.toStringAsFixed(2)}');
 
-    final Map<String, dynamic> progressed = {
-      'weight': baseWeight,
-      'reps': baseReps,
-      'e1rm': e1rm,
-    };
+    final topSetHistory = PeriodizationModelUtils.topSetsByExercise[exerciseName];
+    print('🧪 [BB2] Top set history used for base E1RM: $topSetHistory');
 
-    print('✅ [BB2] Progressed weight: ${progressed['weight']}');
-    print('✅ [BB2] Progressed reps: ${progressed['reps']}');
-    print('✅ [BB2] Progressed E1RM: ${progressed['e1rm']}');
-
+    final progressed = PeriodizationModelUtils.getWeightByProgressionModel(
+      model: progressionModel,
+      exerciseName: exerciseName,
+      repTarget: baseReps,
+      defaultWeight: baseWeight,
+      rirValue: baseRir,
+      increments: PeriodizationModelUtils.getIncrementsForExercise(exerciseId ?? ''),
+      maxWeightByReps: plannedExerciseDetails[exerciseId]?['maxWeightByReps'],
+      topSetHistory: topSetHistory, // ✅ now injected
+      weekIndex: weekIndex,
+    );
 
     final double? weight = progressed['weight'];
     final int? reps = progressed['reps'];
@@ -976,7 +980,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
     print('📦 [BB2] Caching progression E1RM for $exerciseName → $e1rm');
 
-    progressed['e1rm'] = e1rm;
     _cachedProgressedValues[cacheKey] = progressed;
 
 
@@ -2354,8 +2357,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
             ? rirController.text
             : rirSetValues?['set1']?['rir']?.toString() ?? '1';
 
-
-
 // ✅ Then use it here
         final double rirValue = rirController.text.isNotEmpty
             ? double.tryParse(rirController.text) ?? 1
@@ -2385,11 +2386,16 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         final bool userTypedRir = rirController.text.isNotEmpty;
         final bool userTypedWeight = weightController.text.isNotEmpty;
 
+        print('🧪 [BB2] Top set history used for base E1RM: ${topSetsByExercise[exerciseName]}');
 // 🚀 Progression logic (only triggers if model is explicitly selected)
         final Map<String, dynamic> progressed = _getCachedProgressedValues(
           exerciseName: exerciseName,
           exerciseId: exerciseId,
-          weekIndex: weekIndex,
+          weekIndex: PeriodizationModelUtils.getWeekIndexForDate(
+            _displayStart.add(Duration(days: weekIndex * 7 + dayIndex)),
+            blockStartDate,
+          ),
+
           dayIndex: dayIndex,
           rowIndex: rowIndex,
           repTarget: repsValue.toInt(),

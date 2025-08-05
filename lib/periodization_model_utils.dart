@@ -2087,6 +2087,7 @@ class PeriodizationModelUtils {
     final daysSinceStart = date.difference(blockStartDate).inDays;
     final weekIndex = (daysSinceStart / 7).floor();
     return weekIndex.clamp(0, 11); // assuming max 12 weeks
+
   }
 
   // WES and bb2 function

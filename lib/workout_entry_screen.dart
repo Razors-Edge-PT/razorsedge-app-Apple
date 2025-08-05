@@ -484,12 +484,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       String blockId,
       String exerciseId,
       ) async {
-    final uid = UserContext.of(context, listen: false).currentUid;
+    final uid = UserContext.of(context, listen: false).actingAsUid;
 
-    if (uid == null) {
-      print('🚫 [DEBUG] No user selected in UserContext.');
-      return;
-    }
 
     final docRef = FirebaseFirestore.instance
         .collection('planned_blocks')
@@ -506,6 +502,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final data = docSnap.data();
     if (data == null || !data.containsKey('exerciseSettings')) {
       print('🚫 [DEBUG] No exerciseSettings field in block document.');
+      print('🧾 [DEBUG] Full block doc:\n${jsonEncode(data)}');
+
       return;
     }
 
@@ -539,12 +537,33 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     Future.microtask(() async {
       print('🐛 [WES] Triggering debugPrintRepTargetsFromExerciseSettings...');
-      await debugPrintRepTargetsFromExerciseSettings(
-        context,
-        'RSIxR5dTovAkvm2o11qn',
-        'iPaRtXsLXcXHQg5vmVA0',
-      );
+
+      final blockId = _selectedBlockId;
+      final exerciseName = _selectedExercisesWithCircuits.isNotEmpty
+          ? _selectedExercisesWithCircuits.first['name']?.trim()
+          : null;
+
+      final exerciseId = exerciseName != null
+          ? PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName
+          : null;
+
+      print('🛠 DEBUG: About to call debugPrintRepTargetsFromExerciseSettings with:');
+      print('🔑 Block ID: $blockId');
+      print('🏋️ Exercise Name: $exerciseName');
+      print('💪 Exercise ID: $exerciseId');
+
+      if (blockId != null && exerciseId != null) {
+        await debugPrintRepTargetsFromExerciseSettings(
+          context,
+          blockId,
+          exerciseId,
+        );
+      } else {
+        print('🚫 [DEBUG] Could not resolve blockId or exerciseId from WES state.');
+      }
     });
+
+
 
 
     // 🧠 STEP 1: If we already cached a GOOD value, return it
@@ -561,6 +580,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
 
     final weekIndex = _getApplicableWeekIndex(exerciseId);
+    print('📅 [WES] selectedDate = $_selectedDate');
+    print('📅 [WES] blockStartDate = $blockStartDate');
+    print('🧮 [WES] Computed weekIndex = ${blockStartDate != null ? PeriodizationModelUtils.getWeekIndexForDate(_selectedDate, blockStartDate!) : '⚠️ blockStartDate is null!'}');
+
+
 
     // Determine how many times this exercise appeared before.
     int plannedCountBefore = 0;
@@ -755,7 +779,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       maxWeightByReps: _exerciseSettings[exerciseId]?['maxWeightByReps'],
 
       topSetHistory: PeriodizationModelUtils.topSetsByExercise[exerciseName],
-      weekIndex: weekIndex ?? 0,
+      weekIndex: PeriodizationModelUtils.getWeekIndexForDate(_selectedDate, blockStartDate!),
+
     );
 
 
