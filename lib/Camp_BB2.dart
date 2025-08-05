@@ -689,7 +689,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       'dup, by exposure': PeriodizationModelType.dailyUndulatingExposure,
       'dup, by week': PeriodizationModelType.dailyUndulatingWeek,
       'linear by exposure': PeriodizationModelType.linearExposure,
-      'linear by week': PeriodizationModelType.linearClassic,
+      'linear, classic': PeriodizationModelType.linearClassic, // ✅ Add this line
       'dup, signature': PeriodizationModelType.dupSignature,
     }[normalizedModel];
 
@@ -725,7 +725,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
             exerciseName: exerciseId,
             plannedIndex: plannedIndex,
             weekIndex: week,
-            repTargetsByExercise: repTargetsByExercise,
+            repTargetsByExercise: {exerciseId: repTargets},
             plannedExerciseDetails: plannedExerciseDetails,
             blockStartDate: blockStartDate,
             blockEndDate: blockEndDate,

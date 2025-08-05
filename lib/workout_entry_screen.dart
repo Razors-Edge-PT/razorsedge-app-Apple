@@ -369,6 +369,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   }
 
   String? getRepTargetForExerciseWES(String exerciseName, int rowIndex) {
+    print('🚨 [WES] ENTERED getRepTargetForExerciseWES → $exerciseName, row $rowIndex');
+    print('🗓️ [WES] _blockStartDate = $_blockStartDate');
+    print('📅 [WES] _selectedDate = $_selectedDate');
+
     if (_blockStartDate == null || _selectedDate == null) {
       print('❌ [WES] Block start or selected date is null');
       return null;
@@ -403,6 +407,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           break;
 
         case PeriodizationModelType.linearClassic:
+          rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
+            exerciseName: exerciseId,
+            plannedIndex: rowIndex,
+            weekIndex: weekIndex,
+            repTargetsByExercise: {exerciseId: {'repTargets': repTargets}},
+            plannedExerciseDetails: PeriodizationModelUtils.plannedExerciseDetails,
+            blockStartDate: _blockStartDate,
+            blockEndDate: _blockEndDate,
+          );
+          break;
         case PeriodizationModelType.dailyUndulatingWeek:
           rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
             exerciseName: exerciseId,
@@ -700,7 +714,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       print('📆 weekIndex = $weekIndex');
 
       final weekStart = repTargets?['week1'];
-      final week = weekIndex ?? 0;
+      final week = PeriodizationModelUtils.getWeekIndexForDate(
+        _selectedDate,
+        blockStartDate!,
+      );
+
       final blockLength = PeriodizationModelUtils.getBlockLength(
         blockStartDate: blockStartDate!,
         blockEndDate: blockEndDate!,

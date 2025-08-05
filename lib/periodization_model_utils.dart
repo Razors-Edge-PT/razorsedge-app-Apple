@@ -420,11 +420,16 @@ class PeriodizationModelUtils {
     String? weightText,
     String? rirText,
     int? weekIndex,
+    DateTime? selectedDate,          // ⬅️ ADD THIS
+    DateTime? blockStartDate,
+    DateTime? blockEndDate,
     Map<String, dynamic>? repTargetsByExercise,
     Map<String, dynamic>? plannedExerciseDetails,
-    DateTime? blockStartDate,   // ✅ NEW
-    DateTime? blockEndDate,     // ✅ NEW
   }) {
+
+
+
+    print('🧪 [PMU] getSuggestedRepTargetByModel → weekIndex = $weekIndex');
 
     print('🧠 Model detected: ${exercisePeriodizationModels[exerciseName]}');
 
@@ -502,7 +507,9 @@ class PeriodizationModelUtils {
 
 
         case PeriodizationModelType.linearClassic:
-          final repTargetsRaw = repTargetsByExercise?[exerciseName] ?? plannedExerciseDetails?[exerciseName]?['repTargets'];
+          final repTargetsRaw = repTargetsByExercise?[exerciseName]?['repTargets']
+              ?? plannedExerciseDetails?[exerciseName]?['repTargets'];
+
           print('📦 repTargetsRaw for $exerciseName: ${jsonEncode(repTargetsRaw)}');
 
           if (repTargetsRaw == null || repTargetsRaw is! Map<String, dynamic>) {
