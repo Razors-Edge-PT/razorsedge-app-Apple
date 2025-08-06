@@ -549,7 +549,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
   Map<String, dynamic> _getProgressedValues(int exerciseIndex) {
 
-    Future.microtask(() async {
+    /*Future.microtask(() async {
       print('🐛 [WES] Triggering debugPrintRepTargetsFromExerciseSettings...');
 
       final blockId = _selectedBlockId;
@@ -577,7 +577,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       }
     });
 
-
+*/
 
 
     // 🧠 STEP 1: If we already cached a GOOD value, return it
@@ -1193,7 +1193,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
 
     print('🚀 [WES] initState started');
-    _debugUid('WES.initState');
+
     _cachedUid = UserContext.of(context, listen: false).currentUid;
 
     final contextUid = UserContext.of(context, listen: false).currentUid;
