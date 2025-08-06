@@ -170,6 +170,11 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _loadAthleteEmail(); // 👈 this line ensures _actingAsEmail is set
+  }
 
 
 // cleaning function

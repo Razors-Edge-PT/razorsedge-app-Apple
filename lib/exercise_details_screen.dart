@@ -46,6 +46,9 @@ class ExerciseDetailsScreen extends StatelessWidget {
         dateLabels.add(DateFormat('dd MMM').format(workout.date));
       }
     }
+    final double maxE1RM = e1rmSpots.map((spot) => spot.y).fold<double>(0, (prev, y) => y > prev ? y : prev);
+    final double adjustedMaxY = (maxE1RM * 1.018).clamp(100.0, double.infinity);
+
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -64,6 +67,7 @@ class ExerciseDetailsScreen extends StatelessWidget {
                 LineChartData(
                   minX: -0.3, // ✅ Add some padding to the left
                   maxX: e1rmSpots.length.toDouble() - 0.7, // ✅ Add right padding so final label/point isn't clipped
+                  maxY: adjustedMaxY, // ✅ Use your computed value here
 
                   gridData: FlGridData(
                     show: true,
@@ -83,14 +87,21 @@ class ExerciseDetailsScreen extends StatelessWidget {
                     bottomTitles: AxisTitles(
                       sideTitles: SideTitles(
                         showTitles: true,
-                        interval: 1,
+                        interval: 2,
                         getTitlesWidget: (value, _) {
                           final index = value.toInt();
-                          return Text(
-                            index >= 0 && index < dateLabels.length ? dateLabels[index] : '',
-                            style: const TextStyle(color: Colors.white, fontSize: 10),
+                          return SideTitleWidget(
+                            axisSide: AxisSide.bottom,
+                            child: Transform.rotate(
+                              angle: -0.5, // ~ -28.6 degrees
+                              child: Text(
+                                index >= 0 && index < dateLabels.length ? dateLabels[index] : '',
+                                style: const TextStyle(color: Colors.white, fontSize: 10),
+                              ),
+                            ),
                           );
                         },
+
                       ),
                     ),
                   ),
