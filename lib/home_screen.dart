@@ -597,7 +597,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           child: Row(
                             children: [
 
-                              //if (UserContext.of(context).isCoach)
+                              if (UserContext.of(context).isCoach)
                               SizedBox(
                                 width: kFeatureCardWidth,
                                 height: 125,
@@ -628,7 +628,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                             child: Icon(
                                               Icons.supervisor_account,
                                               size: 48,
-                                              color: Colors.cyanAccent,
+                                              color: Colors.amberAccent,
                                             ),
                                           ),
                                           // ✅ Bottom-right text

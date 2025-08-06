@@ -986,7 +986,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
 
     print('📦 [BB2] Caching progression E1RM for $exerciseName → $e1rm');
-
+    progressed['e1rm'] = e1rm;
     _cachedProgressedValues[cacheKey] = progressed;
 
 
