@@ -15,6 +15,8 @@ import 'week_planner.dart';
 import 'planned_blocks_screen.dart';
 import 'package:uuid/uuid.dart';
 import 'user_context.dart';
+import 'dart:math' as math;
+
 
 class Block_Planner extends StatefulWidget {
   const Block_Planner({super.key});
@@ -1458,7 +1460,8 @@ class _BlockPlannerState extends State<Block_Planner> {
             ),
             const SizedBox(height: 12),
             SizedBox(
-              height: exercises.length * 240, // 👈 Tweak if your cards are taller/shorter
+              height: math.max(exercises.length * 380, 550).toDouble(),
+              // 👈 Tweak if your cards are taller/shorter
               child: ReorderableListView.builder(
                 shrinkWrap: true,
                 physics:
