@@ -527,17 +527,19 @@ class _BlockPlannerState extends State<Block_Planner> {
       return sanitize(def);
     }
 
-    // --- Tier 2: Isolation override ---
+    // --- Tier 2: Group/category fallback ---
+    if (_defaultsByGroup.containsKey(category)) {
+      final def = _defaultsByGroup[category]!;
+      return sanitize(def);
+    }
+
+    // --- Tier 3: Isolation override ---
     if (_isIsolation(bodyPart)) {
       final def = _defaultsByGroup['isolation']!;
       return sanitize(def);
     }
 
-    // --- Tier 3: Group/category fallback ---
-    if (_defaultsByGroup.containsKey(category)) {
-      final def = _defaultsByGroup[category]!;
-      return sanitize(def);
-    }
+
 
     // 🔸 Fallback if unmatched
     return {};
@@ -583,7 +585,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [9, 5, 12, 3],
       'rirModel': 'Static RIR',
-      'rirTargets': [2, 2, 2, 2],
+      'rirTargets': [2, 2, 1.5, 2],
       'progressionModel': 'Smart Progression',
     },
     'Back Squat, Barbell': {
@@ -605,30 +607,30 @@ class _BlockPlannerState extends State<Block_Planner> {
       'progressionModel': 'Smart Progression',
     },
     'Deadlift, Sumo': {
-      'weeklyFrequency': 4,
+      'weeklyFrequency': 3,
       'increments': '2.5, 1',
       'periodizationModel': 'DUP, By Exposure',
-      'repTargets': [9, 5, 3, 1],
+      'repTargets': [15, 9, 5],
       'rirModel': 'Static RIR',
-      'rirTargets': [3.5, 3, 2, 2],
+      'rirTargets': [2, 2, 2.5],
       'progressionModel': 'Smart Progression',
     },
-    'Bulgarian Split Squat': {
+    'Bulgarian Split Squat, Deficit': {
       'weeklyFrequency': 2,
       'increments': '2.5',
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [6, 8],
       'rirModel': 'Static RIR',
-      'rirTargets': [3, 2],
+      'rirTargets': [3, 3],
       'progressionModel': 'Smart Progression',
     },
     'Chin-Up': {
-      'weeklyFrequency': 3,
+      'weeklyFrequency': 4,
       'increments': '2.5, 1.25',
       'periodizationModel': 'DUP, By Exposure',
-      'repTargets': [8, 3, 1],
+      'repTargets': [8, 3, 6, 1],
       'rirModel': 'Static RIR',
-      'rirTargets': [2, 3, 1.5],
+      'rirTargets': [1.5, 2, 2, 0.5 ],
       'progressionModel': 'Smart Progression',
     },
     'Overhead Dumbbell Press, Unilateral': {
@@ -644,21 +646,21 @@ class _BlockPlannerState extends State<Block_Planner> {
 
   final Map<String, Map<String, dynamic>> _defaultsByGroup = {
     'Squat Pattern': {
-      'weeklyFrequency': 1,
+      'weeklyFrequency': 2,
       'increments': '1.3',
       'periodizationModel': 'DUP, By Week',
-      'repTargets': [15, 9, 6],
+      'repTargets': [15, 9],
       'rirModel': 'Static RIR',
-      'rirTargets': [2, 1.5, 2],
+      'rirTargets': [1, 1.5],
       'progressionModel': 'Add reps',
     },
     'Hip Hinge': {
-      'weeklyFrequency': 1,
+      'weeklyFrequency': 3,
       'increments': '1.3',
-      'periodizationModel': 'DUP, By Week',
-      'repTargets': [15, 9, 6],
+      'periodizationModel': 'DUP, By Exposure',
+      'repTargets': [15, 18, 9],
       'rirModel': 'Static RIR',
-      'rirTargets': [2, 1.5, 2],
+      'rirTargets': [1, 1, 1.5],
       'progressionModel': 'Add reps',
     },
     'Horizontal Press': {
@@ -674,7 +676,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'weeklyFrequency': 3,
       'increments': '2.5, 1',
       'periodizationModel': 'DUP, By Exposure',
-      'repTargets': [9, 15, 5],
+      'repTargets': [9, 15, 6],
       'rirModel': 'Static RIR',
       'rirTargets': [1, 1, 1],
       'progressionModel': 'Add reps',
@@ -694,7 +696,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [9, 15, 5],
       'rirModel': 'Static RIR',
-      'rirTargets': [1, 1, 1],
+      'rirTargets': [1, 9, 1],
       'progressionModel': 'Add reps',
     },
     'Core': {
