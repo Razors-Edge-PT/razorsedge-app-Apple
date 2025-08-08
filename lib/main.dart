@@ -45,11 +45,17 @@ class AppRoot extends StatelessWidget {
             }
 
             final token = tokenSnap.data!;
-            const devCoachUids = {'Mxj2NXankQdVv4Xrj2sZzBBm4W92'};
+            const devCoachUids = {
+              'Mxj2NXankQdVv4Xrj2sZzBBm4W92', // Richard
+              'B3dWiljf4ISavFufZ0xN6o9LsD93', //Campbell
+            };
             final isCoachClaim = token.claims?['isCoach'] == true;
             final isCoach = isCoachClaim || devCoachUids.contains(user.uid);
 
             final userContext = UserContext(actorUid: user.uid, isCoach: isCoach);
+
+            // 🐛 DEBUG: Confirm coach/admin flags for this login
+            print('🔍 UID: ${user.uid} | isCoach: $isCoach | isAdmin: ${userContext.isAdmin}');
 
             return ChangeNotifierProvider<UserContext>.value(
               value: userContext,
