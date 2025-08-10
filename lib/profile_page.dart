@@ -144,30 +144,35 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _pickAndUploadProfileImage() async {
-    // Local-only picker
     final picked = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
     if (picked == null) return;
 
     final tempFile = File(picked.path);
-
-    // Copy to app documents so it persists (cache may be cleared by OS)
     final appDir = await getApplicationDocumentsDirectory();
     final destPath = '${appDir.path}/profile.jpg';
+
+    // Overwrite the old file (delete first to be explicit)
+    try { await File(destPath).delete(); } catch (_) {}
     await tempFile.copy(destPath);
+
+    // ⚠️ Evict old cached image for this path
+    final provider = FileImage(File(destPath));
+    await provider.evict();
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('profile_local_path', destPath);
 
+    if (!mounted) return;
     setState(() {
       _localProfilePath = destPath;
       _localProfileImage = File(destPath);
     });
 
-    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Profile photo updated (local only)')),
     );
   }
+
 
 
   final List<String> _displayExercises = const [

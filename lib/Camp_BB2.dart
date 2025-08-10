@@ -421,14 +421,16 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     final total = Stopwatch()..start();
     if (kDebugMode) debugPrint('⏱️ [_fetchActiveBlockThenMeta] start');
 
-    final uid = _cachedUid;
+    final uid = _cachedUid; // consistent with your other calls
 
-    // 1) Choose active block ID (widget → repo → fallback)
+    // 1) Resolve active block ID: widget → repo → fallback
     String? activeId = widget.blockId;
     if (activeId == null) {
       try {
         activeId = await BlockRepository().fetchActiveBlockId(uid);
-      } catch (_) {}
+      } catch (e) {
+        if (kDebugMode) debugPrint('   ⚠️ fetchActiveBlockId failed: $e');
+      }
     }
     if (activeId == null) {
       try {
@@ -437,7 +439,9 @@ class _BlockBuilder2State extends State<Camp_BB2> {
             .collection('block_planner').doc('current_block')
             .get(const GetOptions(source: Source.server));
         activeId = snap.data()?['blockId'] as String?;
-      } catch (_) {}
+      } catch (e) {
+        if (kDebugMode) debugPrint('   ⚠️ fallback current_block failed: $e');
+      }
     }
     if (activeId == null) {
       total.stop();
@@ -445,11 +449,13 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     }
     _activeBlockId = activeId;
 
-    // 2) Load meta from server (authoritative) and NORMALIZE to local date-only
+    // 2) Load meta from server (authoritative) + normalize to local dates
+    DateTime _asLocalDate(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
+
     final tMeta = Stopwatch()..start();
     final meta = await _repo.loadBlockMeta(
-      userId: uid,            // keep same UID you use elsewhere
-      blockId: activeId,      // non-null here
+      userId: uid,
+      blockId: activeId,
     );
     tMeta.stop();
     if (kDebugMode) {
@@ -457,38 +463,51 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           '(raw start=${meta.startDate.toIso8601String()}, end=${meta.endDate.toIso8601String()})');
     }
 
-    DateTime _localDate(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
-
-    // IMPORTANT: trim time components before computing bounds
-    blockStartDate = _localDate(meta.startDate);
-    blockEndDate   = _localDate(meta.endDate);
+    blockStartDate = _asLocalDate(meta.startDate);
+    blockEndDate   = _asLocalDate(meta.endDate);
     _selectedDays  = meta.selectedDays;
 
-    // 3) Compute week bounds and init
+    // 3) Compute week bounds, page, and init arrays
+    final tCompute = Stopwatch()..start();
     _computeWeekBounds();
 
     final today = DateTime.now();
-    _currentWeekPage = (today.difference(_displayStart).inDays ~/ 7).clamp(0, totalWeeks - 1);
+    _currentWeekPage =
+        (today.difference(_displayStart).inDays ~/ 7).clamp(0, totalWeeks - 1);
     _weekPageController = PageController(initialPage: _currentWeekPage);
 
-    // 4) Init arrays using computed totalWeeks
     exerciseRows = List.generate(
       totalWeeks,
-          (_) => List.generate(7, (_) => [ExerciseRow(circuitIndex: 0), ExerciseRow(circuitIndex: 0)]),
+          (_) => List.generate(7, (_) => [
+        ExerciseRow(circuitIndex: 0),
+        ExerciseRow(circuitIndex: 0),
+      ]),
     );
     selectedTemplateIds = List.generate(totalWeeks, (_) => List.filled(7, null));
-    circuitStartIndices = List.generate(totalWeeks, (_) => List.generate(7, (_) => [0]));
+    circuitStartIndices =
+        List.generate(totalWeeks, (_) => List.generate(7, (_) => [0]));
+    tCompute.stop();
+    if (kDebugMode) {
+      debugPrint('   ↳ compute/init took ${tCompute.elapsedMilliseconds}ms');
+    }
 
-    // 5) Load rest
+    // 4) Load the rest (this is already instrumented in your loadAllData)
+    final tAll = Stopwatch()..start();
     await loadAllData();
+    tAll.stop();
+    if (kDebugMode) {
+      debugPrint('   ↳ loadAllData took ${tAll.elapsedMilliseconds}ms');
+    }
 
     total.stop();
     if (kDebugMode) {
-      debugPrint('✅ [_fetchActiveBlockThenMeta] ${total.elapsedMilliseconds}ms total '
-          '(start=${blockStartDate.toIso8601String().substring(0,10)}, '
-          'end=${blockEndDate.toIso8601String().substring(0,10)}, weeks=$totalWeeks)');
+      debugPrint(
+          '✅ [_fetchActiveBlockThenMeta] ${total.elapsedMilliseconds}ms total '
+              '(start=${blockStartDate.toIso8601String().substring(0,10)}, '
+              'end=${blockEndDate.toIso8601String().substring(0,10)}, weeks=$totalWeeks)');
     }
   }
+
 
 
   void _computeWeekBounds() {
@@ -1438,7 +1457,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     final total = Stopwatch()..start();
     print('⏳ [BB2] loadBlockDataForWeek($weekIndex) start');
 
-    final uid = UserContext.of(context, listen: false).currentUid;
+
+    final uid = _cachedUid; // lock to the selected athlete for this BB2 State
     if ((uid ?? '').isEmpty || _selectedBlockId == null) {
       print('❌ [LOAD_ABORT] uid or selectedBlockId missing');
       return;
@@ -1507,23 +1527,33 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       print('📦 [BB2] exerciseSettings: ${_exerciseSettings.length} exercises');
     }
 
-    // 4) Ensure day docs (move this OUT of hot path if you can)
-    if (daySnaps.docs.isEmpty) {
-      print('📭 Week $weekIndex has no day docs.');
-      // Fast path: skip creation here to avoid latency spikes
-      // If you must create, do it once via a setup task using a single WriteBatch.
-      /*
-    final batch = FirebaseFirestore.instance.batch();
-    final daysCol = weekDocRef.collection('days');
-    for (int i = 0; i < 7; i++) {
-      batch.set(daysCol.doc('day_$i'), {'exists': true});
+
+    // 4) Ensure all 7 day docs exist (handle partial weeks too)
+    final existingIds = daySnaps.docs.map((d) => d.id).toSet();
+    final missingIds = <String>[];
+    for (int d = 0; d < 7; d++) {
+      final id = 'day_$d';
+      if (!existingIds.contains(id)) missingIds.add(id);
     }
-    final t = Stopwatch()..start();
-    await batch.commit();
-    daySnaps = await daysCol.get(const GetOptions(source: Source.server));
-    print('   ↳ created 7 day docs + refetch in ${t.elapsedMilliseconds}ms');
-    */
+
+    if (missingIds.isNotEmpty) {
+      print('📭 Week $weekIndex missing ${missingIds.length} day docs → creating: $missingIds');
+      final batch = FirebaseFirestore.instance.batch();
+      final daysCol = weekDocRef.collection('days');
+      for (final id in missingIds) {
+        batch.set(daysCol.doc(id), {
+          'exists': true,
+          'exercises': [],
+          'circuitStartIndices': [0],
+        });
+      }
+      final t = Stopwatch()..start();
+      await batch.commit();
+      // refresh daySnaps so downstream parsing sees all 7
+      daySnaps = await daysCol.get(const GetOptions(source: Source.server));
+      print('   ↳ created ${missingIds.length} day docs in ${t.elapsedMilliseconds}ms');
     }
+
 
     // 5) Build day data first (parse Firestore)
     final parsedByDayIndex = <int, List<ExerciseRow>>{};
@@ -1647,6 +1677,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
     final wesDocs = await Future.wait(wesFetches);
     print('   ↳ WES overrides fetch (${wesDocs.length} docs) took ${wesStep.elapsedMilliseconds}ms');
+
 
 // Then, when applying overrides:
     for (int i = 0; i < wesDocs.length; i++) {

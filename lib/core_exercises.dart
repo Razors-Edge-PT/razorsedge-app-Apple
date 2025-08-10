@@ -464,11 +464,6 @@ final List<Map<String, String>> coreExercises = [
     'bodyPart': 'Hamstrings, Glutes, Lower Back',
   },
   {
-    'name': 'Romanian Deadlift, Deficit',
-    'category': 'Hip Hinge',
-    'bodyPart': 'Hamstrings, Glutes, Lower Back',
-  },
-  {
     'name': 'Romanian Deadlift, Unilateral',
     'category': 'Hip Hinge',
     'bodyPart': 'Hamstrings, Glutes, Lower Back',
