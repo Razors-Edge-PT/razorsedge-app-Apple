@@ -71,11 +71,9 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
 
   Future<void> _loadAthletes(UserContext userContext) async {
     try {
-      // ✅ Super admin override: Load ALL users
       if (userContext.isSuperAdmin) {
-        debugPrint('👑 SuperAdmin branch hit for ${userContext.actorUid}');
+        // unchanged
         final query = await FirebaseFirestore.instance.collection('users').get();
-        debugPrint('👑 Loaded ${query.docs.length} users for super admin');
         setState(() {
           _athletes = {
             for (var doc in query.docs)
@@ -85,23 +83,54 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
               }
           };
         });
-        return; // 👈 Skip regular coach logic
+        return;
       }
 
-      debugPrint('👤 Coach branch hit for ${userContext.actorUid}');
-      // ✅ Normal coach logic
-      final doc = await FirebaseFirestore.instance
-          .collection('coachAssignments')
-          .doc(userContext.actorUid)
+      final coachUid = userContext.actorUid;
+      debugPrint('👤 Coach branch hit for $coachUid');
+
+      final Map<String, dynamic> athletes = {};
+
+      // 1️⃣ Athletes from athleteAssignments
+      final q1 = await FirebaseFirestore.instance
+          .collection('athleteAssignments')
+          .where('coaches.$coachUid.approved', isEqualTo: true)
           .get();
 
-      if (doc.exists && doc.data() != null) {
-        setState(() {
-          _athletes = Map<String, dynamic>.from(doc.data()!['athletes'] ?? {});
-        });
-      } else {
-        debugPrint("ℹ️ No athlete data found for coach ${userContext.actorUid}");
+      for (final doc in q1.docs) {
+        final athleteUid = doc.id;
+        final u = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(athleteUid)
+            .get();
+        final data = u.data() ?? {};
+        athletes[athleteUid] = {
+          'displayName': (data['displayName'] ?? '') as String,
+          'email': (data['email'] ?? '') as String,
+        };
       }
+
+      // 2️⃣ Athletes seeded by super admin in coachAssignments
+      final doc2 = await FirebaseFirestore.instance
+          .collection('coachAssignments')
+          .doc(coachUid)
+          .get();
+
+      if (doc2.exists) {
+        final seeded = Map<String, dynamic>.from(doc2.data()?['athletes'] ?? {});
+        for (final entry in seeded.entries) {
+          final athleteUid = entry.key;
+          // Avoid overwriting if already loaded
+          athletes.putIfAbsent(athleteUid, () => {
+            'displayName': entry.value['displayName'] ?? '',
+            'email': entry.value['email'] ?? '',
+          });
+        }
+      }
+
+      setState(() => _athletes = athletes);
+      debugPrint('✅ Loaded ${athletes.length} athletes for coach $coachUid');
+
     } catch (e) {
       debugPrint("❌ Error loading athletes: $e");
     }

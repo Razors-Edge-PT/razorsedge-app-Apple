@@ -11,38 +11,52 @@ class ApproveRequestsScreen extends StatelessWidget {
   Future<void> _approve(String requestId, String coachUid, String athleteUid) async {
     final db = FirebaseFirestore.instance;
 
-    // Load request details
-    final reqSnap = await db.collection('accessRequests').doc(requestId).get();
-    if (!reqSnap.exists) {
-      debugPrint('⚠️ [approve] Request $requestId not found.');
-      return;
-    }
-    final r = reqSnap.data() as Map<String, dynamic>;
-    final coachEmail   = (r['coachEmail'] ?? '') as String;
-    final coachName    = (r['coachName']  ?? '') as String;
+    try {
+      final reqSnap = await db.collection('accessRequests').doc(requestId).get();
+      if (!reqSnap.exists) {
+        debugPrint('⚠️ [approve] Request $requestId not found.');
+        return;
+      }
+      final r = reqSnap.data() as Map<String, dynamic>;
+      final coachEmail = (r['coachEmail'] ?? '') as String;
+      final coachName  = (r['coachName']  ?? '') as String;
 
-    final batch = db.batch();
+      // 1) Athlete-side approval (should be allowed by your rules)
+      await db.collection('athleteAssignments').doc(athleteUid).set({
+        'coaches': {
+          coachUid: {
+            'coachEmail': coachEmail,
+            'coachName': coachName,
+            'approved': true,
+            'approvedAt': FieldValue.serverTimestamp(),
+          }
+        }
+      }, SetOptions(merge: true));
+      debugPrint('✅ [approve] Wrote athleteAssignments for $athleteUid → $coachUid');
 
-    // ✅ Athlete grants access by writing their own doc (allowed by rules)
-    final athleteRef = db.collection('athleteAssignments').doc(athleteUid);
-    batch.set(athleteRef, {
-      'coaches': {
-        coachUid: {
-          'coachEmail': coachEmail,
-          'coachName': coachName,
-          'approvedAt': FieldValue.serverTimestamp(),
+      // 2) Best-effort: delete the request (don’t crash if blocked)
+      try {
+        await db.collection('accessRequests').doc(requestId).delete();
+        debugPrint('🧹 [approve] Deleted accessRequests/$requestId');
+      } catch (e) {
+        debugPrint('⚠️ [approve] Could not delete accessRequests/$requestId: $e');
+        // Optional: mark approved if delete not permitted
+        try {
+          await db.collection('accessRequests').doc(requestId).set({
+            'status': 'approved',
+            'approvedAt': FieldValue.serverTimestamp(),
+            'approvedBy': athleteUid,
+          }, SetOptions(merge: true));
+          debugPrint('ℹ️ [approve] Marked request approved instead of delete.');
+        } catch (e2) {
+          debugPrint('⚠️ [approve] Also could not mark approved: $e2');
         }
       }
-    }, SetOptions(merge: true));
-
-    // 🧹 Remove request
-    batch.delete(db.collection('accessRequests').doc(requestId));
-
-    await batch.commit();
-
-    debugPrint('✅ [approve] Athlete $athleteUid approved coach $coachUid '
-        '(wrote athleteAssignments & deleted request $requestId).');
+    } catch (e) {
+      debugPrint('❌ [approve] Error: $e');
+    }
   }
+
 
 
 
