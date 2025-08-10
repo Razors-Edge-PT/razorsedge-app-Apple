@@ -2366,6 +2366,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
 
 // 🧠 Double guard: If it's still empty after loading, just skip the planned-only filter.
+
+    bool showPlannedOnly = true;
     bool plannedModeAvailable = plannedExercises.isNotEmpty;
 
     final snapshot =
@@ -2384,7 +2386,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       for (final ex in allExercises) ex['name']!: ex['id']!,
     };
 
-    bool showPlannedOnly = true;
     final Map<String, bool> expandedGroups = {};
 
     final List<String> selected = await showDialog<List<String>>(
@@ -2396,14 +2397,31 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
             String searchQuery = "";
 
             return StatefulBuilder(builder: (context, setLocalState) {
-              List<Map<String, String>> filteredExercises =
-                  (showPlannedOnly && plannedModeAvailable)
-                      ? allExercises
-                          .where((ex) => plannedExercises.contains(ex['id']))
-                          .toList()
-                      : allExercises;
+              // 🔍 Toggle UI
+              Widget toggleRow = Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    showPlannedOnly ? 'Planned Only' : 'All Exercises',
+                    style: const TextStyle(fontSize: 12, color: Colors.white70),
+                  ),
+                  Switch(
+                    value: showPlannedOnly,
+                    onChanged: (v) => setLocalState(() => showPlannedOnly = v),
+                    activeColor: Colors.lightBlueAccent,
+                  ),
+                ],
+              );
 
-// 🔍 Apply case-insensitive name filter
+              // 🗂 Apply planned-only filter
+              List<Map<String, String>> filteredExercises =
+              (showPlannedOnly && plannedModeAvailable)
+                  ? allExercises
+                  .where((ex) => plannedExercises.contains(ex['id']))
+                  .toList()
+                  : allExercises;
+
+              // 🔍 Apply case-insensitive name filter
               if (searchQuery.trim().isNotEmpty) {
                 final query = searchQuery.toLowerCase();
                 filteredExercises = filteredExercises.where((ex) {
