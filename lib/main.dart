@@ -24,6 +24,7 @@ import 'package:provider/provider.dart';
 import 'user_context.dart';
 import 'coach_home_screen.dart';
 
+
 class AppRoot extends StatelessWidget {
   const AppRoot({super.key});
 
@@ -51,6 +52,8 @@ class AppRoot extends StatelessWidget {
             };
             final isCoachClaim = token.claims?['isCoach'] == true;
             final isCoach = isCoachClaim || devCoachUids.contains(user.uid);
+
+            upsertUserLookup(); // fire and forget is fine here
 
             final userContext = UserContext(actorUid: user.uid, isCoach: isCoach);
 

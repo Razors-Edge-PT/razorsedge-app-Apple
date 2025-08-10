@@ -14,7 +14,7 @@ import 'approve_requests_screen.dart';
 import 'Camp_BB2.dart';
 import 'update_exercises.dart';
 import 'core_exercises.dart';
-
+import 'profile_page.dart';
 
 
 
@@ -520,13 +520,21 @@ class _HomeScreenState extends State<HomeScreen> {
 
 
               // 👤 Profile picture
+              // 👤 Profile picture (Home)
               Material(
                 color: Colors.transparent,
                 child: InkWell(
                   customBorder: const CircleBorder(),
-                  onTap: () async {
-                    print('📸 Picker tapped');
-                    await _pickProfileImage();
+                  onTap: () {
+                    final userContext = context.read<UserContext>();
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                          value: userContext,
+                          child: const ProfilePage(),
+                        ),
+                      ),
+                    );
                   },
                   child: Padding(
                     padding: const EdgeInsets.all(4.0),
@@ -535,7 +543,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       backgroundColor: Colors.grey.shade300,
                       backgroundImage: _profileImage != null
                           ? FileImage(_profileImage!)
-                          : null,
+                          : null, // you can also stream users/{uid}.photoURL here if you want
                       child: _profileImage == null
                           ? ClipOval(
                         child: Image.asset(
@@ -546,11 +554,11 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       )
                           : null,
-
                     ),
                   ),
                 ),
               ),
+
               const SizedBox(width: 12),
 
               // App logo
@@ -769,6 +777,62 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                 ),
                               ),
+
+                              SizedBox(
+                                width: kFeatureCardWidth,
+                                child: GestureDetector(
+                                  onTap: () {
+                                    final userContext = UserContext.of(context, listen: false);
+
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                          value: userContext,
+                                          child: const ProfilePage(), // 👈 Navigate to your ProfilePage
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  child: Card(
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    color: Colors.blueGrey.shade800,
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(12),
+                                      child: Stack(
+                                        children: [
+                                          const Positioned(
+                                            top: 0,
+                                            left: 0,
+                                            child: Icon(
+                                              Icons.person_outline,
+                                              size: 48,
+                                              color: Colors.cyanAccent,
+                                            ),
+                                          ),
+                                          Positioned(
+                                            bottom: 0,
+                                            right: 0,
+                                            left: 50,
+                                            child: Text(
+                                              'Profile',
+                                              textAlign: TextAlign.center,
+                                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                                color: Colors.white,
+                                                height: 1.3,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+
 
                               SizedBox(
                                 width: kFeatureCardWidth,

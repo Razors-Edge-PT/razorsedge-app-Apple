@@ -3,6 +3,32 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 import 'user_context.dart';
 import 'request_access_screen.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
+String emailHash(String email) {
+  final lower = email.trim().toLowerCase();
+  return sha256.convert(utf8.encode(lower)).toString();
+}
+
+Future<void> upsertUserLookup() async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null || user.email == null) return;
+
+  final hash = emailHash(user.email!);
+  await FirebaseFirestore.instance
+      .collection('user_lookup')
+      .doc(hash)
+      .set({
+    'uid': user.uid,
+    'displayName': user.displayName ?? '', // ✅ store here
+  }, SetOptions(merge: true));
+  debugPrint('✅ [upsertUserLookup] Lookup saved for ${user.email}');
+}
+
 
 class CoachHomeScreen extends StatefulWidget {
   const CoachHomeScreen({super.key});
@@ -39,6 +65,9 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
       _loadAthletes(userContext);
     });
   }
+
+
+
 
   Future<void> _loadAthletes(UserContext userContext) async {
     try {
@@ -134,56 +163,77 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
 
   // ---------- Added: helper to add athlete by email ----------
   Future<void> _addAthleteByEmail(BuildContext context, String email) async {
-    final coachUid = context.read<UserContext>().actorUid;
+    final trimmed = email.trim().toLowerCase();
+    if (trimmed.isEmpty) return;
+
     try {
-      final q = await FirebaseFirestore.instance
-          .collection('users')
-          .where('email', isEqualTo: email.trim().toLowerCase())
-          .limit(1)
+      final coachUid = UserContext.of(context, listen: false).actorUid;
+
+      // Resolve athlete via hashed email
+      final hash = emailHash(trimmed);
+      final lookup = await FirebaseFirestore.instance
+          .collection('user_lookup')
+          .doc(hash)
           .get();
 
-      if (q.docs.isEmpty) {
+      if (!lookup.exists) {
+        if (!context.mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('No user found for $email')),
+          SnackBar(content: Text('No user found for $trimmed')),
         );
         return;
       }
 
-      final doc = q.docs.first;
-      final athleteUid = doc.id;
-      final data = doc.data();
-      final displayName = (data['displayName'] ?? '') as String;
-      final normalizedEmail = (data['email'] ?? email).toString();
+      final data = lookup.data()!;
+      final athleteUid = (data['uid'] as String).trim();
+      final athleteName = (data['displayName'] ?? '') as String;
 
+      if (athleteUid == coachUid) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("You can't add yourself.")),
+        );
+        return;
+      }
+
+      // Create/refresh a PENDING access request (idempotent key)
+      final user = FirebaseAuth.instance.currentUser!;
+      final coachName = user.displayName ?? '';
+      final coachEmail = user.email ?? '';
+
+      final requestId = '${coachUid}__${athleteUid}'; // deterministic
       await FirebaseFirestore.instance
-          .collection('coachAssignments')
-          .doc(coachUid)
+          .collection('accessRequests')
+          .doc(requestId)
           .set({
-        'athletes': {
-          athleteUid: {
-            'email': normalizedEmail,
-            'displayName': displayName,
-          },
-        }
+        'coachUid': coachUid,
+        'coachName': coachName,
+        'coachEmail': coachEmail,
+        'athleteUid': athleteUid,
+        'athleteDisplayName': athleteName,
+        'athleteEmail': trimmed,
+        'status': 'pending',
+        'createdAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
-      setState(() {
-        _athletes[athleteUid] = {
-          'email': normalizedEmail,
-          'displayName': displayName,
-        };
-      });
+      debugPrint('📨 [addAthleteByEmail] Created access request $requestId → $trimmed');
 
+      if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Added $normalizedEmail')),
+        SnackBar(content: Text('Request sent to $trimmed')),
       );
     } catch (e) {
-      debugPrint('❌ Failed to add athlete: $e');
+      debugPrint('❌ addAthleteByEmail error: $e');
+      if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to add athlete')),
+        const SnackBar(content: Text('Failed to send request')),
       );
     }
   }
+
+
+
+
 
   // ---------- Added: helper to remove athlete ----------
   Future<void> _removeAthlete(String uid) async {

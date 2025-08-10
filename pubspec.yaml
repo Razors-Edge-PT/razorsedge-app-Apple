@@ -41,7 +41,10 @@ dependencies:
   string_similarity: ^2.0.0
   fl_chart: ^0.65.0
   device_info_plus: ^10.1.0
-  image_picker: ^1.0.0 # or latest
+  image_picker: ^1.0.7 # or latest
+  firebase_storage: ^12.0.0
+  cloud_functions: ^5.0.4
+  crypto: ^3.0.3
 
 
   flutter:
