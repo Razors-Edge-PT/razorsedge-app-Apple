@@ -724,7 +724,6 @@ class PeriodizationModelUtils {
     final increments = byName ?? byId;
 
     if (increments == null) {
-      print('❌ [BB2] No increments found for $exerciseName by name or ID');
       return (targetWeight / 2.5).round() * 2.5;
     }
 

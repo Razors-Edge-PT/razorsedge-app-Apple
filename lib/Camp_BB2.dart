@@ -170,7 +170,10 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
   String get userId => UserContext.of(context, listen: false).currentUid;
   late final String _cachedUid;
-
+  String? _dataOwnerUid;
+  String? _dataOwnerBlockId;
+  String? _ownerUid;
+  String? _ownerBlockId;
 
   int? _draggedRowIndex;
   List<Map<String, String>> allExercisesFromFirestore = []; // 🔥 Full list
@@ -421,13 +424,14 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     final total = Stopwatch()..start();
     if (kDebugMode) debugPrint('⏱️ [_fetchActiveBlockThenMeta] start');
 
-    final uid = _cachedUid; // consistent with your other calls
+    final uid = _cachedUid; // ✅ selected athlete, not auth uid
+    print('👤 [_fetchActiveBlockThenMeta] using uid=$uid'); // optional sanity log
 
     // 1) Resolve active block ID: widget → repo → fallback
     String? activeId = widget.blockId;
     if (activeId == null) {
       try {
-        activeId = await BlockRepository().fetchActiveBlockId(uid);
+        activeId = await BlockRepository().fetchActiveBlockId(uid); // 🔧 pass uid explicitly
       } catch (e) {
         if (kDebugMode) debugPrint('   ⚠️ fetchActiveBlockId failed: $e');
       }
@@ -435,8 +439,9 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     if (activeId == null) {
       try {
         final snap = await FirebaseFirestore.instance
-            .collection('users').doc(uid)
-            .collection('block_planner').doc('current_block')
+            .collection('users').doc(uid) // 🔧 use the same uid here
+            .collection('block_planner')
+            .doc('current_block')
             .get(const GetOptions(source: Source.server));
         activeId = snap.data()?['blockId'] as String?;
       } catch (e) {
@@ -449,13 +454,15 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     }
     _activeBlockId = activeId;
 
-    // 2) Load meta from server (authoritative) + normalize to local dates
+    _maybeResetCaches(_cachedUid, _activeBlockId!); // keep this
+
+    // 2) Load meta (authoritative) + normalize to local dates
     DateTime _asLocalDate(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
 
     final tMeta = Stopwatch()..start();
     final meta = await _repo.loadBlockMeta(
-      userId: uid,
-      blockId: activeId,
+      userId: uid,          // 🔧 pass the selected uid
+      blockId: activeId,    // non-null here
     );
     tMeta.stop();
     if (kDebugMode) {
@@ -491,7 +498,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       debugPrint('   ↳ compute/init took ${tCompute.elapsedMilliseconds}ms');
     }
 
-    // 4) Load the rest (this is already instrumented in your loadAllData)
+    // 4) Load the rest
     final tAll = Stopwatch()..start();
     await loadAllData();
     tAll.stop();
@@ -501,14 +508,26 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
     total.stop();
     if (kDebugMode) {
-      debugPrint(
-          '✅ [_fetchActiveBlockThenMeta] ${total.elapsedMilliseconds}ms total '
-              '(start=${blockStartDate.toIso8601String().substring(0,10)}, '
-              'end=${blockEndDate.toIso8601String().substring(0,10)}, weeks=$totalWeeks)');
+      debugPrint('✅ [_fetchActiveBlockThenMeta] ${total.elapsedMilliseconds}ms total '
+          '(start=${blockStartDate.toIso8601String().substring(0,10)}, '
+          'end=${blockEndDate.toIso8601String().substring(0,10)}, weeks=$totalWeeks)');
     }
   }
 
 
+  String? _lastCtxKey;
+  void _maybeResetCaches(String uid, String blockId) {
+    final key = '$uid::$blockId';
+    if (key == _lastCtxKey) return; // same athlete+block → keep caches
+    _lastCtxKey = key;
+
+    // Reset per-athlete/block caches ONLY when context changes
+    _exerciseSettings.clear();
+    _savedFields.clear();
+    // If you have other per-athlete caches, clear them here too:
+    // _hintCache?.clear();
+    // _repTargetsCache?.clear();
+  }
 
   void _computeWeekBounds() {
     // 1) get Monday on-or-before blockStart
@@ -1519,14 +1538,24 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     // 3) Exercise settings — load once & cache globally if already loaded
     final blockData = parentBlockSnap.data();
     final settings = blockData?['exerciseSettings'];
-    if (settings != null && (_exerciseSettings.isEmpty)) {
+
+    final needSettingsReload =
+        _exerciseSettings.isEmpty ||
+            _dataOwnerUid != uid ||
+            _dataOwnerBlockId != _selectedBlockId;
+
+    if (settings != null && needSettingsReload) {
       _exerciseSettings = Map<String, Map<String, dynamic>>.from(
         (settings as Map).map((k, v) =>
             MapEntry(k.toString(), Map<String, dynamic>.from(v as Map))),
       );
-      print('📦 [BB2] exerciseSettings: ${_exerciseSettings.length} exercises');
+      _dataOwnerUid = uid;
+      _dataOwnerBlockId = _selectedBlockId;
+      if (kDebugMode) {
+        debugPrint('📦 [BB2] exerciseSettings reloaded for uid=$uid, block=$_selectedBlockId '
+            '(${_exerciseSettings.length} exercises)');
+      }
     }
-
 
     // 4) Ensure all 7 day docs exist (handle partial weeks too)
     final existingIds = daySnaps.docs.map((d) => d.id).toSet();
