@@ -148,6 +148,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
 
   Future<void> loadPreviousWorkoutData() async {
+    final sw = Stopwatch()..start(); // ⏱️ start
     await PeriodizationModelUtils.fetchLastWorkoutTopSetReps(
       uid: UserContext.of(context, listen: false).currentUid,
     );
@@ -155,6 +156,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     setState(() {
       _isLoadingData = false; // ✅ Data has been fetched, UI can update
     });
+    sw.stop();
+    print('⏱️ [WES] loadPreviousWorkoutData took ${sw.elapsedMilliseconds}ms');
   }
 
   static const TextStyle _headerStyle = TextStyle(
@@ -1787,19 +1790,35 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   }
 
   Future<Map<String, dynamic>> _loadPlannedExerciseDetails() async {
+    // ⏱️ added
+    final sw = Stopwatch()..start(); // ⏱️ Start timer
     final user = FirebaseAuth.instance.currentUser;
     if (user == null || _selectedBlockId == null) return {};
     print('🔍 [WES] _loadPlannedExerciseDetails() using blockId: $_selectedBlockId');
 
 
     // ✅ 1. Load from BB2-style Firestore path using _selectedBlockId
-    final doc = await FirebaseFirestore.instance
+    final ref = FirebaseFirestore.instance
         .collection('planned_blocks')
         .doc(userId)
         .collection('blocks')
-        .doc(_selectedBlockId!)
-        .get();
+        .doc(_selectedBlockId!);
+
+// Cache-first load (uses warmed cache if available)
+    DocumentSnapshot<Map<String, dynamic>> doc;
+    try {
+      final cacheDoc = await ref.get(const GetOptions(source: Source.cache));
+      if (cacheDoc.exists) {
+        doc = cacheDoc; // fast path: use warmed cache
+      } else {
+        doc = await ref.get(const GetOptions(source: Source.server)); // cold path
+      }
+    } catch (_) {
+      doc = await ref.get(const GetOptions(source: Source.server)); // fallback
+    }
+
     print('🧾 [RAW] Full Firestore doc snapshot data: ${doc.data()}');
+
 
 
     if (!doc.exists) {
@@ -1868,7 +1887,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
 
     print('📄 [WES] Full plannedExerciseDetails loaded: ${details.keys}');
+    sw.stop();
+    print('⏱️ [WES] _loadPlannedExerciseDetails took ${sw.elapsedMilliseconds}ms');
     return details;
+
   }
 
 

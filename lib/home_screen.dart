@@ -15,7 +15,8 @@ import 'Camp_BB2.dart';
 import 'update_exercises.dart';
 import 'core_exercises.dart';
 import 'profile_page.dart';
-
+import 'warmup_service.dart';
+import 'dart:async';
 
 
 class HomeScreen extends StatefulWidget {
@@ -43,6 +44,8 @@ class _HomeScreenState extends State<HomeScreen> {
   File? _profileImage;
   final ImagePicker _picker = ImagePicker();
   String? _actingAsEmail;
+  String? _lastWarmUid;
+
 
 
   HomeSection _currentSection = HomeSection.calendar;
@@ -52,8 +55,13 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
 
     final userContext = Provider.of<UserContext>(context, listen: false);
+    final actingUid = userContext.actingAsUid ?? userContext.actorUid; // add this line
     print("🏠 Home loaded for ${userContext.actingAsUid} "
         "(actor: ${userContext.actorUid}, coach: ${userContext.isCoach})");
+
+    print('[Warmup] started for $actingUid');
+    // Kick off WES cache warmup (does not block UI, has cooldown)
+    unawaited(WarmupService.instance.warmWES(actingUid ?? ''));
 
     // Delay the email fetch until after build
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -170,11 +178,28 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  void _onUserContextChange() {
+    final uc = Provider.of<UserContext>(context, listen: false);
+    final newUid = uc.actingAsUid ?? uc.actorUid;
+    if (newUid != null && newUid != _lastWarmUid) {
+      _lastWarmUid = newUid;
+      unawaited(WarmupService.instance.warmWES(newUid));
+    }
+  }
+
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     _loadAthleteEmail(); // 👈 this line ensures _actingAsEmail is set
   }
+
+  @override
+  void dispose() {
+    Provider.of<UserContext>(context, listen: false).removeListener(_onUserContextChange);
+    super.dispose();
+  }
+
 
 
 // cleaning function
