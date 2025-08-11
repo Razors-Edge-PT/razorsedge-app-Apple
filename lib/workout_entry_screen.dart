@@ -17,6 +17,8 @@ import 'block_planner_repository.dart';
 import 'block_repository.dart';
 import 'package:provider/provider.dart';
 import 'user_context.dart';
+import 'dart:async';
+import 'package:flutter/foundation.dart';
 
 Future<void> deleteAllUserWorkouts() async {
   final user = FirebaseAuth.instance.currentUser;
@@ -136,10 +138,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
   late Future<void> _initialLoad;
   late Future<void> _blockDateLoad;
-  bool _delayRenderCards = true;
+
 
   //UI bits
   late ScrollController _horizontalScrollController;
+
+  //Timing Bits
+  final _wesInitTimer = Stopwatch()..start();
+
 
   Future<void> loadPreviousWorkoutData() async {
     await PeriodizationModelUtils.fetchLastWorkoutTopSetReps(
@@ -1186,14 +1192,24 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     print('👤 [$where] actorUid=${ctx.actorUid} actingAsUid=${ctx.actingAsUid} currentUid=${ctx.currentUid}');
   }
 
+  Future<T> _timeStep<T>(String label, Future<T> Function() step, {Stopwatch? total}) async {
+    final sw = Stopwatch()..start();
+    try {
+      return await step();
+    } finally {
+      sw.stop();
+      if (kDebugMode) {
+        debugPrint('⏱️ [WES Init] $label took ${sw.elapsedMilliseconds}ms'
+            '${total != null ? " (total: ${total.elapsedMilliseconds}ms)" : ""}');
+      }
+    }
+  }
 
   @override
   void initState() {
     super.initState();
 
-
     print('🚀 [WES] initState started');
-
     _cachedUid = UserContext.of(context, listen: false).currentUid;
 
     final contextUid = UserContext.of(context, listen: false).currentUid;
@@ -1202,20 +1218,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final legacyDraftKey = 'workout_draft_$formattedDate';
     final namespacedDraftKey = 'workout_draft_${contextUid}_$formattedDate';
 
-    print('🧪 [WES DraftKey] contextUid = $contextUid');
-    print('🧪 [WES DraftKey] legacy format = $legacyDraftKey');
-    print('🧪 [WES DraftKey] new namespaced = $namespacedDraftKey');
-
-
     _blockDateLoad = _loadBlockDatesOnly(userId); // ✅ actingAsUid
 
     _repo = BlockPlannerRepository();
     WidgetsBinding.instance.addObserver(this);
 
-
     _selectedDate = widget.initialDate ?? DateTime.now();
-    print('📅 [WES] Selected date: $_selectedDate');
 
+    final initTotal = Stopwatch()..start();
 
     _initialLoad = _fetchActiveBlockThenMeta().then((_) {
       // ✅ Return an async function and immediately invoke it
@@ -1233,6 +1243,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           await _loadAllBlocks();
           print('📦 [WES] _loadAllBlocks complete, total blocks: ${_allBlocks.length}');
 
+
           _selectedBlockId = _allBlocks.firstWhere(
                 (b) => b.id == _activeBlockId,
             orElse: () => _allBlocks.first,
@@ -1241,7 +1252,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           print("🧱 [WES] Selected blockId: $_selectedBlockId");
 
           await _loadInitialData();
-          print("📥 [WES] Draft data loaded");
 
           await _fetchLastWorkoutTopSetReps();
           print("📈 [WES] Top set reps fetched");
@@ -1249,7 +1259,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           _debugPrintBlockDates();
 
           await _initializeDayDocIfNeeded(_selectedDate);
-          print("📄 [WES] Day doc initialized if needed");
 
           if (widget.initialDate != null) {
             _selectedDate = widget.initialDate!;
@@ -1283,7 +1292,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
             print('✅ [WES Init] Skipping BB2 re-merge — WES already has user-entered data');
           }
 
-
           Future.delayed(const Duration(milliseconds: 10), () {
             if (_selectedExercisesWithCircuits.isNotEmpty) {
               final testExercise = _selectedExercisesWithCircuits.first['name']?.trim() ?? '';
@@ -1315,6 +1323,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     _horizontalScrollController = ScrollController();
 
     print('🧠 [WES] initState complete — awaiting _initialLoad...');
+    _wesInitTimer.stop();
+    print('⏱️ [WES] initState total = ${_wesInitTimer.elapsedMilliseconds}ms');
+
   }
 
 
@@ -1530,10 +1541,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
   Future<void> _loadInitialData() async {
     print('🚀 [WES Init] Starting _loadInitialData');
+    final _loadInitialDataTimer = Stopwatch()..start();
 
     if (widget.prefilledExercisesWithCircuits?.isNotEmpty ?? false) {
-      print('🧠 [WES Init] Using widget.prefilledExercisesWithCircuits');
-
       setState(() {
         _selectedExercisesWithCircuits.clear();
         _workoutSets.clear();
@@ -1558,50 +1568,46 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
         }
 
-        print('✅ [WES Init] Pre-filled exercises: ${_selectedExercisesWithCircuits.map((e) => e['name'])}');
-        print('✅ [WES Init] Skipping normal BB2 flow, returning early');
-
         _isLoadingData = false;
       });
-      print('🚫 [WES Init] BB2 hint loading skipped due to prefilledExercisesWithCircuits');
-
       return;
     }
 
     // 🔁 Normal flow
     print('🔁 [WES Init] Running full BB2 plan load');
+
+// These 3 appear order-dependent → keep them sequential
     await loadExercisesFromFirestoreForWES();
     await _buildNameToIdMapsFromFirestore();
     await _loadPlannedExerciseDetails();
-    await PeriodizationModelUtils.fetchFullTopSetHistory(
-      uid: UserContext.of(context, listen: false).currentUid,
-    );
-    await loadSavedWorkoutsForInstanceCount();
 
-    await loadPlannedExercisesFromFirestore();
-    await loadPreviousWorkoutData();
+// These are independent once the above are done → run in parallel
+    final uid = _cachedUid; // use the selected athlete
+    await Future.wait([
+      PeriodizationModelUtils.fetchFullTopSetHistory(uid: uid),
+      loadSavedWorkoutsForInstanceCount(),
+      loadPlannedExercisesFromFirestore(),
+      loadPreviousWorkoutData(),
+    ]);
 
-    // 💾 Draft Load
+// 💾 Draft Load
     print('💾 [WES Init] Attempting to load draft from cache...');
     final draftLoaded = await _loadWorkoutDraftFromCache();
     print('📦 [WES Init] Draft loaded: $draftLoaded');
 
     if (draftLoaded) {
-      await Future.delayed(const Duration(milliseconds: 10));
       print('🔁 [WES Init] Merging BB2 exercises post-draft...');
       await _mergeNewBB2ExercisesIntoDraft();
     } else {
       print('📭 [WES Init] No draft found → merging BB2 from scratch');
       _selectedExercisesWithCircuits.clear(); // ensure fully fresh
       print('[WES Init] Exercises before BB2 merge: ${_selectedExercisesWithCircuits.length}');
-
       await _mergeNewBB2ExercisesIntoDraft();
       print('[WES Init] Exercises after BB2 merge: ${_selectedExercisesWithCircuits.length}');
-
     }
 
-    print('🧠 [WES Init] Running final merge to reinforce BB2 values...');
-    await _mergeNewBB2ExercisesIntoDraft();
+// (Was duplicated before) —> no second _mergeNewBB2ExercisesIntoDraft() call here
+
 
     print('🧪 [WES Init] Resolved BB2 values:');
     _resolvedBB2Values.forEach((name, values) {
@@ -1611,11 +1617,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     setState(() {
       _isLoadingData = false;
       _isInitialized = true;
-      print('🟢 [WES Init] Final setState to force UI rebuild after BB2 exercise injection');
     });
-
     print('✅ [WES Init] _loadInitialData complete');
-
+    _loadInitialDataTimer.stop();
+    print('⏱️ [WES] _loadInitialData took ${_loadInitialDataTimer.elapsedMilliseconds}ms');
   }
 
 

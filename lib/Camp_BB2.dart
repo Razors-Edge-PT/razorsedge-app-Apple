@@ -172,8 +172,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   late final String _cachedUid;
   String? _dataOwnerUid;
   String? _dataOwnerBlockId;
-  String? _ownerUid;
-  String? _ownerBlockId;
 
   int? _draggedRowIndex;
   List<Map<String, String>> allExercisesFromFirestore = []; // 🔥 Full list
@@ -194,6 +192,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   int initialWeekIndex = 0;
   int initialDayIndex = 0; // Optional but useful for fine control
   final Set<int> loadedWeekIndices = {};
+  final Set<int> _loadingWeeks = {};
 
 
   DateTime _bb2StartTime = DateTime.now();
@@ -304,6 +303,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           total: total);
       print("📦 Week $_currentWeekPage data loaded.");
       loadedWeekIndices.add(_currentWeekPage);
+      unawaited(_prefetchNeighborWeeks(_currentWeekPage));
 
       await _timeStep('loadPlannedExercisesFromFirestore',
               () => loadPlannedExercisesFromFirestore(),
@@ -514,7 +514,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     }
   }
 
-
   String? _lastCtxKey;
   void _maybeResetCaches(String uid, String blockId) {
     final key = '$uid::$blockId';
@@ -527,6 +526,30 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     // If you have other per-athlete caches, clear them here too:
     // _hintCache?.clear();
     // _repTargetsCache?.clear();
+  }
+
+  Future<void> _loadWeekIfNeeded(int week) async {
+    if (week < 0 || week >= totalWeeks) return;
+    if (loadedWeekIndices.contains(week)) return;
+    if (_loadingWeeks.contains(week)) return;
+
+    _loadingWeeks.add(week);
+    try {
+      await loadBlockDataForWeek(week);
+      loadedWeekIndices.add(week);
+      if (mounted) setState(() {}); // optional if your loader already setState's
+    } finally {
+      _loadingWeeks.remove(week);
+    }
+  }
+
+  Future<void> _prefetchNeighborWeeks(int center) async {
+    final futures = <Future<void>>[];
+    // previous
+    futures.add(_loadWeekIfNeeded(center - 1));
+    // next
+    futures.add(_loadWeekIfNeeded(center + 1));
+    await Future.wait(futures);
   }
 
   void _computeWeekBounds() {
@@ -1684,36 +1707,31 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       return '${d.year}-$m-$day';
     }
 
-    // 6) Fetch WES overrides only for days with exercises
+    // 6) WES overrides: cache-first, then server reconcile
     final wesStep = Stopwatch()..start();
-    final wesFetches = <Future<DocumentSnapshot<Map<String, dynamic>>>>[];
-    final wesDayOrder = <int>[]; // to keep mapping
+    final wesCacheFetches = <Future<DocumentSnapshot<Map<String, dynamic>>>>[];
+    final wesServerFetches = <Future<DocumentSnapshot<Map<String, dynamic>>>>[];
+    final wesDayOrder = <int>[];
 
     parsedByDayIndex.forEach((dayIndex, rows) {
-      if (rows.isEmpty) return; // ⬅️ skip empty days
-
+      if (rows.isEmpty) return;
       final date = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
+      final docRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(_cachedUid) // lock to selected athlete
+          .collection('workouts')
+          .doc(_ymd(date));
       wesDayOrder.add(dayIndex);
-      wesFetches.add(
-        FirebaseFirestore.instance
-            .collection('users')
-            .doc(uid)
-            .collection('workouts')
-            .doc(_ymd(date))
-            .get(const GetOptions(source: Source.server)),
-      );
+      wesCacheFetches.add(docRef.get(const GetOptions(source: Source.cache)));
+      wesServerFetches.add(docRef.get(const GetOptions(source: Source.server)));
     });
 
-    final wesDocs = await Future.wait(wesFetches);
-    print('   ↳ WES overrides fetch (${wesDocs.length} docs) took ${wesStep.elapsedMilliseconds}ms');
-
-
-// Then, when applying overrides:
-    for (int i = 0; i < wesDocs.length; i++) {
+// 6a) Apply cache (fast paint)
+    final wesCacheDocs = await Future.wait(wesCacheFetches);
+    for (int i = 0; i < wesCacheDocs.length; i++) {
       final dayIndex = wesDayOrder[i];
-      final doc = wesDocs[i];
+      final doc = wesCacheDocs[i];
       if (!doc.exists) continue;
-
       final savedExercises = List<Map<String, dynamic>>.from(doc.data()?['exercises'] ?? []);
       final rows = parsedByDayIndex[dayIndex]!;
       for (final ex in savedExercises) {
@@ -1721,18 +1739,73 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         final circuit = ex['circuitIndex'] ?? 0;
         final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? []);
         if (name == '' || sets.isEmpty) continue;
-
         final idx = rows.indexWhere((r) => r.exercise == name && r.circuitIndex == circuit);
         if (idx < 0) continue;
-
         final r = rows[idx];
-        r.weightController.text = sets[0]['weight']?.toString() ?? '';
-        r.repsController.text = sets[0]['reps']?.toString() ?? '';
-        r.rirController.text = sets[0]['rir']?.toString() ?? '';
+        r.weightController.text   = sets[0]['weight']?.toString()   ?? '';
+        r.repsController.text     = sets[0]['reps']?.toString()     ?? '';
+        r.rirController.text      = sets[0]['rir']?.toString()      ?? '';
         r.velocityController.text = sets[0]['velocity']?.toString() ?? '';
-        r.notesController.text = sets[0]['notes']?.toString() ?? '';
+        r.notesController.text    = sets[0]['notes']?.toString()    ?? '';
+        final baseKey = 'w${weekIndex}_d${dayIndex}_r$idx';
+        _savedFields['${baseKey}_weight']   = r.weightController.text.trim().isNotEmpty;
+        _savedFields['${baseKey}_reps']     = r.repsController.text.trim().isNotEmpty;
+        _savedFields['${baseKey}_rir']      = r.rirController.text.trim().isNotEmpty;
+        _savedFields['${baseKey}_velocity'] = r.velocityController.text.trim().isNotEmpty;
+        _savedFields['${baseKey}_notes']    = r.notesController.text.trim().isNotEmpty;
       }
     }
+    print('   ↳ WES cache fetch (${wesCacheDocs.length} docs) took ${wesStep.elapsedMilliseconds}ms');
+
+// 6b) Server reconcile in background
+    unawaited(Future.wait(wesServerFetches).then((wesServerDocs) {
+      bool changed = false;
+      for (int i = 0; i < wesServerDocs.length; i++) {
+        final dayIndex = wesDayOrder[i];
+        final doc = wesServerDocs[i];
+        if (!doc.exists) continue;
+        final savedExercises = List<Map<String, dynamic>>.from(doc.data()?['exercises'] ?? []);
+        final rows = parsedByDayIndex[dayIndex]!;
+        for (final ex in savedExercises) {
+          final name = ex['name'] ?? '';
+          final circuit = ex['circuitIndex'] ?? 0;
+          final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? []);
+          if (name == '' || sets.isEmpty) continue;
+          final idx = rows.indexWhere((r) => r.exercise == name && r.circuitIndex == circuit);
+          if (idx < 0) continue;
+          final r = rows[idx];
+
+          // Apply only if value differs
+          String v(String? s) => s?.toString() ?? '';
+          final w = v(sets[0]['weight']);
+          final rp= v(sets[0]['reps']);
+          final rr= v(sets[0]['rir']);
+          final ve= v(sets[0]['velocity']);
+          final no= v(sets[0]['notes']);
+
+          if (r.weightController.text != w ||
+              r.repsController.text   != rp ||
+              r.rirController.text    != rr ||
+              r.velocityController.text != ve ||
+              r.notesController.text  != no) {
+            r.weightController.text = w;
+            r.repsController.text   = rp;
+            r.rirController.text    = rr;
+            r.velocityController.text = ve;
+            r.notesController.text  = no;
+            final baseKey = 'w${weekIndex}_d${dayIndex}_r$idx';
+            _savedFields['${baseKey}_weight']   = w.isNotEmpty;
+            _savedFields['${baseKey}_reps']     = rp.isNotEmpty;
+            _savedFields['${baseKey}_rir']      = rr.isNotEmpty;
+            _savedFields['${baseKey}_velocity'] = ve.isNotEmpty;
+            _savedFields['${baseKey}_notes']    = no.isNotEmpty;
+            changed = true;
+          }
+        }
+      }
+      if (changed && mounted) setState(() {});
+    }));
+
 
     // 8) Commit to state once
     if (!mounted) return;
