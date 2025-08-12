@@ -2338,28 +2338,78 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
   void _addNewCircuitExercise() {
     setState(() {
+      // 1) Decide the next circuit index
       int nextCircuitIndex = 0;
-
       if (_selectedExercisesWithCircuits.isNotEmpty) {
         final lastCircuitIndex =
             _selectedExercisesWithCircuits.last['circuitIndex'] ?? 0;
         nextCircuitIndex = lastCircuitIndex + 1;
       }
 
+      // 2) Add a placeholder row
       _selectedExercisesWithCircuits.add({
-        'name': '',
+        'name': '', // empty until user picks an exercise
         'circuitIndex': nextCircuitIndex,
       });
 
-      _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
-      _repsControllers
-          .add(List.generate(_defaultSets, (_) => TextEditingController()));
-      _weightControllers
-          .add(List.generate(_defaultSets, (_) => TextEditingController()));
-      _rirControllers
-          .add(List.generate(_defaultSets, (_) => TextEditingController()));
+      // new row index
+      final int i = _selectedExercisesWithCircuits.length - 1;
+
+      // 3) Ensure ALL parallel structures have a row i,
+      //    and that each row contains _defaultSets entries.
+
+      // workout sets
+      while (_workoutSets.length <= i) {
+        _workoutSets.add(<SetDetails>[]);
+      }
+      while (_workoutSets[i].length < _defaultSets) {
+        _workoutSets[i].add(SetDetails());
+      }
+
+      // reps controllers
+      while (_repsControllers.length <= i) {
+        _repsControllers.add(<TextEditingController>[]);
+      }
+      while (_repsControllers[i].length < _defaultSets) {
+        _repsControllers[i].add(TextEditingController());
+      }
+
+      // weight controllers
+      while (_weightControllers.length <= i) {
+        _weightControllers.add(<TextEditingController>[]);
+      }
+      while (_weightControllers[i].length < _defaultSets) {
+        _weightControllers[i].add(TextEditingController());
+      }
+
+      // RIR controllers
+      while (_rirControllers.length <= i) {
+        _rirControllers.add(<TextEditingController>[]);
+      }
+      while (_rirControllers[i].length < _defaultSets) {
+        _rirControllers[i].add(TextEditingController());
+      }
+
+      // OPTIONAL: if you also track velocity/notes per set, keep them in sync too.
+      // Uncomment if these exist in your state:
+
+    while (_velocityControllers.length <= i) {
+      _velocityControllers.add(<TextEditingController>[]);
+    }
+    while (_velocityControllers[i].length < _defaultSets) {
+      _velocityControllers[i].add(TextEditingController());
+    }
+
+    while (_notesControllers.length <= i) {
+      _notesControllers.add(<TextEditingController>[]);
+    }
+    while (_notesControllers[i].length < _defaultSets) {
+      _notesControllers[i].add(TextEditingController());
+    }
+
     });
   }
+
 
   @override
   void dispose() {
@@ -2588,9 +2638,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     final Map<String, bool> expandedGroups = {};
 
-    final List<String> selected = await showDialog<List<String>>(
-          context: context,
-          builder: (ctx) {
+    final List<String>? selected = await showDialog<List<String>>(
+      context: context,
+      builder: (ctx) {
             List<String> tempSelected = _selectedExercisesWithCircuits
                 .map((e) => e['name'] as String)
                 .toList();
@@ -2849,23 +2899,28 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
               );
             });
           },
-        ) ??
-        [];
+        ) ;
+
+
+    if (selected == null) {
+      // User tapped Cancel → keep existing exercises untouched.
+      return;
+    }
 
     setState(() {
       _selectedExercisesWithCircuits.clear();
       _selectedExercisesWithCircuits.addAll(
         selected.map((name) => {
-              'name': name,
-              'circuitIndex': 0,
-            }),
+          'name': name,
+          'circuitIndex': 0,
+        }),
       );
 
       _workoutSets.clear();
       _workoutSets.addAll(
         List.generate(
           _selectedExercisesWithCircuits.length,
-          (_) => List.generate(_defaultSets, (_) => SetDetails()),
+              (_) => List.generate(_defaultSets, (_) => SetDetails()),
         ),
       );
 
@@ -3925,12 +3980,30 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
   void addSet(int exerciseIndex) {
     setState(() {
-      _workoutSets[exerciseIndex].add(SetDetails(reps: 0, weight: 0, rir: 0));
+      // 0) Make sure the outer row exists for every parallel structure
+      while (_workoutSets.length <= exerciseIndex) _workoutSets.add(<SetDetails>[]);
+      while (_repsControllers.length <= exerciseIndex) _repsControllers.add(<TextEditingController>[]);
+      while (_weightControllers.length <= exerciseIndex) _weightControllers.add(<TextEditingController>[]);
+      while (_rirControllers.length <= exerciseIndex) _rirControllers.add(<TextEditingController>[]);
+      while (_velocityControllers.length <= exerciseIndex) _velocityControllers.add(<TextEditingController>[]);
+      while (_notesControllers.length <= exerciseIndex) _notesControllers.add(<TextEditingController>[]);
+
+      // 1) Append a new set to every parallel structure
+      _workoutSets[exerciseIndex].add(SetDetails(
+        reps: null,
+        weight: null,
+        rir: null,
+        // add velocity/notes fields here if SetDetails has them; otherwise leave as controllers only
+      ));
       _repsControllers[exerciseIndex].add(TextEditingController());
       _weightControllers[exerciseIndex].add(TextEditingController());
       _rirControllers[exerciseIndex].add(TextEditingController());
+      _velocityControllers[exerciseIndex].add(TextEditingController());
+      _notesControllers[exerciseIndex].add(TextEditingController());
+
     });
   }
+
 
   void removeSet(int exerciseIndex, int setIndex) {
     setState(() {
