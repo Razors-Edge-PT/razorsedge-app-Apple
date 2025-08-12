@@ -1865,6 +1865,108 @@ class PeriodizationModelUtils {
     print('✅ [SmartProgression] Loaded sets for: ${topSetsByExercise.keys}');
   }
 
+  //Warm Up Service Function for speed
+  static void _applyTopSetsFromSnapshot(QuerySnapshot<Map<String, dynamic>> snapshot) {
+    if (snapshot.docs.isEmpty) return;
+
+    // ✅ Clear ONLY if new data exists
+    if (exercisePreviousTopSetReps.isNotEmpty || exercisePreviousE1RMs.isNotEmpty) {
+      exercisePreviousTopSetReps.clear();
+      exercisePreviousE1RMs.clear();
+    }
+
+    for (var doc in snapshot.docs) {
+      final data = doc.data();
+      // print('🧪 [PMU] Processing workout → date: ${data['date']}, exercises: ${data['exercises']}');
+
+      final workout = Workout.fromFirestore(doc);
+
+      for (var exercise in workout.exercises) {
+        String exerciseName = exercise.name;
+
+        SetDetails? topSet;
+        double highestE1RM = 0.0;
+
+        for (var set in exercise.sets) {
+          double weight = _parseToDouble(set.weight);
+          double reps = _parseToDouble(set.reps);
+          double rir = _parseToDouble(set.rir);
+          double totalReps = reps + rir;
+
+          double e1rm = (totalReps <= 6)
+              ? (weight * (36 / (37 - totalReps))) // Brzycki
+              : (weight * (1 + (0.0333 * totalReps))); // Epley
+
+          if (topSet == null || e1rm > highestE1RM) {
+            highestE1RM = e1rm;
+            topSet = set;
+          }
+        }
+
+        if (topSet != null) {
+          int effectiveReps = (_parseToDouble(topSet.reps) + _parseToDouble(topSet.rir)).floor();
+
+          exercisePreviousE1RMs.putIfAbsent(exerciseName, () => []);
+          exercisePreviousE1RMs[exerciseName]!.add(highestE1RM);
+
+          exercisePreviousTopSetReps.putIfAbsent(exerciseName, () => []);
+          exercisePreviousTopSetReps[exerciseName]!.add(effectiveReps);
+
+          // keep only last N
+          if (exercisePreviousTopSetReps[exerciseName]!.length > 12) {
+            exercisePreviousTopSetReps[exerciseName] =
+                exercisePreviousTopSetReps[exerciseName]!.take(12).toList();
+          }
+          if (exercisePreviousE1RMs[exerciseName]!.length > 4) {
+            exercisePreviousE1RMs[exerciseName] =
+                exercisePreviousE1RMs[exerciseName]!.take(4).toList();
+          }
+        }
+      }
+    }
+
+    // Optional debug
+    // print('🧪 [PMU] Top set history fully loaded. Keys: ${exercisePreviousTopSetReps.keys.toList()}');
+  }
+
+  static Future<void> fetchLastWorkoutTopSetRepsCacheFirst({required String uid}) async {
+    print('🧪 [PMU] (cache-first) Fetching top sets for: $uid');
+
+    final query = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('workouts')
+        .orderBy('date', descending: true)
+        .limit(12);
+
+    // 1) Try cache (fast if warmed)
+    try {
+      final cacheSnap = await query.get(const GetOptions(source: Source.cache));
+      if (cacheSnap.docs.isNotEmpty) {
+        _applyTopSetsFromSnapshot(cacheSnap);
+
+        // 2) Reconcile with server in background (non-blocking)
+        unawaited(() async {
+          try {
+            final serverSnap = await query.get(const GetOptions(source: Source.server));
+            // You could diff; simplest is to re-apply
+            _applyTopSetsFromSnapshot(serverSnap);
+          } catch (_) {}
+        }());
+        return;
+      }
+    } catch (_) {
+      // cache disabled/cold — fall through to server
+    }
+
+    // 3) Cold path: server
+    final serverSnap = await query.get(const GetOptions(source: Source.server));
+    _applyTopSetsFromSnapshot(serverSnap);
+  }
+
+
+  //Warm up Service functions end
+
   static Future<void> fetchLastWorkoutTopSetReps({String? uid}) async {
     final resolvedUid = uid ?? FirebaseAuth.instance.currentUser!.uid;
     print('🧪 [PMU] Fetching top sets for: $resolvedUid');

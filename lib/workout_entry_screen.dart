@@ -19,6 +19,7 @@ import 'package:provider/provider.dart';
 import 'user_context.dart';
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'warmup_service.dart';
 
 Future<void> deleteAllUserWorkouts() async {
   final user = FirebaseAuth.instance.currentUser;
@@ -149,7 +150,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
   Future<void> loadPreviousWorkoutData() async {
     final sw = Stopwatch()..start(); // ⏱️ start
-    await PeriodizationModelUtils.fetchLastWorkoutTopSetReps(
+    await PeriodizationModelUtils.fetchLastWorkoutTopSetRepsCacheFirst(
       uid: UserContext.of(context, listen: false).currentUid,
     );
 
@@ -168,36 +169,110 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
 
   Future<void> loadPlannedExercisesFromFirestore() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    final totalSw = Stopwatch()..start();
+    try {
+      // ✅ Same uid source you use elsewhere (impersonation-safe, no Provider listen)
+      final uid = userId;
+      final blockId = _selectedBlockId; // ✅ match _loadPlannedExerciseDetails()
 
-    final doc = await FirebaseFirestore.instance
-        .collection('planned_blocks')
-        .doc(userId)
-        .collection('blocks')
-        .doc(widget.blockId)
-        .get();
-
-    print(
-        '[WorkoutPage] loading plannedExercises for blockId=${widget.blockId}');
-
-    if (doc.exists) {
-      final data = doc.data();
-      if (data != null && data['plannedExercises'] != null) {
-        setState(() {
-          plannedExercises = List<String>.from(data['plannedExercises']);
-        });
-      } else {
-        setState(() {
-          plannedExercises = []; // ✅ If null, safely empty list
-        });
+      if (uid.isEmpty || blockId == null || blockId.isEmpty) {
+        print('⚠️ [WES] loadPlannedExercisesFromFirestore missing uid/blockId (uid=$uid, blockId=$blockId)');
+        return;
       }
-    } else {
-      setState(() {
-        plannedExercises = []; // ✅ If doc doesn't exist, safely empty list
-      });
+
+      final ref = FirebaseFirestore.instance
+          .collection('planned_blocks')
+          .doc(uid)
+          .collection('blocks')
+          .doc(blockId);
+
+      print('[WES] loadPlannedExercisesFromFirestore → planned_blocks/$uid/blocks/$blockId');
+
+      List<String> parseDoc(DocumentSnapshot<Map<String, dynamic>> snap) {
+        if (!snap.exists) return const <String>[];
+        final data = snap.data() ?? const <String, dynamic>{};
+        final raw = data['plannedExercises'];
+        if (raw is List) {
+          return raw
+              .map((e) => (e?.toString() ?? '').trim())
+              .where((s) => s.isNotEmpty)
+              .toList(growable: false);
+        }
+        return const <String>[];
+      }
+
+      bool listEq<T>(List<T>? a, List<T>? b) {
+        if (identical(a, b)) return true;
+        if (a == null || b == null || a.length != b.length) return false;
+        for (var i = 0; i < a.length; i++) {
+          if (a[i] != b[i]) return false;
+        }
+        return true;
+      }
+
+      // 1) Try CACHE first
+      final cacheSw = Stopwatch()..start();
+      DocumentSnapshot<Map<String, dynamic>>? cacheSnap;
+      try {
+        cacheSnap = await ref.get(const GetOptions(source: Source.cache));
+      } catch (_) {}
+      cacheSw.stop();
+
+      if (cacheSnap != null && cacheSnap.exists) {
+        final cached = parseDoc(cacheSnap);
+        if (mounted && !listEq(plannedExercises, cached)) {
+          setState(() => plannedExercises = cached);
+        }
+        print('📦 [WES] plannedExercises (cache) items=${cached.length} in ${cacheSw.elapsedMilliseconds}ms');
+
+        // 2) Background reconcile
+        unawaited(() async {
+          try {
+            final srvSw = Stopwatch()..start();
+            final srvSnap = await ref.get(); // server
+            srvSw.stop();
+            final fresh = parseDoc(srvSnap);
+            if (mounted && !listEq(plannedExercises, fresh)) {
+              setState(() => plannedExercises = fresh);
+              print('🔁 [WES] reconciled from server (items=${fresh.length}, ${srvSw.elapsedMilliseconds}ms)');
+            }
+          } catch (e) {
+            print('ℹ️ [WES] plannedExercises reconcile failed: $e');
+          }
+        }());
+
+      } else {
+        // 3) Guaranteed SERVER fallback (awaited) for cold start
+        final srvSw = Stopwatch()..start();
+        final srvSnap = await ref.get();
+        srvSw.stop();
+
+        if (!srvSnap.exists) {
+          print('⚠️ [WES] Block doc missing at planned_blocks/$uid/blocks/$blockId');
+          if (mounted && (plannedExercises == null || plannedExercises.isNotEmpty)) {
+            setState(() => plannedExercises = const <String>[]);
+          }
+        } else {
+          final fresh = parseDoc(srvSnap);
+          if (mounted && !listEq(plannedExercises, fresh)) {
+            setState(() => plannedExercises = fresh);
+          }
+          print('🌐 [WES] plannedExercises (server) items=${fresh.length} in ${srvSw.elapsedMilliseconds}ms');
+        }
+      }
+    } catch (e, st) {
+      print('❌ [WES] loadPlannedExercisesFromFirestore error: $e');
+      print(st);
+    } finally {
+      totalSw.stop();
+      print('⏱️ [WES] loadPlannedExercisesFromFirestore total took ${totalSw.elapsedMilliseconds}ms');
     }
   }
+
+
+
+
+
 
   // ✅ Custom Hybrid E1RM Formula: Brzycki for ≤6 reps, Epley for >6 reps
   double calculateE1RM(double? weight, double? reps, double? rir) {
@@ -1253,6 +1328,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           ).id;
 
           print("🧱 [WES] Selected blockId: $_selectedBlockId");
+          // ✅ Pre-warm exact block doc for WES
+          // right after: print("🧱 [WES] Selected blockId: $_selectedBlockId");
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            final uidForWarm = userId;
+            if (uidForWarm.isNotEmpty && _selectedBlockId != null && _selectedBlockId!.isNotEmpty) {
+              WarmupService.instance.warmWES(uidForWarm, activeBlockId: _selectedBlockId);
+            }
+          });
+
 
           await _loadInitialData();
 
@@ -1580,17 +1664,17 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     print('🔁 [WES Init] Running full BB2 plan load');
 
 // These 3 appear order-dependent → keep them sequential
-    await loadExercisesFromFirestoreForWES();
+    await loadExercisesFromFirestoreForWES(); //done
     await _buildNameToIdMapsFromFirestore();
-    await _loadPlannedExerciseDetails();
+    await _loadPlannedExerciseDetails(); //done
 
 // These are independent once the above are done → run in parallel
     final uid = _cachedUid; // use the selected athlete
     await Future.wait([
       PeriodizationModelUtils.fetchFullTopSetHistory(uid: uid),
-      loadSavedWorkoutsForInstanceCount(),
+      loadSavedWorkoutsForInstanceCount(), //done
       loadPlannedExercisesFromFirestore(),
-      loadPreviousWorkoutData(),
+      loadPreviousWorkoutData(),//done
     ]);
 
 // 💾 Draft Load
@@ -1775,19 +1859,70 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
 
   Future<void> loadExercisesFromFirestoreForWES() async {
-    final snapshot =
-        await FirebaseFirestore.instance.collection('exercises').get();
+    print('➡️ [WES] loadExercisesFromFirestoreForWES START');
+    final total = Stopwatch()..start();
+    final getSw = Stopwatch();
+    final mapSw = Stopwatch();
 
-    for (final doc in snapshot.docs) {
-      final id = doc.id;
-      final name = doc['name']?.toString()?.trim();
-      if (name != null && name.isNotEmpty) {
-        PeriodizationModelUtils.nameToId[name] = id;
-        PeriodizationModelUtils.idToName[id] = name;
-        print('✅ [WES] Mapped "$name" → $id');
+    int mapped = 0;
+
+    Future<QuerySnapshot<Map<String, dynamic>>?> _getCached() async {
+      try {
+        return await FirebaseFirestore.instance
+            .collection('exercises')
+            .orderBy('name')
+            .get(const GetOptions(source: Source.cache));
+      } catch (_) {
+        return null;
       }
     }
+
+    Future<QuerySnapshot<Map<String, dynamic>>> _getServer() {
+      return FirebaseFirestore.instance
+          .collection('exercises')
+          .orderBy('name')
+          .get(); // server
+    }
+
+    try {
+      getSw.start();
+      var snapshot = await _getCached();
+      if (snapshot == null || snapshot.docs.isEmpty) {
+        snapshot = await _getServer();
+        print('📥 [WES] exercises.get() from SERVER (docs: ${snapshot.docs.length})');
+      } else {
+        print('📥 [WES] exercises.get() from CACHE (docs: ${snapshot.docs.length})');
+      }
+      getSw.stop();
+
+      mapSw.start();
+      for (final doc in snapshot.docs) {
+        final id = doc.id;
+        final rawName = doc.data()['name'];
+        final name = rawName?.toString().trim();
+        if (name != null && name.isNotEmpty) {
+          PeriodizationModelUtils.nameToId[name] = id;
+          PeriodizationModelUtils.idToName[id] = name;
+          mapped++;
+          print('✅ [WES] Mapped "$name" → $id');
+        }
+      }
+      mapSw.stop();
+
+      print('📥 [WES] exercises.get() took ${getSw.elapsedMilliseconds}ms');
+      print('🧭 [WES] Mapping loop took ${mapSw.elapsedMilliseconds}ms (mapped $mapped)');
+    } catch (e, st) {
+      print('❌ [WES] loadExercisesFromFirestoreForWES error: $e');
+      print(st);
+    } finally {
+      total.stop();
+      print('⏱️ [WES] loadExercisesFromFirestoreForWES total ${total.elapsedMilliseconds}ms (mapped $mapped)');
+      print('⤴️ [WES] loadExercisesFromFirestoreForWES END');
+    }
   }
+
+
+
 
   Future<Map<String, dynamic>> _loadPlannedExerciseDetails() async {
     // ⏱️ added
@@ -1971,22 +2106,60 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   }
 
   Future<void> loadSavedWorkoutsForInstanceCount() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    final sw = Stopwatch()..start();
+    try {
+      // Keep your original identity source/behavior
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
 
-    final snapshot = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(userId)
-        .collection('workouts')
-        .get();
+      final col = FirebaseFirestore.instance
+          .collection('users')
+          .doc(userId) // ✅ same as your original code
+          .collection('workouts');
 
-    final workouts = snapshot.docs.map((doc) => doc.data()).toList();
-    PeriodizationModelUtils.savedWorkoutsList =
+      // 1) Try cache first (fast when WarmupService has seeded)
+      List<Map<String, dynamic>> workouts = const <Map<String, dynamic>>[];
+      try {
+        final cachedSnap = await col.get(const GetOptions(source: Source.cache));
+        workouts = cachedSnap.docs.map((d) => d.data()).toList();
+      } catch (_) {
+        // cache may miss/throw on first-ever run; that's fine
+      }
+
+      // 2) If cache had anything, apply immediately
+      if (workouts.isNotEmpty) {
+        PeriodizationModelUtils.savedWorkoutsList =
         List<Map<String, dynamic>>.from(workouts);
+        print('📦 [WES] (cache) Loaded ${workouts.length} saved workouts into savedWorkoutsList');
+      } else {
+        // 3) Guarantee a server fallback (awaited) so behavior matches old code
+        final serverSnap = await col.get(); // server
+        workouts = serverSnap.docs.map((d) => d.data()).toList();
+        PeriodizationModelUtils.savedWorkoutsList =
+        List<Map<String, dynamic>>.from(workouts);
+        print('📦 [WES] (server) Loaded ${workouts.length} saved workouts into savedWorkoutsList');
+      }
 
-    print(
-        '📦 [WES] Loaded ${workouts.length} saved workouts into savedWorkoutsList');
+      // 4) Background reconcile (non-blocking) for freshness, only if cache was used
+      if (workouts.isNotEmpty) {
+        unawaited(() async {
+          try {
+            final freshSnap = await col.get(); // server
+            final fresh = freshSnap.docs.map((d) => d.data()).toList();
+            if (fresh.length != workouts.length) {
+              PeriodizationModelUtils.savedWorkoutsList =
+              List<Map<String, dynamic>>.from(fresh);
+              print('🔁 [WES] Reconciled saved workouts (server count ${fresh.length})');
+            }
+          } catch (_) {}
+        }());
+      }
+    } finally {
+      sw.stop();
+      print('⏱️ [WES] loadSavedWorkoutsForInstanceCount took ${sw.elapsedMilliseconds}ms');
+    }
   }
+
 
   int? _getApplicableWeekIndex(String exerciseId) {
     final model =
