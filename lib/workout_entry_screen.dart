@@ -1302,7 +1302,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
 
     _selectedDate = widget.initialDate ?? DateTime.now();
-
+    if (_workoutNameController.text.trim().isEmpty) {
+      _workoutNameController.text = DateFormat('EEE d MMM yyyy').format(_selectedDate);
+    }
     final initTotal = Stopwatch()..start();
 
     _initialLoad = _fetchActiveBlockThenMeta().then((_) {
@@ -1346,6 +1348,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           _debugPrintBlockDates();
 
           await _initializeDayDocIfNeeded(_selectedDate);
+
+
 
           if (widget.initialDate != null) {
             _selectedDate = widget.initialDate!;
@@ -2413,7 +2417,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
-    //101here
     print('🧹 [WES] dispose — saving draft for $_cachedUid');
     _persistDraftLocally();
 
@@ -2549,8 +2552,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   }
 
 
-
-  //101here
   Future<void> _loadDraftLocallyIfAvailable() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -2598,7 +2599,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   }
 
 
-  //101here
   Future<void> _clearDraft() async {
     final prefs = await SharedPreferences.getInstance();
     final key = _getDraftKey(); // 👈 use helper
@@ -3181,10 +3181,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   }
 
   Future<void> _saveWorkout() async {
-    if (_workoutNameController.text.isEmpty ||
-        _selectedExercisesWithCircuits.isEmpty) {
+    // Auto-fill a default name if empty (but don't block save)
+    if (_workoutNameController.text.trim().isEmpty) {
+      _workoutNameController.text =
+          DateFormat('EEE d MMM yyyy').format(_selectedDate);
+    }
+
+    // Only require that there are exercises to save
+    if (_selectedExercisesWithCircuits.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please fill in all required fields.')),
+        const SnackBar(content: Text('Please add at least one exercise.')),
       );
       return;
     }
