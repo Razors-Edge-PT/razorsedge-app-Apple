@@ -249,22 +249,34 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadAthleteEmail() async {
     final uid = Provider.of<UserContext>(context, listen: false).actingAsUid;
-
-    print('📡 Attempting to fetch email for UID: $uid'); // 👈 move this up
-
     if (uid == null) return;
 
-    final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
-    final email = userDoc.data()?['email'];
+    final snap = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+    final data = snap.data();
+    if (!mounted || data == null) return;
 
-    print('📄 User doc data: ${userDoc.data()}');
-
-    if (email != null && mounted) {
-      setState(() {
-        _actingAsEmail = email;
-      });
+    String? pick(dynamic v) {
+      final s = (v ?? '').toString().trim();
+      return s.isEmpty ? null : s;
     }
+
+    final chosen =
+        pick(data['username']) ??
+            pick(data['displayName']) ??
+            pick(data['email']) ??
+            'Unknown';
+
+    print('🧭 display pick for $uid → '
+        '${pick(data["username"]) != null ? "username" :
+    pick(data["displayName"]) != null ? "displayName" :
+    pick(data["email"]) != null ? "email" : "Unknown"}'
+        ' = $chosen');
+
+    setState(() => _actingAsEmail = chosen); // (maybe rename to _actingAsLabel)
   }
+
+
+
 
 
 

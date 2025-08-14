@@ -16,9 +16,20 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _confirmPasswordController = TextEditingController();
+  final TextEditingController _usernameController = TextEditingController();
 
   bool _isLoading = false;
   String? _errorMessage;
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    _confirmPasswordController.dispose();
+    _usernameController.dispose();
+    super.dispose();
+  }
+
 
   void _register() async {
     if (!_formKey.currentState!.validate()) return;
@@ -31,6 +42,7 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
     try {
       final email = _emailController.text.trim();
       final password = _passwordController.text.trim();
+      final username = _usernameController.text.trim();
 
       // ✅ Create the user
       await FirebaseAuth.instance.createUserWithEmailAndPassword(
@@ -39,16 +51,25 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
       );
 
       // ✅ Store user email in Firestore
+      // ✅ Store user email (+ optional username) in Firestore and Auth
       final user = FirebaseAuth.instance.currentUser;
       if (user != null) {
+        if (username.isNotEmpty) {
+          await user.updateDisplayName(username);
+        }
+
         await FirebaseFirestore.instance
             .collection('users')
             .doc(user.uid)
             .set({
           'email': user.email,
+          if (username.isNotEmpty) 'username': username,
+          // Optional: handy for case-insensitive lookups later
+          if (username.isNotEmpty) 'usernameLower': username.toLowerCase(),
           'createdAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
       }
+
 
       // ✅ Navigate directly to Home screen after successful registration
       if (mounted) {
@@ -144,6 +165,32 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                       color: Colors.black54),
                                 ),
                                 const SizedBox(height: 16),
+
+                                // Username (optional)
+                                TextFormField(
+                                  controller: _usernameController,
+                                  textCapitalization: TextCapitalization.words,
+                                  style: const TextStyle(color: Colors.black54),
+                                  decoration: InputDecoration(
+                                    labelText: 'Username (optional)',
+                                    labelStyle: const TextStyle(color: Colors.blueAccent),
+                                    hintText: 'What should we call you?',
+                                    hintStyle: TextStyle(
+                                      color: Colors.blueAccent.withOpacity(0.6),
+                                      fontSize: 16,
+                                    ),
+                                    enabledBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      borderSide: const BorderSide(color: Colors.blueAccent),
+                                    ),
+                                    focusedBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      borderSide: const BorderSide(color: Colors.lightBlue, width: 2),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+
 
                                 // Email
                                 TextFormField(

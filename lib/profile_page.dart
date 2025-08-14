@@ -36,6 +36,7 @@ class ProfilePage extends StatefulWidget {
   @override
   State<ProfilePage> createState() => _ProfilePageState();
 
+
 }
 
 class _StatChip extends StatelessWidget {
@@ -67,6 +68,7 @@ class _ProfilePageState extends State<ProfilePage> {
   File? _localProfileImage;           // <-- use this one
   String? photoURL;
   String? _localProfilePath; // persisted path on device
+  String? _currentUsername;
 
   // Bio
   final TextEditingController _bioController = TextEditingController();
@@ -88,6 +90,20 @@ class _ProfilePageState extends State<ProfilePage> {
     _loadLocalProfileImage();
     _loadPhotoURL();
     _refreshBestLiftsAndPoints(); // NEW
+    _loadCurrentUsername();
+  }
+
+  Future<void> _loadCurrentUsername() async {
+    final uid = Provider.of<UserContext>(context, listen: false).actingAsUid;
+    if (uid == null) return;
+
+    final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+    if (userDoc.exists) {
+      final data = userDoc.data();
+      setState(() {
+        _currentUsername = data?['username'] ?? data?['displayName'] ?? 'No username';
+      });
+    }
   }
 
   Future<void> _loadProfileData() async {
@@ -496,46 +512,103 @@ class _ProfilePageState extends State<ProfilePage> {
             Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                // Profile Picture
-                GestureDetector(
-                  onTap: () async {
-                    final confirm = await showDialog<bool>(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        title: const Text('Change Profile Picture?'),
-                        content: const Text('Do you want to change your profile picture?'),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx, false),
-                            child: const Text('Cancel'),
+                // Avatar + Username Column
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Profile Picture
+                    GestureDetector(
+                      onTap: () async {
+                        final confirm = await showDialog<bool>(
+                          context: context,
+                          builder: (ctx) => AlertDialog(
+                            title: const Text('Change Profile Picture?'),
+                            content: const Text('Do you want to change your profile picture?'),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(ctx, false),
+                                child: const Text('Cancel'),
+                              ),
+                              TextButton(
+                                onPressed: () => Navigator.pop(ctx, true),
+                                child: const Text('Yes'),
+                              ),
+                            ],
                           ),
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx, true),
-                            child: const Text('Yes'),
-                          ),
-                        ],
+                        );
+                        if (confirm == true) _pickAndUploadProfileImage();
+                      },
+                      child: CircleAvatar(
+                        radius: 48,
+                        backgroundColor: Colors.grey.shade300,
+                        backgroundImage: _localProfileImage != null
+                            ? FileImage(_localProfileImage!)
+                            : (_localProfilePath != null && File(_localProfilePath!).existsSync())
+                            ? FileImage(File(_localProfilePath!))
+                            : null,
+                        child: (_localProfileImage == null &&
+                            (_localProfilePath == null || !File(_localProfilePath!).existsSync()))
+                            ? const Icon(Icons.person, size: 48)
+                            : null,
                       ),
-                    );
-                    if (confirm == true) _pickAndUploadProfileImage();
-                  },
-                  child: CircleAvatar(
-                    radius: 48,
-                    backgroundColor: Colors.grey.shade300,
-                    backgroundImage: _localProfileImage != null
-                        ? FileImage(_localProfileImage!)
-                        : (_localProfilePath != null && File(_localProfilePath!).existsSync())
-                        ? FileImage(File(_localProfilePath!))
-                        : null,
-                    child: (_localProfileImage == null &&
-                        (_localProfilePath == null || !File(_localProfilePath!).existsSync()))
-                        ? const Icon(Icons.person, size: 48)
-                        : null,
-                  ),
+                    ),
+
+                    const SizedBox(height: 6),
+
+                    // Username display + edit
+                    InkWell(
+                      onTap: () async {
+                        final newName = await showDialog<String>(
+                          context: context,
+                          builder: (ctx) {
+                            final ctrl = TextEditingController(text: _currentUsername);
+                            return AlertDialog(
+                              title: const Text('Update Username'),
+                              content: TextField(
+                                controller: ctrl,
+                                decoration: const InputDecoration(labelText: 'New Username'),
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(ctx),
+                                  child: const Text('Cancel'),
+                                ),
+                                ElevatedButton(
+                                  onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+                                  child: const Text('Save'),
+                                ),
+                              ],
+                            );
+                          },
+                        );
+
+                        if (newName != null && newName.isNotEmpty && newName != _currentUsername) {
+                          await FirebaseFirestore.instance
+                              .collection('users')
+                              .doc(Provider.of<UserContext>(context, listen: false).actingAsUid)
+                              .set({
+                            'username': newName,
+                            'usernameLower': newName.toLowerCase(),
+                          }, SetOptions(merge: true));
+
+                          setState(() => _currentUsername = newName);
+                        }
+                      },
+                      child: Text(
+                        _currentUsername ?? 'No username',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
 
                 const SizedBox(width: 16),
 
-                // Points chips
+                // Points chips & other stats stay as before
                 Expanded(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -545,19 +618,13 @@ class _ProfilePageState extends State<ProfilePage> {
                       const SizedBox(height: 8),
                       _StatChip(label: 'RE Points', value: _rePoints),
                       const SizedBox(height: 8),
-
-                      // Best Comp Total line
                       _StatChip(
                         label: 'Best Comp Total',
                         value: _compMode == _CompMode.threeLift
                             ? _bestThreeLiftTotal
                             : _bestBenchOnly,
                       ),
-
-
                       const SizedBox(height: 4),
-
-                      // Toggle buttons
                       ToggleButtons(
                         isSelected: [
                           _compMode == _CompMode.threeLift,
@@ -565,8 +632,7 @@ class _ProfilePageState extends State<ProfilePage> {
                         ],
                         onPressed: (idx) {
                           setState(() {
-                            _compMode =
-                            (idx == 0) ? _CompMode.threeLift : _CompMode.benchOnly;
+                            _compMode = (idx == 0) ? _CompMode.threeLift : _CompMode.benchOnly;
                           });
                         },
                         borderRadius: BorderRadius.circular(8),
@@ -585,11 +651,9 @@ class _ProfilePageState extends State<ProfilePage> {
                     ],
                   ),
                 ),
-
-
-
               ],
             ),
+
 
 
 
