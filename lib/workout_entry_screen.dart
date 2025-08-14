@@ -5130,10 +5130,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
             ),
           ], //paste point
         ),
-
       );
-       //old bracket for Card
-    }),
+    }),//old bracket for Card
     )],
                   );
                 }),
@@ -5153,6 +5151,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                 ),
               ),
             ),
+
+            const SizedBox(height: 55), // after the last exercise card
+
           ],
         ),
       ),
