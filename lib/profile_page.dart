@@ -23,6 +23,10 @@ enum _CompMode { threeLift, benchOnly }
 
 enum VideoStorageMode { local, firestore }
 
+enum BodyWeightMode { recent, avg7 }
+
+enum HeightUnit { cm, inch }
+
 class LiftVideo {
   final String liftId;      // stable key e.g., 'bench_barbell'
   final String? localPath;  // file path on device
@@ -209,6 +213,18 @@ class _ProfilePageState extends State<ProfilePage> {
   final _compBpCtrl = TextEditingController();
   final _compDlCtrl = TextEditingController();
 
+  //Body Metric bits
+  double? _bwRecent;
+  double? _bwAvg7;
+  BodyWeightMode _bwMode = BodyWeightMode.recent;
+  bool _bwPrivate = false; // local flag; persist later if you want
+  bool _bwLoading = false;
+  final TextEditingController _heightCtrl = TextEditingController();
+  HeightUnit _heightUnit = HeightUnit.cm;
+  double? _parseNum(String s) => double.tryParse(s.trim());
+  double _cmToIn(double cm) => cm / 2.54;
+  double _inToCm(double inch) => inch * 2.54;
+
 
   //Video bits
   // Toggleable later; default to local.
@@ -254,7 +270,7 @@ class _ProfilePageState extends State<ProfilePage> {
       children: [
         const SizedBox(height: 12),
         _buildLiftVideoGroupGrid(
-          title: 'Best Lift in Training (E1RM)',
+          title: 'Best Reps in Training (Highest E1RM)',
           lifts: _bestTrainingByE1RM,
         ),
         const SizedBox(height: 12),
@@ -314,8 +330,9 @@ class _ProfilePageState extends State<ProfilePage> {
             ),
             itemBuilder: (_, i) {
               final liftId = lifts[i]['id']!;
-              final liftName = lifts[i]['name']!;
-              return _buildLiftVideoTile(liftId: liftId, liftName: liftName);
+              final fullName = lifts[i]['name']!;
+              final shortName = _shortExerciseNames[fullName] ?? fullName;
+              return _buildLiftVideoTile(liftId: liftId, liftName: shortName);
             },
           ),
         ],
@@ -334,7 +351,6 @@ class _ProfilePageState extends State<ProfilePage> {
     return GestureDetector(
       onTap: () {
         if (!hasVideo || path == null || !File(path).existsSync()) {
-          // Missing or invalid – route to upload
           _pickVideoForLift(liftId);
           return;
         }
@@ -349,94 +365,106 @@ class _ProfilePageState extends State<ProfilePage> {
           await _stopInlinePlay(liftId);
         }
       },
-      child: Column(
-        children: [
-          Expanded(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: Container(
-                color: Colors.black.withOpacity(0.06),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    // Thumbnail or placeholder
-                    if (hasVideo && path != null && File(path).existsSync())
-                      FutureBuilder<Uint8List?>(
-                        future: _getThumbFor(liftId, path),
-                        builder: (context, snap) {
-                          if (snap.connectionState != ConnectionState.done ||
-                              snap.data == null) {
-                            return const Center(child: Icon(Icons.videocam));
-                          }
-                          return Image.memory(
-                            snap.data!,
-                            fit: BoxFit.cover,
-                          );
-                        },
-                      )
-                    else
-                      const Center(child: Icon(Icons.upload_file)),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          color: Colors.black.withOpacity(0.06),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              // ---- BACKGROUND (Video thumb if present) ----
+              if (hasVideo && path != null && File(path).existsSync())
+                FutureBuilder<Uint8List?>(
+                  future: _getThumbFor(liftId, path),
+                  builder: (context, snap) {
+                    if (snap.connectionState != ConnectionState.done || snap.data == null) {
+                      return const Center(child: Icon(Icons.videocam));
+                    }
+                    return Image.memory(snap.data!, fit: BoxFit.cover);
+                  },
+                ),
 
-                    // Inline player overlay when press&hold
-                    if (_inlinePlayingLiftId == liftId &&
-                        _inlineControllers[liftId]?.value.isInitialized == true)
-                      VideoPlayer(_inlineControllers[liftId]!),
+              // ---- INLINE PLAYER (press & hold) ----
+              if (_inlinePlayingLiftId == liftId &&
+                  _inlineControllers[liftId]?.value.isInitialized == true)
+                VideoPlayer(_inlineControllers[liftId]!),
 
-                    // Play/upload affordance
-                    Align(
-                      alignment: Alignment.center,
-                      child: Icon(
-                        hasVideo ? Icons.play_circle_fill : Icons.file_upload,
-                        size: 32,
-                        color: Colors.white.withOpacity(0.9),
-                      ),
-                    ),
-
-                    // Replace / Remove small buttons (only when a video exists)
-                    if (hasVideo)
-                      Positioned(
-                        right: 6,
-                        top: 6,
-                        child: Row(
-                          children: [
-                            _tinyCircleBtn(
-                              Icons.swap_horiz,
-                              tooltip: 'Replace',
-                              onTap: () => _pickVideoForLift(liftId),
-                            ),
-                            const SizedBox(width: 6),
-                            _tinyCircleBtn(
-                              Icons.delete_outline,
-                              tooltip: 'Remove',
-                              onTap: () {
-                                _removeVideoForLift(liftId);
-                                _stopInlinePlay(liftId);
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
-                  ],
+              // ---- CENTER ICON (Upload or Play) ----
+              Align(
+                alignment: Alignment.center,
+                child: Icon(
+                  hasVideo ? Icons.play_circle_fill : Icons.file_upload,
+                  size: 40,
+                  color: Colors.white.withOpacity(0.65),
                 ),
               ),
-            ),
+
+              // ---- BOTTOM NAME BAND (only when NO video yet) ----
+              if (!hasVideo)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    decoration: const BoxDecoration(
+                      // subtle gradient makes text readable without feeling heavy
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Colors.transparent, Colors.black54],
+                      ),
+                    ),
+                    child: Text(
+                      liftName,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontFamily: 'Monda',
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                        height: 1.15,
+                      ),
+                    ),
+                  ),
+                ),
+
+              // ---- REPLACE / REMOVE (only when video exists) ----
+              if (hasVideo)
+              // Replace icon (further left)
+                Positioned(
+                  right: 62, // moves it left from the bin
+                  top: 6,
+                  child: _tinyCircleBtn(
+                    Icons.swap_horiz,
+                    tooltip: 'Replace',
+                    onTap: () => _pickVideoForLift(liftId),
+                  ),
+                ),
+
+// Bin icon (furthest right)
+              Positioned(
+                right: 2,
+                top: 6,
+                child: _tinyCircleBtn(
+                  Icons.delete_outline,
+                  tooltip: 'Remove',
+                  onTap: () {
+                    _removeVideoForLift(liftId);
+                    _stopInlinePlay(liftId);
+                  },
+                ),
+              ),
+
+            ],
           ),
-          const SizedBox(height: 6),
-          Text(
-            liftName,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              fontFamily: 'Monda',
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
+
 
   Widget _tinyCircleBtn(IconData icon,
       {required VoidCallback onTap, String? tooltip}) {
@@ -512,65 +540,6 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
-
-
-  Widget _chipButton({
-    required String label,
-    required IconData icon,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(999),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.primaryContainer,
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, size: 16),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-
-
-  @override
-  void initState() {
-    super.initState();
-    _loadProfileData();
-    _loadLocalProfileImage();
-    _loadPhotoURL();
-    _refreshBestLiftsAndPoints(); // NEW
-    _loadCurrentUsername();
-    _loadCompSingles();
-    _loadLiftVideosFromLocal(); // local-only for now
-  }
-
-  @override
-  void dispose() {
-    _saveCompSingles();
-    _compSqCtrl.dispose();
-    _compBpCtrl.dispose();
-    _compDlCtrl.dispose();
-    _saveLiftVideosToLocal(); // persist on page exit
-
-    for (final c in _inlineControllers.values) {
-      c.dispose();
-    }
-    _inlineControllers.clear();
-    super.dispose();
-  }
-
   Future<void> _loadLiftVideosFromLocal() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_kLiftVideosPrefsKey);
@@ -636,7 +605,70 @@ class _ProfilePageState extends State<ProfilePage> {
       ),
     );
   }
+  //Video bits end
 
+
+
+
+
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfileData();
+    _loadLocalProfileImage();
+    _loadPhotoURL();
+    _refreshBestLiftsAndPoints(); // NEW
+    _loadCurrentUsername();
+    _loadCompSingles();
+    _loadLiftVideosFromLocal(); // local-only for now
+    _loadBodyWeightForSelectedUser();
+  }
+
+  @override
+  void dispose() {
+    _saveCompSingles();
+    _compSqCtrl.dispose();
+    _compBpCtrl.dispose();
+    _compDlCtrl.dispose();
+    _saveLiftVideosToLocal(); // persist on page exit
+    _heightCtrl.dispose();
+
+    for (final c in _inlineControllers.values) {
+      c.dispose();
+    }
+    _inlineControllers.clear();
+    super.dispose();
+  }
+
+
+  Widget _chipButton({
+    required String label,
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.primaryContainer,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 16),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   Future<void> _loadCurrentUsername() async {
     final uid = Provider.of<UserContext>(context, listen: false).actingAsUid;
@@ -691,6 +723,36 @@ class _ProfilePageState extends State<ProfilePage> {
     } catch (e) {
       debugPrint('❌ Failed to load photoURL: $e');
     }
+  }
+
+  Future<void> _pickAndUploadProfileImage() async {
+    final picked = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+    if (picked == null) return;
+
+    final tempFile = File(picked.path);
+    final appDir = await getApplicationDocumentsDirectory();
+    final destPath = '${appDir.path}/profile.jpg';
+
+    // Overwrite the old file (delete first to be explicit)
+    try { await File(destPath).delete(); } catch (_) {}
+    await tempFile.copy(destPath);
+
+    // ⚠️ Evict old cached image for this path
+    final provider = FileImage(File(destPath));
+    await provider.evict();
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('profile_local_path', destPath);
+
+    if (!mounted) return;
+    setState(() {
+      _localProfilePath = destPath;
+      _localProfileImage = File(destPath);
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Profile photo updated (local only)')),
+    );
   }
 
   Future<void> _loadLocalProfileImage() async {
@@ -752,36 +814,153 @@ class _ProfilePageState extends State<ProfilePage> {
         .set(payload, SetOptions(merge: true));
   }
 
+  //Body metric functions
+  Future<void> _loadBodyWeightForSelectedUser() async {
+    final uid = UserContext.of(context, listen: false).currentUid;
+    if (uid == null) return;
 
-  Future<void> _pickAndUploadProfileImage() async {
-    final picked = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
-    if (picked == null) return;
+    setState(() => _bwLoading = true);
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('weights')
+          .orderBy('timestamp', descending: true) // <-- matches your field
+          .limit(60) // grab a decent window
+          .get();
 
-    final tempFile = File(picked.path);
-    final appDir = await getApplicationDocumentsDirectory();
-    final destPath = '${appDir.path}/profile.jpg';
+      if (snap.docs.isEmpty) {
+        setState(() {
+          _bwRecent = null;
+          _bwAvg7 = null;
+          _bwLoading = false;
+        });
+        return;
+      }
 
-    // Overwrite the old file (delete first to be explicit)
-    try { await File(destPath).delete(); } catch (_) {}
-    await tempFile.copy(destPath);
+      double? recent;
+      double sum = 0.0;
+      int count = 0;
 
-    // ⚠️ Evict old cached image for this path
-    final provider = FileImage(File(destPath));
-    await provider.evict();
+// Helper: strip time → date-only (local)
+      DateTime _toDateOnly(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
 
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('profile_local_path', destPath);
+      final today = _toDateOnly(DateTime.now());
+// Inclusive window: today, today-1, ..., today-6  (7 calendar days)
+      bool _isInLast7Days(DateTime dt) {
+        final d = _toDateOnly(dt);
+        final diff = today.difference(d).inDays; // 0=today, 1=yesterday, ...
+        return diff >= 0 && diff <= 6;
+      }
 
-    if (!mounted) return;
-    setState(() {
-      _localProfilePath = destPath;
-      _localProfileImage = File(destPath);
-    });
+      for (final d in snap.docs) {
+        final data = d.data();
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Profile photo updated (local only)')),
-    );
+        final w = (data['weight'] as num?)?.toDouble();
+        if (w == null) continue;
+
+        DateTime? dt;
+        final ts = data['timestamp'];
+        if (ts is Timestamp) dt = ts.toDate();
+        if (ts is DateTime) dt = ts;
+        dt ??= (data['date'] is Timestamp) ? (data['date'] as Timestamp).toDate() : null;
+        if (dt == null) continue;
+
+        // First valid entry (already ordered desc) → most recent
+        recent ??= w;
+
+        if (_isInLast7Days(dt)) {
+          sum += w;
+          count += 1;
+        }
+      }
+
+      final avg7 = (count > 0) ? (sum / count) : null;
+
+      setState(() {
+        _bwRecent = recent;
+        _bwAvg7  = avg7 ?? recent; // still falls back, but should now compute
+        _bwLoading = false;
+      });
+
+    } catch (e) {
+      setState(() => _bwLoading = false);
+      // Optional: print for debug
+      // print('❌ _loadBodyWeightForSelectedUser error: $e');
+    }
   }
+
+  void _toggleHeightUnit(HeightUnit to) {
+    if (_heightUnit == to) return;
+
+    final currentText = _heightCtrl.text.trim();
+    double? currentValueInches;
+
+    if (_heightUnit == HeightUnit.cm) {
+      // Convert cm → inches first
+      final cmValue = double.tryParse(currentText);
+      if (cmValue != null) {
+        currentValueInches = _cmToIn(cmValue);
+      }
+    } else {
+      // Currently in inches/feet mode → parse it into inches
+      currentValueInches = _feetInchesStringToInches(currentText);
+    }
+
+    if (to == HeightUnit.cm && currentValueInches != null) {
+      // Inches → cm
+      _heightCtrl.text = _inToCm(currentValueInches).toStringAsFixed(2);
+    } else if (to == HeightUnit.inch && currentValueInches != null) {
+      // Inches → ft'in"
+      _heightCtrl.text = _inchToFeetInchesString(currentValueInches);
+    }
+
+    setState(() => _heightUnit = to);
+  }
+
+
+  String _inchToFeetInchesString(double inches) {
+    final feet = inches ~/ 12; // integer division
+    final remainingInches = inches % 12;
+    return "$feet'${remainingInches.toStringAsFixed(1)}\"";
+  }
+
+  double? _feetInchesStringToInches(String input) {
+    // Normalize spaces and smart quotes
+    var cleaned = input.trim()
+        .replaceAll('′', "'")
+        .replaceAll('″', '"')
+        .replaceAll('’', "'")
+        .replaceAll('“', '"')
+        .replaceAll('”', '"');
+
+    // Remove internal spaces for simple patterns like 5' 8"
+    cleaned = cleaned.replaceAll(' ', '');
+
+    // 1) Match feet + inches (inches may have decimals, trailing " optional)
+    final reFeetIn = RegExp(r'''^(\d+)'(\d+(?:\.\d+)?)"?$''');
+    final m1 = reFeetIn.firstMatch(cleaned);
+    if (m1 != null) {
+      final feet = double.tryParse(m1.group(1)!) ?? 0;
+      final inch = double.tryParse(m1.group(2)!) ?? 0;
+      return feet * 12 + inch;
+    }
+
+    // 2) Feet only like 5'  → treat as 5 * 12 inches
+    final reFeetOnly = RegExp(r'''^(\d+)'$''');
+    final m2 = reFeetOnly.firstMatch(cleaned);
+    if (m2 != null) {
+      final feet = double.tryParse(m2.group(1)!) ?? 0;
+      return feet * 12;
+    }
+
+    // 3) Plain number → treat as total inches (e.g., "68" or "68.5")
+    final asNumber = double.tryParse(cleaned);
+    if (asNumber != null) return asNumber;
+
+    return null; // couldn't parse
+  }
+
 
 
 
@@ -798,7 +977,7 @@ class _ProfilePageState extends State<ProfilePage> {
     'Back Squat, Barbell': 'Back Squat',
     'Deadlift, Conventional': 'Deadlift',
     'Chin-Up': 'Chin-Up',
-    'Overhead Dumbbell Press, Unilateral': 'Uni DB Shoulder Press',
+    'Overhead Dumbbell Press, Unilateral': 'DB Shoulder Press, Uni',
   };
 
 
@@ -1114,7 +1293,7 @@ class _ProfilePageState extends State<ProfilePage> {
                       children: [
                         Expanded(
                           child: Text(
-                            'RE Points',
+                            'RE Points (Singles)',
                             style: GoogleFonts.monda(
                               fontSize: Theme.of(context).textTheme.bodyLarge?.fontSize ?? 14,
                               fontWeight: Theme.of(context).textTheme.bodyLarge?.fontWeight,
@@ -1150,17 +1329,15 @@ class _ProfilePageState extends State<ProfilePage> {
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 8),
                     child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Expanded(
-                          child: Text(
-                            'Best Comp Singles:',
-                            style: GoogleFonts.monda(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
+                        Text(
+                          'Best Comp Singles:',
+                          style: GoogleFonts.monda(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
                           ),
                         ),
-                        const SizedBox(width: 6),
                       ],
                     ),
                   ),
@@ -1294,6 +1471,229 @@ class _ProfilePageState extends State<ProfilePage> {
                       ],
                     ),
                   ),
+
+                  const SizedBox(height: 6),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          'Body Metrics',
+                          style: GoogleFonts.monda(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 6),
+
+
+                  // --- Current Body Weight ---
+                  // --- Current Body Weight (label w/ privacy under it; chip w/ mode toggle under) ---
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // LEFT: label + privacy under it
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Body Weight', style: GoogleFonts.monda(fontSize: 16)),
+                              const SizedBox(height: 4),
+                              // tiny privacy toggle (under label)
+                              InkWell(
+                                onTap: () => setState(() => _bwPrivate = !_bwPrivate),
+                                borderRadius: BorderRadius.circular(16),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: _bwPrivate
+                                        ? Colors.blueGrey.withOpacity(0.25)
+                                        : Colors.transparent,
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        _bwPrivate ? Icons.lock : Icons.lock_open,
+                                        size: 14,
+                                        color: Colors.blueGrey,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        _bwPrivate ? 'Private' : 'Public',
+                                        style: const TextStyle(fontSize: 14),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        // RIGHT: chip (value) + mode toggle under it, aligned to chip width
+                        SizedBox(
+                          width: _rightColWidth,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: Colors.blueGrey,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                alignment: Alignment.centerLeft,
+                                child: _bwLoading
+                                    ? const SizedBox(
+                                  height: 16,
+                                  width: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                )
+                                    : Text(
+                                  (() {
+                                    final v = (_bwMode == BodyWeightMode.recent) ? _bwRecent : _bwAvg7;
+                                    if (v == null) return '(no data)';
+                                    return '${v.toStringAsFixed(1)} kg';
+                                  })(),
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              // mode toggle under the chip (aligned)
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        color: Colors.blueGrey.withOpacity(0.08),
+                                        borderRadius: BorderRadius.circular(999),
+                                      ),
+                                      child: ToggleButtons(
+                                        constraints: const BoxConstraints(minHeight: 28),
+                                        borderRadius: BorderRadius.circular(999),
+                                        isSelected: [
+                                          _bwMode == BodyWeightMode.recent,
+                                          _bwMode == BodyWeightMode.avg7,
+                                        ],
+                                        onPressed: (i) {
+                                          setState(() => _bwMode = (i == 0)
+                                              ? BodyWeightMode.recent
+                                              : BodyWeightMode.avg7);
+                                        },
+                                        children: const [
+                                          Padding(
+                                            padding: EdgeInsets.symmetric(horizontal: 8),
+                                            child: Text('Most Recent'),
+                                          ),
+                                          Padding(
+                                            padding: EdgeInsets.symmetric(horizontal: 8),
+                                            child: Text('7-Day Avg'),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // --- Height ---
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // LEFT: label + cm/in toggle under it (compact)
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Height', style: GoogleFonts.monda(fontSize: 16)),
+                              const SizedBox(height: 4),
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.blueGrey.withOpacity(0.08),
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                                child: ToggleButtons(
+                                  constraints: const BoxConstraints(minHeight: 26, minWidth: 56),
+                                  borderRadius: BorderRadius.circular(999),
+                                  isSelected: [
+                                    _heightUnit == HeightUnit.cm,
+                                    _heightUnit == HeightUnit.inch,
+                                  ],
+                                  onPressed: (i) =>
+                                      _toggleHeightUnit(i == 0 ? HeightUnit.cm : HeightUnit.inch),
+                                  children: const [
+                                    Padding(
+                                      padding: EdgeInsets.symmetric(horizontal: 8),
+                                      child: Text('cm'),
+                                    ),
+                                    Padding(
+                                      padding: EdgeInsets.symmetric(horizontal: 8),
+                                      child: Text('in'),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        // RIGHT: input chip (same look as Deadlift)
+                        SizedBox(
+                          width: _rightColWidth,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.blueGrey,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            alignment: Alignment.centerLeft,
+                            child: TextField(
+                              controller: _heightCtrl,
+                              keyboardType: TextInputType.text,
+                              inputFormatters: _heightUnit == HeightUnit.cm
+                                  ? [FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}'))]
+                                  : [], // no strict filter in inch mode, we parse it ourselves
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              decoration: InputDecoration(
+                                isDense: true,
+                                hintText: _heightUnit == HeightUnit.cm ? 'cm' : 'ft\'in"',
+                                hintStyle: const TextStyle(color: Colors.white70),
+                                border: InputBorder.none,
+                              ),
+                            ),
+
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+
+
                 ],
               ),
             ),
