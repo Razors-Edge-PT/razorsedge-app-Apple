@@ -261,18 +261,12 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final chosen =
-        pick(data['username']) ??
-            pick(data['displayName']) ??
-            pick(data['email']) ??
+        pick(data['username']) ??      // ✅ username first
+            pick(data['displayName']) ??   // fallback to display name
+            pick(data['email']) ??         // fallback to email
             'Unknown';
 
-    print('🧭 display pick for $uid → '
-        '${pick(data["username"]) != null ? "username" :
-    pick(data["displayName"]) != null ? "displayName" :
-    pick(data["email"]) != null ? "email" : "Unknown"}'
-        ' = $chosen');
-
-    setState(() => _actingAsEmail = chosen); // (maybe rename to _actingAsLabel)
+    setState(() => _actingAsEmail = chosen);
   }
 
 

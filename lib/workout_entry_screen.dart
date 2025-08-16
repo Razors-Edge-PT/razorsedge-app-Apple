@@ -4263,13 +4263,52 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
           return Scaffold(
       backgroundColor: Colors.blueGrey.shade900,
-      appBar: AppBar(
-        backgroundColor: Colors.blueGrey.shade800,
-        title: const Text(
-          'Razors Edge',
-          style: TextStyle(fontFamily: 'Verdana', color: Colors.white),
-        ),
-        iconTheme: const IconThemeData(color: Colors.white),
+            appBar: AppBar(
+              backgroundColor: Colors.blueGrey.shade800,
+              title: Builder(
+                builder: (context) {
+                  final actingAsUid = Provider.of<UserContext>(context, listen: true).actingAsUid;
+
+                  if (actingAsUid == null) {
+                    return const Text(
+                      'Razors Edge',
+                      style: TextStyle(fontFamily: 'Verdana', color: Colors.white),
+                    );
+                  }
+
+                  return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                    stream: FirebaseFirestore.instance
+                        .collection('users')
+                        .doc(actingAsUid)
+                        .snapshots(),
+                    builder: (context, snap) {
+                      if (!snap.hasData) {
+                        return const Text(
+                          'Razors Edge',
+                          style: TextStyle(fontFamily: 'Verdana', color: Colors.white),
+                        );
+                      }
+
+                      final data = snap.data?.data();
+                      String? pick(dynamic v) {
+                        final s = (v ?? '').toString().trim();
+                        return s.isEmpty ? null : s;
+                      }
+
+                      final label = pick(data?['username']) ??
+                          pick(data?['displayName']) ??
+                          pick(data?['email']) ??
+                          'Razors Edge';
+
+                      return Text(
+                        label,
+                        style: const TextStyle(fontFamily: 'Verdana', color: Colors.white),
+                      );
+                    },
+                  );
+                },
+              ),
+              iconTheme: const IconThemeData(color: Colors.white),
         actionsIconTheme: const IconThemeData(color: Colors.white),
         actions: [
           IconButton(

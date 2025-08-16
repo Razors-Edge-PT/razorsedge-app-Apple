@@ -72,14 +72,14 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
   Future<void> _loadAthletes(UserContext userContext) async {
     try {
       if (userContext.isSuperAdmin) {
-        // unchanged
         final query = await FirebaseFirestore.instance.collection('users').get();
         setState(() {
           _athletes = {
             for (var doc in query.docs)
               doc.id: {
-                'displayName': doc.data()['displayName'] ?? '',
-                'email': doc.data()['email'] ?? '',
+                'username'    : (doc.data()['username'] ?? '') as String,
+                'displayName' : (doc.data()['displayName'] ?? '') as String,
+                'email'       : (doc.data()['email'] ?? '') as String,
               }
           };
         });
@@ -91,7 +91,7 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
 
       final Map<String, dynamic> athletes = {};
 
-      // 1️⃣ Athletes from athleteAssignments
+      // 1) athleteAssignments
       final q1 = await FirebaseFirestore.instance
           .collection('athleteAssignments')
           .where('coaches.$coachUid.approved', isEqualTo: true)
@@ -105,12 +105,13 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
             .get();
         final data = u.data() ?? {};
         athletes[athleteUid] = {
-          'displayName': (data['displayName'] ?? '') as String,
-          'email': (data['email'] ?? '') as String,
+          'username'    : (data['username'] ?? '') as String,
+          'displayName' : (data['displayName'] ?? '') as String,
+          'email'       : (data['email'] ?? '') as String,
         };
       }
 
-      // 2️⃣ Athletes seeded by super admin in coachAssignments
+      // 2) coachAssignments (seeded)
       final doc2 = await FirebaseFirestore.instance
           .collection('coachAssignments')
           .doc(coachUid)
@@ -120,21 +121,21 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
         final seeded = Map<String, dynamic>.from(doc2.data()?['athletes'] ?? {});
         for (final entry in seeded.entries) {
           final athleteUid = entry.key;
-          // Avoid overwriting if already loaded
           athletes.putIfAbsent(athleteUid, () => {
-            'displayName': entry.value['displayName'] ?? '',
-            'email': entry.value['email'] ?? '',
+            'username'    : (entry.value['username'] ?? '') as String,
+            'displayName' : (entry.value['displayName'] ?? '') as String,
+            'email'       : (entry.value['email'] ?? '') as String,
           });
         }
       }
 
       setState(() => _athletes = athletes);
       debugPrint('✅ Loaded ${athletes.length} athletes for coach $coachUid');
-
     } catch (e) {
       debugPrint("❌ Error loading athletes: $e");
     }
   }
+
 
 
   Future<void> _adminSeedAthleteToCoach({
@@ -413,22 +414,36 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
               itemBuilder: (context, index) {
                 final uid = filteredUids[index];
                 final isSelected = uid == userContext.actingAsUid;
+                final a = _athletes[uid] ?? {};
+
+                String? pick(dynamic v) {
+                  final s = (v ?? '').toString().trim();
+                  return s.isEmpty ? null : s;
+                }
+
+                final titleText =
+                    pick(a['username']) ??
+                        pick(a['displayName']) ??
+                        pick(a['email']) ??
+                        uid;
+
+                final emailText = pick(a['email']);
+                final subtitleText = (emailText != null && emailText != titleText)
+                    ? emailText
+                    : null;
 
                 return ListTile(
                   title: Text(
-                    _athletes[uid]?['email'] ?? uid,
+                    titleText,
                     style: TextStyle(
                       fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                     ),
                   ),
-                  subtitle: (_athletes[uid]?['displayName'] ?? '').isNotEmpty
-                      ? Text(_athletes[uid]?['displayName'])
-                      : null,
+                  subtitle: subtitleText != null ? Text(subtitleText) : null,
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       if (isSelected) const Icon(Icons.check, color: Colors.green),
-                      // ---------- Added: remove athlete button ----------
                       IconButton(
                         icon: const Icon(Icons.delete_outline),
                         onPressed: () => _removeAthlete(uid),
@@ -438,14 +453,15 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
                   ),
                   onTap: () {
                     userContext.switchAthlete(uid);
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                      content: Text("Switched to athlete: ${_athletes[uid]?['email'] ?? uid}"),
-                    ));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text("Switched to athlete: $titleText")),
+                    );
                   },
                 );
               },
             ),
           ),
+
           ElevatedButton.icon(
             onPressed: () {
               Navigator.of(context).push(MaterialPageRoute(

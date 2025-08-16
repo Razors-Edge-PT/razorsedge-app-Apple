@@ -9,6 +9,8 @@ import 'package:image_picker/image_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:flutter/services.dart';
 
 
 enum _CompMode { threeLift, benchOnly }
@@ -49,6 +51,20 @@ class _StatChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final text = (value == null) ? '--' : value!.toStringAsFixed(1);
+
+    // ✅ Choose font based on label
+    final customStyle = (label.toLowerCase() == 'goodlift')
+        ? GoogleFonts.monda(
+      color: Colors.white,
+      fontSize: 14,
+      fontWeight: FontWeight.bold,
+    )
+        : GoogleFonts.monda(
+      color: Colors.white,
+      fontWeight: FontWeight.bold,
+      fontSize: 14,
+    );
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
@@ -56,10 +72,13 @@ class _StatChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(999),
         border: Border.all(color: Colors.blueGrey.withOpacity(0.35)),
       ),
-      child: Text('$label: $text',
-          style: Theme.of(context).textTheme.bodyMedium),
+      child: Text(
+        '${(label.toLowerCase() == 'goodlift') ? label.toUpperCase() : label}: $text',
+        style: customStyle,
+      ),
     );
   }
+
 }
 
 
@@ -76,12 +95,20 @@ class _ProfilePageState extends State<ProfilePage> {
   bool isLoading = true;
 
   // UI layout
-  static const double _rightColWidth = 190; // tweak to taste
+  static const double _rightColWidth = 185; // tweak to taste
 
-  // Comp totals/toggle
+  // Training Singles totals/toggle
   _CompMode _compMode = _CompMode.threeLift;
   double? _bestThreeLiftTotal; // kg
   double? _bestBenchOnly;      // kg
+  Map<String, double> _bestSinglesFive = {};
+
+  // Best competition singles (kg)
+  final _compSqCtrl = TextEditingController();
+  final _compBpCtrl = TextEditingController();
+  final _compDlCtrl = TextEditingController();
+
+
 
   @override
   void initState() {
@@ -91,7 +118,18 @@ class _ProfilePageState extends State<ProfilePage> {
     _loadPhotoURL();
     _refreshBestLiftsAndPoints(); // NEW
     _loadCurrentUsername();
+    _loadCompSingles();
   }
+
+  @override
+  void dispose() {
+    _saveCompSingles();
+    _compSqCtrl.dispose();
+    _compBpCtrl.dispose();
+    _compDlCtrl.dispose();
+    super.dispose();
+  }
+
 
   Future<void> _loadCurrentUsername() async {
     final uid = Provider.of<UserContext>(context, listen: false).actingAsUid;
@@ -159,6 +197,55 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
+  Future<void> _loadCompSingles() async {
+    final uid = Provider.of<UserContext>(context, listen: false).actingAsUid;
+    if (uid == null) return;
+
+    final snap = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+    final data = snap.data();
+    final comp = (data?['compSingles'] as Map<String, dynamic>?) ?? {};
+
+    String _fmt(dynamic v) {
+      final d = (v is num) ? v.toDouble() : double.tryParse('$v');
+      return (d != null && d > 0) ? d.toStringAsFixed(1) : '';
+    }
+
+    setState(() {
+      _compSqCtrl.text = _fmt(comp['squatKg']);
+      _compBpCtrl.text = _fmt(comp['benchKg']);
+      _compDlCtrl.text = _fmt(comp['deadliftKg']);
+    });
+  }
+
+  Future<void> _saveCompSingles() async {
+    final uid = Provider.of<UserContext>(context, listen: false).actingAsUid;
+    if (uid == null) return;
+
+    double? _parse(TextEditingController c) {
+      final t = c.text.trim();
+      if (t.isEmpty) return null;
+      return double.tryParse(t);
+    }
+
+    final squat = _parse(_compSqCtrl);
+    final bench = _parse(_compBpCtrl);
+    final dead  = _parse(_compDlCtrl);
+
+    final payload = {
+      'compSingles': {
+        if (squat != null) 'squatKg': squat,
+        if (bench != null) 'benchKg': bench,
+        if (dead  != null) 'deadliftKg': dead,
+      }
+    };
+
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .set(payload, SetOptions(merge: true));
+  }
+
+
   Future<void> _pickAndUploadProfileImage() async {
     final picked = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
     if (picked == null) return;
@@ -204,7 +291,7 @@ class _ProfilePageState extends State<ProfilePage> {
     'Back Squat, Barbell': 'Back Squat',
     'Deadlift, Conventional': 'Deadlift',
     'Chin-Up': 'Chin-Up',
-    'Overhead Dumbbell Press, Unilateral': 'Standing, Uni Shoulder Press',
+    'Overhead Dumbbell Press, Unilateral': 'Uni DB Shoulder Press',
   };
 
 
@@ -326,16 +413,23 @@ class _ProfilePageState extends State<ProfilePage> {
       snaps = await workoutsCol.limit(600).get();
     }
 
+    // Canonical exercise names
     const squatName = 'Back Squat, Barbell';
     const benchName = 'Bench Press, Barbell';
     const deadName  = 'Deadlift, Conventional';
+    const chinName  = 'Chin-Up';
+    const ohpUni    = 'Overhead Dumbbell Press, Unilateral';
 
+    // Track best single (1 rep) and best-any (fallback) for ALL 5
     final Map<String, double> bestSingle = {
-      squatName: 0, benchName: 0, deadName: 0,
+      squatName: 0, benchName: 0, deadName: 0, chinName: 0, ohpUni: 0,
     };
     final Map<String, double> bestAny = {
-      squatName: 0, benchName: 0, deadName: 0,
+      squatName: 0, benchName: 0, deadName: 0, chinName: 0, ohpUni: 0,
     };
+
+    // Helper: only care about these 5
+    bool isTracked(String n) => bestSingle.containsKey(n);
 
     for (final doc in snaps.docs) {
       final data = doc.data();
@@ -345,7 +439,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
       for (final ex in exercises) {
         final name = _canonical((ex['name'] as String?)?.trim() ?? '');
-        if (!bestSingle.containsKey(name)) continue; // only S/B/D
+        if (!isTracked(name)) continue;
 
         final sets = (ex['sets'] is List)
             ? List<Map<String, dynamic>>.from(ex['sets'] as List)
@@ -359,11 +453,11 @@ class _ProfilePageState extends State<ProfilePage> {
 
           if (w <= 0) continue;
 
-          // Track best single
+          // Best single (exactly 1 rep)
           if (r == 1 && w > (bestSingle[name] ?? 0)) {
             bestSingle[name] = w;
           }
-          // Track heaviest weight (any reps) for fallback
+          // Heaviest weight seen (any reps) as fallback
           if (w > (bestAny[name] ?? 0)) {
             bestAny[name] = w;
           }
@@ -371,23 +465,17 @@ class _ProfilePageState extends State<ProfilePage> {
       }
     }
 
-    // Debug logs — keep these INSIDE the function so bestSingle/bestAny are in scope
-    debugPrint('🏋️ Best single S/B/D: '
-        'S=${bestSingle[squatName]}, B=${bestSingle[benchName]}, D=${bestSingle[deadName]}');
-    debugPrint('🔁 Fallback any-rep S/B/D: '
-        'S=${bestAny[squatName]}, B=${bestAny[benchName]}, D=${bestAny[deadName]}');
+    // Resolve each lift's best: prefer single, else fallback
+    double bestOrFallback(String n) =>
+        (bestSingle[n] ?? 0) > 0 ? (bestSingle[n] ?? 0) : (bestAny[n] ?? 0);
 
-    // Use best single if available, else fallback to best any-rep
-    double squatBest = (bestSingle[squatName] ?? 0) > 0
-        ? (bestSingle[squatName] ?? 0)
-        : (bestAny[squatName] ?? 0);
-    double benchBest = (bestSingle[benchName] ?? 0) > 0
-        ? (bestSingle[benchName] ?? 0)
-        : (bestAny[benchName] ?? 0);
-    double deadBest  = (bestSingle[deadName]  ?? 0) > 0
-        ? (bestSingle[deadName]  ?? 0)
-        : (bestAny[deadName]  ?? 0);
+    final squatBest = bestOrFallback(squatName);
+    final benchBest = bestOrFallback(benchName);
+    final deadBest  = bestOrFallback(deadName);
+    final chinBest  = bestOrFallback(chinName);
+    final ohpBest   = bestOrFallback(ohpUni);
 
+    // Totals (unchanged)
     final threeLift = squatBest + benchBest + deadBest;
     final benchOnly = benchBest;
 
@@ -395,10 +483,22 @@ class _ProfilePageState extends State<ProfilePage> {
     setState(() {
       _bestThreeLiftTotal = (threeLift > 0) ? threeLift : null;
       _bestBenchOnly      = (benchOnly > 0) ? benchOnly : null;
+
+      // Expose best singles for all 5 to the UI
+      _bestSinglesFive = {
+        squatName: squatBest,
+        benchName: benchBest,
+        deadName : deadBest,
+        chinName : chinBest,
+        ohpUni   : ohpBest,
+      };
     });
 
     debugPrint('🏆 Totals → 3-Lift=$_bestThreeLiftTotal, BenchOnly=$_bestBenchOnly');
+    debugPrint('💪 Best singles → '
+        'SQ=$squatBest, BP=$benchBest, DL=$deadBest, CH=$chinBest, OHPu=$ohpBest');
   }
+
 
 
 // Stubs – wire these when you’re ready
@@ -430,17 +530,23 @@ class _ProfilePageState extends State<ProfilePage> {
         ? FileImage(File(_localProfilePath!))
         : null;
 
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.blueGrey,
-        automaticallyImplyLeading: false, // disable default
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () {
-            Navigator.pop(context); // go back to the previous page
-          },
-        ),
-        actions: [
+    return WillPopScope(
+      onWillPop: () async {
+        await _saveCompSingles();
+        return true; // allow navigation
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          backgroundColor: Colors.blueGrey,
+          automaticallyImplyLeading: false, // disable default
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () async {
+              await _saveCompSingles();      // ✅ ensure save on custom back
+              if (context.mounted) Navigator.pop(context);
+            },
+          ),
+          actions: [
           Padding(
             padding: const EdgeInsets.only(right: 8.0),
             child: Column(
@@ -449,17 +555,48 @@ class _ProfilePageState extends State<ProfilePage> {
               children: [
                 SizedBox(
                   width: 180,
-                  child: Text(
-                    userEmail,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    maxLines: 1,
+                  child: Builder(
+                    builder: (context) {
+                      final actingUid = Provider.of<UserContext>(context, listen: true).actingAsUid;
+                      if (actingUid == null) {
+                        return const Text('Unknown',
+                          maxLines: 1,
+                          style: TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        );
+                      }
+
+                      return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                        stream: FirebaseFirestore.instance.collection('users').doc(actingUid).snapshots(),
+                        builder: (context, snap) {
+                          final data = snap.data?.data();
+                          String? pick(dynamic v) {
+                            final s = (v ?? '').toString().trim();
+                            return s.isEmpty ? null : s;
+                          }
+                          final label = pick(data?['username']) ??
+                              pick(data?['displayName']) ??
+                              pick(data?['email']) ??
+                              'Unknown';
+
+                          return Text(
+                            label,
+                            maxLines: 1,
+                            //style: GoogleFonts.rajdhani(
+                            style: GoogleFonts.rajdhani(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 18,
+                            ),
+                          );
+                        },
+                      );
+                    },
                   ),
-                ),
+                )
+
               ],
             ),
           ),
@@ -596,7 +733,7 @@ class _ProfilePageState extends State<ProfilePage> {
                       },
                       child: Text(
                         _currentUsername ?? 'No username',
-                        style: const TextStyle(
+                        style: GoogleFonts.monda(
                           color: Colors.white,
                           fontWeight: FontWeight.bold,
                           fontSize: 14,
@@ -660,7 +797,7 @@ class _ProfilePageState extends State<ProfilePage> {
             const SizedBox(height: 16),
 
             // Bio Section
-            const Text('About Me',
+            const Text('Bio',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             TextField(
@@ -677,16 +814,20 @@ class _ProfilePageState extends State<ProfilePage> {
 
             // Best Lifts Section
             // Best Lifts header with chips
+
             Row(
               children: [
-                const Expanded(
-                  child: Text('Best Lifts',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                Expanded(
+                  child: Text(
+                    'Best Lifts In Training - Off E1RM',
+                    style: GoogleFonts.monda(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                 ),
-                _StatChip(label: 'Goodlift', value: _goodliftPoints),
-                const SizedBox(width: 8),
-                _StatChip(label: 'RE Points', value: _rePoints),
               ],
+
             ),
             const SizedBox(height: 8),
 
@@ -711,9 +852,12 @@ class _ProfilePageState extends State<ProfilePage> {
                         Expanded(
                           child: Text(
                             _shortExerciseNames[name] ?? name, // falls back to full if not found
-                            style: const TextStyle(fontSize: 16),
+                            style: GoogleFonts.monda(
+                              fontSize: 16,
+                            ),
                           ),
                         ),
+
 
 
                         // Right: aligned “weight × reps  •  ~e1RM” in a blue-grey chip
@@ -744,15 +888,313 @@ class _ProfilePageState extends State<ProfilePage> {
             ),
 
 
-
+            const SizedBox(height: 10),
             // Stats
-            const Text('Stats',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+
+
+
+
+            const SizedBox(height: 6),
+            Text(
+              'Best singles In Training:',
+              style: GoogleFonts.monda(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+
+            const SizedBox(height: 6),
+            Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                color: Colors.blueGrey.withOpacity(0.10),
+              ),
+              child: Column(
+                children: _displayExercises.map((name) {
+                  final best = _bestSinglesFive[name] ?? 0.0;
+                  final rightText = (best > 0) ? '${best.toStringAsFixed(1)} ' : '—';
+
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    child: Row(
+                      children: [
+                        // Left: exercise name
+                        Expanded(
+                          child: Text(
+                            _shortExerciseNames[name] ?? name,
+                            style: GoogleFonts.monda(
+                              fontSize: 16,
+                            ),
+                          ),
+                        ),
+
+                        // Right: weight × 1 in a blue-grey chip
+                        SizedBox(
+                          width: _rightColWidth,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.blueGrey,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              rightText,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+
+            Text(
+              'More Stats:',
+              style: GoogleFonts.monda(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
             const SizedBox(height: 8),
-            Text('Goodlift Points: (pending calc)',
-                style: Theme.of(context).textTheme.bodyLarge),
-            Text('RE Points: (pending calc)',
-                style: Theme.of(context).textTheme.bodyLarge),
+            Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                color: Colors.blueGrey.withOpacity(0.10), // same faint background
+              ),
+              padding: const EdgeInsets.symmetric(vertical: 8), // match padding to lifts section
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Goodlift Points In Comp',
+                            style: GoogleFonts.monda(
+                              fontSize: Theme.of(context).textTheme.bodyLarge?.fontSize ?? 14,
+                              fontWeight: Theme.of(context).textTheme.bodyLarge?.fontWeight,
+                            ),
+                          ),
+                        ),
+                        SizedBox(
+                          width: _rightColWidth, // align with best lifts column
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.blueGrey, // same chip background as others
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            alignment: Alignment.centerLeft,
+                            child: const Text(
+                              '(pending calc)',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'RE Points',
+                            style: GoogleFonts.monda(
+                              fontSize: Theme.of(context).textTheme.bodyLarge?.fontSize ?? 14,
+                              fontWeight: Theme.of(context).textTheme.bodyLarge?.fontWeight,
+                            ),
+                          ),
+                        ),
+                        SizedBox(
+                          width: _rightColWidth, // align with best lifts column
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.blueGrey,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            alignment: Alignment.centerLeft,
+                            child: const Text(
+                              '(pending calc)',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+
+
+                  ),
+
+                  const SizedBox(height: 8),
+
+// Header (optional)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Best Comp Singles:',
+                            style: GoogleFonts.monda(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width:6), // small padding only
+                      ],
+
+                    ),
+                  ),
+                  const SizedBox(height:6),
+// Squat
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text('Back Squat',
+                            style: GoogleFonts.monda(fontSize: 16),
+                          ),
+                        ),
+                        SizedBox(
+                          width: _rightColWidth,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.blueGrey,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            alignment: Alignment.centerLeft,
+                            child: TextField(
+                              controller: _compSqCtrl,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              inputFormatters: [
+                                FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
+                              ],
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              decoration: const InputDecoration(
+                                isDense: true,
+                                hintText: 'kg',
+                                hintStyle: TextStyle(color: Colors.white70),
+                                border: InputBorder.none,
+                              ),
+                            ),
+
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+// Bench
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text('Bench Press',
+                            style: GoogleFonts.monda(fontSize: 16),
+                          ),
+                        ),
+                        SizedBox(
+                          width: _rightColWidth,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.blueGrey,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            alignment: Alignment.centerLeft,
+                            child: TextField(
+                              controller: _compBpCtrl,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              inputFormatters: [
+                                FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
+                              ],
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              decoration: const InputDecoration(
+                                isDense: true,
+                                hintText: 'kg',
+                                hintStyle: TextStyle(color: Colors.white70),
+                                border: InputBorder.none,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+// Deadlift
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text('Deadlift',
+                            style: GoogleFonts.monda(fontSize: 16),
+                          ),
+                        ),
+                        SizedBox(
+                          width: _rightColWidth,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.blueGrey,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            alignment: Alignment.centerLeft,
+                            child: TextField(
+                              controller: _compDlCtrl,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              inputFormatters: [
+                                FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
+                              ],
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              decoration: const InputDecoration(
+                                isDense: true,
+                                hintText: 'kg',
+                                hintStyle: TextStyle(color: Colors.white70),
+                                border: InputBorder.none,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                ],
+              ),
+            ),
+
+
 
             const SizedBox(height: 20),
             ElevatedButton(
@@ -760,9 +1202,12 @@ class _ProfilePageState extends State<ProfilePage> {
               style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey),
               child: const Text('Save Profile'),
             ),
+
+            const SizedBox(height: 60),
           ],
         ),
       ),
+    ),
     );
   }
 
