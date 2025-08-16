@@ -11,9 +11,108 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter/services.dart';
+import 'dart:io';
+import 'dart:convert';
+import 'package:file_picker/file_picker.dart';
+import 'package:video_player/video_player.dart';
+import 'dart:typed_data';
+import 'package:video_thumbnail/video_thumbnail.dart';
 
 
 enum _CompMode { threeLift, benchOnly }
+
+enum VideoStorageMode { local, firestore }
+
+class LiftVideo {
+  final String liftId;      // stable key e.g., 'bench_barbell'
+  final String? localPath;  // file path on device
+  final String? remoteUrl;  // Firestore mode (future)
+  final DateTime updatedAt;
+
+  LiftVideo({
+    required this.liftId,
+    this.localPath,
+    this.remoteUrl,
+    DateTime? updatedAt,
+  }) : updatedAt = updatedAt ?? DateTime.now();
+
+  bool get hasLocal => (localPath != null && localPath!.isNotEmpty);
+  bool get hasRemote => (remoteUrl != null && remoteUrl!.isNotEmpty);
+
+  Map<String, dynamic> toJson() => {
+    'liftId': liftId,
+    'localPath': localPath,
+    'remoteUrl': remoteUrl,
+    'updatedAt': updatedAt.toIso8601String(),
+  };
+
+  static LiftVideo fromJson(Map<String, dynamic> j) => LiftVideo(
+    liftId: j['liftId'] as String,
+    localPath: j['localPath'] as String?,
+    remoteUrl: j['remoteUrl'] as String?,
+    updatedAt: DateTime.tryParse(j['updatedAt'] ?? '') ?? DateTime.now(),
+  );
+}
+
+class _InAppVideoPlayer extends StatefulWidget {
+  final String videoPath;
+  const _InAppVideoPlayer({required this.videoPath});
+
+  @override
+  State<_InAppVideoPlayer> createState() => _InAppVideoPlayerState();
+}
+
+class _InAppVideoPlayerState extends State<_InAppVideoPlayer> {
+  late VideoPlayerController _controller;
+  bool _ready = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = VideoPlayerController.file(File(widget.videoPath))
+      ..initialize().then((_) {
+        setState(() => _ready = true);
+        _controller.play();
+      });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Lift Video')),
+      body: Center(
+        child: _ready
+            ? AspectRatio(
+          aspectRatio: _controller.value.aspectRatio,
+          child: VideoPlayer(_controller),
+        )
+            : const CircularProgressIndicator(),
+      ),
+      floatingActionButton: _ready
+          ? FloatingActionButton(
+        onPressed: () {
+          setState(() {
+            _controller.value.isPlaying
+                ? _controller.pause()
+                : _controller.play();
+          });
+        },
+        child: Icon(
+          _controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
+        ),
+      )
+          : null,
+    );
+  }
+}
+
+
 
 class BestLift {
   final String exerciseName;
@@ -102,11 +201,346 @@ class _ProfilePageState extends State<ProfilePage> {
   double? _bestThreeLiftTotal; // kg
   double? _bestBenchOnly;      // kg
   Map<String, double> _bestSinglesFive = {};
+  bool _moreStatsExpanded = false;
+
 
   // Best competition singles (kg)
   final _compSqCtrl = TextEditingController();
   final _compBpCtrl = TextEditingController();
   final _compDlCtrl = TextEditingController();
+
+
+  //Video bits
+  // Toggleable later; default to local.
+  VideoStorageMode _videoMode = VideoStorageMode.local;
+// One entry per liftId.
+  final Map<String, LiftVideo> _liftVideos = {};
+// SharedPreferences key
+  static const _kLiftVideosPrefsKey = 'lift_videos_map_v1';
+  final ImagePicker _imagePicker = ImagePicker();
+  // In-memory thumbnail cache (keyed by liftId)
+  final Map<String, Uint8List?> _thumbCache = {};
+
+// Inline (press&hold) players, one per tile as needed
+  final Map<String, VideoPlayerController> _inlineControllers = {};
+  String? _inlinePlayingLiftId;
+
+
+  final List<Map<String, String>> _bestTrainingByE1RM = [
+    {'id': 'bench_barbell', 'name': 'Bench Press, Barbell'},
+    {'id': 'squat_barbell', 'name': 'Back Squat, Barbell'},
+    {'id': 'deadlift_conv', 'name': 'Deadlift, Conventional'},
+    {'id': 'chin_up', 'name': 'Chin-Up'},
+    {'id': 'ohp_db_uni', 'name': 'Overhead Dumbbell Press, Unilateral'},
+  ];
+
+  final List<Map<String, String>> _bestSinglesTraining = [
+    {'id': 'bench_barbell_single', 'name': 'Bench Press, Barbell'},
+    {'id': 'squat_barbell_single', 'name': 'Back Squat, Barbell'},
+    {'id': 'deadlift_conv_single', 'name': 'Deadlift, Conventional'},
+    {'id': 'chin_up_single', 'name': 'Chin-Up'},
+    {'id': 'ohp_db_uni_single', 'name': 'Overhead Dumbbell Press, Unilateral'},
+  ];
+
+  final List<Map<String, String>> _bestCompSingles = [
+    {'id': 'squat_barbell_comp', 'name': 'Back Squat, Barbell'},
+    {'id': 'bench_barbell_comp', 'name': 'Bench Press, Barbell'},
+    {'id': 'deadlift_conv_comp', 'name': 'Deadlift, Conventional'},
+  ];
+
+  Widget _buildLiftVideoSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 12),
+        _buildLiftVideoGroupGrid(
+          title: 'Best Lift in Training (E1RM)',
+          lifts: _bestTrainingByE1RM,
+        ),
+        const SizedBox(height: 12),
+        _buildLiftVideoGroupGrid(
+          title: 'Best Singles in Training',
+          lifts: _bestSinglesTraining,
+        ),
+        const SizedBox(height: 12),
+        _buildLiftVideoGroupGrid(
+          title: 'Best Comp Singles',
+          lifts: _bestCompSingles,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLiftVideoGroupGrid({
+    required String title,
+    required List<Map<String, String>> lifts,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            blurRadius: 8,
+            color: Colors.black.withOpacity(0.04),
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              fontFamily: 'Monda',
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+
+          // GRID: 3 per row, square tiles, no overflow; it expands to content height.
+          GridView.builder(
+            itemCount: lifts.length,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              mainAxisSpacing: 8,
+              crossAxisSpacing: 8,
+              childAspectRatio: 1, // square tiles
+            ),
+            itemBuilder: (_, i) {
+              final liftId = lifts[i]['id']!;
+              final liftName = lifts[i]['name']!;
+              return _buildLiftVideoTile(liftId: liftId, liftName: liftName);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLiftVideoTile({
+    required String liftId,
+    required String liftName,
+  }) {
+    final entry = _liftVideos[liftId];
+    final hasVideo = (entry?.hasLocal ?? false);
+    final path = entry?.localPath;
+
+    return GestureDetector(
+      onTap: () {
+        if (!hasVideo || path == null || !File(path).existsSync()) {
+          // Missing or invalid – route to upload
+          _pickVideoForLift(liftId);
+          return;
+        }
+        _playVideo(context, path);
+      },
+      onLongPress: () async {
+        if (!hasVideo || path == null || !File(path).existsSync()) return;
+        await _startInlinePlay(liftId, path);
+      },
+      onLongPressUp: () async {
+        if (_inlinePlayingLiftId == liftId) {
+          await _stopInlinePlay(liftId);
+        }
+      },
+      child: Column(
+        children: [
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                color: Colors.black.withOpacity(0.06),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    // Thumbnail or placeholder
+                    if (hasVideo && path != null && File(path).existsSync())
+                      FutureBuilder<Uint8List?>(
+                        future: _getThumbFor(liftId, path),
+                        builder: (context, snap) {
+                          if (snap.connectionState != ConnectionState.done ||
+                              snap.data == null) {
+                            return const Center(child: Icon(Icons.videocam));
+                          }
+                          return Image.memory(
+                            snap.data!,
+                            fit: BoxFit.cover,
+                          );
+                        },
+                      )
+                    else
+                      const Center(child: Icon(Icons.upload_file)),
+
+                    // Inline player overlay when press&hold
+                    if (_inlinePlayingLiftId == liftId &&
+                        _inlineControllers[liftId]?.value.isInitialized == true)
+                      VideoPlayer(_inlineControllers[liftId]!),
+
+                    // Play/upload affordance
+                    Align(
+                      alignment: Alignment.center,
+                      child: Icon(
+                        hasVideo ? Icons.play_circle_fill : Icons.file_upload,
+                        size: 32,
+                        color: Colors.white.withOpacity(0.9),
+                      ),
+                    ),
+
+                    // Replace / Remove small buttons (only when a video exists)
+                    if (hasVideo)
+                      Positioned(
+                        right: 6,
+                        top: 6,
+                        child: Row(
+                          children: [
+                            _tinyCircleBtn(
+                              Icons.swap_horiz,
+                              tooltip: 'Replace',
+                              onTap: () => _pickVideoForLift(liftId),
+                            ),
+                            const SizedBox(width: 6),
+                            _tinyCircleBtn(
+                              Icons.delete_outline,
+                              tooltip: 'Remove',
+                              onTap: () {
+                                _removeVideoForLift(liftId);
+                                _stopInlinePlay(liftId);
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            liftName,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontFamily: 'Monda',
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _tinyCircleBtn(IconData icon,
+      {required VoidCallback onTap, String? tooltip}) {
+    final btn = InkWell(
+      onTap: onTap,
+      customBorder: const CircleBorder(),
+      child: Container(
+        width: 28,
+        height: 28,
+        decoration: const BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.black54,
+        ),
+        child: Icon(icon, size: 16, color: Colors.white),
+      ),
+    );
+    return tooltip != null ? Tooltip(message: tooltip, child: btn) : btn;
+  }
+
+
+  Future<Uint8List?> _getThumbFor(String liftId, String videoPath) async {
+    // Use cache first
+    if (_thumbCache.containsKey(liftId)) return _thumbCache[liftId];
+
+    try {
+      final bytes = await VideoThumbnail.thumbnailData(
+        video: videoPath,
+        imageFormat: ImageFormat.PNG,
+        maxWidth: 300, // keeps memory reasonable; grid is small
+        quality: 70,
+      );
+      _thumbCache[liftId] = bytes;
+      return bytes;
+    } catch (_) {
+      _thumbCache[liftId] = null;
+      return null;
+    }
+  }
+
+  Future<void> _startInlinePlay(String liftId, String videoPath) async {
+    // Stop any other tile first
+    if (_inlinePlayingLiftId != null && _inlinePlayingLiftId != liftId) {
+      await _stopInlinePlay(_inlinePlayingLiftId!);
+    }
+
+    // If already built, just play
+    if (_inlineControllers.containsKey(liftId)) {
+      final c = _inlineControllers[liftId]!;
+      await c.play();
+      setState(() => _inlinePlayingLiftId = liftId);
+      return;
+    }
+
+    final controller = VideoPlayerController.file(File(videoPath));
+    _inlineControllers[liftId] = controller;
+    await controller.initialize();
+    controller.setLooping(true);
+    controller.setVolume(0); // muted
+    await controller.play();
+
+    setState(() => _inlinePlayingLiftId = liftId);
+  }
+
+  Future<void> _stopInlinePlay(String liftId) async {
+    final c = _inlineControllers[liftId];
+    if (c != null) {
+      await c.pause();
+      await c.dispose();
+      _inlineControllers.remove(liftId);
+    }
+    if (_inlinePlayingLiftId == liftId) {
+      setState(() => _inlinePlayingLiftId = null);
+    }
+  }
+
+
+
+  Widget _chipButton({
+    required String label,
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.primaryContainer,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 16),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
 
 
@@ -119,6 +553,7 @@ class _ProfilePageState extends State<ProfilePage> {
     _refreshBestLiftsAndPoints(); // NEW
     _loadCurrentUsername();
     _loadCompSingles();
+    _loadLiftVideosFromLocal(); // local-only for now
   }
 
   @override
@@ -127,7 +562,79 @@ class _ProfilePageState extends State<ProfilePage> {
     _compSqCtrl.dispose();
     _compBpCtrl.dispose();
     _compDlCtrl.dispose();
+    _saveLiftVideosToLocal(); // persist on page exit
+
+    for (final c in _inlineControllers.values) {
+      c.dispose();
+    }
+    _inlineControllers.clear();
     super.dispose();
+  }
+
+  Future<void> _loadLiftVideosFromLocal() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_kLiftVideosPrefsKey);
+    if (raw == null) return;
+
+    try {
+      final decoded = (jsonDecode(raw) as Map<String, dynamic>);
+      decoded.forEach((liftId, obj) {
+        _liftVideos[liftId] = LiftVideo.fromJson(Map<String, dynamic>.from(obj));
+      });
+      if (mounted) setState(() {});
+    } catch (_) {
+      // Ignore corrupt; you could add logging
+    }
+  }
+
+  Future<void> _saveLiftVideosToLocal() async {
+    final prefs = await SharedPreferences.getInstance();
+    final map = _liftVideos.map((k, v) => MapEntry(k, v.toJson()));
+    await prefs.setString(_kLiftVideosPrefsKey, jsonEncode(map));
+  }
+
+  Future<void> _pickVideoForLift(String liftId) async {
+    if (_videoMode != VideoStorageMode.local) {
+      // Future: route to Firestore upload flow
+      return;
+    }
+
+    // 👉 This opens the device's Gallery-style picker
+    final XFile? picked = await _imagePicker.pickVideo(
+      source: ImageSource.gallery,
+      // optional: cap duration shown/recorded
+      // maxDuration: const Duration(minutes: 5),
+    );
+
+    if (picked == null) return; // user canceled
+
+    final path = picked.path;
+
+    setState(() {
+      _liftVideos[liftId] = LiftVideo(
+        liftId: liftId,
+        localPath: path,
+        remoteUrl: null,
+        updatedAt: DateTime.now(),
+      );
+    });
+
+    await _saveLiftVideosToLocal();
+  }
+
+  void _removeVideoForLift(String liftId) {
+    setState(() {
+      _liftVideos.remove(liftId);
+    });
+    _saveLiftVideosToLocal();
+  }
+
+  void _playVideo(BuildContext context, String path) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => _InAppVideoPlayer(videoPath: path),
+      ),
+    );
   }
 
 
@@ -517,6 +1024,284 @@ class _ProfilePageState extends State<ProfilePage> {
     return null;
   }
 
+  Widget _buildMoreStatsCard() {
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        color: Colors.blueGrey.withOpacity(0.10),
+      ),
+      child: Column(
+        children: [
+          // Header row (tap to expand/collapse)
+          InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () => setState(() => _moreStatsExpanded = !_moreStatsExpanded),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'More Stats:',
+                      style: GoogleFonts.monda(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  AnimatedRotation(
+                    duration: const Duration(milliseconds: 180),
+                    turns: _moreStatsExpanded ? 0.5 : 0.0, // chevron flips
+                    child: const Icon(Icons.expand_more),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // Collapsible content
+          AnimatedCrossFade(
+            duration: const Duration(milliseconds: 180),
+            crossFadeState: _moreStatsExpanded
+                ? CrossFadeState.showSecond
+                : CrossFadeState.showFirst,
+            firstChild: const SizedBox.shrink(),
+            secondChild: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Column(
+                children: [
+                  // --- Goodlift Points In Comp ---
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Goodlift Points In Comp',
+                            style: GoogleFonts.monda(
+                              fontSize: Theme.of(context).textTheme.bodyLarge?.fontSize ?? 14,
+                              fontWeight: Theme.of(context).textTheme.bodyLarge?.fontWeight,
+                            ),
+                          ),
+                        ),
+                        SizedBox(
+                          width: _rightColWidth,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.blueGrey,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            alignment: Alignment.centerLeft,
+                            child: const Text(
+                              '(pending calc)',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // --- RE Points ---
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'RE Points',
+                            style: GoogleFonts.monda(
+                              fontSize: Theme.of(context).textTheme.bodyLarge?.fontSize ?? 14,
+                              fontWeight: Theme.of(context).textTheme.bodyLarge?.fontWeight,
+                            ),
+                          ),
+                        ),
+                        SizedBox(
+                          width: _rightColWidth,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.blueGrey,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            alignment: Alignment.centerLeft,
+                            child: const Text(
+                              '(pending calc)',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  // --- Best Comp Singles (header) ---
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Best Comp Singles:',
+                            style: GoogleFonts.monda(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+
+                  // --- Squat ---
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Back Squat',
+                            style: GoogleFonts.monda(fontSize: 16),
+                          ),
+                        ),
+                        SizedBox(
+                          width: _rightColWidth,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.blueGrey,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            alignment: Alignment.centerLeft,
+                            child: TextField(
+                              controller: _compSqCtrl,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              inputFormatters: [
+                                FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
+                              ],
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              decoration: const InputDecoration(
+                                isDense: true,
+                                hintText: 'kg',
+                                hintStyle: TextStyle(color: Colors.white70),
+                                border: InputBorder.none,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // --- Bench ---
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Bench Press',
+                            style: GoogleFonts.monda(fontSize: 16),
+                          ),
+                        ),
+                        SizedBox(
+                          width: _rightColWidth,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.blueGrey,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            alignment: Alignment.centerLeft,
+                            child: TextField(
+                              controller: _compBpCtrl,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              inputFormatters: [
+                                FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
+                              ],
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              decoration: const InputDecoration(
+                                isDense: true,
+                                hintText: 'kg',
+                                hintStyle: TextStyle(color: Colors.white70),
+                                border: InputBorder.none,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // --- Deadlift ---
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Deadlift',
+                            style: GoogleFonts.monda(fontSize: 16),
+                          ),
+                        ),
+                        SizedBox(
+                          width: _rightColWidth,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.blueGrey,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            alignment: Alignment.centerLeft,
+                            child: TextField(
+                              controller: _compDlCtrl,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              inputFormatters: [
+                                FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
+                              ],
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              decoration: const InputDecoration(
+                                isDense: true,
+                                hintText: 'kg',
+                                hintStyle: TextStyle(color: Colors.white70),
+                                border: InputBorder.none,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
 
   @override
@@ -952,246 +1737,11 @@ class _ProfilePageState extends State<ProfilePage> {
               ),
             ),
 
-            Text(
-              'More Stats:',
-              style: GoogleFonts.monda(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
             const SizedBox(height: 8),
-            Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8),
-                color: Colors.blueGrey.withOpacity(0.10), // same faint background
-              ),
-              padding: const EdgeInsets.symmetric(vertical: 8), // match padding to lifts section
-              child: Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            'Goodlift Points In Comp',
-                            style: GoogleFonts.monda(
-                              fontSize: Theme.of(context).textTheme.bodyLarge?.fontSize ?? 14,
-                              fontWeight: Theme.of(context).textTheme.bodyLarge?.fontWeight,
-                            ),
-                          ),
-                        ),
-                        SizedBox(
-                          width: _rightColWidth, // align with best lifts column
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: Colors.blueGrey, // same chip background as others
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            alignment: Alignment.centerLeft,
-                            child: const Text(
-                              '(pending calc)',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w600,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            'RE Points',
-                            style: GoogleFonts.monda(
-                              fontSize: Theme.of(context).textTheme.bodyLarge?.fontSize ?? 14,
-                              fontWeight: Theme.of(context).textTheme.bodyLarge?.fontWeight,
-                            ),
-                          ),
-                        ),
-                        SizedBox(
-                          width: _rightColWidth, // align with best lifts column
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: Colors.blueGrey,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            alignment: Alignment.centerLeft,
-                            child: const Text(
-                              '(pending calc)',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w600,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-
-
-                  ),
-
-                  const SizedBox(height: 8),
-
-// Header (optional)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            'Best Comp Singles:',
-                            style: GoogleFonts.monda(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width:6), // small padding only
-                      ],
-
-                    ),
-                  ),
-                  const SizedBox(height:6),
-// Squat
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text('Back Squat',
-                            style: GoogleFonts.monda(fontSize: 16),
-                          ),
-                        ),
-                        SizedBox(
-                          width: _rightColWidth,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: Colors.blueGrey,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            alignment: Alignment.centerLeft,
-                            child: TextField(
-                              controller: _compSqCtrl,
-                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                              inputFormatters: [
-                                FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
-                              ],
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w600,
-                              ),
-                              decoration: const InputDecoration(
-                                isDense: true,
-                                hintText: 'kg',
-                                hintStyle: TextStyle(color: Colors.white70),
-                                border: InputBorder.none,
-                              ),
-                            ),
-
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-// Bench
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text('Bench Press',
-                            style: GoogleFonts.monda(fontSize: 16),
-                          ),
-                        ),
-                        SizedBox(
-                          width: _rightColWidth,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: Colors.blueGrey,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            alignment: Alignment.centerLeft,
-                            child: TextField(
-                              controller: _compBpCtrl,
-                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                              inputFormatters: [
-                                FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
-                              ],
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w600,
-                              ),
-                              decoration: const InputDecoration(
-                                isDense: true,
-                                hintText: 'kg',
-                                hintStyle: TextStyle(color: Colors.white70),
-                                border: InputBorder.none,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-// Deadlift
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text('Deadlift',
-                            style: GoogleFonts.monda(fontSize: 16),
-                          ),
-                        ),
-                        SizedBox(
-                          width: _rightColWidth,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: Colors.blueGrey,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            alignment: Alignment.centerLeft,
-                            child: TextField(
-                              controller: _compDlCtrl,
-                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                              inputFormatters: [
-                                FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
-                              ],
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w600,
-                              ),
-                              decoration: const InputDecoration(
-                                isDense: true,
-                                hintText: 'kg',
-                                hintStyle: TextStyle(color: Colors.white70),
-                                border: InputBorder.none,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                ],
-              ),
+            // ⬇️ Drop-in replacement
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 0),
+              child: _buildMoreStatsCard(),
             ),
 
 
@@ -1203,13 +1753,25 @@ class _ProfilePageState extends State<ProfilePage> {
               child: const Text('Save Profile'),
             ),
 
+            const SizedBox(height: 12),
+
+// 👇 NEW: Videos section goes here (keeps your page styling/alignment)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: _buildLiftVideoSection(),
+            ),
+
             const SizedBox(height: 60),
           ],
         ),
+
+
       ),
     ),
     );
   }
+
+
 
   Widget _buildLiftRow(String label, double value, Function(double) onChanged) {
     final controller = TextEditingController(text: value.toString());
