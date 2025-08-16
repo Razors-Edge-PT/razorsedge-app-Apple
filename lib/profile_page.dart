@@ -27,6 +27,8 @@ enum BodyWeightMode { recent, avg7 }
 
 enum HeightUnit { cm, inch }
 
+enum BodyWeightUnit { kg, lb }
+
 class LiftVideo {
   final String liftId;      // stable key e.g., 'bench_barbell'
   final String? localPath;  // file path on device
@@ -217,14 +219,19 @@ class _ProfilePageState extends State<ProfilePage> {
   double? _bwRecent;
   double? _bwAvg7;
   BodyWeightMode _bwMode = BodyWeightMode.recent;
+  bool _metricsPrivate = false;   // master toggle for Body Metrics
   bool _bwPrivate = false; // local flag; persist later if you want
   bool _bwLoading = false;
   final TextEditingController _heightCtrl = TextEditingController();
+
   HeightUnit _heightUnit = HeightUnit.cm;
   double? _parseNum(String s) => double.tryParse(s.trim());
   double _cmToIn(double cm) => cm / 2.54;
   double _inToCm(double inch) => inch * 2.54;
 
+  BodyWeightUnit _bwUnit = BodyWeightUnit.kg;
+  double _kgToLbs(double kg) => kg * 2.20462;
+  double _lbsToKg(double lbs) => lbs / 2.20462;
 
   //Video bits
   // Toggleable later; default to local.
@@ -622,17 +629,23 @@ class _ProfilePageState extends State<ProfilePage> {
     _loadCurrentUsername();
     _loadCompSingles();
     _loadLiftVideosFromLocal(); // local-only for now
+    _loadProfilePrefs();
     _loadBodyWeightForSelectedUser();
+    _loadHeightForSelectedUser(); // this alone is fine
   }
 
   @override
   void dispose() {
     _saveCompSingles();
+    _saveProfileData();
     _compSqCtrl.dispose();
     _compBpCtrl.dispose();
     _compDlCtrl.dispose();
-    _saveLiftVideosToLocal(); // persist on page exit
     _heightCtrl.dispose();
+    _bioController.dispose();
+
+    _saveLiftVideosToLocal(); // persist on page exit
+
 
     for (final c in _inlineControllers.values) {
       c.dispose();
@@ -683,6 +696,43 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
+  Future<void> _loadProfilePrefs() async {
+    final uid = UserContext.of(context, listen: false).currentUid;
+    if (uid == null) return;
+
+    final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+    final data = doc.data();
+    if (data == null) return;
+
+    // Safe map coercion
+    final profile = data['profile'] is Map
+        ? Map<String, dynamic>.from(data['profile'] as Map)
+        : <String, dynamic>{};
+    final prefs = profile['prefs'] is Map
+        ? Map<String, dynamic>.from(profile['prefs'] as Map)
+        : <String, dynamic>{};
+
+    // DEBUG
+    print('[PrefsLoader] profile keys: ${profile.keys.toList()}');
+    print('[PrefsLoader] prefs keys: ${prefs.keys.toList()}');
+
+    setState(() {
+      final bw = (prefs['bwUnit'] as String?)?.toLowerCase();
+      _bwUnit = (bw == 'lb') ? BodyWeightUnit.lb : BodyWeightUnit.kg;
+
+      final hu = (prefs['heightUnit'] as String?)?.toLowerCase();
+      _heightUnit = (hu == 'inch') ? HeightUnit.inch : HeightUnit.cm;
+
+      final mode = (prefs['bwMode'] as String?)?.toLowerCase();
+      _bwMode = (mode == 'avg7') ? BodyWeightMode.avg7 : BodyWeightMode.recent;
+
+      // If you store this:
+      // _metricsPrivate = prefs['bodyMetricsPrivate'] == true;
+    });
+  }
+
+
+
   Future<void> _loadProfileData() async {
     final uid = UserContext.of(context, listen: false).currentUid;
     if (uid == null) return;
@@ -704,9 +754,35 @@ class _ProfilePageState extends State<ProfilePage> {
     final uid = UserContext.of(context, listen: false).currentUid;
     if (uid == null) return;
 
-    await FirebaseFirestore.instance.collection('users').doc(uid).set({
+    final heightCm = _currentHeightCmFromField();
+    final bwUnitPref = _bwUnit == BodyWeightUnit.kg ? 'kg' : 'lb';
+    final heightUnitPref = _heightUnit == HeightUnit.cm ? 'cm' : 'inch';
+
+    final payload = <String, dynamic>{
       'bio': _bioController.text,
-    }, SetOptions(merge: true));
+      'profile': {
+        if (heightCm != null)
+          'heightCm': double.parse(heightCm.toStringAsFixed(2)),
+        'prefs': {
+          'bwUnit': bwUnitPref,
+          'heightUnit': heightUnitPref,
+          'bwMode': _bwMode == BodyWeightMode.recent ? 'recent' : 'avg7',
+          // 'bodyMetricsPrivate': _metricsPrivate,
+        },
+        'updatedAt': FieldValue.serverTimestamp(),
+      },
+    };
+
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .set(payload, SetOptions(merge: true));
+
+    // (Optional) one-time back-compat write for existing clients that read the flat key.
+    // await FirebaseFirestore.instance.collection('users').doc(uid).set(
+    //   {'profile.heightCm': payload['profile']?['heightCm']},
+    //   SetOptions(merge: true),
+    // );
   }
 
 
@@ -890,6 +966,20 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
+  double? _currentBodyWeightKg() {
+    // pick the active source (recent vs 7-day)
+    final raw = (_bwMode == BodyWeightMode.recent) ? _bwRecent : _bwAvg7;
+    if (raw == null) return null;
+
+    // raw is stored from Firestore in kg.
+    // If the UI toggle is lb, convert back to kg to be safe.
+    if (_bwUnit == BodyWeightUnit.lb) {
+      return _lbsToKg(_kgToLbs(raw)); // no-op in practice but future-proof if source changes
+    }
+    return raw;
+  }
+
+
   void _toggleHeightUnit(HeightUnit to) {
     if (_heightUnit == to) return;
 
@@ -961,6 +1051,96 @@ class _ProfilePageState extends State<ProfilePage> {
     return null; // couldn't parse
   }
 
+  double? _currentHeightCmFromField() {
+    final txt = _heightCtrl.text.trim();
+    if (txt.isEmpty) return null;
+
+    if (_heightUnit == HeightUnit.cm) {
+      return double.tryParse(txt);
+    } else {
+      // inch mode accepts 5'8", 5'8.5", 68, etc.
+      final inches = _feetInchesStringToInches(txt);
+      if (inches == null) return null;
+      return _inToCm(inches);
+    }
+  }
+
+  Future<void> _loadHeightForSelectedUser() async {
+    final uid = UserContext.of(context, listen: false).currentUid;
+    if (uid == null) {
+      print('[HeightLoader] No UID found, skipping load.');
+      return;
+    }
+    print('[HeightLoader] Loading height for UID: $uid');
+
+    // Server-first to avoid stale cache
+    DocumentSnapshot<Map<String, dynamic>> snap;
+    try {
+      snap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get(const GetOptions(source: Source.server));
+    } catch (_) {
+      snap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get(const GetOptions(source: Source.cache));
+    }
+    if (!snap.exists) {
+      print('[HeightLoader] User doc missing.');
+      return;
+    }
+
+    // ----- Load height unit pref (nested if present)
+    String? heightUnitPref;
+    try {
+      final v = snap.get('profile.prefs.heightUnit');
+      if (v is String) heightUnitPref = v.toLowerCase();
+    } catch (_) {}
+    setState(() {
+      _heightUnit = (heightUnitPref == 'inch') ? HeightUnit.inch : HeightUnit.cm;
+    });
+    print('[HeightLoader] Height unit from prefs: $_heightUnit (raw="$heightUnitPref")');
+
+    // ----- Read height: try nested map first
+    double? heightCm;
+    try {
+      final v = snap.get('profile.heightCm'); // nested path
+      if (v is num) heightCm = v.toDouble();
+    } catch (_) {
+      // fallback: literal flat field named "profile.heightCm"
+      // Fallback: check for legacy flat key
+      try {
+        final rawData = snap.data();
+        if (rawData != null && rawData.containsKey('profile.heightCm')) {
+          final v = rawData['profile.heightCm'];
+          if (v is num) heightCm = v.toDouble();
+          print('[HeightLoader] Read legacy flat field "profile.heightCm": $heightCm');
+        }
+      } catch (e) {
+        print('[HeightLoader] Legacy flat key read failed: $e');
+      }
+
+    }
+
+    if (heightCm == null) {
+      print('[HeightLoader] heightCm not found in nested or flat field.');
+      return;
+    }
+    print('[HeightLoader] Found heightCm: $heightCm');
+
+    // ----- Format into TextField
+    if (_heightUnit == HeightUnit.cm) {
+      _heightCtrl.text = heightCm.toStringAsFixed(2);
+    } else {
+      final inches = heightCm / 2.54;
+      final feet = inches ~/ 12;
+      final rem = inches - feet * 12;
+      _heightCtrl.text = "$feet'${rem.toStringAsFixed(1)}\"";
+    }
+    if (mounted) setState(() {});
+    print('[HeightLoader] TextField set to: ${_heightCtrl.text}');
+  }
 
 
 
@@ -1473,19 +1653,61 @@ class _ProfilePageState extends State<ProfilePage> {
                   ),
 
                   const SizedBox(height: 6),
+                  // Centered heading with adjustable right-aligned toggle
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          'Body Metrics',
-                          style: GoogleFonts.monda(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
+                    child: SizedBox(
+                      width: double.infinity, // <-- ensure full width
+                      height: 32,
+                      child: Stack(
+                        children: [
+                          // Centered heading
+                          const Center(
+                            child: Text(
+                              'Body Metrics',
+                              textAlign: TextAlign.center,
+                              // replace with GoogleFonts.monda if you prefer
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                            ),
                           ),
-                        ),
-                      ],
+
+                          // Right-aligned toggle (on top)
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: Padding(
+                              padding: const EdgeInsets.only(right: 0), // <- tweak this to nudge
+                              child: InkWell(
+                                onTap: () => setState(() => _metricsPrivate = !_metricsPrivate),
+                                borderRadius: BorderRadius.circular(16),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: _metricsPrivate
+                                        ? Colors.blueGrey.withOpacity(0.25)
+                                        : Colors.blueGrey.withOpacity(0.10),
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        _metricsPrivate ? Icons.lock : Icons.lock_open,
+                                        size: 14,
+                                        color: Colors.blueGrey,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        _metricsPrivate ? 'Private' : 'Public',
+                                        style: const TextStyle(fontSize: 12),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
 
@@ -1521,18 +1743,32 @@ class _ProfilePageState extends State<ProfilePage> {
                                   child: Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      Icon(
-                                        _bwPrivate ? Icons.lock : Icons.lock_open,
-                                        size: 14,
-                                        color: Colors.blueGrey,
-                                      ),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        _bwPrivate ? 'Private' : 'Public',
-                                        style: const TextStyle(fontSize: 14),
+                                      InkWell(
+                                        onTap: () {
+                                          setState(() {
+                                            if (_bwUnit == BodyWeightUnit.kg) {
+                                              _bwUnit = BodyWeightUnit.lb;
+                                            } else {
+                                              _bwUnit = BodyWeightUnit.kg;
+                                            }
+                                          });
+                                        },
+                                        borderRadius: BorderRadius.circular(16),
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            color: Colors.blueGrey.withOpacity(0.10),
+                                            borderRadius: BorderRadius.circular(16),
+                                          ),
+                                          child: Text(
+                                            _bwUnit == BodyWeightUnit.kg ? 'kg' : 'lb',
+                                            style: const TextStyle(fontSize: 14),
+                                          ),
+                                        ),
                                       ),
                                     ],
-                                  ),
+                                  )
+
                                 ),
                               ),
                             ],
@@ -1562,7 +1798,13 @@ class _ProfilePageState extends State<ProfilePage> {
                                   (() {
                                     final v = (_bwMode == BodyWeightMode.recent) ? _bwRecent : _bwAvg7;
                                     if (v == null) return '(no data)';
-                                    return '${v.toStringAsFixed(1)} kg';
+
+                                    if (_bwUnit == BodyWeightUnit.lb) {
+                                      return '${_kgToLbs(v).toStringAsFixed(1)} lb';
+                                    } else {
+                                      return '${v.toStringAsFixed(1)} kg';
+                                    }
+
                                   })(),
                                   style: const TextStyle(
                                     color: Colors.white,
@@ -1718,6 +1960,7 @@ class _ProfilePageState extends State<ProfilePage> {
     return WillPopScope(
       onWillPop: () async {
         await _saveCompSingles();
+        await _saveProfileData();
         return true; // allow navigation
       },
       child: Scaffold(
@@ -1727,7 +1970,8 @@ class _ProfilePageState extends State<ProfilePage> {
           leading: IconButton(
             icon: const Icon(Icons.arrow_back),
             onPressed: () async {
-              await _saveCompSingles();      // ✅ ensure save on custom back
+              await _saveCompSingles();
+              await _saveProfileData(); // ✅ save on custom back
               if (context.mounted) Navigator.pop(context);
             },
           ),
