@@ -17,6 +17,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:video_player/video_player.dart';
 import 'dart:typed_data';
 import 'package:video_thumbnail/video_thumbnail.dart';
+import 'formula.dart' as formula;
+
 
 
 enum _CompMode { threeLift, benchOnly }
@@ -215,6 +217,8 @@ class _ProfilePageState extends State<ProfilePage> {
   final _compBpCtrl = TextEditingController();
   final _compDlCtrl = TextEditingController();
 
+
+
   //Body Metric bits
   double? _bwRecent;
   double? _bwAvg7;
@@ -232,6 +236,7 @@ class _ProfilePageState extends State<ProfilePage> {
   BodyWeightUnit _bwUnit = BodyWeightUnit.kg;
   double _kgToLbs(double kg) => kg * 2.20462;
   double _lbsToKg(double lbs) => lbs / 2.20462;
+
 
   //Video bits
   // Toggleable later; default to local.
@@ -632,6 +637,7 @@ class _ProfilePageState extends State<ProfilePage> {
     _loadProfilePrefs();
     _loadBodyWeightForSelectedUser();
     _loadHeightForSelectedUser(); // this alone is fine
+    _loadGender(); // <<— load gender last is fine
   }
 
   @override
@@ -731,6 +737,44 @@ class _ProfilePageState extends State<ProfilePage> {
     });
   }
 
+  Future<void> _loadGender() async {
+    final uid = UserContext.of(context, listen: false).currentUid;
+    if (uid == null) return;
+
+    // Server-first to avoid stale cache; fallback to cache if offline
+    DocumentSnapshot<Map<String, dynamic>> snap;
+    try {
+      snap = await FirebaseFirestore.instance
+          .collection('users').doc(uid)
+          .get(const GetOptions(source: Source.server));
+    } catch (_) {
+      snap = await FirebaseFirestore.instance
+          .collection('users').doc(uid)
+          .get(const GetOptions(source: Source.cache));
+    }
+
+    String? raw;
+    // Try nested path
+    try { raw = snap.get('profile.gender') as String?; } catch (_) {}
+
+    // Fallback: literal flat key named "profile.gender"
+    if (raw == null) {
+      final data = snap.data();
+      if (data != null && data.containsKey('profile.gender')) {
+        final v = data['profile.gender'];
+        if (v is String) raw = v;
+      }
+    }
+
+    setState(() {
+      _gender = (raw != null && raw.toLowerCase() == 'female')
+          ? formula.Gender.female
+          : formula.Gender.male; // default
+      _rePoints = _computeREPointsFromBest(_bestLifts); // refresh calc
+    });
+  }
+
+
 
 
   Future<void> _loadProfileData() async {
@@ -763,6 +807,7 @@ class _ProfilePageState extends State<ProfilePage> {
       'profile': {
         if (heightCm != null)
           'heightCm': double.parse(heightCm.toStringAsFixed(2)),
+        'gender': (_gender == formula.Gender.female) ? 'female' : 'male', // ✅ nested
         'prefs': {
           'bwUnit': bwUnitPref,
           'heightUnit': heightUnitPref,
@@ -778,12 +823,12 @@ class _ProfilePageState extends State<ProfilePage> {
         .doc(uid)
         .set(payload, SetOptions(merge: true));
 
-    // (Optional) one-time back-compat write for existing clients that read the flat key.
-    // await FirebaseFirestore.instance.collection('users').doc(uid).set(
-    //   {'profile.heightCm': payload['profile']?['heightCm']},
-    //   SetOptions(merge: true),
-    // );
+    // (Optional) temporary compatibility write for any old readers:
+    // await FirebaseFirestore.instance.collection('users').doc(uid)
+    //   .set({'profile.gender': (_gender == formula.Gender.female) ? 'female' : 'male'},
+    //        SetOptions(merge: true));
   }
+
 
 
   Future<void> _loadPhotoURL() async {
@@ -1165,18 +1210,24 @@ class _ProfilePageState extends State<ProfilePage> {
 
   double? _goodliftPoints; // TODO: fill when you want
   double? _rePoints;       // TODO: fill when you want
+  formula.Gender _gender = formula.Gender.male; // default until you wire profile.gender
 
   Future<void> _refreshBestLiftsAndPoints() async {
     final uid = UserContext.of(context, listen: false).currentUid;
     if (uid == null) return;
 
     try {
+      // 1) Fetch best E1RMs from workouts
       final best = await _fetchBestLiftsFromWorkouts(uid, _displayExercises);
-      final gl = await _computeGoodliftPoints(uid, best); // TODO real formula
-      final re = await _computeREPoints(uid, best);       // TODO your brand metric
+
+      // 2) (Optional) Goodlift points from your existing helper
+      final gl = await _computeGoodliftPoints(uid, best);
+
+      // 3) RE points from best-in-training E1RMs + BW/gender
+      final rePts = _computeREPointsFromBest(best);
+
+      // 4) Any other totals you compute
       await _computeCompTotals(uid);
-
-
 
       if (!mounted) return;
       setState(() {
@@ -1184,14 +1235,13 @@ class _ProfilePageState extends State<ProfilePage> {
           ..clear()
           ..addAll(best);
         _goodliftPoints = gl;
-        _rePoints = re;
+        _rePoints = rePts;
       });
     } catch (e) {
       debugPrint('❌ Failed to refresh best lifts/points: $e');
     }
-
-
   }
+
 
   Future<Map<String, BestLift>> _fetchBestLiftsFromWorkouts(
       String uid,
@@ -1381,6 +1431,43 @@ class _ProfilePageState extends State<ProfilePage> {
     // final d = best['Deadlift, Conventional']?.e1rm ?? 0;
     // return (s + b + d);
     return null;
+  }
+
+  /// Compute RE points from the best-in-training E1RMs.
+  /// Expects `_bestLifts` to be keyed by the workout exercise names that match
+  /// `formula.ReExerciseKeys.defaults`.
+  double? _computeREPointsFromBest(Map<String, BestLift> bestByName) {
+    final bwKg = _currentBodyWeightKg();
+    if (bwKg == null || bwKg <= 0) return null;
+
+    const keys = formula.ReExerciseKeys.defaults;
+    double readE1(String name) => (bestByName[name]?.e1rm ?? 0.0).toDouble();
+
+    final squatE1       = readE1(keys.squat);
+    final benchE1       = readE1(keys.bench);
+    final deadliftE1    = readE1(keys.deadlift);
+    final chinTotalE1   = readE1(keys.chinUp);        // ← use E1RM as TOTAL (no BW add)
+    final dbShoulderE1  = readE1(keys.dbShoulder);
+
+    final includes = formula.ReIncludes(
+      bench:      benchE1 > 0,
+      squat:      squatE1 > 0,
+      deadlift:   deadliftE1 > 0,
+      chinUp:     chinTotalE1 > 0,
+      dbShoulder: dbShoulderE1 > 0,
+    );
+
+    return formula.computeRePoints(
+      gender: _gender,
+      bodyweightKg: bwKg,
+      benchKg: benchE1,
+      squatKg: squatE1,
+      deadliftKg: deadliftE1,
+      chinUpCombinedKg: chinTotalE1,       // ← pass through directly
+      dbShoulderUnilateralKg: dbShoulderE1,
+      includes: includes,
+      roundDecimals: 2,
+    );
   }
 
   Widget _buildMoreStatsCard() {
@@ -1933,6 +2020,67 @@ class _ProfilePageState extends State<ProfilePage> {
                       ],
                     ),
                   ),
+// --- Gender ---
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // LEFT: label (keeps same look as others)
+                        Expanded(
+                          child: Text('Gender', style: GoogleFonts.monda(fontSize: 16)),
+                        ),
+
+                        // RIGHT: chip with dropdown (same chip styling as height/deadlift)
+                        SizedBox(
+                          width: _rightColWidth,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.blueGrey,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: (_metricsPrivate)
+                                ? const Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                'Private',
+                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            )
+                                : DropdownButtonHideUnderline(
+                              child: DropdownButton<formula.Gender>(
+                                isExpanded: true,
+                                value: _gender,
+                                dropdownColor: Colors.blueGrey,
+                                iconEnabledColor: Colors.white,
+                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                                items: const [
+                                  DropdownMenuItem(
+                                    value: formula.Gender.male,
+                                    child: Text('Male'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: formula.Gender.female,
+                                    child: Text('Female'),
+                                  ),
+                                ],
+                                onChanged: (val) {
+                                  if (val == null) return;
+                                  setState(() => _gender = val);
+                                  // Recompute RE immediately
+                                  setState(() {
+                                    _rePoints = _computeREPointsFromBest(_bestLifts);
+                                  });
+                                },
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
 
 
 
@@ -2180,12 +2328,12 @@ class _ProfilePageState extends State<ProfilePage> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _StatChip(label: 'Goodlift', value: _goodliftPoints),
-                      const SizedBox(height: 8),
                       _StatChip(label: 'RE Points', value: _rePoints),
                       const SizedBox(height: 8),
+                      _StatChip(label: 'GL Points', value: _goodliftPoints),
+                      const SizedBox(height: 8),
                       _StatChip(
-                        label: 'Best Comp Total',
+                        label: 'Best Comp Total Kgs',
                         value: _compMode == _CompMode.threeLift
                             ? _bestThreeLiftTotal
                             : _bestBenchOnly,
