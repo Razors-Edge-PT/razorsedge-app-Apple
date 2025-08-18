@@ -633,37 +633,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
   Map<String, dynamic> _getProgressedValues(int exerciseIndex) {
 
-    /*Future.microtask(() async {
-      print('🐛 [WES] Triggering debugPrintRepTargetsFromExerciseSettings...');
-
-      final blockId = _selectedBlockId;
-      final exerciseName = _selectedExercisesWithCircuits.isNotEmpty
-          ? _selectedExercisesWithCircuits.first['name']?.trim()
-          : null;
-
-      final exerciseId = exerciseName != null
-          ? PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName
-          : null;
-
-      print('🛠 DEBUG: About to call debugPrintRepTargetsFromExerciseSettings with:');
-      print('🔑 Block ID: $blockId');
-      print('🏋️ Exercise Name: $exerciseName');
-      print('💪 Exercise ID: $exerciseId');
-
-      if (blockId != null && exerciseId != null) {
-        await debugPrintRepTargetsFromExerciseSettings(
-          context,
-          blockId,
-          exerciseId,
-        );
-      } else {
-        print('🚫 [DEBUG] Could not resolve blockId or exerciseId from WES state.');
-      }
-    });
-
-*/
-
-
     // 🧠 STEP 1: If we already cached a GOOD value, return it
     final cached = _cachedProgressedValues[exerciseIndex];
     if (cached != null && blockStartDate != null && blockEndDate != null) {
