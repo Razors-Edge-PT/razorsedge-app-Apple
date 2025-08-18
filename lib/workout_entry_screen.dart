@@ -3566,6 +3566,29 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     return _savedExerciseKeysForDate.contains(key);
   }
 
+  Future<void> _markExerciseSaved(int index) async {
+    if (index < 0 || index >= _selectedExercisesWithCircuits.length) return;
+
+    final name =
+        (_selectedExercisesWithCircuits[index]['name'] as String?)?.trim() ?? 'Unnamed';
+    final circuitIndex = _selectedExercisesWithCircuits[index]['circuitIndex'] ?? 0;
+
+    if (!_hasAnyDataForExercise(index)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Enter some data for this exercise first.')),
+        );
+      }
+      return;
+    }
+
+    setState(() {
+      _savedExerciseKeysForDate.add(_exerciseKey(name, circuitIndex));
+    });
+
+    // Upsert just like autosave; this will include `savedAt` for this exercise
+    await _upsertWorkoutToFirestore(alsoPushToBB2: true, markAllSaved: false);
+  }
 
 
   Future<void> _saveWorkout() async {
@@ -4626,26 +4649,40 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // ✅ Small "Saved" pill when in saved format
+              // If already saved → show the green "Saved" pill (as you have now)
               if (isSaved) ...[
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  margin: const EdgeInsets.only(right: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                  margin: const EdgeInsets.only(right: 1),
                   decoration: BoxDecoration(
                     color: Colors.green.withOpacity(0.15),
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: Colors.green.withOpacity(0.6)),
                   ),
-                  child: Row(
-                    children: const [
+                  child: const Row(
+                    children: [
                       Icon(Icons.check_circle, size: 14, color: Colors.green),
                       SizedBox(width: 4),
-                      Text('Saved', style: TextStyle(fontSize: 12, color: Colors.green)),
+                      Text('Done', style: TextStyle(fontSize: 11, color: Colors.green)),
                     ],
                   ),
                 ),
+              ] else ...[
+                // Not saved yet → show "Save?" control in the same spot
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(color: Colors.white24),
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  onPressed: () => _markExerciseSaved(i),
+                  icon: const Icon(Icons.check_circle_outline, size: 14),
+                  label: const Text('Done?', style: TextStyle(fontSize: 12)),
+                ),
+                const SizedBox(width: 3),
               ],
 
+              // …keep your existing info + Top Sets buttons…
               IconButton(
                 icon: const Icon(Icons.info_outline),
                 color: Colors.blueGrey,
@@ -4654,7 +4691,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                       _selectedExercisesWithCircuits[i]['name'] ?? '');
                 },
               ),
-              const SizedBox(width: 4),
+              const SizedBox(width: 1),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.blueGrey,
@@ -4673,6 +4710,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
               ),
             ],
           ),
+
 
           children: [
             // 👇 Your set rows and other ExpansionTile children continue here
