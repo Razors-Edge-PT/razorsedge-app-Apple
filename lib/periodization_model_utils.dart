@@ -804,34 +804,40 @@ class PeriodizationModelUtils {
   // Weight Logic
 
   static double getSuggestedWeightFromRep(String exerciseName, int reps, double rir) {
-    final e1rms = exercisePreviousE1RMs[exerciseName];
-    if (e1rms == null || e1rms.isEmpty) return 20.0;
+    // 1) Pull a unified base E1RM from history (no week-1 logic here)
+    final info = computeBaseE1RMFromHistory(
+      exerciseName: exerciseName,
+      repTarget: reps,
+      plannedRIR: rir,
+    );
+    final double? baseE1RM = info['baseE1RM'] as double?;
 
-    final recent = e1rms.take(4).toList();
-    final avgE1RM = recent.reduce((a, b) => a + b) / recent.length;
-    final effectiveReps = reps + rir;
-
-    double suggestedWeight;
-
-    if (effectiveReps <= 6) {
-      suggestedWeight = avgE1RM * (37 - effectiveReps) / 36;
-    } else {
-      suggestedWeight = avgE1RM / (1 + 0.0333 * effectiveReps);
+    if (baseE1RM == null || baseE1RM <= 0) {
+      // Preserve your conservative fallback when no history is available.
+      return 20.0;
     }
 
-    final rounded = roundToNearestValidIncrement(
+    // 2) Convert E1RM → weight for the current plan
+    final double suggestedWeight = reverseCalculateWeight(
+      targetE1RM: baseE1RM,
+      reps: reps,
+      rir: rir,
+    );
+
+    // 3) Snap to valid increment for this exercise
+    final double rounded = roundToNearestValidIncrement(
       targetWeight: suggestedWeight,
       exerciseName: exerciseName,
     );
 
-
-    print('🧪 [BB2] Top set E1RM history for $exerciseName → $e1rms');
-    print('🎯 [BB2] Rounded $suggestedWeight → $rounded using custom increments');
-
-
+    print('🧪 [BB2] Base E1RM for $exerciseName → ${baseE1RM.toStringAsFixed(2)} '
+        '(source=${info['baseSource']})');
+    print('🎯 [BB2] Rounded ${suggestedWeight.toStringAsFixed(2)} → '
+        '${rounded.toStringAsFixed(1)} using custom increments');
 
     return rounded;
   }
+
 
   static void setExerciseSettings(Map<String, dynamic> settings) {
     _exerciseSettings = settings;
@@ -1099,8 +1105,6 @@ class PeriodizationModelUtils {
   }) {
     print('🧠 [SmartProgression] Entered smartProgressionModel for $exerciseName (week $weekIndex, repTarget: $repTarget)');
 
-    String baseSource = '';
-
     if (weekIndex == 0) {
       print('🧭 [SmartProgression] Base source = week1_short_circuit');
       print('🕓 Week 1 detected → progression disabled, using base weight: $defaultWeight');
@@ -1110,125 +1114,31 @@ class PeriodizationModelUtils {
       };
     }
 
-    if (topSetHistory == null || topSetHistory.isEmpty) {
-      print('🧭 [SmartProgression] Base source = no_history_default');
-      print('🚫 No top set history available.');
+// 🔎 Unified history-based E1RM (no week-1 logic here)
+    final baseInfo = PeriodizationModelUtils.computeBaseE1RMFromHistory(
+      exerciseName: exerciseName,
+      repTarget: repTarget,
+      plannedRIR: rirValue,
+      topSetHistory: topSetHistory,          // use what was passed in
+      maxWeightByReps: maxWeightByReps,      // preserve your fallback
+      now: DateTime.now(),
+    );
+
+    final double? baseE1RMNullable = baseInfo['baseE1RM'] as double?;
+    final String baseSource = (baseInfo['baseSource'] as String?) ?? 'no_history';
+
+    if (baseE1RMNullable == null) {
+      print('🧭 [SmartProgression] Base source = $baseSource');
+      print('🚫 No viable E1RM source. Using default weight → $defaultWeight');
       return {
         'weight': defaultWeight,
         'reps': repTarget,
       };
     }
 
-    final List<Map<String, dynamic>> historyWithE1RM = topSetHistory.map((entry) {
-      final double weight = (entry['weight'] as num?)?.toDouble() ?? 0.0;
-      final double reps = (entry['reps'] as num?)?.toDouble() ?? 0.0;
-      final double rir = (entry['rir'] as num?)?.toDouble() ?? 0;
-      final double e1rm = calculateE1RM(weight, reps, rir);
-      final double effectiveReps = reps + rir;
-      final DateTime? date = entry['date'] is DateTime
-          ? entry['date'] as DateTime
-          : DateTime.tryParse(entry['date']?.toString() ?? '');
+    final double baseE1RM = baseE1RMNullable;
 
-      return {
-        'weight': weight,
-        'reps': reps,
-        'rir': rir,
-        'e1rm': e1rm,
-        'effectiveReps': effectiveReps,
-        'date': date,
-      };
-    }).toList();
-
-    final List<String> lastFourCombos = historyWithE1RM
-        .take(4)
-        .map((entry) {
-      final w = (entry['weight'] as num).toStringAsFixed(1);
-      final r = (entry['reps'] as num).toString();
-      final rir = (entry['rir'] as num).toStringAsFixed(1);
-      return '$w${r}_$rir';
-    })
-        .toList();
-
-    print('🧾 [SmartProgression] Last 4 combos: $lastFourCombos');
-
-    // recent match step
-    final DateTime now = DateTime.now();
-    final double targetEffectiveReps = repTarget + rirValue;
-
-    final recentMatch = historyWithE1RM.firstWhere(
-          (entry) {
-        final date = entry['date'] as DateTime?;
-        final eReps = entry['effectiveReps'] as double;
-        return date != null &&
-            now.difference(date).inDays <= 28 &&
-            (eReps - targetEffectiveReps).abs() <= 0.5;
-      },
-      orElse: () => {},
-    );
-
-    double baseE1RM;
-    baseSource = 'recent_match';
-
-    if (recentMatch.isNotEmpty) {
-      baseE1RM = recentMatch['e1rm'];
-      // 🔎 PRINTS ONLY
-      final double mEff = ((recentMatch['effectiveReps'] as num?)?.toDouble() ?? 0.0);
-      final DateTime? mDate = recentMatch['date'] as DateTime?;
-      final double delta = (mEff - targetEffectiveReps).abs();
-      print('🧭 [SmartProgression] Base source = recent_match '
-          '(effReps=${mEff.toStringAsFixed(1)}, target=${targetEffectiveReps.toStringAsFixed(1)}, '
-          'Δ=${delta.toStringAsFixed(1)}, date=${mDate?.toIso8601String() ?? 'unknown'})');
-      print('✅ Using recent match for base E1RM → $baseE1RM');
-    } else {
-      final recentTwoWeeks = historyWithE1RM.where((entry) {
-        final date = entry['date'] as DateTime?;
-        return date != null && now.difference(date).inDays <= 14;
-      }).toList();
-
-      if (recentTwoWeeks.isNotEmpty) {
-        baseE1RM = recentTwoWeeks.map((e) => e['e1rm'] as double).reduce((a, b) => a + b) / recentTwoWeeks.length;
-        // 🔎 PRINTS ONLY
-        print('🧭 [SmartProgression] Base source = two_week_avg (n=${recentTwoWeeks.length})');
-        print('📆 Averaged E1RM from past 2 weeks → $baseE1RM');
-      } else if (historyWithE1RM.length >= 4) {
-        final lastFour = historyWithE1RM.take(4).toList();
-        baseE1RM = lastFour.map((e) => e['e1rm'] as double).reduce((a, b) => a + b) / lastFour.length;
-        // 🔎 PRINTS ONLY
-        print('🧭 [SmartProgression] Base source = last4_avg');
-        print('📊 Using average of last 4 E1RMs → $baseE1RM');
-
-      } else if (historyWithE1RM.isNotEmpty) {
-        // ✅ New: if we have 1–3 entries (older than 2 weeks), average what we have
-        final int n = historyWithE1RM.length < 4 ? historyWithE1RM.length : 4;
-        final recentAny = historyWithE1RM.take(n).toList();
-        baseE1RM = recentAny
-            .map((e) => e['e1rm'] as double)
-            .reduce((a, b) => a + b) / n;
-        baseSource = 'recent_any_avg';
-        print('🧭 [SmartProgression] Base source = recent_any_avg (n=$n)');
-        print('📚 Averaged E1RM from most recent $n historical entries → $baseE1RM');
-
-      } else if (maxWeightByReps != null) {
-        baseE1RM = (maxWeightByReps['weight'] as num?)?.toDouble() ?? defaultWeight;
-        // 🔎 PRINTS ONLY
-        print('🧭 [SmartProgression] Base source = maxWeightByReps');
-        print('🪂 Using fallback maxWeightByReps → $baseE1RM');
-      } else {
-        // already had this — keep and leave logic unchanged
-        print('🧭 [SmartProgression] Base source = default_weight');
-        print(
-            '🧷 [SmartProgression] Base E1RM selected → N/A '
-                '(exercise=$exerciseName, week=$weekIndex, '
-                'targetEffReps=${(repTarget + rirValue).toStringAsFixed(1)}, '
-                'plannedRIR=${rirValue.toStringAsFixed(1)})'
-        );
-        print('🚨 No viable E1RM source. Using default weight → $defaultWeight');
-        return {
-          'weight': defaultWeight,
-          'reps': repTarget,
-        };
-      }
-    }
+    print('🧭 [SmartProgression] Base source = $baseSource');
     print(
         '🧷 [SmartProgression] Base E1RM selected → ${baseE1RM.toStringAsFixed(2)} '
             '(exercise=$exerciseName, week=$weekIndex, '
@@ -1236,60 +1146,31 @@ class PeriodizationModelUtils {
             'plannedRIR=${rirValue.toStringAsFixed(1)})'
     );
 
-    //logging stuff
-    // 🔎 VERIFY: what weight would produce baseE1RM at the planned reps/RIR?
-    double lo = 0.0;
-    double hi = ((baseE1RM.isFinite ? baseE1RM : defaultWeight) * 1.2) + 10.0; // safe upper bound
-    for (int i = 0; i < 30; i++) {
-      final mid = (lo + hi) / 2;
-      final e = calculateE1RM(mid, repTarget.toDouble(), rirValue);
-      if (e < baseE1RM) {
-        lo = mid;
-      } else {
-        hi = mid;
-      }
-    }
-    final double impliedFromBase = (lo + hi) / 2.0;
-
-    print(
-        '🎯 [SmartProgression] Implied weight for baseE1RM '
-            '${baseE1RM.toStringAsFixed(2)} at ${repTarget} reps @ RIR ${rirValue.toStringAsFixed(1)} '
-            '≈ ${impliedFromBase.toStringAsFixed(1)} kg '
-            '(defaultWeight=${defaultWeight.toStringAsFixed(1)}, '
-            'Δw=${(defaultWeight - impliedFromBase).abs().toStringAsFixed(1)})'
-    );
-//logging e1rmbase finish
-
     final validWeights = roundToAllValidIncrements(
       baseWeight: defaultWeight,
       exerciseName: exerciseName,
     );
 
-    // 🎯 Center trials on the weight implied by baseE1RM at (repTarget, RIR),
+// 🎯 Center trials on the weight implied by baseE1RM at (repTarget, RIR),
 // then snap to the nearest valid increment.
-    double _lo = 0.0;
-    double _hi = ((baseE1RM.isFinite ? baseE1RM : defaultWeight) * 1.2) + 10.0;
-    for (int i = 0; i < 30; i++) {
-      final mid = (_lo + _hi) / 2;
-      final e   = calculateE1RM(mid, repTarget.toDouble(), rirValue);
-      if (e < baseE1RM) {
-        _lo = mid;
-      } else {
-        _hi = mid;
-      }
-    }
-    final double _implied = (_lo + _hi) / 2.0;
+    final double implied = PeriodizationModelUtils.reverseCalculateWeight(
+      targetE1RM: baseE1RM,
+      reps: repTarget,
+      rir: rirValue,
+    );
+
 // snap to nearest allowed weight
     final double centerWeight = validWeights.reduce((a, b) =>
-    ((a - _implied).abs() < (b - _implied).abs()) ? a : b);
+    ((a - implied).abs() < (b - implied).abs()) ? a : b
+    );
 
     print('🎯 [SmartProgression] Centering trials on '
         '${centerWeight.toStringAsFixed(1)} kg '
-        '(implied=${_implied.toStringAsFixed(1)}, '
+        '(implied=${implied.toStringAsFixed(1)}, '
         'default=${defaultWeight.toStringAsFixed(1)})');
 
-
     print('🔍 [SmartProgression] Valid weights for $exerciseName:\n$validWeights');
+
 
     final usedCombos = PeriodizationModelUtils.getUsedWeightRepsRirTripletsForExercise(
       exerciseName: exerciseName,
