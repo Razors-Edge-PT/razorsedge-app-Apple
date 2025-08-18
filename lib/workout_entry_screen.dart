@@ -20,6 +20,7 @@ import 'user_context.dart';
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'warmup_service.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 Future<void> deleteAllUserWorkouts() async {
   final user = FirebaseAuth.instance.currentUser;
@@ -307,18 +308,22 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   {}; // ✅ Tracks reps per exercise
 
   double getAverageE1RM(String exerciseName) {
-    if (!PeriodizationModelUtils.exercisePreviousE1RMs
-        .containsKey(exerciseName) ||
-        PeriodizationModelUtils.exercisePreviousE1RMs[exerciseName]!.isEmpty) {
-      return 0.0; // ✅ Default if no history
-    }
+    final info = PeriodizationModelUtils.computeBaseE1RMFromHistory(
+      exerciseName: exerciseName.trim(),
+      // Neutral anchor for the helper's recent-match step.
+      // (If you prefer to anchor to the *actual planned* target for today,
+      // pass that rep target + planned RIR instead.)
+      repTarget: 5,
+      plannedRIR: 1.0,
+      topSetHistory: null,      // use global PMU cache (topSetsByExercise)
+      maxWeightByReps: null,    // optional fallback if you use it elsewhere
+      now: DateTime.now(),
+    );
 
-    List<double> recentE1RMs = PeriodizationModelUtils
-        .exercisePreviousE1RMs[exerciseName]!
-        .take(4)
-        .toList();
-    return recentE1RMs.reduce((a, b) => a + b) / recentE1RMs.length;
+    final double? base = info['baseE1RM'] as double?;
+    return (base != null && base.isFinite) ? base : 0.0;
   }
+
 
   double getSet2E1RM(int exerciseIndex) {
     String exerciseName =
@@ -4238,11 +4243,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                 builder: (context) {
                   final actingAsUid = Provider.of<UserContext>(context, listen: true).actingAsUid;
 
+                  final nameStyle = GoogleFonts.monda(
+                    color: Colors.white,
+                  ).copyWith(
+                    // Fallbacks if Monda can't load for any reason
+                    fontFamilyFallback: const ['Roboto', 'Helvetica', 'Arial'],
+                  );
+
                   if (actingAsUid == null) {
-                    return const Text(
-                      'Razors Edge',
-                      style: TextStyle(fontFamily: 'Verdana', color: Colors.white),
-                    );
+                    return Text('Razors Edge', style: nameStyle);
                   }
 
                   return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
@@ -4252,10 +4261,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                         .snapshots(),
                     builder: (context, snap) {
                       if (!snap.hasData) {
-                        return const Text(
-                          'Razors Edge',
-                          style: TextStyle(fontFamily: 'Verdana', color: Colors.white),
-                        );
+                        return Text('Razors Edge', style: nameStyle);
                       }
 
                       final data = snap.data?.data();
@@ -4271,7 +4277,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
                       return Text(
                         label,
-                        style: const TextStyle(fontFamily: 'Verdana', color: Colors.white),
+                        style: nameStyle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       );
                     },
                   );

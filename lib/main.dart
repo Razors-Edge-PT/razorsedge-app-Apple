@@ -23,6 +23,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:provider/provider.dart';
 import 'user_context.dart';
 import 'coach_home_screen.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 
 class AppRoot extends StatelessWidget {
@@ -167,6 +168,23 @@ class MyApp extends StatelessWidget {
           surface: Colors.blueGrey.shade800,
           onSurface: Colors.white,
         ),
+        appBarTheme: AppBarTheme(
+          backgroundColor: Colors.blueGrey.shade900,
+          foregroundColor: Colors.white, // affects title/icon colors
+          titleTextStyle: GoogleFonts.monda(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.w600,
+          ).copyWith(
+            fontFamilyFallback: const ['Roboto', 'Helvetica', 'Arial'],
+          ),
+          toolbarTextStyle: GoogleFonts.monda(
+            color: Colors.white,
+            fontSize: 16,
+          ).copyWith(
+            fontFamilyFallback: const ['Roboto', 'Helvetica', 'Arial'],
+          ),
+        ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.blueGrey.shade700,
@@ -177,14 +195,13 @@ class MyApp extends StatelessWidget {
             ),
           ),
         ),
-        iconTheme: const IconThemeData(
-          color: Colors.white70,
-        ),
+        iconTheme: const IconThemeData(color: Colors.white70),
         textTheme: const TextTheme(
           bodyMedium: TextStyle(color: Colors.white),
           labelLarge: TextStyle(color: Colors.white),
         ),
       ),
+
 
       // ✅ Provider< UserContext > is now already wrapping this via AppRoot
       home: const HomeScreen(),

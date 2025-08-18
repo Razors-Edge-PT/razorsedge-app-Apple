@@ -1948,6 +1948,8 @@ class PeriodizationModelUtils {
         .limit(20)
         .get();
 
+
+
     topSetsByExercise.clear();
 
     for (var doc in snapshot.docs) {

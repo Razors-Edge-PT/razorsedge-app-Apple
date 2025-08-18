@@ -855,69 +855,162 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
           return reps.toString();
 
-        case PeriodizationModelType.linearClassic:
-          final plannedIndex = getExerciseCountInWeek(exerciseName, week, day, row); // 🆕 Use this
+        case PeriodizationModelType.linearClassic: {
+          // Planned occurrences BEFORE this row in the same week
+          final int plannedBeforeThisWeek = getExerciseCountInWeek(exerciseName, week, day, row);
+
+          // Completed exposures IN THIS WEEK from saved workouts
+          int completedThisWeek = 0;
+          if (blockStartDate != null) {
+            completedThisWeek = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+              exerciseName: exerciseName,
+              savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+              blockStartDate: blockStartDate!,
+              weekIndex: week, // week-scoped; resets each new week
+            );
+          } else {
+            print('⚠️ [BB2] blockStartDate is null — assuming completedThisWeek=0');
+          }
+
+          // Combined index within the week = done + planned-before
+          final int plannedIndex = completedThisWeek + plannedBeforeThisWeek;
+
           final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
             exerciseName: exerciseId,
-            plannedIndex: plannedIndex,
+            plannedIndex: plannedIndex,          // ✅ week-scoped exposure index
             weekIndex: week,
             repTargetsByExercise: {exerciseId: repTargets},
             plannedExerciseDetails: plannedExerciseDetails,
             blockStartDate: blockStartDate,
             blockEndDate: blockEndDate,
           );
-          print('📈 LinearClassic rep → $rep for $exerciseId (week $week, instance $plannedIndex)');
+
+          print('📈 LinearClassic rep → $rep for $exerciseId '
+              '(week $week, doneThisWeek=$completedThisWeek, '
+              'plannedBefore=$plannedBeforeThisWeek, instance $plannedIndex)');
           return rep.toString();
+        }
 
-        case PeriodizationModelType.dailyUndulatingWeek:
-          final indexInWeek = getExerciseCountInWeek(exerciseName, week, day, row);
 
+        case PeriodizationModelType.dailyUndulatingWeek: {
+          // Planned occurrences BEFORE this row in the same week (your existing logic)
+          final int plannedBeforeThisWeek = getExerciseCountInWeek(exerciseName, week, day, row);
+
+          // Completed exposures IN THIS WEEK from saved workouts
+          int completedThisWeek = 0;
+          if (blockStartDate != null) {
+            completedThisWeek = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+              exerciseName: exerciseName,
+              savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+              blockStartDate: blockStartDate!,
+              weekIndex: week, // ← stays week-scoped; resets each new week
+            );
+          } else {
+            print('⚠️ [BB2] blockStartDate is null — assuming completedThisWeek=0');
+          }
+
+          // Combined index within the week = done + planned-before
+          final int plannedIndex = completedThisWeek + plannedBeforeThisWeek;
+
+          // Use your existing model helper with the combined index
           final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
             exerciseName: exerciseId,
-            plannedIndex: indexInWeek, // ✅ resets each week
+            plannedIndex: plannedIndex,          // ✅ week-scoped exposure index
             weekIndex: week,
             repTargetsByExercise: {exerciseId: _exerciseSettings[exerciseId]},
-
-            plannedExerciseDetails: plannedExerciseDetails, // Still needed for blockMeta if reused
-          );
-
-          print('🔁 DUP by Week rep: $rep for $exerciseId (week $week, index $indexInWeek)');
-          return rep.toString();
-
-
-        case PeriodizationModelType.dupSignature:
-          final globalIndex = getExercisePlannedCountBefore(exerciseName, week, day, row);
-
-          final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
-
-            exerciseName: exerciseId,
-            plannedIndex: globalIndex,
-            repTargetsByExercise: _exerciseSettings, // ✅ use exerciseId internally
-
-            weekIndex: week,
-          );
-
-          return rep.toString();
-
-        case PeriodizationModelType.dailyUndulatingExposure:
-          print('🔍 Entering getRepTargetForExercise → model = $model for $exerciseId');
-
-          final globalIndex = getExercisePlannedCountBefore(exerciseName, week, day, row);
-          final repTargetsRaw = _exerciseSettings[exerciseId]?['repTargets'];
-          print('🧪 repTargets runtimeType for $exerciseId = ${repTargetsRaw.runtimeType}');
-          print('🧪 repTargets keys for $exerciseId = ${repTargetsRaw?.keys}');
-          final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
-            exerciseName: exerciseId,
-            plannedIndex: globalIndex,
-            weekIndex: week,
-            repTargetsByExercise: {exerciseId: repTargets},
-
             plannedExerciseDetails: plannedExerciseDetails,
           );
-          print('📦 [DEBUG] Passing repTargetsByExercise: ${jsonEncode({exerciseId: repTargets})}');
 
-          print('🔁 Model-based rep: $rep for $exerciseId using $model (index $globalIndex)');
+          print('🔁 DUP by Week rep: $rep for $exerciseId '
+              '(week $week, doneThisWeek=$completedThisWeek, '
+              'plannedBefore=$plannedBeforeThisWeek, index=$plannedIndex)');
           return rep.toString();
+        }
+
+
+
+        case PeriodizationModelType.dupSignature: {
+          // 🔢 Completed exposures across the whole block
+          int completedCount = 0;
+          if (blockStartDate != null && blockEndDate != null) {
+            completedCount = PeriodizationModelUtils.getInstanceCountForExerciseInBlock(
+              exerciseName: exerciseName,
+              savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+              blockStartDate: blockStartDate!,
+              blockEndDate: blockEndDate!,
+            );
+          } else {
+            print('⚠️ [BB2] blockStartDate or blockEndDate is null — treating completedCount=0');
+          }
+
+          // 🗓️ Planned occurrences before this position in the planner
+          final int plannedBefore = getExercisePlannedCountBefore(exerciseName, week, day, row);
+
+          // 🌍 Global exposure index within the block = completed + plannedBefore
+          final int plannedIndex = completedCount + plannedBefore;
+
+          // ⚙️ Keep dupSignature’s existing wiring (uses _exerciseSettings map)
+          final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
+            exerciseName: exerciseId,
+            plannedIndex: plannedIndex,                 // ✅ combined global index
+            repTargetsByExercise: _exerciseSettings,    // ← unchanged, dupSignature-specific
+            weekIndex: week,
+          );
+
+          print('🎛️ DUP Signature rep: $rep for $exerciseId '
+              '(completedInBlock=$completedCount, plannedBefore=$plannedBefore, index=$plannedIndex)');
+
+          return rep.toString();
+        }
+
+
+        case PeriodizationModelType.dailyUndulatingExposure: {
+          print('🔍 Entering getRepTargetForExercise → model = $model for $exerciseId');
+
+          // 1) How many times has the user actually DONE this exercise in the block?
+          int completedCount = 0;
+          if (blockStartDate != null && blockEndDate != null) {
+            completedCount = PeriodizationModelUtils.getInstanceCountForExerciseInBlock(
+              exerciseName: exerciseName,
+              savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+              blockStartDate: blockStartDate!,
+              blockEndDate: blockEndDate!,
+            );
+          } else {
+            print('⚠️ [BB2] blockStartDate or blockEndDate is null — treating completedCount=0');
+          }
+
+          // 2) How many times is it PLANNED before this position (week/day/row)?
+          final int plannedCountBefore = getExercisePlannedCountBefore(exerciseName, week, day, row);
+
+          // 3) Combined global index → this is the exposure number we want to map to instance
+          final int plannedIndex = completedCount + plannedCountBefore;
+
+          // (Optional) debug: how many instances are defined?
+          final repTargetsRaw = _exerciseSettings[exerciseId]?['repTargets'];
+          final week1 = repTargetsRaw?['week1'] as Map<String, dynamic>?;
+          final numInstances = week1 == null
+              ? 0
+              : week1.keys.where((k) => k.startsWith('instance')).length;
+
+          print('📊 [BB2] exposuresSoFarInBlock=$completedCount plannedBefore=$plannedCountBefore '
+              '→ plannedIndex=$plannedIndex of ~${numInstances} instances (pre-modulo)');
+
+          // 4) Ask the existing model helper to pick the rep using our combined plannedIndex
+          final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
+            exerciseName: exerciseId,
+            plannedIndex: plannedIndex,          // ✅ combined (done + plannedBefore)
+            weekIndex: week,
+            repTargetsByExercise: {exerciseId: repTargets},
+            plannedExerciseDetails: plannedExerciseDetails,
+          );
+
+          print('🔁 [BB2] DUP by Exposure rep: $rep for $exerciseId '
+              '(completed=$completedCount, plannedBefore=$plannedCountBefore, index=$plannedIndex)');
+
+          return rep.toString();
+        }
+
 
         default:
           return null;
@@ -1094,8 +1187,16 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     print('📦 [BB2] Using baseWeight = $baseWeight, baseReps = $baseReps, baseRIR = $baseRir');
     print('📦 [BB2] Final E1RM = ${e1rm?.toStringAsFixed(2)}');
 
-    final topSetHistory = PeriodizationModelUtils.topSetsByExercise[exerciseName];
-    print('🧪 [BB2] Top set history used for base E1RM: $topSetHistory');
+    final String exerciseKey = exerciseName.trim();
+    final List<Map<String, dynamic>> topSetHistory =
+        PeriodizationModelUtils.topSetsByExercise[exerciseKey] ?? [];
+
+    print('🧪 [BB2] topSetsByExercise key="$exerciseKey" histLen=${topSetHistory.length}');
+    if (topSetHistory.isNotEmpty) {
+      final s = topSetHistory.first;
+      print('🧪 [BB2] sampleTopSet → w=${s['weight']} r=${s['reps']} rir=${s['rir']} date=${s['date']}');
+    }
+
 
     final progressed = PeriodizationModelUtils.getWeightByProgressionModel(
       model: progressionModel,
