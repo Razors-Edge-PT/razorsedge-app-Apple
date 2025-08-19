@@ -3764,30 +3764,47 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
 
   Future<void> _saveWorkout() async {
-    // 1) Mark every eligible exercise as "saved format" locally
+    // 1) Mark every eligible exercise as "saved format" locally (strict: weight+reps in SAME set)
+    int eligibleCount = 0;
+
     for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
       final name = (_selectedExercisesWithCircuits[i]['name'] as String?)?.trim() ?? 'Unnamed';
       final circuitIndex = _selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0;
 
-      if (_hasSetWithWeightAndReps(i)) {
+      bool eligible = false;
+      if (i < _weightControllers.length && i < _repsControllers.length) {
+        final len = _weightControllers[i].length;
+        for (int j = 0; j < len; j++) {
+          final w = double.tryParse(_weightControllers[i][j].text.trim()) ?? 0.0;
+          final r = int.tryParse(_repsControllers[i][j].text.trim()) ?? 0;
+          if (w > 0 && r > 0) {
+            eligible = true;
+            break;
+          }
+        }
+      }
+
+      if (eligible) {
         _savedExerciseKeysForDate.add(_exerciseKey(name, circuitIndex));
+        eligibleCount++;
       }
     }
 
     await _persistSavedFlagsLocally(); // keep local flags in sync
 
-    // 2) Upsert → markAllSaved=true (payload will only mark eligible as saved; see change below)
+    // 2) Upsert → markAllSaved=true (payload will only mark eligible as saved)
     await _upsertWorkoutToFirestore(alsoPushToBB2: true, markAllSaved: true);
 
     // 3) UI hint
     if (mounted) {
-      setState(() {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Saved. Eligible exercises marked Done.')),
-        );
-      });
+      final msg = (eligibleCount > 0)
+          ? 'Saved. $eligibleCount exercise${eligibleCount == 1 ? '' : 's'} marked Done.'
+          : 'Brah you gotta do some work first, enter at least one set.';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      setState(() {}); // refresh saved-format visuals
     }
   }
+
 
 //...AUTOSAVE FUNCTIONS end
 
