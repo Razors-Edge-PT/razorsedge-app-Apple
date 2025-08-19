@@ -1821,40 +1821,48 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
       if (match != null) {
         final setMaps = List<Map<String, dynamic>>.from(match['sets'] ?? []);
-        final sets = setMaps.map((s) => SetDetails(
-          reps: (s['reps'] is int) ? s['reps'] : int.tryParse(s['reps']?.toString() ?? ''),
-          weight: (s['weight'] is num) ? (s['weight'] as num).toDouble() : null,
-          rir: (s['rir'] is num) ? (s['rir'] as num).toDouble() : null,
-          velocity: (s['velocity'] is num) ? (s['velocity'] as num).toDouble() : null,
-          notes: s['notes']?.toString(),
-        )).toList();
 
-        if (i >= _workoutSets.length) continue;
+        // ⭐ If Firestore has no sets for this exercise, SKIP overlay,
+        //    so locally-typed (weight-only) draft remains visible.
+        if (setMaps.isEmpty) {
+          // Optionally log:
+          // print('[WES Overlay] Skipping overlay for "$nameRaw" — Firestore empty, keeping local draft sets');
+        } else {
+          final sets = setMaps.map((s) => SetDetails(
+            reps: (s['reps'] is int) ? s['reps'] : int.tryParse(s['reps']?.toString() ?? ''),
+            weight: (s['weight'] is num) ? (s['weight'] as num).toDouble() : null,
+            rir: (s['rir'] is num) ? (s['rir'] as num).toDouble() : null,
+            velocity: (s['velocity'] is num) ? (s['velocity'] as num).toDouble() : null,
+            notes: s['notes']?.toString(),
+          )).toList();
 
-        // ⭐ NEW: pad to at least _defaultSets so UI shows hint rows
-        final int minRows = _defaultSets;
-        if (sets.length < minRows) {
-          sets.addAll(List.generate(minRows - sets.length, (_) => SetDetails()));
-        }
-        _workoutSets[i] = sets;
+          if (i >= _workoutSets.length) continue;
 
-        // Update controllers to reflect Firestore content
-        if (i < _repsControllers.length) {
-          final needed = sets.length; // already ≥ minRows by padding above
-          if (_repsControllers[i].length != needed) {
-            _repsControllers[i] = List.generate(needed, (_) => TextEditingController());
-            _weightControllers[i] = List.generate(needed, (_) => TextEditingController());
-            _rirControllers[i] = List.generate(needed, (_) => TextEditingController());
-            _velocityControllers[i] = List.generate(needed, (_) => TextEditingController());
-            _notesControllers[i] = List.generate(needed, (_) => TextEditingController());
+          // Pad to default rows for hint text
+          final int minRows = _defaultSets;
+          if (sets.length < minRows) {
+            sets.addAll(List.generate(minRows - sets.length, (_) => SetDetails()));
           }
-          for (int j = 0; j < needed; j++) {
-            final s = _workoutSets[i][j];
-            _repsControllers[i][j].text = (s.reps?.toString() ?? '');
-            _weightControllers[i][j].text = (s.weight?.toString() ?? '');
-            _rirControllers[i][j].text = (s.rir?.toString() ?? '');
-            _velocityControllers[i][j].text = (s.velocity?.toString() ?? '');
-            _notesControllers[i][j].text = (s.notes ?? '');
+          _workoutSets[i] = sets;
+
+          // Resize + set controller texts from Firestore sets
+          if (i < _repsControllers.length) {
+            final needed = sets.length;
+            if (_repsControllers[i].length != needed) {
+              _repsControllers[i] = List.generate(needed, (_) => TextEditingController());
+              _weightControllers[i] = List.generate(needed, (_) => TextEditingController());
+              _rirControllers[i] = List.generate(needed, (_) => TextEditingController());
+              _velocityControllers[i] = List.generate(needed, (_) => TextEditingController());
+              _notesControllers[i] = List.generate(needed, (_) => TextEditingController());
+            }
+            for (int j = 0; j < needed; j++) {
+              final s = _workoutSets[i][j];
+              _repsControllers[i][j].text = (s.reps?.toString() ?? '');
+              _weightControllers[i][j].text = (s.weight?.toString() ?? '');
+              _rirControllers[i][j].text = (s.rir?.toString() ?? '');
+              _velocityControllers[i][j].text = (s.velocity?.toString() ?? '');
+              _notesControllers[i][j].text = (s.notes ?? '');
+            }
           }
         }
       }
@@ -3412,13 +3420,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       final key = _exerciseKey(name, circuitIndex);
 
       // Filter sets to only those with any data (weight>0 OR reps>0 OR etc.)
+      // AFTER (strict for WR; still allow notes/velocity if you want them saved)
       final setsWithData = _workoutSets[i].where((s) {
         final reps = s.reps ?? 0;
         final w    = s.weight ?? 0.0;
-        final rir  = s.rir ?? 0.0;
-        final vel  = s.velocity ?? 0.0;
-        final notes= s.notes?.trim() ?? '';
-        return reps > 0 || w > 0 || rir > 0 || vel > 0 || notes.isNotEmpty;
+        final hasWR = reps > 0 && w > 0;          // 👈 must have BOTH to count as a training set
+        final hasOther = ((s.velocity ?? 0.0) > 0) || ((s.notes ?? '').trim().isNotEmpty);
+        return hasWR || hasOther;                 // keep notes/velocity if you want; remove if not
       }).toList();
 
       if (setsWithData.isEmpty) continue; // “No data gets nothing saved”
@@ -3524,8 +3532,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       // keep only sets with any data
       final validSets = _workoutSets[i].where((s) {
         final reps = s.reps ?? 0;
-        final w = s.weight ?? 0.0;
-        return reps >= 1 || w > 1;
+        final weight = s.weight ?? 0.0;
+        return reps > 0 && weight > 0; // 👈 require both
       }).toList();
       if (validSets.isEmpty) continue;
 
