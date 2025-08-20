@@ -2616,17 +2616,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
-    print('🧹 [WES] dispose — saving draft for $_cachedUid');
-    if (_pendingChanges) {
-      print('💾 [WES dispose] Pending changes detected — autosaving to Firestore...');
-      // fire-and-forget is fine in dispose; no await needed
-      _upsertWorkoutToFirestore(alsoPushToBB2: true, markAllSaved: false);
-    } else {
-      print('🔸 [WES dispose] No pending changes — skipping Firestore autosave.');
-    }
+    print('🧹 [WES] dispose called — uid=$_cachedUid');
 
     print('💾 [WES dispose] Persisting local draft...');
     _persistDraftLocally();
+
+    // ⭐ Always attempt autosave on exit; _upsert will skip/clear appropriately
+    print('💾 [WES dispose] Attempting autosave to Firestore...');
+    _upsertWorkoutToFirestore(alsoPushToBB2: true, markAllSaved: false);
 
     _workoutNameController.dispose();
     for (var controllers in _repsControllers) {
@@ -3395,38 +3392,43 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
   //AUTOSAVE FUNCTIONS begin...
 
-  Map<String, dynamic> _buildWorkoutPayload({bool markAllSaved = false}) {
-    // 1) Sync controllers → _workoutSets (same as you do in _saveWorkout)
+  Map<String, dynamic> _buildWorkoutPayload({
+    required bool markAllSaved,
+    required String uid, // 👈 pass the acting/selected user here
+  }) {
+    // 1) Sync controllers → _workoutSets (same as in _saveWorkout)
     for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
       for (int j = 0; j < _workoutSets[i].length; j++) {
-        final repsText = _repsControllers[i][j].text.trim();
-        final weightText = _weightControllers[i][j].text.trim();
-        final rirText = _rirControllers[i][j].text.trim();
+        final repsText     = _repsControllers[i][j].text.trim();
+        final weightText   = _weightControllers[i][j].text.trim();
+        final rirText      = _rirControllers[i][j].text.trim();
         final velocityText = _velocityControllers[i][j].text.trim();
-        final notesText = _notesControllers[i][j].text.trim();
+        final notesText    = _notesControllers[i][j].text.trim();
 
-        _workoutSets[i][j].reps    = repsText.isNotEmpty   ? int.tryParse(repsText)            : null;
-        _workoutSets[i][j].weight  = weightText.isNotEmpty ? double.tryParse(weightText)       : null;
-        _workoutSets[i][j].rir     = rirText.isNotEmpty    ? double.tryParse(rirText)          : 0.0; // 👈 default 0
-        _workoutSets[i][j].velocity= velocityText.isNotEmpty ? double.tryParse(velocityText)   : null;
-        _workoutSets[i][j].notes   = notesText.isNotEmpty  ? notesText                         : null;
+        _workoutSets[i][j].reps     = repsText.isNotEmpty     ? int.tryParse(repsText)       : null;
+        _workoutSets[i][j].weight   = weightText.isNotEmpty   ? double.tryParse(weightText)  : null;
+        _workoutSets[i][j].rir      = rirText.isNotEmpty      ? double.tryParse(rirText)     : 0.0; // default 0
+        _workoutSets[i][j].velocity = velocityText.isNotEmpty ? double.tryParse(velocityText): null;
+        _workoutSets[i][j].notes    = notesText.isNotEmpty    ? notesText                    : null;
       }
     }
 
     final exercises = <Map<String, dynamic>>[];
-    for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
-      final name = (_selectedExercisesWithCircuits[i]['name'] as String?)?.trim() ?? 'Unnamed';
-      final circuitIndex = _selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0;
-      final key = _exerciseKey(name, circuitIndex);
 
-      // Filter sets to only those with any data (weight>0 OR reps>0 OR etc.)
-      // AFTER (strict for WR; still allow notes/velocity if you want them saved)
+    for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+      final nameRaw      = (_selectedExercisesWithCircuits[i]['name'] as String?) ?? 'Unnamed';
+      final name         = nameRaw.trim().isEmpty ? 'Unnamed' : nameRaw.trim();
+      final circuitIndex = _selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0;
+      final key          = _exerciseKey(name, circuitIndex);
+
+      // Only count sets with BOTH weight & reps as training sets.
+      // (Optionally keep velocity/notes-only rows if desired.)
       final setsWithData = _workoutSets[i].where((s) {
-        final reps = s.reps ?? 0;
-        final w    = s.weight ?? 0.0;
-        final hasWR = reps > 0 && w > 0;          // 👈 must have BOTH to count as a training set
+        final reps   = s.reps ?? 0;
+        final w      = s.weight ?? 0.0;
+        final hasWR  = reps > 0 && w > 0; // strict gate
         final hasOther = ((s.velocity ?? 0.0) > 0) || ((s.notes ?? '').trim().isNotEmpty);
-        return hasWR || hasOther;                 // keep notes/velocity if you want; remove if not
+        return hasWR || hasOther;
       }).toList();
 
       if (setsWithData.isEmpty) continue; // “No data gets nothing saved”
@@ -3434,11 +3436,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       final ex = <String, dynamic>{
         'name': name,
         'circuitIndex': circuitIndex,
-        // Normalize: default RIR to 0.0, include velocity/notes only when present
         'sets': setsWithData.map((s) => {
           'reps': s.reps ?? 0,
           'weight': s.weight ?? 0.0,
-          'rir': s.rir ?? 0.0,
+          'rir': s.rir ?? 0.0, // assume 0 when not entered
           if (s.velocity != null) 'velocity': s.velocity,
           if ((s.notes ?? '').trim().isNotEmpty) 'notes': s.notes,
         }).toList(),
@@ -3452,24 +3453,24 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           : _savedExerciseKeysForDate.contains(key);
 
       if (markThisSaved) {
-        ex['saved'] = true;                  // optional, helpful boolean
-        ex['savedAt'] = Timestamp.now();     // ✅ allowed inside arrays
+        ex['saved']  = true;              // optional boolean
+        ex['savedAt'] = Timestamp.now();  // ✅ allowed inside arrays
       }
 
       exercises.add(ex);
     }
-
 
     return {
       'name': _workoutNameController.text.trim().isEmpty
           ? _formatWorkoutDate(_selectedDate)
           : _workoutNameController.text.trim(),
       'date': _selectedDate.toIso8601String(),
-      'userId': UserContext.of(context, listen: false).currentUid ?? FirebaseAuth.instance.currentUser?.uid,
-      'exercises': exercises, // replaces entire array on set()
+      'userId': uid,                           // 👈 no context used
+      'exercises': exercises,                  // replaces entire array on set()
       'lastEditedAt': FieldValue.serverTimestamp(),
     };
   }
+
 
   Future<void> _pushTopSetsToBlockDataIfAny() async {
     final uid = UserContext.of(context, listen: false).currentUid ?? FirebaseAuth.instance.currentUser?.uid;
@@ -3598,7 +3599,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   }) async {
     print('🚀 [WES upsert] Starting upsert (markAllSaved=$markAllSaved, pushBB2=$alsoPushToBB2)');
 
-    final uid = UserContext.of(context, listen: false).currentUid ?? FirebaseAuth.instance.currentUser?.uid;
+    // Ensure controllers → _workoutSets are in sync for the first-exit case
+    await _persistDraftLocally();
+
+    // Resolve the acting UID WITHOUT using context (dispose-safe)
+    final uid = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) {
       print('❌ [WES upsert] No UID found — aborting.');
       return;
@@ -3606,49 +3611,42 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     final docId = _workoutDocIdForDate(_selectedDate);
     final coll = FirebaseFirestore.instance.collection('users').doc(uid).collection('workouts');
-    final payload = _buildWorkoutPayload(markAllSaved: markAllSaved);
+
+    Map<String, dynamic> payload;
+    try {
+      payload = _buildWorkoutPayload(markAllSaved: markAllSaved, uid: uid); // 👈 pass uid
+    } catch (e, st) {
+      print('❌ [WES upsert] Payload build threw (likely context access in builder): $e');
+      print(st);
+      return;
+    }
 
     final exercises = (payload['exercises'] as List?) ?? [];
+    print('📦 [WES upsert] Built payload: exercises=${exercises.length}');
     if (exercises.isEmpty) {
       print('🔸 [WES upsert] No exercises with data — will clear Firestore doc for this date.');
-
-      final uid = UserContext.of(context, listen: false).currentUid ?? FirebaseAuth.instance.currentUser?.uid;
-      final docId = _workoutDocIdForDate(_selectedDate);
-      final coll = FirebaseFirestore.instance.collection('users').doc(uid).collection('workouts');
-
       try {
-        // Option A (recommended): overwrite with empty array so the “no data” state is explicit
         await coll.doc(docId).set({
           'name': _workoutNameController.text.trim().isEmpty
               ? _formatWorkoutDate(_selectedDate)
               : _workoutNameController.text.trim(),
           'date': _selectedDate.toIso8601String(),
           'userId': uid,
-          'exercises': <Map<String, dynamic>>[],              // 👈 clears previously saved sets
+          'exercises': <Map<String, dynamic>>[],
           'lastEditedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: false));
-
         print('✅ [WES upsert] Cleared Firestore doc (empty exercises).');
 
-        // No BB2 push when empty — nothing to contribute
         _pendingChanges = false;
-        _lastSavedHash = null; // force next non-empty write
-
-        // Clear “Done” flags for this date (since nothing left)
+        _lastSavedHash = null;
         _savedExerciseKeysForDate.clear();
         await _persistSavedFlagsLocally();
-
-        // Persist current (empty) draft so local cache doesn’t resurrect old values
         await _persistDraftLocally();
-
       } catch (e, st) {
-        print('❌ [WES upsert] Failed to clear doc: $e');
-        print(st);
+        print('❌ [WES upsert] Failed to clear doc: $e'); print(st);
       }
-
       return;
     }
-
 
     final currentHash = payload.hashCode.toString();
     if (_lastSavedHash == currentHash) {
@@ -3670,15 +3668,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         print('✅ [WES upsert] BB2 push complete.');
       }
 
-      // ⭐ NEW: keep local mirrors in sync (prevents old values coming back)
       await _persistSavedFlagsLocally();
-      await _persistDraftLocally();      // ← ensures deletions stay deleted locally
-
+      await _persistDraftLocally();
     } catch (e, st) {
-      print('❌ [WES upsert] Firestore write failed: $e');
-      print(st);
+      print('❌ [WES upsert] Firestore write failed: $e'); print(st);
     }
   }
+
 
 
   bool _isExerciseSaved(int index) {
@@ -4068,7 +4064,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       _lastMergedDate = _selectedDate;
     }
 
-
+    _attachDirtyListeners(); // ⭐ ensure freshly created controllers flip _pendingChanges
 
     final blockId = _selectedBlockId!;
     final daysSinceStart = _selectedDate.difference(blockStartDate!).inDays;
