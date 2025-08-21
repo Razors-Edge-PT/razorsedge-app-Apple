@@ -1,0 +1,327 @@
+[33md399f17[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mBlockIDMerging[m[33m)[m HEAD@{0}: reset: moving to d399f176fb95a18a90d8131aad6068aa60137c9c
+[33me3774ef[m[33m ([m[1;31morigin/BlockIDMerging[m[33m)[m HEAD@{1}: commit: Horizontal scroll within each day added for notes and velocity. This version each row scrolling individually incorectly, and exercise name remains in place, correctly. header row scrolling seperately, incorrectly.
+[33m734e2bf[m HEAD@{2}: commit: Horizontal scroll within each day added for notes and vlecoisty. not really working. This version all rows scroll together correctly.
+[33m4f9fb01[m HEAD@{3}: commit: VELOCITY further set up in bb2
+[33me6cdb7a[m HEAD@{4}: commit: VELOCITY further set up in bb2
+[33md399f17[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mBlockIDMerging[m[33m)[m HEAD@{5}: commit: VELOCITY Partially set up in BB2
+[33m421789a[m HEAD@{6}: reset: moving to 421789a091656cf0e282f6f36da6bfc971b9ea54
+[33m421789a[m HEAD@{7}: commit: VELOCITY showing in WES conditionally.
+[33m193ab75[m HEAD@{8}: commit: ADDED VELOCITY and Notes
+[33mf8a4192[m HEAD@{9}: commit: Fixed 'Go to Workout' button. Now carrying bb2 entered values correctly to WES
+[33md003bee[m HEAD@{10}: commit: WES and BB2 now using same calculations for E1RM with and without models assigned.
+[33m26c65c3[m HEAD@{11}: commit: Fixed BB2 updates, closer, not perfect. fixed unplanned RIR defaults in WES and bb2.
+[33m9b94198[m HEAD@{12}: commit: Cleaned UI home page
+[33m5e9102b[m HEAD@{13}: commit: WES updates. BB2 user entered values for weight and reps are fully working in WES now. .
+[33m920f2fc[m HEAD@{14}: commit: WES updates. BB2 user entered weight Values taking priority, and causing correct updates in reps field. NEXT fix: reps field causing updates correctly in Weight field.
+[33mf1330c1[m HEAD@{15}: commit: WES updates. Exercises integrating correctly, select date and exercise reordering now updating exercise values accordingly correctly. BB2 Values being used with priority correctlty. NEXT FIX update hint logic to adjust according to bb2 entered values for remaining mepty fields, insterad of model logic applied values persisting
+[33m38c06f5[m HEAD@{16}: commit: WES updates. Initstate and initial load function's timing races fixed. now loads consistently.
+[33m6c8886b[m HEAD@{17}: commit: WES updates. BB2 MERGING PROPERLY. fixed.
+[33mdf51b08[m HEAD@{18}: commit: WES updates. BB2 exercises mergin better with date change
+[33ma64b556[m HEAD@{19}: commit: GoodLift logo added
+[33m92ffb02[m HEAD@{20}: commit: BP updates. RIR model's rep targets fixed. cleaned up home page.
+[33me108857[m HEAD@{21}: commit: WES updates. Select date function and MERGE function fixed. loading exercises from bb2 correctly
+[33m3288118[m HEAD@{22}: commit: WES updates. Select date function loading exercises from bb2 fixed
+[33md32b2f4[m HEAD@{23}: commit: BP updates. Go to week planner BUTTON FIXED
+[33m9e7243c[m HEAD@{24}: commit: BP updates. Exericse Card UI initstate fixed
+[33m89d3ca2[m HEAD@{25}: commit: BP updates. Rep periodization model names updated. BB2 bug fixed, loading rep model correctly.
+[33m9f17294[m HEAD@{26}: commit: BP updates. Rep dialog save function fixed. UI cleaned up
+[33m952aca5[m HEAD@{27}: commit: WES working. exercise load to wes from bb2 a little slow. not perfect line up of exercise index with bb2 and wes. somewhat ready for testing?
+[33m1f43325[m HEAD@{28}: commit: WES working. exercise load to wes from bb2 a little slow. not perfect line up of exercise index with bb2 and wes. somewhat ready for testing?
+[33m5b259cc[m HEAD@{29}: commit: WES WORKING integrating with PMU and BP
+[33mbcffffd[m HEAD@{30}: commit: WES using BP and PMU correctly. RIR not being factored into e1rm. very close
+[33m4c098a4[m[33m ([m[1;32mIntegrationWork[m[33m)[m HEAD@{31}: checkout: moving from IntegrationWork to BlockIDMerging
+[33m4c098a4[m[33m ([m[1;32mIntegrationWork[m[33m)[m HEAD@{32}: commit: bb2 bug fixed. WES BlockID loading correctly... close
+[33md54a0b0[m HEAD@{33}: reset: moving to d54a0b0f5f658f6b53e0b625dcc46250532c4de3
+[33m7a32683[m[33m ([m[1;31morigin/IntegrationWork[m[33m)[m HEAD@{34}: commit: WEs as close as i can get it.
+[33md54a0b0[m HEAD@{35}: checkout: moving from 6a7f2e656b9b308283df1a16a783a32a33335bb2 to IntegrationWork
+[33m6a7f2e6[m[33m ([m[1;32mtemp-fix-branch[m[33m, [m[1;32mrestore-safe-607f4b87[m[33m, [m[1;32mINtegrationFailing[m[33m)[m HEAD@{36}: checkout: moving from IntegrationWork to 6a7f2e65
+[33md54a0b0[m HEAD@{37}: commit: 💾 Backup: BB2 wired to BP and working. WES blockId loads correctly, but rep targets fire before it's ready
+[33m04b4cc6[m HEAD@{38}: commit: WES Closer to wokring
+[33mf6f53fd[m HEAD@{39}: reset: moving to f6f53fd9
+[33mf6f53fd[m HEAD@{40}: reset: moving to f6f53fd9e15ccf7c4f915770547e97b80cc42bf9
+[33mf6f53fd[m HEAD@{41}: commit: BB2 Merged with Campbell Integration work. RIR FIXED
+[33mcfdfef2[m HEAD@{42}: commit: BB2 Merged with Campbell Integration work. Needs testing
+[33m374cf0a[m HEAD@{43}: commit: Campbell IntegartionWork updated BP. fields persists
+[33m1f5135c[m HEAD@{44}: commit: 🕰️ Added old Block_Planner.dart from 607f4b87 as Block_Planner_old.dart
+[33mc2ce867[m HEAD@{45}: commit: Imported Block_Planner.dart from 607f4b87 for comparison
+[33m6a7f2e6[m[33m ([m[1;32mtemp-fix-branch[m[33m, [m[1;32mrestore-safe-607f4b87[m[33m, [m[1;32mINtegrationFailing[m[33m)[m HEAD@{46}: checkout: moving from 607f4b872de813c00b9f35fe7487f7b00c187a42 to IntegrationWork
+[33m607f4b8[m[33m ([m[1;32mtemp-campbell-8f54c0e1[m[33m)[m HEAD@{47}: checkout: moving from IntegrationWork to 607f4b87
+[33m6a7f2e6[m[33m ([m[1;32mtemp-fix-branch[m[33m, [m[1;32mrestore-safe-607f4b87[m[33m, [m[1;32mINtegrationFailing[m[33m)[m HEAD@{48}: checkout: moving from IntegrationWork to IntegrationWork
+[33m6a7f2e6[m[33m ([m[1;32mtemp-fix-branch[m[33m, [m[1;32mrestore-safe-607f4b87[m[33m, [m[1;32mINtegrationFailing[m[33m)[m HEAD@{49}: checkout: moving from 607f4b872de813c00b9f35fe7487f7b00c187a42 to IntegrationWork
+[33m607f4b8[m[33m ([m[1;32mtemp-campbell-8f54c0e1[m[33m)[m HEAD@{50}: checkout: moving from IntegrationWork to 607f4b87
+[33m6a7f2e6[m[33m ([m[1;32mtemp-fix-branch[m[33m, [m[1;32mrestore-safe-607f4b87[m[33m, [m[1;32mINtegrationFailing[m[33m)[m HEAD@{51}: reset: moving to HEAD
+[33m6a7f2e6[m[33m ([m[1;32mtemp-fix-branch[m[33m, [m[1;32mrestore-safe-607f4b87[m[33m, [m[1;32mINtegrationFailing[m[33m)[m HEAD@{52}: checkout: moving from temp-fix-branch to IntegrationWork
+[33m6a7f2e6[m[33m ([m[1;32mtemp-fix-branch[m[33m, [m[1;32mrestore-safe-607f4b87[m[33m, [m[1;32mINtegrationFailing[m[33m)[m HEAD@{53}: checkout: moving from INtegrationFailing to temp-fix-branch
+[33m6a7f2e6[m[33m ([m[1;32mtemp-fix-branch[m[33m, [m[1;32mrestore-safe-607f4b87[m[33m, [m[1;32mINtegrationFailing[m[33m)[m HEAD@{54}: checkout: moving from restore-safe-607f4b87 to INtegrationFailing
+[33m6a7f2e6[m[33m ([m[1;32mtemp-fix-branch[m[33m, [m[1;32mrestore-safe-607f4b87[m[33m, [m[1;32mINtegrationFailing[m[33m)[m HEAD@{55}: checkout: moving from IntegrationWork to restore-safe-607f4b87
+[33m6a7f2e6[m[33m ([m[1;32mtemp-fix-branch[m[33m, [m[1;32mrestore-safe-607f4b87[m[33m, [m[1;32mINtegrationFailing[m[33m)[m HEAD@{56}: checkout: moving from IntegrationWork to IntegrationWork
+[33m6a7f2e6[m[33m ([m[1;32mtemp-fix-branch[m[33m, [m[1;32mrestore-safe-607f4b87[m[33m, [m[1;32mINtegrationFailing[m[33m)[m HEAD@{57}: reset: moving to 6a7f2e65
+[33m607f4b8[m[33m ([m[1;32mtemp-campbell-8f54c0e1[m[33m)[m HEAD@{58}: checkout: moving from 6a7f2e656b9b308283df1a16a783a32a33335bb2 to IntegrationWork
+[33m6a7f2e6[m[33m ([m[1;32mtemp-fix-branch[m[33m, [m[1;32mrestore-safe-607f4b87[m[33m, [m[1;32mINtegrationFailing[m[33m)[m HEAD@{59}: checkout: moving from IntegrationWork to 6a7f2e656b9b308283df1a16a783a32a33335bb2
+[33m607f4b8[m[33m ([m[1;32mtemp-campbell-8f54c0e1[m[33m)[m HEAD@{60}: reset: moving to 607f4b872de813c00b9f35fe7487f7b00c187a42
+[33m0adf803[m HEAD@{61}: cherry-pick: block planner in good state - saves all to correct place, keyboard behaves, button disappears when keyboard open, active is flagged appropriately
+[33m607f4b8[m[33m ([m[1;32mtemp-campbell-8f54c0e1[m[33m)[m HEAD@{62}: reset: moving to 607f4b87
+[33mfdb7a66[m HEAD@{63}: cherry-pick: block planner in good state - saves all to correct place, keyboard behaves, button disappears when keyboard open, active is flagged appropriately
+[33m607f4b8[m[33m ([m[1;32mtemp-campbell-8f54c0e1[m[33m)[m HEAD@{64}: reset: moving to 607f4b87
+[33m607f4b8[m[33m ([m[1;32mtemp-campbell-8f54c0e1[m[33m)[m HEAD@{65}: checkout: moving from IntegrationWork to IntegrationWork
+[33m607f4b8[m[33m ([m[1;32mtemp-campbell-8f54c0e1[m[33m)[m HEAD@{66}: reset: moving to 607f4b87
+[33m1adc532[m HEAD@{67}: checkout: moving from 607f4b872de813c00b9f35fe7487f7b00c187a42 to IntegrationWork
+[33m607f4b8[m[33m ([m[1;32mtemp-campbell-8f54c0e1[m[33m)[m HEAD@{68}: checkout: moving from IntegrationWork to 607f4b872de813c00b9f35fe7487f7b00c187a42
+[33m1adc532[m HEAD@{69}: reset: moving to 1adc532e74260656610aa83dd673f6ddd7fbbcda
+[33m1adc532[m HEAD@{70}: reset: moving to 1adc532e74260656610aa83dd673f6ddd7fbbcda
+[33m1adc532[m HEAD@{71}: reset: moving to 1adc532e74260656610aa83dd673f6ddd7fbbcda
+[33m1adc532[m HEAD@{72}: checkout: moving from campbell-12-36 to IntegrationWork
+[33m5f240c8[m[33m ([m[1;31morigin/campbell-12-36[m[33m, [m[1;32mcampbell-12-36[m[33m)[m HEAD@{73}: checkout: moving from 5f240c857cc5e61ee8089367a663ec41236bc05e to campbell-12-36
+[33m5f240c8[m[33m ([m[1;31morigin/campbell-12-36[m[33m, [m[1;32mcampbell-12-36[m[33m)[m HEAD@{74}: checkout: moving from IntegrationWork to 5f240c8
+[33m1adc532[m HEAD@{75}: checkout: moving from 607f4b872de813c00b9f35fe7487f7b00c187a42 to IntegrationWork
+[33m607f4b8[m[33m ([m[1;32mtemp-campbell-8f54c0e1[m[33m)[m HEAD@{76}: checkout: moving from IntegrationWork to 607f4b872de813c00b9f35fe7487f7b00c187a42
+[33m1adc532[m HEAD@{77}: reset: moving to HEAD~1
+[33m5f240c8[m[33m ([m[1;31morigin/campbell-12-36[m[33m, [m[1;32mcampbell-12-36[m[33m)[m HEAD@{78}: merge origin/IntegrationWork: Fast-forward
+[33m607f4b8[m[33m ([m[1;32mtemp-campbell-8f54c0e1[m[33m)[m HEAD@{79}: checkout: moving from 5f240c857cc5e61ee8089367a663ec41236bc05e to IntegrationWork
+[33m5f240c8[m[33m ([m[1;31morigin/campbell-12-36[m[33m, [m[1;32mcampbell-12-36[m[33m)[m HEAD@{80}: checkout: moving from IntegrationWork to 5f240c857cc5e61ee8089367a663ec41236bc05e
+[33m607f4b8[m[33m ([m[1;32mtemp-campbell-8f54c0e1[m[33m)[m HEAD@{81}: reset: moving to 607f4b872de813c00b9f35fe7487f7b00c187a42
+[33m607f4b8[m[33m ([m[1;32mtemp-campbell-8f54c0e1[m[33m)[m HEAD@{82}: checkout: moving from 5f240c857cc5e61ee8089367a663ec41236bc05e to IntegrationWork
+[33m5f240c8[m[33m ([m[1;31morigin/campbell-12-36[m[33m, [m[1;32mcampbell-12-36[m[33m)[m HEAD@{83}: checkout: moving from IntegrationWork to 5f240c857cc5e61ee8089367a663ec41236bc05e
+[33m607f4b8[m[33m ([m[1;32mtemp-campbell-8f54c0e1[m[33m)[m HEAD@{84}: checkout: moving from 607f4b872de813c00b9f35fe7487f7b00c187a42 to IntegrationWork
+[33m607f4b8[m[33m ([m[1;32mtemp-campbell-8f54c0e1[m[33m)[m HEAD@{85}: checkout: moving from IntegrationWork to 607f4b872de813c00b9f35fe7487f7b00c187a42
+[33m607f4b8[m[33m ([m[1;32mtemp-campbell-8f54c0e1[m[33m)[m HEAD@{86}: reset: moving to 607f4b872de813c00b9f35fe7487f7b00c187a42
+[33m607f4b8[m[33m ([m[1;32mtemp-campbell-8f54c0e1[m[33m)[m HEAD@{87}: reset: moving to 607f4b872de813c00b9f35fe7487f7b00c187a42
+[33m607f4b8[m[33m ([m[1;32mtemp-campbell-8f54c0e1[m[33m)[m HEAD@{88}: checkout: moving from 8f54c0e11167c07d9bf2793583fb829be0fdb108 to IntegrationWork
+[33m8f54c0e[m HEAD@{89}: checkout: moving from IntegrationWork to 8f54c0e11167c07d9bf2793583fb829be0fdb108
+[33m607f4b8[m[33m ([m[1;32mtemp-campbell-8f54c0e1[m[33m)[m HEAD@{90}: checkout: moving from temp-campbell-8f54c0e1 to IntegrationWork
+[33m607f4b8[m[33m ([m[1;32mtemp-campbell-8f54c0e1[m[33m)[m HEAD@{91}: checkout: moving from IntegrationWork to temp-campbell-8f54c0e1
+[33m607f4b8[m[33m ([m[1;32mtemp-campbell-8f54c0e1[m[33m)[m HEAD@{92}: checkout: moving from IntegrationWork to IntegrationWork
+[33m607f4b8[m[33m ([m[1;32mtemp-campbell-8f54c0e1[m[33m)[m HEAD@{93}: commit (amend): Merge polishAndSpeed with Campbell's updates
+[33m93e1867[m HEAD@{94}: commit (merge): Merge polishAndSpeed with Campbell's updates
+[33m1b15cd0[m HEAD@{95}: checkout: moving from polishAndSpeed to IntegrationWork
+[33m3eda3b2[m[33m ([m[1;31morigin/polishAndSpeed[m[33m, [m[1;32mpolishAndSpeed-backup[m[33m, [m[1;32mpolishAndSpeed[m[33m)[m HEAD@{96}: checkout: moving from IntegrationWork to polishAndSpeed
+[33m1b15cd0[m HEAD@{97}: commit: Temp changes to config files for IntegrationWork
+[33m8f54c0e[m HEAD@{98}: checkout: moving from polishAndSpeed-backup to IntegrationWork
+[33m3eda3b2[m[33m ([m[1;31morigin/polishAndSpeed[m[33m, [m[1;32mpolishAndSpeed-backup[m[33m, [m[1;32mpolishAndSpeed[m[33m)[m HEAD@{99}: checkout: moving from polishAndSpeed to polishAndSpeed-backup
+[33m3eda3b2[m[33m ([m[1;31morigin/polishAndSpeed[m[33m, [m[1;32mpolishAndSpeed-backup[m[33m, [m[1;32mpolishAndSpeed[m[33m)[m HEAD@{100}: checkout: moving from polishAndSpeed to polishAndSpeed
+[33m3eda3b2[m[33m ([m[1;31morigin/polishAndSpeed[m[33m, [m[1;32mpolishAndSpeed-backup[m[33m, [m[1;32mpolishAndSpeed[m[33m)[m HEAD@{101}: commit: BACK UP BEFORE INTEGRATING
+[33m33bd228[m HEAD@{102}: commit: WES UPDATES RIR fixed. Previous bests added. working on horizontal scroll
+[33mfec9910[m HEAD@{103}: commit: WES UPDATES added search bar to exercise picker(s)
+[33md0fdbe2[m HEAD@{104}: commit: PAGE LOAD SPEED to 1.15 seconds.
+[33ma425f6b[m HEAD@{105}: commit: FIXED LAZY LOADING. Horizontal scrolling working Reduced 1900ms from original
+[33me352ba5[m HEAD@{106}: checkout: moving from e352ba529bdb317c3301bb7266e22f10ce75595c to polishAndSpeed
+[33me352ba5[m HEAD@{107}: checkout: moving from 93e687159158a778edbee05b3eb23ffc23dee340 to e352ba52
+[33m93e6871[m HEAD@{108}: checkout: moving from 6a8b4245fbb90a48f180421308e52beb64418099 to 93e68715
+[33m6a8b424[m HEAD@{109}: checkout: moving from smartprogression_base to 6a8b4245
+[33maa253f4[m[33m ([m[1;32msmartprogression_base[m[33m)[m HEAD@{110}: commit: Temp commit before testing old BB2 version
+[33m1c92441[m[33m ([m[1;31morigin/smartprogression_base[m[33m)[m HEAD@{111}: commit: UNSURE if this is better
+[33m94c63c1[m HEAD@{112}: commit: REDUCED LOAD TIME, by another 900ms on bb2, by implementing lazy loading to three days.
+[33m93e6871[m HEAD@{113}: commit: BB2 OPENS TO CURRENT DAY EXCELLENTLY, scroll before page load.
+[33m6a8b424[m HEAD@{114}: commit: REDUCED LOAD TIME, by 1.2 seconds, changed to batch loading from firestore for blockdata
+[33me352ba5[m HEAD@{115}: commit: BB2 UI ready, working on reducing load time now
+[33m690072c[m HEAD@{116}: commit: BB2 cards tidied, EVEN MORE
+[33m0c59ba2[m HEAD@{117}: commit: BB2 cards tidied, MUCH BETTER
+[33ma562882[m HEAD@{118}: reset: moving to a5628822
+[33ma562882[m HEAD@{119}: reset: moving to HEAD
+[33ma562882[m HEAD@{120}: commit: Collapsed cards for read only rows added.
+[33m133cf17[m HEAD@{121}: commit: Fixed RIR and rep updates to bb2. all models working
+[33m98a2b88[m HEAD@{122}: commit: RIR UPDATES WORKING IN WES alongside progression models. yay
+[33m9d7cf04[m HEAD@{123}: commit: Almopst rir updates working in wes. rep and weight updates woerkintg
+[33m55dc4d8[m HEAD@{124}: commit: RIR updates wokring in most cases but not all
+[33m5332b18[m HEAD@{125}: commit: Weight and reps auto updates in bb2 fixed. Now working on RIR changes causing update to weight correctly
+[33md57aa1a[m HEAD@{126}: commit: bb2 sync with WES improved. About to try fix weight auto-updates in BB2 first. tinkering with getweightbyprogression
+[33m3074aff[m HEAD@{127}: commit: WES INTEGRATION FIXED! progression models wired in better
+[33m132afb8[m HEAD@{128}: commit: Smart Progression model FIXED - EVEN SMARTER
+[33m60abe7b[m HEAD@{129}: checkout: moving from 60abe7be42d53dd1507e96c2dbceb04e6c774931 to smartprogression_base
+[33m60abe7b[m HEAD@{130}: checkout: moving from smartprogression_base to 60abe7be42d53dd1507e96c2dbceb04e6c774931
+[33m60abe7b[m HEAD@{131}: commit: ADD REPS PROGRESSION made SMARTER
+[33m3af6a9f[m HEAD@{132}: commit: Block Planner Updating
+[33m46aa30c[m HEAD@{133}: commit: ADD REP PROGRESSION MODEL working across bb2 and WES
+[33m4fb2af4[m HEAD@{134}: commit: PROGRESSION MODELS WORKING IN WES and BB2 and bb2 E1RM fixed to use progression model logic where appropriate
+[33m978c4c0[m HEAD@{135}: commit: PROGRESSION MODELS WORKING IN WES and BB2
+[33m02df469[m HEAD@{136}: commit: SMART PROGRESSION MODEL MANIPULATING REPS
+[33m65bf9b4[m HEAD@{137}: commit: FIXED Null error saving problem in WES
+[33m50eab7c[m HEAD@{138}: commit: FIXED INCREMENT PROBLEM
+[33m6283d8b[m[33m ([m[1;31morigin/richard_all4modelsworking[m[33m, [m[1;32mrichard_all4modelsworking[m[33m)[m HEAD@{139}: checkout: moving from 6283d8bf19b8609e2edc78f3a295d60a30155c36 to smartprogression_base
+[33m6283d8b[m[33m ([m[1;31morigin/richard_all4modelsworking[m[33m, [m[1;32mrichard_all4modelsworking[m[33m)[m HEAD@{140}: checkout: moving from smart_base_revertpoint to 6283d8bf19b8609e2edc78f3a295d60a30155c36
+[33ma7ede11[m[33m ([m[1;32msmart_base_revertpoint[m[33m)[m HEAD@{141}: checkout: moving from a7ede11b3715b0f0abcba6d390ce7a2d2a52b506 to smart_base_revertpoint
+[33ma7ede11[m[33m ([m[1;32msmart_base_revertpoint[m[33m)[m HEAD@{142}: checkout: moving from 6283d8bf19b8609e2edc78f3a295d60a30155c36 to a7ede11b3715b0f0abcba6d390ce7a2d2a52b506
+[33m6283d8b[m[33m ([m[1;31morigin/richard_all4modelsworking[m[33m, [m[1;32mrichard_all4modelsworking[m[33m)[m HEAD@{143}: checkout: moving from richard_all4modelsworking to 6283d8bf19b8609e2edc78f3a295d60a30155c36
+[33m6283d8b[m[33m ([m[1;31morigin/richard_all4modelsworking[m[33m, [m[1;32mrichard_all4modelsworking[m[33m)[m HEAD@{144}: commit: Linear weight increase working
+[33ma7ede11[m[33m ([m[1;32msmart_base_revertpoint[m[33m)[m HEAD@{145}: commit: Unsure if I broke stuff? trying to use reps. needs topsethistroy fucntion worked on within model
+[33mac3692c[m HEAD@{146}: commit: 1st Progression model set up in BP and wired to bb2. logic not implemented yet
+[33m2d61ce5[m HEAD@{147}: commit: Increments working in BOTH WES and bb2
+[33mc314869[m HEAD@{148}: commit: Increments working in bb2. next WES
+[33m18fe3d4[m HEAD@{149}: commit: bb2 hint weight working
+[33m9e22cf8[m HEAD@{150}: commit: ALL RIR MODELS WORKING
+[33me2b1c24[m HEAD@{151}: commit: ALL RIR MODELS WORKING
+[33m2172941[m HEAD@{152}: commit: Static RIR model Working
+[33mcde0853[m HEAD@{153}: commit: FINALLY WaveRIR model values persist in UI on BP Page
+[33mb8d73a2[m HEAD@{154}: commit: BB2 user enterd values working in WES again
+[33m88e1f1a[m HEAD@{155}: commit: RIR MODELS WORKING WITH SIGNATURE in both WES and bb2 YESSS
+[33mab3eb87[m HEAD@{156}: commit: STILL NO LUCK cant get RIR models working for exercises that are assigned signature rep target model boo
+[33m6f334ab[m HEAD@{157}: commit: STILL NO LUCK cant get RIR models working for exercises that are assigned signature rep target model boo
+[33mee95547[m HEAD@{158}: commit: Signature weekly frequency fixed in BP
+[33m1f56d6e[m HEAD@{159}: commit: Working on integrating DUP signature with RIR models in BP and WES. (Working in bb2)
+[33m93d3b81[m HEAD@{160}: commit: 2 RIR MODELS WORKING AND WIRED TO WES
+[33mb1dae78[m HEAD@{161}: commit: 2 RIR MODELS WORKING AND WIRED TO BB2
+[33mbbbb6c2[m HEAD@{162}: commit: RIR LINEAR TAPER MODEL BUILT, not yet wired
+[33md224097[m HEAD@{163}: commit: First RIR model, Linear Taper, is in the making. showing up in BP, not wired yet.
+[33m96f144a[m HEAD@{164}: commit: cleaned up bb2
+[33m3cb67e5[m HEAD@{165}: commit: Cleaner more logical exercise card layout
+[33mcccb224[m HEAD@{166}: commit: Working on adding in specific RIR models
+[33m829aa8d[m HEAD@{167}: commit: USER VALUES WORKING IN WES
+[33m4e498b6[m HEAD@{168}: commit: user entered values printing successfully in WES... about to integrate to actual set1suggested
+[33m19dd1b8[m HEAD@{169}: commit: Linearclassic working in WES
+[33m011ad56[m HEAD@{170}: commit: Could not get linearclassic working in wes, this one or the previos push might be the best to try from
+[33m0f346f5[m HEAD@{171}: commit: In WES Signature, DUP expsoure, DUP weekly all working.... working on linearclasic next
+[33m5c290c4[m HEAD@{172}: commit: In WES Signature model working
+[33mf556a60[m HEAD@{173}: commit: Working on bb2 data populating WES with priority
+[33meeafe1a[m HEAD@{174}: commit: SIGNATURE MODEL NEW AND IMPROVED, much better!!
+[33mc00978f[m HEAD@{175}: commit: MIN MAX VALUES WORKING
+[33ma2895a3[m[33m ([m[1;31morigin/detached[m[33m)[m HEAD@{176}: checkout: moving from a2895a31893cf18c91968f6927e21c2850e17ef6 to richard_all4modelsworking
+[33ma2895a3[m[33m ([m[1;31morigin/detached[m[33m)[m HEAD@{177}: commit: Min max values are working in signature model now in bb2, but a bug in signature model has been found in its internal logic that causes it to produce wrong rep targets when only given a small range to work within. fixing this now
+[33m1a59ac5[m[33m ([m[1;31morigin/RichardVersion[m[33m, [m[1;32mRichardVersion[m[33m)[m HEAD@{178}: checkout: moving from RichardVersion to 1a59ac5d
+[33m1a59ac5[m[33m ([m[1;31morigin/RichardVersion[m[33m, [m[1;32mRichardVersion[m[33m)[m HEAD@{179}: reset: moving to HEAD
+[33m1a59ac5[m[33m ([m[1;31morigin/RichardVersion[m[33m, [m[1;32mRichardVersion[m[33m)[m HEAD@{180}: commit: ALL FOUR MODELS WORKING!
+[33m444b963[m HEAD@{181}: commit: TRAILING SPACE ERROR RESOLVED
+[33m0cc692e[m HEAD@{182}: commit: Topsets are correctly loading to bb2 here
+[33mb091f71[m HEAD@{183}: reset: moving to origin/RichardVersion
+[33mb091f71[m HEAD@{184}: checkout: moving from RichardVersion to RichardVersion
+[33mb091f71[m HEAD@{185}: reset: moving to HEAD
+[33mb091f71[m HEAD@{186}: commit: Exercises persisting again:
+[33mc97f9dd[m HEAD@{187}: commit: Regressed back to linear classic model working.
+[33m505bfec[m[33m ([m[1;32mrestore-working-version[m[33m)[m HEAD@{188}: reset: moving to 505bfecd
+[33m505bfec[m[33m ([m[1;32mrestore-working-version[m[33m)[m HEAD@{189}: checkout: moving from restore-working-version to RichardVersion
+[33m505bfec[m[33m ([m[1;32mrestore-working-version[m[33m)[m HEAD@{190}: checkout: moving from 505bfecd274050d30e90f054694d7d26b6f6a521 to restore-working-version
+[33m505bfec[m[33m ([m[1;32mrestore-working-version[m[33m)[m HEAD@{191}: checkout: moving from RichardVersion to 505bfecd
+[33m505bfec[m[33m ([m[1;32mrestore-working-version[m[33m)[m HEAD@{192}: reset: moving to 505bfecd274050d30e90f054694d7d26b6f6a521
+[33m505bfec[m[33m ([m[1;32mrestore-working-version[m[33m)[m HEAD@{193}: reset: moving to 505bfecd274050d30e90f054694d7d26b6f6a521
+[33m505bfec[m[33m ([m[1;32mrestore-working-version[m[33m)[m HEAD@{194}: reset: moving to 505bfecd274050d30e90f054694d7d26b6f6a521
+[33m505bfec[m[33m ([m[1;32mrestore-working-version[m[33m)[m HEAD@{195}: checkout: moving from RichardVersion to RichardVersion
+[33m505bfec[m[33m ([m[1;32mrestore-working-version[m[33m)[m HEAD@{196}: branch: Reset to origin/RichardVersion
+[33m505bfec[m[33m ([m[1;32mrestore-working-version[m[33m)[m HEAD@{197}: commit: FINALLY Linear by week is working!
+[33m47dda6e[m HEAD@{198}: commit: Dailyundualting by exposure AND Daily undulating by week is working for good, across weeks
+[33m18a24bd[m HEAD@{199}: commit: Daily undulating by exposure working for good, across all weeks
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{200}: checkout: moving from RichardVersion to RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{201}: checkout: moving from 0f70b3997e43d0710ebb5a3aaeca79e4027d2485 to RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{202}: checkout: moving from RichardVersion to 0f70b3997e43d0710ebb5a3aaeca79e4027d2485
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{203}: checkout: moving from RE-Sandbox to RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{204}: checkout: moving from RichardVersion to RE-Sandbox
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{205}: checkout: moving from attemptfix to RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{206}: checkout: moving from RichardVersion to attemptfix
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{207}: checkout: moving from RichardVersion to RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{208}: branch: Reset to origin/RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{209}: checkout: moving from RichardVersion to RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{210}: branch: Reset to origin/RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{211}: reset: moving to 0f70b3997e43d0710ebb5a3aaeca79e4027d2485
+[33mcf09dd3[m HEAD@{212}: checkout: moving from workout-test-dev-backup to RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{213}: checkout: moving from RichardVersion to workout-test-dev-backup
+[33mcf09dd3[m HEAD@{214}: checkout: moving from RE-Sandbox to RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{215}: checkout: moving from RichardVersion to RE-Sandbox
+[33mcf09dd3[m HEAD@{216}: checkout: moving from workout-test-dev-backup to RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{217}: merge origin/RichardVersion: Fast-forward
+[33ma41fc55[m HEAD@{218}: checkout: moving from workout-test-dev to workout-test-dev-backup
+[33m5909920[m[33m ([m[1;32mworkout-test-dev[m[33m)[m HEAD@{219}: checkout: moving from RichardVersion to workout-test-dev
+[33mcf09dd3[m HEAD@{220}: checkout: moving from cdd42b1034396a5ea289572fbefd71c0546101c2 to RichardVersion
+[33mcdd42b1[m HEAD@{221}: checkout: moving from RE-Sandbox to cdd42b1034396a5ea289572fbefd71c0546101c2
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{222}: checkout: moving from RichardVersion to RE-Sandbox
+[33mcf09dd3[m HEAD@{223}: reset: moving to cf09dd3e3213be469b97ab134220a7d0d0140679
+[33m99f9e71[m HEAD@{224}: reset: moving to 99f9e71b4626df05d4885d959801a67db2825ac2
+[33m99f9e71[m HEAD@{225}: checkout: moving from RE-Sandbox to RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{226}: checkout: moving from RichardVersion to RE-Sandbox
+[33m99f9e71[m HEAD@{227}: commit (merge): Merge remote-tracking branch 'origin/RichardVersion' into RichardVersion
+[33m3437cc1[m HEAD@{228}: commit: Test red save button body weight
+[33mcf09dd3[m HEAD@{229}: checkout: moving from RE-Sandbox to RichardVersion
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{230}: rebase (finish): returning to refs/heads/RE-Sandbox
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{231}: rebase (start): checkout origin/RichardVersion
+[33m86c9d30[m HEAD@{232}: checkout: moving from RichardVersion to RE-Sandbox
+[33mcf09dd3[m HEAD@{233}: checkout: moving from RE-Sandbox to RichardVersion
+[33m86c9d30[m HEAD@{234}: checkout: moving from RichardVersion to RE-Sandbox
+[33mcf09dd3[m HEAD@{235}: rebase (finish): returning to refs/heads/RichardVersion
+[33mcf09dd3[m HEAD@{236}: rebase (pick): Test pink
+[33mcdd42b1[m HEAD@{237}: rebase (pick): DUP custom, Linear Classic, Linear Exposure, all working across weeks in bb2.
+[33m9571d94[m HEAD@{238}: rebase (pick): Improvements to BP to show chosen rep target better in UI, effected firstorage. most models closer to working in bb2 now. audit to come next, then fixes for each
+[33m8adb342[m HEAD@{239}: rebase (pick): Got linear by classic working across instacnes
+[33mf816b8b[m HEAD@{240}: rebase (pick): Got linear by exposure updated and working, only first instance of an exercise however
+[33mf621540[m HEAD@{241}: rebase (pick): Exercise specific rep targets loading in bb2 according to periodization model utils and BP. DUP standard not using user entered values. linear classic not working, DUP custom not working.
+[33m2a3b226[m HEAD@{242}: rebase (pick): Blockplanner work to make exe3rcise details persist.
+[33m632dabc[m HEAD@{243}: rebase (pick): still problems with synching bb2 to wes. seems to resolved one way now, huge progess. tested in many different scenarios, seems robust. next step: get WES saved data to show in bb2, and be the appropriate color. great work today.
+[33m55ebb2b[m HEAD@{244}: rebase (pick): Fixed big problem with synching workouts from bb2 to WES, and keeping draft workouts from WES persist until end of day. working now yay
+[33m20e5e63[m HEAD@{245}: rebase (pick): DUP custom, Linear classic and linear exposure set up in blockplanner. need to finalise lay out. Then wire to WES and BB2.
+[33md688072[m HEAD@{246}: rebase (pick): Got linear classsisc and dup signature started
+[33m0ebdcd2[m HEAD@{247}: rebase (pick): Working on periodisation models and block planner. In the process of adding Linear, classic, linear, exposure, and DUP custom
+[33m0f15d43[m HEAD@{248}: rebase (pick): Working on globalising periodization logic to periodization_model_utils, all hint text logic succesfully moved there now and working. next to design different models to choose from per exercise. choosing in blockplanner
+[33m002356e[m HEAD@{249}: rebase (pick): Made a better version of workouthistory, called saved workouts. keeping workouthistory page still, still useful while coding. not sure of what to call this.
+[33m45e755f[m HEAD@{250}: rebase (pick): Tidied templates screen (workout planner screen)
+[33md16a57e[m HEAD@{251}: rebase (pick): More polish to workoutentry screen. Fixed exercises screen
+[33md4efc52[m HEAD@{252}: rebase (pick): Small UI tweaks to workout entry screen
+[33mdec9d12[m HEAD@{253}: rebase (pick): Bunch of work done. changes templates page, changed planned exercise storage to be via uniquie ID in firestore, updated blockplanner, blockbuilder2.0, and workoutentry screen accordingly
+[33m256d13f[m HEAD@{254}: rebase (pick): Fixed block builder: circuit labels working, future weeks reorganising based off current week selection. clear day fucntion fixed. add exercise to circuit fixed.
+[33m58fede2[m HEAD@{255}: rebase (pick): Persistent state added to workoutentryscreen. Working on persistent data per exercise next. when exiting and re-entering the page, previous unsaved exercise selection now persists. added global debounce function
+[33mf81a951[m HEAD@{256}: rebase (pick): Circuit logic in workoutentryscreen implemented. working.
+[33m7116e0c[m HEAD@{257}: rebase (pick): migrating workoutentry screen to circuit logic, at the moment no bugs, but not fully migrated
+[33m42d1fbd[m HEAD@{258}: rebase (pick): templates updated, (now showing as workout planner in UI) synched with blockbuilder, wokring nicely
+[33m7d0d8db[m HEAD@{259}: rebase (pick): Reorderable rows for exercises replaced drag and drop - cleaner
+[33m79d3e5e[m HEAD@{260}: rebase (pick): Everything a little tidier. undo button added to both pages
+[33m3001735[m HEAD@{261}: rebase (pick): Updated save to blockbuilder function from workout entry screen, working perfectly now
+[33m5f069ea[m HEAD@{262}: rebase (pick): improved workout entry layout. linked blockplanner to blockbuilder2.0.
+[33m9dea4e4[m HEAD@{263}: rebase (pick): Fixed log in
+[33m86ca275[m HEAD@{264}: rebase (pick): Changed overall color scheme across app, much better
+[33m4eb5c46[m HEAD@{265}: rebase (pick): exercise grouping added. most uptodate blockbuilder2.0
+[33mb72aaf1[m HEAD@{266}: rebase (pick): Blockbuilder2.0 faster
+[33m76b753d[m HEAD@{267}: rebase (pick): periodization_model_utils.dart a bit smarter and has rep target sequence generator built into it.
+[33m1a99ca0[m HEAD@{268}: rebase (pick): Blockbuilder2.0 rep rogression scheme over full 12 weeks in progress
+[33mac83729[m HEAD@{269}: rebase (pick): Remove google-services.json from version control
+[33m36f9398[m HEAD@{270}: rebase (pick): New blockbuilder2.0 working well.
+[33m86c9d30[m HEAD@{271}: rebase (start): checkout refs/remotes/origin/RE-Sandbox
+[33m0f70b39[m[33m ([m[1;32mworkout-test-dev-backup[m[33m, [m[1;32mattemptfix[m[33m, [m[1;32mRE-Sandbox[m[33m)[m HEAD@{272}: commit: Test pink
+[33m0dcc9ed[m HEAD@{273}: commit: DUP custom, Linear Classic, Linear Exposure, all working across weeks in bb2.
+[33m776c9ae[m HEAD@{274}: commit: Improvements to BP to show chosen rep target better in UI, effected firstorage. most models closer to working in bb2 now. audit to come next, then fixes for each
+[33m5146219[m HEAD@{275}: commit: Got linear by classic working across instacnes
+[33m4938b64[m HEAD@{276}: commit: Got linear by exposure updated and working, only first instance of an exercise however
+[33md1fb0e8[m HEAD@{277}: commit: Exercise specific rep targets loading in bb2 according to periodization model utils and BP. DUP standard not using user entered values. linear classic not working, DUP custom not working.
+[33md75b286[m HEAD@{278}: commit: Blockplanner work to make exe3rcise details persist.
+[33md924088[m HEAD@{279}: commit: still problems with synching bb2 to wes. seems to resolved one way now, huge progess. tested in many different scenarios, seems robust. next step: get WES saved data to show in bb2, and be the appropriate color. great work today.
+[33mcd9c468[m HEAD@{280}: commit: Fixed big problem with synching workouts from bb2 to WES, and keeping draft workouts from WES persist until end of day. working now yay
+[33mf68ae85[m HEAD@{281}: commit: DUP custom, Linear classic and linear exposure set up in blockplanner. need to finalise lay out. Then wire to WES and BB2.
+[33m057b266[m HEAD@{282}: commit: Got linear classsisc and dup signature started
+[33m3c397ec[m HEAD@{283}: commit: Working on periodisation models and block planner. In the process of adding Linear, classic, linear, exposure, and DUP custom
+[33m1816965[m HEAD@{284}: commit: Working on globalising periodization logic to periodization_model_utils, all hint text logic succesfully moved there now and working. next to design different models to choose from per exercise. choosing in blockplanner
+[33mb731a0e[m HEAD@{285}: commit: Made a better version of workouthistory, called saved workouts. keeping workouthistory page still, still useful while coding. not sure of what to call this.
+[33m47f3d6d[m HEAD@{286}: commit: Tidied templates screen (workout planner screen)
+[33m2201011[m HEAD@{287}: commit: More polish to workoutentry screen. Fixed exercises screen
+[33md2194ef[m HEAD@{288}: commit: Small UI tweaks to workout entry screen
+[33m8624a66[m HEAD@{289}: commit: Bunch of work done. changes templates page, changed planned exercise storage to be via uniquie ID in firestore, updated blockplanner, blockbuilder2.0, and workoutentry screen accordingly
+[33m1e97582[m HEAD@{290}: commit: Fixed block builder: circuit labels working, future weeks reorganising based off current week selection. clear day fucntion fixed. add exercise to circuit fixed.
+[33mf12d7d8[m HEAD@{291}: commit: Persistent state added to workoutentryscreen. Working on persistent data per exercise next. when exiting and re-entering the page, previous unsaved exercise selection now persists. added global debounce function
+[33m74dfbff[m HEAD@{292}: commit: Circuit logic in workoutentryscreen implemented. working.
+[33m3bfe872[m HEAD@{293}: commit: migrating workoutentry screen to circuit logic, at the moment no bugs, but not fully migrated
+[33mca629be[m HEAD@{294}: commit: templates updated, (now showing as workout planner in UI) synched with blockbuilder, wokring nicely
+[33m647a853[m HEAD@{295}: commit: Reorderable rows for exercises replaced drag and drop - cleaner
+[33mb075a3f[m HEAD@{296}: commit: Everything a little tidier. undo button added to both pages
+[33me28c9e9[m HEAD@{297}: commit: Updated save to blockbuilder function from workout entry screen, working perfectly now
+[33m0b35c08[m HEAD@{298}: commit: improved workout entry layout. linked blockplanner to blockbuilder2.0.
+[33m2b5c48b[m HEAD@{299}: commit (amend): Fixed log in
+[33m3082978[m HEAD@{300}: commit: Fixed log in
+[33m8b49315[m HEAD@{301}: commit: Changed overall color scheme across app, much better
+[33mf15d6b5[m HEAD@{302}: commit: exercise grouping added. most uptodate blockbuilder2.0
+[33m32e3251[m HEAD@{303}: commit: Blockbuilder2.0 faster
+[33m6fcab9a[m HEAD@{304}: commit: periodization_model_utils.dart a bit smarter and has rep target sequence generator built into it.
+[33m7f05f90[m HEAD@{305}: merge origin/RichardVersion: Merge made by the 'ort' strategy.
+[33m4f7aa2b[m HEAD@{306}: commit: Blockbuilder2.0 rep rogression scheme over full 12 weeks in progress
+[33m67cb455[m HEAD@{307}: commit: Remove google-services.json from version control
+[33m41cc5be[m HEAD@{308}: commit: New blockbuilder2.0 working well.
+[33mb9cd88f[m HEAD@{309}: commit: New blockbuilder2.0 improved a little, have used miro as a wireframe to work from
+[33md9dc3e2[m HEAD@{310}: commit: New blockbuilder2.0 page begun
+[33m196a581[m HEAD@{311}: commit: UI errors gone,
+[33m8ea254f[m HEAD@{312}: commit: Blockbuilderscreen added
+[33madff672[m HEAD@{313}: commit: New E1RM formula working. dynamic changes to weight based off user input in reps and/or RIR.
+[33m02a87e1[m HEAD@{314}: commit (merge): Merge remote-tracking branch 'origin/workout-test-dev-backup' into RichardVersion
+[33me9541b8[m HEAD@{315}: checkout: moving from RichardVersion to RichardVersion
+[33me9541b8[m HEAD@{316}: branch: Reset to origin/RichardVersion
+[33me9541b8[m HEAD@{317}: commit: New E1RM formula working. dynamic changes to weight based off user input in reps and/or RIR.
+[33maed29eb[m HEAD@{318}: merge origin/RichardVersion: Fast-forward
+[33m45d984a[m[33m ([m[1;32mmaster[m[33m)[m HEAD@{319}: checkout: moving from master to RichardVersion
+[33m45d984a[m[33m ([m[1;32mmaster[m[33m)[m HEAD@{320}: checkout: moving from RichardVersion to master
+[33m45d984a[m[33m ([m[1;32mmaster[m[33m)[m HEAD@{321}: checkout: moving from master to RichardVersion
+[33m45d984a[m[33m ([m[1;32mmaster[m[33m)[m HEAD@{322}: checkout: moving from RichardVersion to master
+[33m45d984a[m[33m ([m[1;32mmaster[m[33m)[m HEAD@{323}: checkout: moving from master to RichardVersion
+[33m45d984a[m[33m ([m[1;32mmaster[m[33m)[m HEAD@{324}: checkout: moving from RichardVersion to master
+[33m45d984a[m[33m ([m[1;32mmaster[m[33m)[m HEAD@{325}: checkout: moving from master to RichardVersion
+[33m45d984a[m[33m ([m[1;32mmaster[m[33m)[m HEAD@{326}: clone: from https://github.com/LobsangR/RE-test.git
