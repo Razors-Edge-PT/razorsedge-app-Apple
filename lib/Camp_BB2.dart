@@ -881,17 +881,37 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           // Planned occurrences BEFORE this row in the same week (your existing logic)
           final int plannedBeforeThisWeek = getExerciseCountInWeek(exerciseName, week, day, row);
 
-          // Completed exposures IN THIS WEEK from saved workouts
+          // ✅ Completed exposures IN THIS WEEK up to (and including) this day, using BB2's WES cache
           int completedThisWeek = 0;
-          if (blockStartDate != null) {
-            completedThisWeek = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
-              exerciseName: exerciseName,
-              savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
-              blockStartDate: blockStartDate!,
-              weekIndex: week, // ← stays week-scoped; resets each new week
-            );
-          } else {
-            print('⚠️ [BB2] blockStartDate is null — assuming completedThisWeek=0');
+          try {
+            if (blockStartDate != null) {
+              final target = exerciseName.trim();
+              for (int d = 0; d <= day; d++) {
+                final date = blockStartDate!.add(Duration(days: week * 7 + d));
+                final dateKey = DateFormat('yyyy-MM-dd').format(date);
+
+                final raw = List<Map<String, dynamic>>.from(completedWesRows[dateKey] ?? const []);
+                final hasCompleted = raw.any((ex) {
+                  final name = (ex['name'] ?? '').toString().trim();
+                  if (name != target) return false;
+                  final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? const []);
+                  return sets.isNotEmpty; // count day only if at least one set exists
+                });
+
+                if (hasCompleted) completedThisWeek += 1; // one per day
+                // If you prefer multi-circuit to count multiple exposures, replace with:
+                // completedThisWeek += raw.where((ex) {
+                //   final name = (ex['name'] ?? '').toString().trim();
+                //   if (name != target) return false;
+                //   final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? const []);
+                //   return sets.isNotEmpty;
+                // }).length;
+              }
+            } else {
+              print('⚠️ [BB2] blockStartDate is null — assuming completedThisWeek=0');
+            }
+          } catch (e) {
+            print('⚠️ [BB2] completedThisWeek(calc) failed: $e');
           }
 
           // Combined index within the week = done + planned-before
@@ -911,6 +931,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
               'plannedBefore=$plannedBeforeThisWeek, index=$plannedIndex)');
           return rep.toString();
         }
+
 
 
 
@@ -974,17 +995,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                 });
 
                 if (hasCompleted) completedCount += 1;
-
-                // 👉 If you want to count multiple circuits as multiple exposures
-                // on the same day, replace the block above with:
-                //
-                // final matches = raw.where((ex) {
-                //   final name = (ex['name'] ?? '').toString().trim();
-                //   if (name != target) return false;
-                //   final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? const []);
-                //   return sets.isNotEmpty;
-                // }).length;
-                // completedCount += matches;
               }
             } else {
               print('⚠️ [BB2] blockStartDate is null — treating completedCount=0');
