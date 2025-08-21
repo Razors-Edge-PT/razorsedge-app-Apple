@@ -196,6 +196,7 @@ class _ProfilePageState extends State<ProfilePage> {
   String? _localProfilePath; // persisted path on device
   String? _currentUsername;
 
+
   // Bio
   final TextEditingController _bioController = TextEditingController();
   double squat = 0, bench = 0, deadlift = 0, chinUp = 0, unilateralPress = 0;
@@ -628,7 +629,15 @@ class _ProfilePageState extends State<ProfilePage> {
   void initState() {
     super.initState();
     _loadProfileData();
-    _loadLocalProfileImage();
+
+    _loadLocalProfileImage().then((_) {
+      final uc = context.read<UserContext>();
+      if (uc.isActingAsSelf && _localProfilePath != null && File(_localProfilePath!).existsSync()) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) uc.setLocalPhotoPath(_localProfilePath); // just local path, no Firestore
+        });
+      }
+    });
     _loadPhotoURL();
     _refreshBestLiftsAndPoints(); // NEW
     _loadCurrentUsername();
@@ -874,6 +883,11 @@ class _ProfilePageState extends State<ProfilePage> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Profile photo updated (local only)')),
     );
+    // ✅ sync into UserContext so app bar shows same image
+    final uc = context.read<UserContext>();
+    if (uc.isActingAsSelf) {
+      uc.setLocalPhotoPath(destPath);
+    }
   }
 
   Future<void> _loadLocalProfileImage() async {
