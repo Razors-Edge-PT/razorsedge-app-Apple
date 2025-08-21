@@ -160,7 +160,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   Map<String, List<Map<String, dynamic>>> topSetsByExercise = {};
   Map<String, List<Map<String, dynamic>>> completedWesRows = {};
   final Set<String> _loadedDays = {};
-
+  String _exKey(String name, int circuit) => '${name.trim()}_$circuit';
 
   late DateTime selectedWeekMonday;
   late DateTime blockStartDate;
@@ -201,13 +201,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
 // Key = weekday index (0=Mon...6=Sun), Value = latest edited structure
   VoidCallback? _lastUndoAction;
-
-
-
   late Future<void> _initialLoad;
-
-
-
   final Map<String, FocusNode> _focusNodes = {};
 
   FocusNode _getFocusNode(String key) {
@@ -329,97 +323,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     });
   }
 
-  Future<void> _loadAllBlocks() async {
-    final total = Stopwatch()..start();
-    if (kDebugMode) debugPrint('⏱️ [_loadAllBlocks] start');
-
-    final userId = UserContext.of(context, listen: false).currentUid;
-
-    // Fetch
-    final tFetch = Stopwatch()..start();
-    final snap = await FirebaseFirestore.instance
-        .collection('planned_blocks')
-        .doc(userId)
-        .collection('blocks')
-        .get(const GetOptions(source: Source.server));
-    tFetch.stop();
-    if (kDebugMode) {
-      debugPrint('   ↳ fetch blocks took ${tFetch.elapsedMilliseconds}ms (count=${snap.docs.length})');
-    }
-
-    // Parse/map
-    final tParse = Stopwatch()..start();
-    final blocks = snap.docs
-        .where((d) {
-      final data = d.data();
-      final hasAllFields = data.containsKey('name') &&
-          data.containsKey('startDate') &&
-          data.containsKey('endDate');
-      if (kDebugMode && !hasAllFields) {
-        debugPrint('   ⚠️ skipping ${d.id} (missing fields)');
-      }
-      return hasAllFields;
-    })
-        .map((d) {
-      final data = d.data();
-      return BlockMeta(
-        id: d.id,
-        name: data['name'],
-        startDate: (data['startDate'] as Timestamp).toDate(),
-        endDate: (data['endDate'] as Timestamp).toDate(),
-        selectedDays: List<String>.from(data['selectedDays'] ?? []),
-      );
-    })
-        .toList();
-    tParse.stop();
-    if (kDebugMode) {
-      debugPrint('   ↳ parse/map took ${tParse.elapsedMilliseconds}ms');
-    }
-
-    // setState
-    final tSet = Stopwatch()..start();
-    if (mounted) {
-      setState(() {
-        _allBlocks = blocks;
-        _selectedBlockId = blocks
-            .firstWhere((b) => b.id == _activeBlockId, orElse: () => blocks.first)
-            .id;
-      });
-    }
-    tSet.stop();
-
-    total.stop();
-    if (kDebugMode) {
-      debugPrint('✅ [_loadAllBlocks] ${total.elapsedMilliseconds}ms '
-          '(fetch ${tFetch.elapsedMilliseconds} | parse ${tParse.elapsedMilliseconds} | setState ${tSet.elapsedMilliseconds})');
-    }
-  }
-
-  Future<void> _saveActiveBlockIdCache(String uid, String blockId) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('activeBlockId:$uid', blockId);
-  }
-
-  Future<String?> _loadActiveBlockIdCache(String uid) async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('activeBlockId:$uid');
-  }
-
-  Future<void> _saveBlockMetaCache(String uid, String blockId, Map<String, dynamic> meta) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('blockMeta:$uid:$blockId', meta.toString()); // quick-n-dirty; use jsonEncode in your codebase
-  }
-
-  Map<String, dynamic>? _parseBlockMetaCache(String s) {
-    // replace with jsonDecode if you switch to JSON
-    // expected keys: startDateMillis, endDateMillis, selectedDaysCsv
-    try {
-      // minimal parser for meta.toString(); prefer JSON in real code
-      return null; // keep simple if you prefer: skip parsing fallback
-    } catch (_) { return null; }
-  }
-
-
   Future<void> _fetchActiveBlockThenMeta() async {
     final total = Stopwatch()..start();
     if (kDebugMode) debugPrint('⏱️ [_fetchActiveBlockThenMeta] start');
@@ -514,122 +417,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     }
   }
 
-  String? _lastCtxKey;
-  void _maybeResetCaches(String uid, String blockId) {
-    final key = '$uid::$blockId';
-    if (key == _lastCtxKey) return; // same athlete+block → keep caches
-    _lastCtxKey = key;
-
-    // Reset per-athlete/block caches ONLY when context changes
-    _exerciseSettings.clear();
-    _savedFields.clear();
-    // If you have other per-athlete caches, clear them here too:
-    // _hintCache?.clear();
-    // _repTargetsCache?.clear();
-  }
-
-  Future<void> _loadWeekIfNeeded(int week) async {
-    if (week < 0 || week >= totalWeeks) return;
-    if (loadedWeekIndices.contains(week)) return;
-    if (_loadingWeeks.contains(week)) return;
-
-    _loadingWeeks.add(week);
-    try {
-      await loadBlockDataForWeek(week);
-      loadedWeekIndices.add(week);
-      if (mounted) setState(() {}); // optional if your loader already setState's
-    } finally {
-      _loadingWeeks.remove(week);
-    }
-  }
-
-  Future<void> _prefetchNeighborWeeks(int center) async {
-    final futures = <Future<void>>[];
-    // previous
-    futures.add(_loadWeekIfNeeded(center - 1));
-    // next
-    futures.add(_loadWeekIfNeeded(center + 1));
-    await Future.wait(futures);
-  }
-
-  void _computeWeekBounds() {
-    // 1) get Monday on-or-before blockStart
-    final startOffset = (blockStartDate.weekday - DateTime.monday + 7) % 7;
-    _displayStart = blockStartDate.subtract(Duration(days: startOffset));
-
-    // 2) get Sunday on-or-after blockEnd
-    final endOffset = (DateTime.sunday - blockEndDate.weekday + 7) % 7;
-    _displayEnd = blockEndDate.add(Duration(days: endOffset));
-
-    // 3) how many days total (inclusive)
-    final totalDays = _displayEnd.difference(_displayStart).inDays + 1;
-
-    // ← MISSING ←
-    // 4) how many full weeks?
-    totalWeeks = totalDays ~/ 7;
-    // 5) build your index list
-    weekIndices = List.generate(totalWeeks, (i) => i);
-  }
-
-// 1) New helper for days outside the block:
-  Widget _buildOutsideDayRow(DateTime date) {
-    final label = DateFormat('E • d MMM').format(date);
-    return Container(
-      height: exerciseRowHeight,
-      margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade900, // dark grey fill
-        border: Border.all(color: Colors.grey), // pale grey outline
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: Text(
-          label,
-          style: const TextStyle(color: Colors.white70, fontSize: 12),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildWeek(int weekIndex, Map<String, dynamic> repTargets) {
-    final weekStart = _displayStart.add(Duration(days: weekIndex * 7));
-
-    return SizedBox(
-      width: MediaQuery.of(context).size.width * .999,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: List.generate(7, (dow) {
-          final date = weekStart.add(Duration(days: dow));
-          final dowAbbrev = DateFormat('E').format(date).substring(0, 3);
-          final rows = exerciseRows[weekIndex][dow];
-
-          // 1) days completely outside the block window
-          if (date.isBefore(blockStartDate) || date.isAfter(blockEndDate)) {
-            return _buildOutsideDayRow(date);
-          }
-
-          // 2) check if **any** row has a real exercise name
-          final hasNamedExercise =
-              rows.any((r) => (r.exercise ?? '').trim().isNotEmpty);
-          if (hasNamedExercise) {
-            // this covers your moved workout, plus any “real” saved days
-            return _buildDayView(weekIndex, dow, repTargets);
-          }
-
-          // 3) it’s inside the block but not one of your selected weekdays
-          if (!_selectedDays.contains(dowAbbrev)) {
-            return _buildRestDayRow(dowAbbrev, date);
-          }
-
-          // 4) it’s a training-day with no data yet → show the blank workout UI
-          return _buildDayView(weekIndex, dow, repTargets);
-        }),
-      ),
-    );
-  }
-
   Future<void> loadAllData() async {
     print("🧪 [BB2] Starting loadAllData()…");
     final total = Stopwatch()..start();
@@ -683,6 +470,202 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     print('⏱️ BB2 loadAllData(+visibleWeeks) took ${total.elapsedMilliseconds}ms');
   }
 
+  Future<void> _loadAllBlocks() async {
+    final total = Stopwatch()..start();
+    if (kDebugMode) debugPrint('⏱️ [_loadAllBlocks] start');
+
+    final userId = UserContext.of(context, listen: false).currentUid;
+
+    // Fetch
+    final tFetch = Stopwatch()..start();
+    final snap = await FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(userId)
+        .collection('blocks')
+        .get(const GetOptions(source: Source.server));
+    tFetch.stop();
+    if (kDebugMode) {
+      debugPrint('   ↳ fetch blocks took ${tFetch.elapsedMilliseconds}ms (count=${snap.docs.length})');
+    }
+
+    // Parse/map
+    final tParse = Stopwatch()..start();
+    final blocks = snap.docs
+        .where((d) {
+      final data = d.data();
+      final hasAllFields = data.containsKey('name') &&
+          data.containsKey('startDate') &&
+          data.containsKey('endDate');
+      if (kDebugMode && !hasAllFields) {
+        debugPrint('   ⚠️ skipping ${d.id} (missing fields)');
+      }
+      return hasAllFields;
+    })
+        .map((d) {
+      final data = d.data();
+      return BlockMeta(
+        id: d.id,
+        name: data['name'],
+        startDate: (data['startDate'] as Timestamp).toDate(),
+        endDate: (data['endDate'] as Timestamp).toDate(),
+        selectedDays: List<String>.from(data['selectedDays'] ?? []),
+      );
+    })
+        .toList();
+    tParse.stop();
+    if (kDebugMode) {
+      debugPrint('   ↳ parse/map took ${tParse.elapsedMilliseconds}ms');
+    }
+
+    // setState
+    final tSet = Stopwatch()..start();
+    if (mounted) {
+      setState(() {
+        _allBlocks = blocks;
+        _selectedBlockId = blocks
+            .firstWhere((b) => b.id == _activeBlockId, orElse: () => blocks.first)
+            .id;
+      });
+    }
+    tSet.stop();
+
+    total.stop();
+    if (kDebugMode) {
+      debugPrint('✅ [_loadAllBlocks] ${total.elapsedMilliseconds}ms '
+          '(fetch ${tFetch.elapsedMilliseconds} | parse ${tParse.elapsedMilliseconds} | setState ${tSet.elapsedMilliseconds})');
+    }
+  }
+
+  Future<void> _saveActiveBlockIdCache(String uid, String blockId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('activeBlockId:$uid', blockId);
+  }
+
+  Future<String?> _loadActiveBlockIdCache(String uid) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('activeBlockId:$uid');
+  }
+
+  Future<void> _saveBlockMetaCache(String uid, String blockId, Map<String, dynamic> meta) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('blockMeta:$uid:$blockId', meta.toString()); // quick-n-dirty; use jsonEncode in your codebase
+  }
+
+  Map<String, dynamic>? _parseBlockMetaCache(String s) {
+    // replace with jsonDecode if you switch to JSON
+    // expected keys: startDateMillis, endDateMillis, selectedDaysCsv
+    try {
+      // minimal parser for meta.toString(); prefer JSON in real code
+      return null; // keep simple if you prefer: skip parsing fallback
+    } catch (_) { return null; }
+  }
+
+
+
+// Cache loading technique...
+  String? _lastCtxKey;
+  void _maybeResetCaches(String uid, String blockId) {
+    final key = '$uid::$blockId';
+    if (key == _lastCtxKey) return; // same athlete+block → keep caches
+    _lastCtxKey = key;
+
+    // Reset per-athlete/block caches ONLY when context changes
+    _exerciseSettings.clear();
+    _savedFields.clear();
+    // If you have other per-athlete caches, clear them here too:
+    // _hintCache?.clear();
+    // _repTargetsCache?.clear();
+  }
+
+  Future<void> _loadWeekIfNeeded(int week) async {
+    if (week < 0 || week >= totalWeeks) return;
+    if (loadedWeekIndices.contains(week)) return;
+    if (_loadingWeeks.contains(week)) return;
+
+    _loadingWeeks.add(week);
+    try {
+      await loadBlockDataForWeek(week);
+      loadedWeekIndices.add(week);
+      if (mounted) setState(() {}); // optional if your loader already setState's
+    } finally {
+      _loadingWeeks.remove(week);
+    }
+  }
+
+  Future<void> _prefetchNeighborWeeks(int center) async {
+    final futures = <Future<void>>[];
+    // previous
+    futures.add(_loadWeekIfNeeded(center - 1));
+    // next
+    futures.add(_loadWeekIfNeeded(center + 1));
+    await Future.wait(futures);
+  }
+
+  Future<void> loadVisibleWeeksOnly() async {
+    final stopwatch = Stopwatch()..start();
+    final today = DateTime.now();
+    final currentWeekIndex = today.difference(blockStartDate).inDays ~/ 7;
+
+
+    // CHANGE here to load more weeks on open
+    final weeksToLoad = {
+      currentWeekIndex,
+    };
+    print('⏳ [BB2] Loading visible weeks: $weeksToLoad');
+
+    for (final weekIndex in weeksToLoad) {
+      if (!loadedWeekIndices.contains(weekIndex)) {
+        print('📦 [BB2] Requesting load for week_$weekIndex...');
+        await loadBlockDataForWeek(weekIndex);
+        loadedWeekIndices.add(weekIndex);
+      }
+    }
+    stopwatch.stop();
+    print('✅ [BB2] loadVisibleWeeksOnly completed in ${stopwatch.elapsedMilliseconds}ms');
+  }
+
+  // ...Cache loading technique
+
+  void _computeWeekBounds() {
+    // 1) get Monday on-or-before blockStart
+    final startOffset = (blockStartDate.weekday - DateTime.monday + 7) % 7;
+    _displayStart = blockStartDate.subtract(Duration(days: startOffset));
+
+    // 2) get Sunday on-or-after blockEnd
+    final endOffset = (DateTime.sunday - blockEndDate.weekday + 7) % 7;
+    _displayEnd = blockEndDate.add(Duration(days: endOffset));
+
+    // 3) how many days total (inclusive)
+    final totalDays = _displayEnd.difference(_displayStart).inDays + 1;
+
+    // ← MISSING ←
+    // 4) how many full weeks?
+    totalWeeks = totalDays ~/ 7;
+    // 5) build your index list
+    weekIndices = List.generate(totalWeeks, (i) => i);
+  }
+
+// 1) New helper for days outside the block:
+  Widget _buildOutsideDayRow(DateTime date) {
+    final label = DateFormat('E • d MMM').format(date);
+    return Container(
+      height: exerciseRowHeight,
+      margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade900, // dark grey fill
+        border: Border.all(color: Colors.grey), // pale grey outline
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          label,
+          style: const TextStyle(color: Colors.white70, fontSize: 12),
+        ),
+      ),
+    );
+  }
 
 
   Future<void> _fetchTemplates() async {
@@ -750,6 +733,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     });
 
   }
+
+  // Periodization logic...
 
   Map<String, dynamic>? getPlannedRirSetValues({
     required String exerciseName,
@@ -967,34 +952,62 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         case PeriodizationModelType.dailyUndulatingExposure: {
           print('🔍 Entering getRepTargetForExercise → model = $model for $exerciseId');
 
-          // 1) How many times has the user actually DONE this exercise in the block?
+          // 1) Completed exposures from start of block up to (and including) this day,
+          //    using BB2's WES cache so it's in sync with the UI.
           int completedCount = 0;
-          if (blockStartDate != null && blockEndDate != null) {
-            completedCount = PeriodizationModelUtils.getInstanceCountForExerciseInBlock(
-              exerciseName: exerciseName,
-              savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
-              blockStartDate: blockStartDate!,
-              blockEndDate: blockEndDate!,
-            );
-          } else {
-            print('⚠️ [BB2] blockStartDate or blockEndDate is null — treating completedCount=0');
+          try {
+            if (blockStartDate != null) {
+              final target = exerciseName.trim();
+              final daysIntoBlock = week * 7 + day; // inclusive
+
+              for (int off = 0; off <= daysIntoBlock; off++) {
+                final date = blockStartDate!.add(Duration(days: off));
+                final dateKey = DateFormat('yyyy-MM-dd').format(date);
+                final raw = List<Map<String, dynamic>>.from(completedWesRows[dateKey] ?? const []);
+
+                // Count ONCE per day if there is at least one set for this exercise.
+                final hasCompleted = raw.any((ex) {
+                  final name = (ex['name'] ?? '').toString().trim();
+                  if (name != target) return false;
+                  final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? const []);
+                  return sets.isNotEmpty;
+                });
+
+                if (hasCompleted) completedCount += 1;
+
+                // 👉 If you want to count multiple circuits as multiple exposures
+                // on the same day, replace the block above with:
+                //
+                // final matches = raw.where((ex) {
+                //   final name = (ex['name'] ?? '').toString().trim();
+                //   if (name != target) return false;
+                //   final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? const []);
+                //   return sets.isNotEmpty;
+                // }).length;
+                // completedCount += matches;
+              }
+            } else {
+              print('⚠️ [BB2] blockStartDate is null — treating completedCount=0');
+            }
+          } catch (e) {
+            print('⚠️ [BB2] completedCount calc failed: $e');
           }
 
-          // 2) How many times is it PLANNED before this position (week/day/row)?
+          // 2) Planned occurrences before this position (week/day/row) — keep your existing helper
           final int plannedCountBefore = getExercisePlannedCountBefore(exerciseName, week, day, row);
 
-          // 3) Combined global index → this is the exposure number we want to map to instance
+          // 3) Combined global index → exposure number = completed so far + planned before
           final int plannedIndex = completedCount + plannedCountBefore;
 
-          // (Optional) debug: how many instances are defined?
+          // (Optional) debug
           final repTargetsRaw = _exerciseSettings[exerciseId]?['repTargets'];
           final week1 = repTargetsRaw?['week1'] as Map<String, dynamic>?;
           final numInstances = week1 == null
               ? 0
               : week1.keys.where((k) => k.startsWith('instance')).length;
 
-          print('📊 [BB2] exposuresSoFarInBlock=$completedCount plannedBefore=$plannedCountBefore '
-              '→ plannedIndex=$plannedIndex of ~${numInstances} instances (pre-modulo)');
+          print('📊 [BB2] DUP by Exposure: completedSoFar=$completedCount plannedBefore=$plannedCountBefore '
+              '→ plannedIndex=$plannedIndex of ~${numInstances} instances');
 
           // 4) Ask the existing model helper to pick the rep using our combined plannedIndex
           final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
@@ -1012,6 +1025,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         }
 
 
+
         default:
           return null;
       }
@@ -1022,25 +1036,55 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
   int getExerciseCountInWeek(String exerciseName, int week, int day, int row) {
     int count = 0;
+    final target = exerciseName.trim();
+    if (target.isEmpty) return 0;
 
     for (int d = 0; d <= day; d++) {
+      // 1) Check completed (WES) for this day first
+      final date = blockStartDate.add(Duration(days: week * 7 + d));
+      final dateKey = DateFormat('yyyy-MM-dd').format(date);
+      final rawSaved = List<Map<String, dynamic>>.from(completedWesRows[dateKey] ?? const []);
+
+      bool countedCompletedForDay = false;
+      for (final ex in rawSaved) {
+        final name = (ex['name'] ?? '').toString().trim();
+        if (name != target) continue;
+
+        // only count as completed if at least one set exists
+        final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? const []);
+        if (sets.isEmpty) continue;
+
+        // Count each completed occurrence of this exercise on this day
+        count += 1;
+        countedCompletedForDay = true;
+        // If you want to count multiple circuits of the same exercise on the same day,
+        // remove the 'break'. Keeping one per day? keep the 'break'.
+        break;
+      }
+
+      if (countedCompletedForDay) {
+        // Completed exists → do not also count planned for this day
+        continue;
+      }
+
+      // 2) No completed entry → fall back to planned rows (your existing logic)
       final rows = exerciseRows[week][d];
-      final lastRow = (d == day) ? row + 1 : rows.length; // ✅ include current row
+      final lastRow = (d == day) ? row + 1 : rows.length; // include current row on current day
 
       for (int r = 0; r < lastRow; r++) {
-        final thisName = (rows[r].exercise ?? '').trim();
-        if (thisName == exerciseName.trim()) {
+        final thisName = (rows[r].exercise ?? '').toString().trim();
+        if (thisName == target) {
           count++;
         }
       }
     }
 
-    final result = count - 1; // ✅ zero-based index
-
+    final result = count - 1; // zero-based index (unchanged)
     print('🧠 getExerciseCountInWeek("$exerciseName", week: $week, day: $day, row: $row) = $result');
-
     return result;
   }
+
+
 
 
   int getPlannedIndexForWeek(String exerciseId, int week, int day, int row) {
@@ -1221,6 +1265,198 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     return progressed;
   }
 
+  // ...Periodization logic
+
+
+
+
+
+  List<int> _recomputeCircuitStartsFromPlanned(List<Map<String, dynamic>> planned) {
+    final starts = <int>[];
+    int? last;
+    for (int i = 0; i < planned.length; i++) {
+      final c = (planned[i]['circuitIndex'] ?? 0) as int;
+      if (i == 0 || c != last) {
+        starts.add(i);
+        last = c;
+      }
+    }
+    if (starts.isEmpty || starts.first != 0) starts.insert(0, 0);
+    return starts;
+  }
+
+  Set<String> _completedKeysFromSaved(List<Map<String, dynamic>> savedExercises) {
+    final keys = <String>{};
+    for (final ex in savedExercises) {
+      final name = (ex['name'] ?? '').toString().trim();
+      if (name.isEmpty) continue;
+      final circuit = ex['circuitIndex'] ?? 0;
+      final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? const []);
+      if (sets.isEmpty) continue; // only treat as "completed" if at least 1 set
+      keys.add(_exKey(name, circuit));
+    }
+    return keys;
+  }
+
+  /// Move conflicting planned rows into `suppressedPlanned` so they don’t count,
+  /// but can be restored later if completion disappears.
+  Future<bool> _suppressPlannedForCompletedKeys({
+    required String uid,
+    required String blockId,
+    required int weekIndex,
+    required int dayIndex,
+    required Set<String> completedKeys,
+  }) async {
+    if (completedKeys.isEmpty) return false;
+
+    final dayDoc = FirebaseFirestore.instance
+        .collection('planned_blocks').doc(uid)
+        .collection('blocks').doc(blockId)
+        .collection('weeks').doc('week_$weekIndex')
+        .collection('days').doc('day_$dayIndex');
+
+    final snap = await dayDoc.get(const GetOptions(source: Source.server));
+    if (!snap.exists) return false;
+
+    final data = snap.data() ?? {};
+    final planned = List<Map<String, dynamic>>.from(data['exercises'] ?? const []);
+    final suppressedRaw = (data['suppressedPlanned'] ?? {}) as Map<String, dynamic>;
+    final suppressed = Map<String, dynamic>.from(suppressedRaw);
+
+    // Collect removals with original indices
+    final removals = <int, Map<String, dynamic>>{};
+    for (int i = 0; i < planned.length; i++) {
+      final ex = planned[i];
+      final name = (ex['name'] ?? '').toString().trim();
+      if (name.isEmpty) continue;
+      final circuit = ex['circuitIndex'] ?? 0;
+      final key = _exKey(name, circuit);
+      if (completedKeys.contains(key)) {
+        removals[i] = ex;
+      }
+    }
+
+    if (removals.isEmpty) return false;
+
+    // Remove from planned (highest index first), and store into suppressed with original insertIndex
+    final indices = removals.keys.toList()..sort((a,b) => b.compareTo(a));
+    for (final i in indices) {
+      final ex = planned.removeAt(i);
+      final name = (ex['name'] ?? '').toString().trim();
+      final circuit = ex['circuitIndex'] ?? 0;
+      final key = _exKey(name, circuit);
+      suppressed[key] = {
+        'row': ex,
+        'insertIndex': i,
+      };
+    }
+
+    final newStarts = _recomputeCircuitStartsFromPlanned(planned);
+
+    await dayDoc.set({
+      'exercises': planned,
+      'circuitStartIndices': newStarts,
+      'suppressedPlanned': suppressed,
+    }, SetOptions(merge: true));
+
+    return true;
+  }
+
+  /// Restore any suppressed planned rows whose completion disappeared (no sets).
+  /// Restore any suppressed planned rows whose completion disappeared (no sets),
+  /// and return the restored records so the UI can mirror immediately.
+  Future<List<Map<String, dynamic>>> _restoreSuppressedWhereNotCompleted({
+    required String uid,
+    required String blockId,
+    required int weekIndex,
+    required int dayIndex,
+    required Set<String> completedKeys,
+  }) async {
+    final dayDoc = FirebaseFirestore.instance
+        .collection('planned_blocks').doc(uid)
+        .collection('blocks').doc(blockId)
+        .collection('weeks').doc('week_$weekIndex')
+        .collection('days').doc('day_$dayIndex');
+
+    final snap = await dayDoc.get(const GetOptions(source: Source.server));
+    if (!snap.exists) return const [];
+
+    final data = snap.data() ?? {};
+    final planned = List<Map<String, dynamic>>.from(data['exercises'] ?? const []);
+    final suppressedRaw = (data['suppressedPlanned'] ?? {}) as Map<String, dynamic>;
+    if (suppressedRaw.isEmpty) return const [];
+
+    // Keys to restore (suppressed but not completed anymore)
+    final suppressedKeys = suppressedRaw.keys.toSet();
+    final toRestoreKeys = suppressedKeys.difference(completedKeys);
+    if (toRestoreKeys.isEmpty) return const [];
+
+    // Pull records, sort by original insertIndex
+    final records = <Map<String, dynamic>>[];
+    for (final key in toRestoreKeys) {
+      final rec = suppressedRaw[key] as Map<String, dynamic>;
+      final row = Map<String, dynamic>.from(rec['row'] as Map);
+      final idx = (rec['insertIndex'] ?? planned.length) as int;
+      records.add({'key': key, 'row': row, 'insertIndex': idx});
+    }
+    records.sort((a, b) => (a['insertIndex'] as int).compareTo(b['insertIndex'] as int));
+
+    // Reinsert into planned
+    for (final r in records) {
+      final idx = (r['insertIndex'] as int).clamp(0, planned.length);
+      planned.insert(idx, Map<String, dynamic>.from(r['row'] as Map));
+    }
+
+    // Remove restored from suppressed
+    for (final r in records) {
+      suppressedRaw.remove(r['key'] as String);
+    }
+
+    final newStarts = _recomputeCircuitStartsFromPlanned(planned);
+
+    await dayDoc.set({
+      'exercises': planned,
+      'circuitStartIndices': newStarts,
+      'suppressedPlanned': suppressedRaw,
+    }, SetOptions(merge: true));
+
+    // ⬅️ Return the restored records so caller can mirror in-memory
+    return records;
+  }
+
+  /// In-memory prune (unchanged): hide any planned rows that conflict with current completed set.
+  bool _prunePlannedRowsInMemory({
+    required Map<int, List<ExerciseRow>> parsedByDayIndex,
+    required Map<int, List<int>> circuitStartsByDay,
+    required int dayIndex,
+    required Set<String> completedKeys,
+  }) {
+    if (!parsedByDayIndex.containsKey(dayIndex)) return false;
+    final rows = parsedByDayIndex[dayIndex]!;
+    final before = rows.length;
+
+    rows.removeWhere((r) {
+      final key = _exKey((r.exercise ?? '').toString(), r.circuitIndex);
+      return completedKeys.contains(key);
+    });
+
+    if (rows.length != before) {
+      final starts = <int>[];
+      int? lastCircuit;
+      for (int i = 0; i < rows.length; i++) {
+        final c = rows[i].circuitIndex;
+        if (i == 0 || c != lastCircuit) {
+          starts.add(i);
+          lastCircuit = c;
+        }
+      }
+      circuitStartsByDay[dayIndex] = starts;
+      return true;
+    }
+    return false;
+  }
+
+
   Future<void> loadPlannedExercisesFromFirestore() async {
     final userId = UserContext.of(context, listen: false).currentUid;
     if (userId.isEmpty) return; // Fallback in case something goes wrong
@@ -1238,6 +1474,54 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     final data = docSnap.data()!;
     final raw = data['plannedExercises'] as List<dynamic>? ?? [];
     plannedExercises = raw.whereType<String>().toList();
+    setState(() {});
+  }
+
+  void _populateExercisesFromTemplate(
+      int weekIndex, int dayIndex, String templateId) {
+    final template = templates.firstWhere(
+          (t) => t.id == templateId,
+      orElse: () => Template(id: '', name: '', day: '', exercises: []),
+    );
+
+    // 🔄 Detect if the template used the new circuit-based format
+    final List<Map<String, dynamic>> parsedRows = template.exercises is List<Map<String, dynamic>>
+        ? List<Map<String, dynamic>>.from(template.exercises)
+        : (template.exercises as List)
+        .map((e) => {'name': e.toString(), 'circuitIndex': 0})
+        .toList();
+
+    final requiredCount = parsedRows.length;
+    final rows = exerciseRows[weekIndex][dayIndex];
+
+    // 🧹 Clear existing rows
+    rows.clear();
+
+    for (int i = 0; i < requiredCount; i++) {
+      final entry = parsedRows[i];
+      final row = ExerciseRow(
+        exercise: entry['name'],
+        circuitIndex: entry['circuitIndex'] ?? 0,
+      );
+
+      row.exerciseController.text = entry['name'];
+      rows.add(row);
+    }
+
+    // 🔄 Update circuitStartIndices
+    final List<int> newStarts = [];
+    int? lastCircuit;
+    for (int i = 0; i < rows.length; i++) {
+      final current = rows[i].circuitIndex;
+      if (i == 0 || current != lastCircuit) {
+        newStarts.add(i);
+        lastCircuit = current;
+      }
+    }
+
+    _ensureCircuitStartIndicesInitialized(weekIndex, dayIndex);
+    circuitStartIndices[weekIndex][dayIndex] = newStarts;
+
     setState(() {});
   }
 
@@ -1307,53 +1591,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     super.dispose();
   }
 
-  void _populateExercisesFromTemplate(
-      int weekIndex, int dayIndex, String templateId) {
-    final template = templates.firstWhere(
-      (t) => t.id == templateId,
-      orElse: () => Template(id: '', name: '', day: '', exercises: []),
-    );
 
-    // 🔄 Detect if the template used the new circuit-based format
-    final List<Map<String, dynamic>> parsedRows = template.exercises is List<Map<String, dynamic>>
-        ? List<Map<String, dynamic>>.from(template.exercises)
-        : (template.exercises as List)
-        .map((e) => {'name': e.toString(), 'circuitIndex': 0})
-        .toList();
-
-    final requiredCount = parsedRows.length;
-    final rows = exerciseRows[weekIndex][dayIndex];
-
-    // 🧹 Clear existing rows
-    rows.clear();
-
-    for (int i = 0; i < requiredCount; i++) {
-      final entry = parsedRows[i];
-      final row = ExerciseRow(
-        exercise: entry['name'],
-        circuitIndex: entry['circuitIndex'] ?? 0,
-      );
-
-      row.exerciseController.text = entry['name'];
-      rows.add(row);
-    }
-
-    // 🔄 Update circuitStartIndices
-    final List<int> newStarts = [];
-    int? lastCircuit;
-    for (int i = 0; i < rows.length; i++) {
-      final current = rows[i].circuitIndex;
-      if (i == 0 || current != lastCircuit) {
-        newStarts.add(i);
-        lastCircuit = current;
-      }
-    }
-
-    _ensureCircuitStartIndicesInitialized(weekIndex, dayIndex);
-    circuitStartIndices[weekIndex][dayIndex] = newStarts;
-
-    setState(() {});
-  }
 
   DateTime _getMostRecentMonday([DateTime? reference]) {
     DateTime now = reference ?? DateTime.now();
@@ -1814,98 +2052,213 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     final wesServerFetches = <Future<DocumentSnapshot<Map<String, dynamic>>>>[];
     final wesDayOrder = <int>[];
 
-    parsedByDayIndex.forEach((dayIndex, rows) {
-      if (rows.isEmpty) return;
+// Always fetch WES for all 7 days so completed entries are available for indexing
+    for (int dayIndex = 0; dayIndex < 7; dayIndex++) {
       final date = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
       final docRef = FirebaseFirestore.instance
           .collection('users')
-          .doc(_cachedUid) // lock to selected athlete
+          .doc(_cachedUid) // selected athlete
           .collection('workouts')
           .doc(_ymd(date));
       wesDayOrder.add(dayIndex);
       wesCacheFetches.add(docRef.get(const GetOptions(source: Source.cache)));
       wesServerFetches.add(docRef.get(const GetOptions(source: Source.server)));
-    });
+    }
+
 
 // 6a) Apply cache (fast paint)
     final wesCacheDocs = await Future.wait(wesCacheFetches);
     for (int i = 0; i < wesCacheDocs.length; i++) {
       final dayIndex = wesDayOrder[i];
       final doc = wesCacheDocs[i];
-      if (!doc.exists) continue;
-      final savedExercises = List<Map<String, dynamic>>.from(doc.data()?['exercises'] ?? []);
-      final rows = parsedByDayIndex[dayIndex]!;
-      for (final ex in savedExercises) {
-        final name = ex['name'] ?? '';
-        final circuit = ex['circuitIndex'] ?? 0;
-        final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? []);
-        if (name == '' || sets.isEmpty) continue;
-        final idx = rows.indexWhere((r) => r.exercise == name && r.circuitIndex == circuit);
-        if (idx < 0) continue;
-        final r = rows[idx];
-        r.weightController.text   = sets[0]['weight']?.toString()   ?? '';
-        r.repsController.text     = sets[0]['reps']?.toString()     ?? '';
-        r.rirController.text      = sets[0]['rir']?.toString()      ?? '';
-        r.velocityController.text = sets[0]['velocity']?.toString() ?? '';
-        r.notesController.text    = sets[0]['notes']?.toString()    ?? '';
-        final baseKey = 'w${weekIndex}_d${dayIndex}_r$idx';
-        _savedFields['${baseKey}_weight']   = r.weightController.text.trim().isNotEmpty;
-        _savedFields['${baseKey}_reps']     = r.repsController.text.trim().isNotEmpty;
-        _savedFields['${baseKey}_rir']      = r.rirController.text.trim().isNotEmpty;
-        _savedFields['${baseKey}_velocity'] = r.velocityController.text.trim().isNotEmpty;
-        _savedFields['${baseKey}_notes']    = r.notesController.text.trim().isNotEmpty;
-      }
-    }
-    print('   ↳ WES cache fetch (${wesCacheDocs.length} docs) took ${wesStep.elapsedMilliseconds}ms');
 
-// 6b) Server reconcile in background
-    unawaited(Future.wait(wesServerFetches).then((wesServerDocs) {
-      bool changed = false;
-      for (int i = 0; i < wesServerDocs.length; i++) {
-        final dayIndex = wesDayOrder[i];
-        final doc = wesServerDocs[i];
-        if (!doc.exists) continue;
-        final savedExercises = List<Map<String, dynamic>>.from(doc.data()?['exercises'] ?? []);
-        final rows = parsedByDayIndex[dayIndex]!;
-        for (final ex in savedExercises) {
-          final name = ex['name'] ?? '';
-          final circuit = ex['circuitIndex'] ?? 0;
-          final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? []);
-          if (name == '' || sets.isEmpty) continue;
+      // Build dateKey for the indexer
+      final date = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
+      final dateKey = _ymd(date); // same yyyy-MM-dd you use elsewhere
+
+      if (!doc.exists) {
+        // ✅ ensure key exists so counting logic sees "no completed" explicitly
+        completedWesRows[dateKey] = const [];
+        continue;
+      }
+
+      final savedExercises = List<Map<String, dynamic>>.from(
+        doc.data()?['exercises'] ?? const [],
+      );
+
+      // ✅ make completed data available to getExerciseCountInWeek right away
+      completedWesRows[dateKey] = savedExercises;
+
+      // Planned rows may be null/empty; only apply top-set values if present
+      final rows = parsedByDayIndex[dayIndex]; // may be null or empty
+
+      for (final ex in savedExercises) {
+        final name = (ex['name'] ?? '').toString();
+        final circuit = ex['circuitIndex'] ?? 0;
+        final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? const []);
+        if (name.trim().isEmpty || sets.isEmpty) continue;
+
+        if (rows != null && rows.isNotEmpty) {
           final idx = rows.indexWhere((r) => r.exercise == name && r.circuitIndex == circuit);
           if (idx < 0) continue;
           final r = rows[idx];
 
-          // Apply only if value differs
-          String v(String? s) => s?.toString() ?? '';
-          final w = v(sets[0]['weight']);
-          final rp= v(sets[0]['reps']);
-          final rr= v(sets[0]['rir']);
-          final ve= v(sets[0]['velocity']);
-          final no= v(sets[0]['notes']);
+          r.weightController.text   = sets[0]['weight']?.toString()   ?? '';
+          r.repsController.text     = sets[0]['reps']?.toString()     ?? '';
+          r.rirController.text      = sets[0]['rir']?.toString()      ?? '';
+          r.velocityController.text = sets[0]['velocity']?.toString() ?? '';
+          r.notesController.text    = sets[0]['notes']?.toString()    ?? '';
 
-          if (r.weightController.text != w ||
-              r.repsController.text   != rp ||
-              r.rirController.text    != rr ||
-              r.velocityController.text != ve ||
-              r.notesController.text  != no) {
-            r.weightController.text = w;
-            r.repsController.text   = rp;
-            r.rirController.text    = rr;
-            r.velocityController.text = ve;
-            r.notesController.text  = no;
-            final baseKey = 'w${weekIndex}_d${dayIndex}_r$idx';
-            _savedFields['${baseKey}_weight']   = w.isNotEmpty;
-            _savedFields['${baseKey}_reps']     = rp.isNotEmpty;
-            _savedFields['${baseKey}_rir']      = rr.isNotEmpty;
-            _savedFields['${baseKey}_velocity'] = ve.isNotEmpty;
-            _savedFields['${baseKey}_notes']    = no.isNotEmpty;
+          final baseKey = 'w${weekIndex}_d${dayIndex}_r$idx';
+          _savedFields['${baseKey}_weight']   = r.weightController.text.trim().isNotEmpty;
+          _savedFields['${baseKey}_reps']     = r.repsController.text.trim().isNotEmpty;
+          _savedFields['${baseKey}_rir']      = r.rirController.text.trim().isNotEmpty;
+          _savedFields['${baseKey}_velocity'] = r.velocityController.text.trim().isNotEmpty;
+          _savedFields['${baseKey}_notes']    = r.notesController.text.trim().isNotEmpty;
+        }
+      }
+
+      // ✅ Prune planned dupes in-memory so UI shows only one per exercise that day
+      final completedKeys = _completedKeysFromSaved(savedExercises);
+      _prunePlannedRowsInMemory(
+        parsedByDayIndex: parsedByDayIndex,
+        circuitStartsByDay: circuitStartsByDay,
+        dayIndex: dayIndex,
+        completedKeys: completedKeys,
+      );
+    }
+    print('   ↳ WES cache fetch (${wesCacheDocs.length} docs) took ${wesStep.elapsedMilliseconds}ms');
+
+
+// 6b) Server reconcile in background
+    unawaited(Future.wait(wesServerFetches).then((wesServerDocs) async {
+      bool changed = false;
+
+      for (int i = 0; i < wesServerDocs.length; i++) {
+        final dayIndex = wesDayOrder[i];
+        final doc = wesServerDocs[i];
+        if (!doc.exists) continue;
+
+        final savedExercises = List<Map<String, dynamic>>.from(doc.data()?['exercises'] ?? []);
+        // ⬇️ Ensure we always have a mutable list for this day
+        final rows = parsedByDayIndex[dayIndex] ?? <ExerciseRow>[];
+        if (!parsedByDayIndex.containsKey(dayIndex)) {
+          parsedByDayIndex[dayIndex] = rows;
+        }
+
+        // Apply WES values into matching planned rows (unchanged)
+        for (final ex in savedExercises) {
+          final name = (ex['name'] ?? '').toString();
+          final circuit = ex['circuitIndex'] ?? 0;
+          final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? []);
+          if (name.trim().isEmpty || sets.isEmpty) continue;
+
+          if (rows.isNotEmpty) {
+            final idx = rows.indexWhere((r) => r.exercise == name && r.circuitIndex == circuit);
+            if (idx >= 0) {
+              final r = rows[idx];
+              String v(dynamic s) => s?.toString() ?? '';
+              final w  = v(sets[0]['weight']);
+              final rp = v(sets[0]['reps']);
+              final rr = v(sets[0]['rir']);
+              final ve = v(sets[0]['velocity']);
+              final no = v(sets[0]['notes']);
+
+              if (r.weightController.text != w ||
+                  r.repsController.text   != rp ||
+                  r.rirController.text    != rr ||
+                  r.velocityController.text != ve ||
+                  r.notesController.text  != no) {
+                r.weightController.text   = w;
+                r.repsController.text     = rp;
+                r.rirController.text      = rr;
+                r.velocityController.text = ve;
+                r.notesController.text    = no;
+
+                final baseKey = 'w${weekIndex}_d${dayIndex}_r$idx';
+                _savedFields['${baseKey}_weight']   = w.isNotEmpty;
+                _savedFields['${baseKey}_reps']     = rp.isNotEmpty;
+                _savedFields['${baseKey}_rir']      = rr.isNotEmpty;
+                _savedFields['${baseKey}_velocity'] = ve.isNotEmpty;
+                _savedFields['${baseKey}_notes']    = no.isNotEmpty;
+                changed = true;
+              }
+            }
+          }
+        }
+
+        // Compute keys that are currently "completed" (must have ≥1 set)
+        final completedKeys = _completedKeysFromSaved(savedExercises);
+
+        // (A) SUPPRESS planned duplicates (persist)
+        if (completedKeys.isNotEmpty && _cachedUid != null && _selectedBlockId != null) {
+          final didSuppress = await _suppressPlannedForCompletedKeys(
+            uid: _cachedUid!,
+            blockId: _selectedBlockId!,
+            weekIndex: weekIndex,
+            dayIndex: dayIndex,
+            completedKeys: completedKeys,
+          );
+          if (didSuppress) changed = true;
+        }
+
+        // (B) RESTORE suppressed rows where completion disappeared, and mirror them in-memory
+        if (_cachedUid != null && _selectedBlockId != null) {
+          final restored = await _restoreSuppressedWhereNotCompleted(
+            uid: _cachedUid!,
+            blockId: _selectedBlockId!,
+            weekIndex: weekIndex,
+            dayIndex: dayIndex,
+            completedKeys: completedKeys,
+          );
+
+          if (restored.isNotEmpty) {
+            for (final r in restored) {
+              final rowMap  = Map<String, dynamic>.from(r['row'] as Map);
+              final insertAt = (r['insertIndex'] as int).clamp(0, rows.length);
+
+              final name = (rowMap['name'] ?? '').toString().trim();
+              if (name.isEmpty) continue;
+              final circuit = (rowMap['circuitIndex'] ?? 0) as int;
+
+              final er = ExerciseRow(
+                id: const Uuid().v4(),
+                exercise: name,
+                circuitIndex: circuit,
+              );
+              er.exerciseController.text = name;
+
+              rows.insert(insertAt, er);
+            }
+
+            // Recompute circuit headers for the day
+            final starts = <int>{};
+            for (int j = 0; j < rows.length; j++) {
+              if (j == 0 || rows[j].circuitIndex != rows[j - 1].circuitIndex) {
+                starts.add(j);
+              }
+            }
+            circuitStartsByDay[dayIndex] = starts.toList()..sort();
             changed = true;
           }
         }
+
+        // (C) Prune in-memory planned rows that are still completed (so we never show both)
+        final didPrune = _prunePlannedRowsInMemory(
+          parsedByDayIndex: parsedByDayIndex,
+          circuitStartsByDay: circuitStartsByDay,
+          dayIndex: dayIndex,
+          completedKeys: completedKeys,
+        );
+        if (didPrune) changed = true;
       }
+
       if (changed && mounted) setState(() {});
     }));
+
+
+
+
 
 
     // 8) Commit to state once
@@ -1923,28 +2276,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   }
 
 
-  Future<void> loadVisibleWeeksOnly() async {
-    final stopwatch = Stopwatch()..start();
-    final today = DateTime.now();
-    final currentWeekIndex = today.difference(blockStartDate).inDays ~/ 7;
 
-
-    // CHANGE here to load more weeks on open
-    final weeksToLoad = {
-      currentWeekIndex,
-    };
-    print('⏳ [BB2] Loading visible weeks: $weeksToLoad');
-
-    for (final weekIndex in weeksToLoad) {
-      if (!loadedWeekIndices.contains(weekIndex)) {
-        print('📦 [BB2] Requesting load for week_$weekIndex...');
-        await loadBlockDataForWeek(weekIndex);
-        loadedWeekIndices.add(weekIndex);
-      }
-    }
-    stopwatch.stop();
-    print('✅ [BB2] loadVisibleWeeksOnly completed in ${stopwatch.elapsedMilliseconds}ms');
-  }
 
   int _getCircuitIndexForRow(int rowIndex, List<int> circuitStartIndices) {
     int index = 0;
@@ -3134,6 +3466,42 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     );
   }
 
+  Widget _buildWeek(int weekIndex, Map<String, dynamic> repTargets) {
+    final weekStart = _displayStart.add(Duration(days: weekIndex * 7));
+
+    return SizedBox(
+      width: MediaQuery.of(context).size.width * .999,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: List.generate(7, (dow) {
+          final date = weekStart.add(Duration(days: dow));
+          final dowAbbrev = DateFormat('E').format(date).substring(0, 3);
+          final rows = exerciseRows[weekIndex][dow];
+
+          // 1) days completely outside the block window
+          if (date.isBefore(blockStartDate) || date.isAfter(blockEndDate)) {
+            return _buildOutsideDayRow(date);
+          }
+
+          // 2) check if **any** row has a real exercise name
+          final hasNamedExercise =
+          rows.any((r) => (r.exercise ?? '').trim().isNotEmpty);
+          if (hasNamedExercise) {
+            // this covers your moved workout, plus any “real” saved days
+            return _buildDayView(weekIndex, dow, repTargets);
+          }
+
+          // 3) it’s inside the block but not one of your selected weekdays
+          if (!_selectedDays.contains(dowAbbrev)) {
+            return _buildRestDayRow(dowAbbrev, date);
+          }
+
+          // 4) it’s a training-day with no data yet → show the blank workout UI
+          return _buildDayView(weekIndex, dow, repTargets);
+        }),
+      ),
+    );
+  }
 
   Widget _buildDayView(int weekIndex, int dayIndex, Map<String, dynamic> repTargetsByExercise) {
 
@@ -4052,41 +4420,33 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           Expanded(
           child: ReorderableListView.builder(
           itemCount: exerciseRows[weekIndex][dayIndex].length,
-          onReorder: (oldIndex, newIndex) {
-          // Prevent reordering of read-only rows
-          if (oldIndex < savedWesExercises.length || newIndex < savedWesExercises.length) return;
+            onReorder: (oldIndex, newIndex) {
+              setState(() {
+                if (newIndex > oldIndex) newIndex -= 1;
 
-          setState(() {
-          final adjustedOld = oldIndex - savedWesExercises.length;
-          var adjustedNew = newIndex - savedWesExercises.length;
-          if (adjustedNew > adjustedOld) adjustedNew -= 1;
+                final movedRow = exerciseRows[weekIndex][dayIndex].removeAt(oldIndex);
+                exerciseRows[weekIndex][dayIndex].insert(newIndex, movedRow);
 
-          final movedRow = exerciseRows[weekIndex][dayIndex].removeAt(adjustedOld);
-          exerciseRows[weekIndex][dayIndex].insert(adjustedNew, movedRow);
+                // rebuild circuit structure
+                final starts = <int>{};
+                final rows = exerciseRows[weekIndex][dayIndex];
+                for (int i = 0; i < rows.length; i++) {
+                  if (i == 0 || rows[i].circuitIndex != rows[i - 1].circuitIndex) {
+                    starts.add(i);
+                  }
+                }
+                circuitStartIndices[weekIndex][dayIndex] = starts.toList()..sort();
 
-          // ✅ Rebuild circuit structure and propagate
-          final starts = <int>{};
-          for (int i = 0; i < exerciseRows[weekIndex][dayIndex].length; i++) {
-          if (i == 0 || exerciseRows[weekIndex][dayIndex][i].circuitIndex != exerciseRows[weekIndex][dayIndex][i - 1].circuitIndex) {
-          starts.add(i);
-          }
-          }
-          circuitStartIndices[weekIndex][dayIndex] = starts.toList()..sort();
+                updateFutureDaysWithEditedDay(weekIndex, dayIndex);
+              });
+            },
 
-          updateFutureDaysWithEditedDay(weekIndex, dayIndex);
-          });
-          },
-          buildDefaultDragHandles: false,
+            buildDefaultDragHandles: false,
           proxyDecorator: (child, index, animation) => Material(elevation: 2, child: child),
           itemBuilder: (context, index) {
-          if (index < savedWesExercises.length) {
-          final skipped = savedWesExercises[index];
-          return SizedBox(
-          key: ValueKey('skipped_saved_row_${skipped['name']}_${skipped['circuitIndex']}'),
-          );
-          }
 
-          final rowIndex = index - savedWesExercises.length;
+
+          final rowIndex = index;
           final rows = exerciseRows[weekIndex][dayIndex];
           final row = rows[rowIndex];
           final isFirstInCircuit = rowIndex == 0 || row.circuitIndex != rows[rowIndex - 1].circuitIndex;
