@@ -645,8 +645,11 @@ class PeriodizationModelUtils {
 
 
         case PeriodizationModelType.linearClassic:
-          final repTargetsRaw = repTargetsByExercise?[exerciseName]?['repTargets']
-              ?? plannedExerciseDetails?[exerciseName]?['repTargets'];
+          final repTargetsRaw =
+          (repTargetsByExercise != null && repTargetsByExercise.containsKey(exerciseName))
+              ? repTargetsByExercise[exerciseName]                          // ✅ use inner map
+              : plannedExerciseDetails?[exerciseName]?['repTargets'];
+
 
           print('📦 repTargetsRaw for $exerciseName: ${jsonEncode(repTargetsRaw)}');
 
@@ -2303,39 +2306,66 @@ class PeriodizationModelUtils {
     required String exerciseName,
     required List<Map<String, dynamic>> savedWorkouts,
     required DateTime blockStartDate,
-    required int weekIndex,
+    int? weekIndex,                 // ← now optional
+    DateTime? selectedDate,         // ← new
   }) {
-    final weekStart = blockStartDate.add(Duration(days: weekIndex * 7));
-    final weekEnd = weekStart.add(const Duration(days: 7));
+    final base = DateTime(blockStartDate.year, blockStartDate.month, blockStartDate.day);
+    final idx = weekIndex ??
+        (selectedDate != null
+            ? (DateTime(selectedDate.year, selectedDate.month, selectedDate.day)
+            .difference(base)
+            .inDays ~/ 7)
+            : 0);
+    final int safeWeekIndex = idx < 0 ? 0 : idx;
+
+    final weekStart = base.add(Duration(days: safeWeekIndex * 7));
+    final weekEnd   = weekStart.add(const Duration(days: 7));
 
     final usedDates = <String>{};
 
-
+    // Allow matching by id OR by name (case/whitespace-insensitive)
+    final targetName = exerciseName.trim().toLowerCase();
+    final targetId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
 
     for (final workout in savedWorkouts) {
-      final dateStr = workout['date'] ?? '';
+      final dateStr = (workout['date'] ?? '').toString();
       final date = DateTime.tryParse(dateStr);
-      if (date == null || date.isBefore(weekStart) || date.isAfter(weekEnd)) continue;
+      if (date == null) continue;
+      // Keep only dates in [weekStart, weekEnd)
+      if (date.isBefore(weekStart) || !date.isBefore(weekEnd)) continue;
 
       final exercises = workout['exercises'];
       if (exercises is! List) continue;
 
-      final targetId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
-      final hasExercise = exercises.any((ex) {
+      final matched = exercises.any((ex) {
         final exId = ex['exerciseId']?.toString();
-        return exId == targetId;
+        final exName = (ex['name'] ?? '').toString().trim().toLowerCase();
+        final sets = (ex['sets'] is List) ? List<Map<String, dynamic>>.from(ex['sets']) : const <Map<String, dynamic>>[];
+
+        if (sets.isEmpty) return false; // only count if at least one set exists (i.e., actually completed)
+        final idMatch = (exId != null && exId == targetId);
+        final nameMatch = exName == targetName;
+        return idMatch || nameMatch;
       });
 
-
-      if (hasExercise) {
-        usedDates.add(dateStr); // Count once per day
+      if (matched) {
+        // Normalize to date-only so duplicates on the same day collapse
+        usedDates.add(dateStr.length >= 10 ? dateStr.substring(0, 10) : dateStr);
       }
     }
 
     final count = usedDates.length;
-    print('📊 [Week Instance Count] "$exerciseName" used on $count day(s) in week ${weekIndex + 1}');
+
+    // 🔧 Updated print
+    final label = selectedDate != null
+        ? 'week ${safeWeekIndex + 1} (from selectedDate)'
+        : 'week ${safeWeekIndex + 1} (from weekIndex param)';
+
+    print('📊 [Week Instance Count] "$exerciseName" used on $count day(s) in $label');
+
     return count;
   }
+
 
   //WES Function
   static int getWeekIndexForDate(DateTime date, DateTime blockStartDate) {

@@ -841,96 +841,47 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           return reps.toString();
 
         case PeriodizationModelType.linearClassic: {
-          // Planned occurrences BEFORE this row in the same week
-          final int plannedBeforeThisWeek = getExerciseCountInWeek(exerciseName, week, day, row);
-
-          // Completed exposures IN THIS WEEK from saved workouts
-          int completedThisWeek = 0;
-          if (blockStartDate != null) {
-            completedThisWeek = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
-              exerciseName: exerciseName,
-              savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
-              blockStartDate: blockStartDate!,
-              weekIndex: week, // week-scoped; resets each new week
-            );
-          } else {
-            print('⚠️ [BB2] blockStartDate is null — assuming completedThisWeek=0');
-          }
-
-          // Combined index within the week = done + planned-before
-          final int plannedIndex = completedThisWeek + plannedBeforeThisWeek;
+          // Unified occurrences BEFORE this row in the same week (completed wins per day)
+          final int plannedIndex = getExerciseCountInWeek(exerciseName, week, day, row);
+          // ^ getExerciseCountInWeek already counts completed days via completedWesRows,
+          //   so don't add completedThisWeek again.
 
           final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
             exerciseName: exerciseId,
-            plannedIndex: plannedIndex,          // ✅ week-scoped exposure index
+            plannedIndex: plannedIndex,          // ✅ week-scoped exposure index (0-based)
             weekIndex: week,
-            repTargetsByExercise: {exerciseId: repTargets},
+            repTargetsByExercise: { exerciseId: repTargets }, // ok: PMU now accepts inner map
             plannedExerciseDetails: plannedExerciseDetails,
             blockStartDate: blockStartDate,
             blockEndDate: blockEndDate,
           );
 
           print('📈 LinearClassic rep → $rep for $exerciseId '
-              '(week $week, doneThisWeek=$completedThisWeek, '
-              'plannedBefore=$plannedBeforeThisWeek, instance $plannedIndex)');
+              '(week $week, unifiedIndex=$plannedIndex)');
           return rep.toString();
         }
 
 
+
         case PeriodizationModelType.dailyUndulatingWeek: {
-          // Planned occurrences BEFORE this row in the same week (your existing logic)
-          final int plannedBeforeThisWeek = getExerciseCountInWeek(exerciseName, week, day, row);
+          // ✅ Unified index within THIS WEEK (counts planned-before + completed)
+          final int plannedIndex = getExerciseCountInWeek(exerciseName, week, day, row);
 
-          // ✅ Completed exposures IN THIS WEEK up to (and including) this day, using BB2's WES cache
-          int completedThisWeek = 0;
-          try {
-            if (blockStartDate != null) {
-              final target = exerciseName.trim();
-              for (int d = 0; d <= day; d++) {
-                final date = blockStartDate!.add(Duration(days: week * 7 + d));
-                final dateKey = DateFormat('yyyy-MM-dd').format(date);
-
-                final raw = List<Map<String, dynamic>>.from(completedWesRows[dateKey] ?? const []);
-                final hasCompleted = raw.any((ex) {
-                  final name = (ex['name'] ?? '').toString().trim();
-                  if (name != target) return false;
-                  final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? const []);
-                  return sets.isNotEmpty; // count day only if at least one set exists
-                });
-
-                if (hasCompleted) completedThisWeek += 1; // one per day
-                // If you prefer multi-circuit to count multiple exposures, replace with:
-                // completedThisWeek += raw.where((ex) {
-                //   final name = (ex['name'] ?? '').toString().trim();
-                //   if (name != target) return false;
-                //   final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? const []);
-                //   return sets.isNotEmpty;
-                // }).length;
-              }
-            } else {
-              print('⚠️ [BB2] blockStartDate is null — assuming completedThisWeek=0');
-            }
-          } catch (e) {
-            print('⚠️ [BB2] completedThisWeek(calc) failed: $e');
-          }
-
-          // Combined index within the week = done + planned-before
-          final int plannedIndex = completedThisWeek + plannedBeforeThisWeek;
-
-          // Use your existing model helper with the combined index
+          // ✅ Pass the full settings node at exerciseId so PMU can read ['repTargets']
           final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
             exerciseName: exerciseId,
-            plannedIndex: plannedIndex,          // ✅ week-scoped exposure index
+            plannedIndex: plannedIndex,
             weekIndex: week,
-            repTargetsByExercise: {exerciseId: _exerciseSettings[exerciseId]},
+            repTargetsByExercise: { exerciseId: _exerciseSettings[exerciseId] },
             plannedExerciseDetails: plannedExerciseDetails,
           );
 
           print('🔁 DUP by Week rep: $rep for $exerciseId '
-              '(week $week, doneThisWeek=$completedThisWeek, '
-              'plannedBefore=$plannedBeforeThisWeek, index=$plannedIndex)');
+              '(week $week, unifiedIndex=$plannedIndex)');
           return rep.toString();
         }
+
+
 
 
 

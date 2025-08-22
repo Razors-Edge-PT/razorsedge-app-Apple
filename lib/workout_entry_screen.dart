@@ -1084,6 +1084,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
       blockStartDate: _blockStartDate!,
       weekIndex: weekIndex,
+
     );
 
     final weekKey = 'week${weekIndex + 1}';
@@ -1946,35 +1947,42 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     // dailyUndulatingWeek
     if (model == PeriodizationModelType.dailyUndulatingWeek) {
-      final count = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+      // completed days in THIS week up to selected date
+      final completedUpToToday =
+      PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
         exerciseName: exerciseName,
         savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
         blockStartDate: _blockStartDate!,
-        weekIndex: weekIndex ?? 0,
+        selectedDate: _selectedDate,     // ← key change
+        weekIndex: weekIndex,            // optional; selectedDate takes precedence
       );
 
-      final repTargets = _exerciseSettings[exerciseId]?['repTargets'];
+      // planned occurrences BEFORE this row in today’s session
+      int plannedBefore = 0;
+      for (int i = 0; i < exerciseIndex; i++) {
+        if (_selectedExercisesWithCircuits[i]['name'] == exerciseName) {
+          plannedBefore++;
+        }
+      }
 
-      final weekKey = 'week${(weekIndex ?? 0) + 1}';
-      final weekMap = repTargets?[weekKey];
+      final repTargets = _exerciseSettings[exerciseId]?['repTargets'];
+      final weekMap = repTargets?['week1'];   // ← DUP-Week uses week1 pattern
 
       if (weekMap is Map<String, dynamic>) {
-        final sorted = weekMap.entries
-            .where((e) => e.key.startsWith('instance'))
-            .toList()
+        final sorted = weekMap.entries.where((e) => e.key.startsWith('instance')).toList()
           ..sort((a, b) => a.key.compareTo(b.key));
-
         final frequency = sorted.length;
         if (frequency == 0) return 10;
 
-        final index = count % frequency;
-        final raw = sorted[index].value?.toString() ?? '';
+        final unifiedIndex = completedUpToToday + plannedBefore;
+        final raw = sorted[unifiedIndex % frequency].value?.toString() ?? '';
         final match = RegExp(r'^(\d+)').firstMatch(raw);
         final parsed = match != null ? int.tryParse(match.group(1)!) ?? 10 : 10;
 
         return parsed.toDouble();
       }
     }
+
 
     // linearClassic
     if (model == PeriodizationModelType.linearClassic) {
