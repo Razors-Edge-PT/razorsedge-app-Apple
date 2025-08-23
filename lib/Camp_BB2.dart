@@ -923,29 +923,90 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
         case PeriodizationModelType.dailyUndulatingExposure: {
           print('🔍 Entering getRepTargetForExercise → model = $model for $exerciseId');
+          print('🧭 [BB2 DUP Exposure] context: week=$week day=$day row=$row '
+              'blockStart=${blockStartDate?.toIso8601String()}');
 
-          // 1) Completed exposures from start of block up to (and including) this day,
-          //    using BB2's WES cache so it's in sync with the UI.
           int completedCount = 0;
+          final countedDebug = <Map<String, String>>[];
+
           try {
             if (blockStartDate != null) {
-              final target = exerciseName.trim();
+              final targetId   = exerciseId;
+              final targetName = exerciseName.trim();
               final daysIntoBlock = week * 7 + day; // inclusive
+              final base = DateTime(blockStartDate!.year, blockStartDate!.month, blockStartDate!.day);
 
+              // show which days BB2 cache even has rows for
+              final cacheKeys = (completedWesRows.keys.toList()..sort()).join(', ');
+              print('🗂️ [BB2 DUP Exposure] completedWesRows has keys: [$cacheKeys]');
+
+              // walk every day from start → today
               for (int off = 0; off <= daysIntoBlock; off++) {
-                final date = blockStartDate!.add(Duration(days: off));
+                final date = base.add(Duration(days: off));
                 final dateKey = DateFormat('yyyy-MM-dd').format(date);
                 final raw = List<Map<String, dynamic>>.from(completedWesRows[dateKey] ?? const []);
+                print('  • [BB2 cache] $dateKey → ${raw.length} entries');
 
-                // Count ONCE per day if there is at least one set for this exercise.
-                final hasCompleted = raw.any((ex) {
-                  final name = (ex['name'] ?? '').toString().trim();
-                  if (name != target) return false;
+                // If BB2 cache for this day is empty (race w/ paint), peek at savedWorkoutsList (read-only)
+                List<Map<String, dynamic>> rawFallback = const [];
+                if (raw.isEmpty) {
+                  rawFallback = PeriodizationModelUtils.savedWorkoutsList
+                      .where((w) {
+                    final ds = (w['date'] ?? '').toString();
+                    return ds.startsWith(dateKey);
+                  })
+                      .expand((w) {
+                    final exs = w['exercises'];
+                    if (exs is List) {
+                      return exs.cast<Map<String, dynamic>>();
+                    }
+                    return const <Map<String, dynamic>>[];
+                  })
+                      .toList();
+
+                  if (rawFallback.isNotEmpty) {
+                    print('    ↪︎ [fallback] using ${rawFallback.length} exercises from savedWorkoutsList for $dateKey');
+                  }
+
+                }
+
+                bool hasCompleted = false;
+                String? wTxt, rTxt, rirTxt;
+
+                // prefer cache; else use fallback snapshot
+                final source = raw.isNotEmpty ? raw : rawFallback;
+
+                for (final ex in source) {
+                  // ID-first match; fall back to name if id missing
+                  final exId   = (ex['exerciseId'] ?? ex['id'] ?? ex['exercise_id'] ?? '').toString().trim();
+                  final exName = (ex['name'] ?? ex['exercise'] ?? ex['title'] ?? '').toString().trim();
+
+                  final idMatches   = exId.isNotEmpty && exId == targetId;
+                  final nameMatches = exId.isEmpty && exName == targetName;
+                  if (!(idMatches || nameMatches)) continue;
+
                   final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? const []);
-                  return sets.isNotEmpty;
-                });
+                  if (sets.isEmpty) continue;
 
-                if (hasCompleted) completedCount += 1;
+                  hasCompleted = true;
+
+                  for (final s in sets) {
+                    final w = (s['actualWeight'] ?? s['weight'] ?? '').toString().trim();
+                    final r = (s['actualReps']   ?? s['reps']   ?? '').toString().trim();
+                    final rr= (s['actualRir']    ?? s['rir']    ?? '').toString().trim();
+                    if (wTxt == null && rTxt == null) {
+                      wTxt  = double.tryParse(w) != null ? w : (w.isEmpty ? '—' : w);
+                      rTxt  = int.tryParse(r)    != null ? r : (r.isEmpty ? '—' : r);
+                      rirTxt= rr.isEmpty ? '—' : rr;
+                    }
+                    break;
+                  }
+                }
+
+                if (hasCompleted) {
+                  completedCount += 1;
+                  countedDebug.add({'date': dateKey, 'weight': wTxt ?? '—', 'reps': rTxt ?? '—', 'rir': rirTxt ?? '—'});
+                }
               }
             } else {
               print('⚠️ [BB2] blockStartDate is null — treating completedCount=0');
@@ -954,26 +1015,35 @@ class _BlockBuilder2State extends State<Camp_BB2> {
             print('⚠️ [BB2] completedCount calc failed: $e');
           }
 
-          // 2) Planned occurrences before this position (week/day/row) — keep your existing helper
+          // planned rows before on this day
           final int plannedCountBefore = getExercisePlannedCountBefore(exerciseName, week, day, row);
-
-          // 3) Combined global index → exposure number = completed so far + planned before
           final int plannedIndex = completedCount + plannedCountBefore;
 
-          // (Optional) debug
+          // instances count (from week1)
           final repTargetsRaw = _exerciseSettings[exerciseId]?['repTargets'];
           final week1 = repTargetsRaw?['week1'] as Map<String, dynamic>?;
-          final numInstances = week1 == null
+          final int numInstances = week1 == null
               ? 0
               : week1.keys.where((k) => k.startsWith('instance')).length;
 
-          print('📊 [BB2] DUP by Exposure: completedSoFar=$completedCount plannedBefore=$plannedCountBefore '
-              '→ plannedIndex=$plannedIndex of ~${numInstances} instances');
+          for (int i = 0; i < countedDebug.length; i++) {
+            final e = countedDebug[i];
+            final cyclePos = numInstances == 0 ? 'n/a' : ((i % numInstances) + 1).toString();
+            final cycleDen = numInstances == 0 ? 'n/a' : numInstances.toString();
+            print('🧾 [BB2 DUP Exposure] prior #${i + 1} → ${e['date']} • ${e['weight']} kg × ${e['reps']} '
+                '${(e['rir'] ?? '—') != '—' ? '(RIR ${e['rir']}) ' : ''}→ cycle $cyclePos/$cycleDen');
+          }
 
-          // 4) Ask the existing model helper to pick the rep using our combined plannedIndex
+          final instanceLabel = numInstances == 0 ? 'n/a'
+              : '${(plannedIndex % (numInstances == 0 ? 1 : numInstances)) + 1}/$numInstances';
+
+          print('🧮 [BB2 DUP Exposure] completedSoFar=$completedCount '
+              'plannedBefore=$plannedCountBefore → plannedIndex=$plannedIndex '
+              '→ instance=$instanceLabel');
+
           final rep = PeriodizationModelUtils.getSuggestedRepTargetByModel(
             exerciseName: exerciseId,
-            plannedIndex: plannedIndex,          // ✅ combined (done + plannedBefore)
+            plannedIndex: plannedIndex,
             weekIndex: week,
             repTargetsByExercise: {exerciseId: repTargets},
             plannedExerciseDetails: plannedExerciseDetails,
@@ -984,6 +1054,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
           return rep.toString();
         }
+
+
 
 
 
