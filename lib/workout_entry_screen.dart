@@ -766,21 +766,147 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           ..sort((a, b) => a.key.compareTo(b.key));
         if (sorted.isNotEmpty) {
 
-          final count =
-          PeriodizationModelUtils.getInstanceCountForExerciseInBlock(
-            exerciseName: exerciseName,
-            savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
-            blockStartDate: blockStartDate!,
-            blockEndDate: blockEndDate!,
-          );
-          final index = count % sorted.length;
-          final raw = sorted[index].value?.toString() ?? '';
-          final match = RegExp(r'^(\d+)').firstMatch(raw);
-          print('📦 Sorted week1 entries = ${sorted.map((e) => '${e.key}: ${e.value}').toList()}');
-          print('🔢 Calculated instance count = $count → index = $index');
-          print('🧾 raw value = "$raw"');
-          print('📈 match = ${match?.group(1)}');
+          int completedBeforeTodayInBlock = 0;
+          final matchedDates = <String>{};
 
+          try {
+            final base = DateTime(blockStartDate!.year, blockStartDate!.month, blockStartDate!.day);
+            final todayStart = DateTime(_selectedDate!.year, _selectedDate!.month, _selectedDate!.day);
+
+            String norm(String s) {
+              var t = s.toLowerCase().trim();
+              t = t.replaceAll(RegExp(r'\([^)]*\)'), '');
+              t = t.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');
+              t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
+              t = t.replaceAll(RegExp(r'\bdb\b'), 'dumbbell');
+              t = t.replaceAll(RegExp(r'\bbb\b'), 'barbell');
+              return t;
+            }
+
+            final targetId = exerciseId;
+            final targetNameNorm = norm(exerciseName);
+
+            bool hasValidSet(dynamic setsRaw) {
+              final sets = (setsRaw is List) ? setsRaw.cast<Map>() : const <Map>[];
+              return sets.any((s) {
+                final w = (s['weight']?.toString() ?? '').trim();
+                final r = (s['reps']?.toString() ?? '').trim();
+                return w.isNotEmpty && r.isNotEmpty;
+              });
+            }
+
+            for (final w in PeriodizationModelUtils.savedWorkoutsList) {
+              final dateStr = (w['date'] ?? '').toString();
+              final dt = DateTime.tryParse(dateStr);
+              if (dt == null) continue;
+
+              final dayOnly = DateTime(dt.year, dt.month, dt.day);
+              if (dayOnly.isBefore(base) || !dayOnly.isBefore(todayStart)) continue; // [base, today)
+
+              final exs = w['exercises'];
+              if (exs is! List) continue;
+
+              final matched = exs.any((ex) {
+                if (!hasValidSet(ex['sets'])) return false;
+
+                final exId = (ex['exerciseId'] ?? ex['id'] ?? ex['exercise_id'] ?? '').toString();
+                if (exId.isNotEmpty && exId == targetId) return true;
+
+                final exName = (ex['name'] ?? ex['exercise'] ?? ex['title'] ?? '').toString();
+                if (exName.isNotEmpty && norm(exName) == targetNameNorm) return true;
+
+                final mapped = (PeriodizationModelUtils.nameToId[exName] ?? '').toString();
+                return mapped.isNotEmpty && mapped == targetId;
+              });
+
+              if (matched) {
+                matchedDates.add(dateStr.length >= 10 ? dateStr.substring(0, 10) : dateStr);
+              }
+            }
+
+            completedBeforeTodayInBlock = matchedDates.length;
+          } catch (e) {
+            print('⚠️ [WES DUP Exposure] completedBeforeTodayInBlock calc failed: $e');
+          }
+
+          // AFTER you finish building `matchedDates` (and before plannedIndex/index):
+          final countedDebug = <Map<String, String>>[];
+
+// Re-scan only the matched dates to grab a representative set per day
+          for (final w in PeriodizationModelUtils.savedWorkoutsList) {
+            final dateStr = (w['date'] ?? '').toString();
+            final key = dateStr.length >= 10 ? dateStr.substring(0, 10) : dateStr;
+            if (!matchedDates.contains(key)) continue;
+
+            final exs = w['exercises'];
+            if (exs is! List) continue;
+
+            String? weightTxt, repsTxt, rirTxt;
+
+            for (final ex in exs) {
+              // ID-first match (fallback to name→id only if no id on row)
+              final exId   = (ex['exerciseId'] ?? ex['id'] ?? ex['exercise_id'] ?? '').toString().trim();
+              final exName = (ex['name'] ?? ex['exercise'] ?? ex['title'] ?? '').toString().trim();
+              final idMatches = exId.isNotEmpty ? (exId == exerciseId) : false;
+              final nameMatches = (exId.isEmpty)
+                  ? ((PeriodizationModelUtils.nameToId[exName] ?? '').toString().trim() == exerciseId)
+                  : false;
+              if (!(idMatches || nameMatches)) continue;
+
+              final sets = (ex['sets'] is List) ? List<Map<String, dynamic>>.from(ex['sets']) : const <Map<String, dynamic>>[];
+
+              // Pick the first set that looks numeric
+              for (final s in sets) {
+                final wTxt = (s['actualWeight'] ?? s['weight'] ?? '').toString().trim();
+                final rTxt = (s['actualReps']   ?? s['reps']   ?? '').toString().trim();
+                final rir  = (s['actualRir']    ?? s['rir']    ?? '').toString().trim();
+
+                final looksNumber = double.tryParse(wTxt) != null && int.tryParse(rTxt) != null;
+                if (looksNumber) {
+                  weightTxt = wTxt;
+                  repsTxt   = rTxt;
+                  rirTxt    = rir.isEmpty ? null : rir;
+                  break;
+                }
+              }
+
+              if (weightTxt != null || repsTxt != null) break;
+            }
+
+            countedDebug.add({
+              'date': key,
+              'weight': weightTxt ?? '—',
+              'reps': repsTxt ?? '—',
+              'rir': rirTxt ?? '—',
+            });
+          }
+
+// Sort by date (ascending) so the cycle order is obvious
+          countedDebug.sort((a, b) => a['date']!.compareTo(b['date']!));
+
+// Print the counted days with set details and cycle position
+          for (int i = 0; i < countedDebug.length; i++) {
+            final e = countedDebug[i];
+            // cyclePos is 1-based within the week1 instances list size
+            final cyclePos = sorted.isEmpty ? 'n/a' : ((i % sorted.length) + 1).toString();
+            final cycleDen = sorted.isEmpty ? 'n/a' : sorted.length.toString();
+            print('🧾 [WES DUP Exposure] prior #${i + 1} → ${e['date']} '
+                '• ${e['weight']} kg × ${e['reps']} '
+                '${e['rir'] != '—' ? '(RIR ${e['rir']}) ' : ''}'
+                '→ cycle ${cyclePos}/${cycleDen}');
+          }
+
+// Now compute plannedIndex / index as before
+          final plannedIndex = completedBeforeTodayInBlock + plannedCountBefore;
+          final index = sorted.isEmpty ? 0 : plannedIndex % sorted.length;
+
+          print('🧮 [WES DUP Exposure] completedBeforeTodayInBlock=$completedBeforeTodayInBlock '
+              'plannedBefore=$plannedCountBefore → plannedIndex=$plannedIndex '
+              '→ instance=${sorted.isEmpty ? 'n/a' : (index + 1)}/${sorted.length}');
+
+
+          final raw = sorted.isNotEmpty ? (sorted[index].value?.toString() ?? '') : '';
+          final match = RegExp(r'^(\d+)').firstMatch(raw);
           repTarget = match != null
               ? int.tryParse(match.group(1)!)?.toDouble() ?? 10.0
               : 10.0;
@@ -1945,159 +2071,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     if (mounted) setState(() {}); // repaint to reflect merged saved flags + data
   }
 
-
-
-  double _calculateFallbackSet1Reps(int exerciseIndex) {
-    String exerciseName =
-        _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
-    int plannedCountBefore = 0;
-
-    for (int i = 0; i < exerciseIndex; i++) {
-      if (_selectedExercisesWithCircuits[i]['name'] == exerciseName) {
-        plannedCountBefore++;
-      }
-    }
-
-    final exerciseId =
-        PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
-    final weekIndex = _getApplicableWeekIndex(exerciseId);
-    final model =
-        PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
-
-    // dailyUndulatingExposure
-    if (model == PeriodizationModelType.dailyUndulatingExposure) {
-      final count = PeriodizationModelUtils.getInstanceCountForExerciseInBlock(
-        exerciseName: exerciseName,
-        savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
-        blockStartDate: _blockStartDate!,
-        blockEndDate: _blockEndDate!,
-      );
-
-      final week1 = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]
-          ?['repTargets']?['week1'];
-
-      print("🔍 [DUP Exposure] Looking up reps for $exerciseName (ID: $exerciseId)");
-      print("📦 week1 = $week1");
-
-      if (week1 is Map<String, dynamic>) {
-        final sorted = week1.entries
-            .where((e) => e.key.startsWith('instance'))
-            .toList()
-          ..sort((a, b) => a.key.compareTo(b.key));
-
-
-        print("📚 Found ${sorted.length} instances: ${sorted.map((e) => '${e.key}: ${e.value}').join(', ')}");
-        print("🔢 Instance count for this exercise in block: $count");
-
-        final frequency = sorted.length;
-        if (frequency == 0) {
-          print("⚠️ No rep targets found — falling back to 10.");
-          return 10;
-        }
-
-
-        final index = count % frequency;
-        final raw = sorted[index].value?.toString() ?? '';
-        final match = RegExp(r'^(\d+)').firstMatch(raw);
-        final parsed = match != null ? int.tryParse(match.group(1)!) ?? 10 : 10;
-        print("🎯 Selected raw rep string: '$raw' → Parsed: $parsed");
-        return parsed.toDouble();
-      } else {
-        print("⚠️ week1 is not a Map<String, dynamic> → got: ${week1.runtimeType}");
-      }
-    }
-
-    // dailyUndulatingWeek
-    if (model == PeriodizationModelType.dailyUndulatingWeek) {
-      // completed days in THIS week up to selected date
-      final completedUpToToday =
-      PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
-        exerciseName: exerciseName,
-        savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
-        blockStartDate: _blockStartDate!,
-        selectedDate: _selectedDate,     // ← key change
-        weekIndex: weekIndex,            // optional; selectedDate takes precedence
-      );
-
-      // planned occurrences BEFORE this row in today’s session
-      int plannedBefore = 0;
-      for (int i = 0; i < exerciseIndex; i++) {
-        if (_selectedExercisesWithCircuits[i]['name'] == exerciseName) {
-          plannedBefore++;
-        }
-      }
-
-      final repTargets = _exerciseSettings[exerciseId]?['repTargets'];
-      final weekMap = repTargets?['week1'];   // ← DUP-Week uses week1 pattern
-
-      if (weekMap is Map<String, dynamic>) {
-        final sorted = weekMap.entries.where((e) => e.key.startsWith('instance')).toList()
-          ..sort((a, b) => a.key.compareTo(b.key));
-        final frequency = sorted.length;
-        if (frequency == 0) return 10;
-
-        final unifiedIndex = completedUpToToday + plannedBefore;
-        final raw = sorted[unifiedIndex % frequency].value?.toString() ?? '';
-        final match = RegExp(r'^(\d+)').firstMatch(raw);
-        final parsed = match != null ? int.tryParse(match.group(1)!) ?? 10 : 10;
-
-        return parsed.toDouble();
-      }
-    }
-
-
-    // linearClassic
-    if (model == PeriodizationModelType.linearClassic) {
-      final repTargets = _exerciseSettings[exerciseId]?['repTargets'];
-
-      final weekStart = repTargets?['week1'];
-
-      if (weekStart is Map<String, dynamic>) {
-        final instanceCount =
-            PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
-          exerciseName: exerciseName,
-          savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
-          blockStartDate: _blockStartDate!,
-          weekIndex: weekIndex ?? 0,
-        );
-
-        final sortedKeys = weekStart.keys
-            .where((k) => k.startsWith('instance'))
-            .toList()
-          ..sort();
-
-        final frequency = sortedKeys.length;
-        if (frequency == 0) return 10;
-
-        final index = instanceCount % frequency;
-        final instanceKey = sortedKeys[index];
-
-        final startRaw = weekStart[instanceKey]?.toString() ?? '10 x 3';
-        final startMatch = RegExp(r'^(\d+)').firstMatch(startRaw);
-        final setMatch = RegExp(r'x\s*(\d+)').firstMatch(startRaw);
-
-        final startReps =
-            startMatch != null ? int.tryParse(startMatch.group(1)!) ?? 10 : 10;
-        final sets = setMatch != null ? setMatch.group(1)! : '3';
-        final endReps = 1;
-
-        final blockLength = PeriodizationModelUtils.getBlockLength(
-          blockStartDate: _blockStartDate!,
-          blockEndDate: _blockEndDate!,
-        );
-
-        final week = weekIndex ?? 0;
-        final reps =
-            (startReps + ((endReps - startReps) * (week / (blockLength - 1))))
-                .round();
-
-        return reps.toDouble();
-      }
-    }
-
-    // Default fallback
-    return 10.0;
-  }
 
 
   Future<void> loadExercisesFromFirestoreForWES() async {

@@ -2013,6 +2013,30 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     final wesServerFetches = <Future<DocumentSnapshot<Map<String, dynamic>>>>[];
     final wesDayOrder = <int>[];
 
+// Week window for a single range query (covers legacy auto-ID docs)
+    final weekStart = DateTime(blockStartDate.year, blockStartDate.month, blockStartDate.day)
+        .add(Duration(days: weekIndex * 7));
+    final weekEnd = weekStart.add(const Duration(days: 7));
+
+    String _isoDay(DateTime d) =>
+        '${DateTime(d.year, d.month, d.day).toIso8601String().split(".").first}.000';
+
+    final workoutsCol = FirebaseFirestore.instance
+        .collection('users')
+        .doc(_cachedUid)
+        .collection('workouts');
+
+// One range query for the whole week (cache + server) to catch auto-ID docs
+    final weekCacheQuery = workoutsCol
+        .where('date', isGreaterThanOrEqualTo: _isoDay(weekStart))
+        .where('date', isLessThan: _isoDay(weekEnd))
+        .get(const GetOptions(source: Source.cache));
+
+    final weekServerQuery = workoutsCol
+        .where('date', isGreaterThanOrEqualTo: _isoDay(weekStart))
+        .where('date', isLessThan: _isoDay(weekEnd))
+        .get(const GetOptions(source: Source.server));
+
 // Always fetch WES for all 7 days so completed entries are available for indexing
     for (int dayIndex = 0; dayIndex < 7; dayIndex++) {
       final date = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
@@ -2026,28 +2050,56 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       wesServerFetches.add(docRef.get(const GetOptions(source: Source.server)));
     }
 
-
 // 6a) Apply cache (fast paint)
+// Fetch: per-day doc-id attempts
     final wesCacheDocs = await Future.wait(wesCacheFetches);
+
+// Fetch: weekly legacy (auto-ID) docs once
+    final weekCacheSnap = await weekCacheQuery;
+
+// Index legacy docs by yyyy-MM-dd (date field) → collect ALL docs per day
+    final Map<String, List<QueryDocumentSnapshot<Map<String, dynamic>>>> legacyByDateCache = {};
+    for (final d in weekCacheSnap.docs) {
+      final raw = d.data()['date'];
+      final dt = (raw is Timestamp)
+          ? raw.toDate()
+          : DateTime.tryParse(raw?.toString() ?? '');
+      if (dt == null) continue;
+      final key = _ymd(DateTime(dt.year, dt.month, dt.day));
+      (legacyByDateCache[key] ??= []).add(d);
+    }
+
+// Now process the 7 days, preferring doc-id; also merge any legacy docs
     for (int i = 0; i < wesCacheDocs.length; i++) {
       final dayIndex = wesDayOrder[i];
-      final doc = wesCacheDocs[i];
-
-      // Build dateKey for the indexer
       final date = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
-      final dateKey = _ymd(date); // same yyyy-MM-dd you use elsewhere
+      final dateKey = _ymd(date);
 
-      if (!doc.exists) {
-        // ✅ ensure key exists so counting logic sees "no completed" explicitly
+      // Merge doc-id snapshot + ALL legacy auto-ID docs into one list
+      final mergedSaved = <Map<String, dynamic>>[];
+
+      final docIdSnap = wesCacheDocs[i];
+      if (docIdSnap.exists) {
+        mergedSaved.addAll(List<Map<String, dynamic>>.from(
+            docIdSnap.data()?['exercises'] ?? const []));
+      }
+
+      final legacyList = legacyByDateCache[dateKey] ?? const [];
+      for (final legacy in legacyList) {
+        mergedSaved.addAll(List<Map<String, dynamic>>.from(
+            legacy.data()['exercises'] ?? const []));
+      }
+      if (!docIdSnap.exists && legacyList.isNotEmpty) {
+        print('↩️ [BB2] Using ${legacyList.length} legacy auto-ID workout(s) from cache for $dateKey');
+      }
+
+      if (mergedSaved.isEmpty) {
         completedWesRows[dateKey] = const [];
         continue;
       }
 
-      final savedExercises = List<Map<String, dynamic>>.from(
-        doc.data()?['exercises'] ?? const [],
-      );
-
-      // ✅ make completed data available to getExerciseCountInWeek right away
+      // Keep original name so the rest of the loop stays unchanged
+      final savedExercises = mergedSaved;
       completedWesRows[dateKey] = savedExercises;
 
       // Planned rows may be null/empty; only apply top-set values if present
@@ -2090,17 +2142,52 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     }
     print('   ↳ WES cache fetch (${wesCacheDocs.length} docs) took ${wesStep.elapsedMilliseconds}ms');
 
-
 // 6b) Server reconcile in background
     unawaited(Future.wait(wesServerFetches).then((wesServerDocs) async {
       bool changed = false;
 
-      for (int i = 0; i < wesServerDocs.length; i++) {
-        final dayIndex = wesDayOrder[i];
-        final doc = wesServerDocs[i];
-        if (!doc.exists) continue;
+      // Fetch weekly legacy (server) and index by date (ALL docs per day)
+      final weekServerSnap = await weekServerQuery;
+      final Map<String, List<QueryDocumentSnapshot<Map<String, dynamic>>>> legacyByDateServer = {};
+      for (final d in weekServerSnap.docs) {
+        final raw = d.data()['date'];
+        final dt = (raw is Timestamp)
+            ? raw.toDate()
+            : DateTime.tryParse(raw?.toString() ?? '');
+        if (dt == null) continue;
+        final key = _ymd(DateTime(dt.year, dt.month, dt.day));
+        (legacyByDateServer[key] ??= []).add(d);
+      }
 
-        final savedExercises = List<Map<String, dynamic>>.from(doc.data()?['exercises'] ?? []);
+      for (int i = 0; i < 7; i++) {
+        final dayIndex = wesDayOrder[i];
+        final date = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
+        final dateKey = _ymd(date);
+
+        // Merge doc-id snapshot + ALL legacy auto-ID docs into one list
+        final mergedSaved = <Map<String, dynamic>>[];
+
+        final docIdSnap = wesServerDocs[i];
+        if (docIdSnap.exists) {
+          mergedSaved.addAll(List<Map<String, dynamic>>.from(
+              docIdSnap.data()?['exercises'] ?? const []));
+        }
+
+        final legacyList = legacyByDateServer[dateKey] ?? const [];
+        for (final legacy in legacyList) {
+          mergedSaved.addAll(List<Map<String, dynamic>>.from(
+              legacy.data()['exercises'] ?? const []));
+        }
+
+        if (!docIdSnap.exists && legacyList.isNotEmpty) {
+          print('↩️ [BB2] Using ${legacyList.length} legacy auto-ID workout(s) from server for $dateKey');
+        }
+
+        if (mergedSaved.isEmpty) continue;
+
+        // Keep original name so the rest of the loop stays unchanged
+        final savedExercises = mergedSaved;
+
         // ⬇️ Ensure we always have a mutable list for this day
         final rows = parsedByDayIndex[dayIndex] ?? <ExerciseRow>[];
         if (!parsedByDayIndex.containsKey(dayIndex)) {
@@ -2216,6 +2303,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
       if (changed && mounted) setState(() {});
     }));
+
 
 
 
