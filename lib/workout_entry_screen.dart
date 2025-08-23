@@ -3654,22 +3654,48 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     final docId = _workoutDocIdForDate(_selectedDate);
     final coll = FirebaseFirestore.instance.collection('users').doc(uid).collection('workouts');
+    final docRef = coll.doc(docId);
+
+    // ⬇️ NEW: read existing doc so we can preserve previously-completed entries if user clears fields
+    final existingSnap = await docRef.get();
+    final List<Map<String, dynamic>> existingExercises =
+    List<Map<String, dynamic>>.from(existingSnap.data()?['exercises'] ?? const []);
+    final bool hadExisting = existingExercises.isNotEmpty;
 
     Map<String, dynamic> payload;
     try {
-      payload = _buildWorkoutPayload(markAllSaved: markAllSaved, uid: uid); // 👈 pass uid
+      payload = _buildWorkoutPayload(markAllSaved: markAllSaved, uid: uid);
     } catch (e, st) {
       print('❌ [WES upsert] Payload build threw (likely context access in builder): $e');
       print(st);
       return;
     }
 
-    final exercises = (payload['exercises'] as List?) ?? [];
-    print('📦 [WES upsert] Built payload: exercises=${exercises.length}');
-    if (exercises.isEmpty) {
-      print('🔸 [WES upsert] No exercises with data — will clear Firestore doc for this date.');
+    // What the user typed this visit (only sets with BOTH weight & reps, per your builder)
+    final List<Map<String, dynamic>> newExercises =
+    List<Map<String, dynamic>>.from((payload['exercises'] as List?) ?? const []);
+    print('📦 [WES upsert] Built payload: newExercises=${newExercises.length} (hadExisting=$hadExisting)');
+
+    // Helper key for matching (same fields you already use elsewhere)
+    String exKey(Map e) => '${(e['name'] ?? '').toString().trim()}|${e['circuitIndex'] ?? 0}';
+
+    // If user cleared everything this visit:
+    // - If there was an existing workout → DO NOT overwrite; keep existing as-is (skip write)
+    // - If there was nothing before → keep current behavior (write/clear as needed)
+    if (newExercises.isEmpty) {
+      if (hadExisting) {
+        print('🔸 [WES upsert] User left insufficient data; preserving existing workout (no write).');
+        _pendingChanges = false;
+        _lastSavedHash = null;
+        await _persistSavedFlagsLocally();
+        await _persistDraftLocally();
+        return; // ← early exit: do not clobber existing doc
+      }
+
+      // No new data and no existing → write minimal empty doc (unchanged behavior)
+      print('🔸 [WES upsert] No exercises with data AND no existing — writing empty shell.');
       try {
-        await coll.doc(docId).set({
+        await docRef.set({
           'name': _workoutNameController.text.trim().isEmpty
               ? _formatWorkoutDate(_selectedDate)
               : _workoutNameController.text.trim(),
@@ -3678,7 +3704,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           'exercises': <Map<String, dynamic>>[],
           'lastEditedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: false));
-        print('✅ [WES upsert] Cleared Firestore doc (empty exercises).');
+        print('✅ [WES upsert] Wrote empty exercises array.');
 
         _pendingChanges = false;
         _lastSavedHash = null;
@@ -3686,10 +3712,30 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         await _persistSavedFlagsLocally();
         await _persistDraftLocally();
       } catch (e, st) {
-        print('❌ [WES upsert] Failed to clear doc: $e'); print(st);
+        print('❌ [WES upsert] Failed to write empty shell: $e'); print(st);
       }
       return;
     }
+
+    // NEW: Merge logic — replace only the entries the user actually edited this visit,
+    // and keep any existing ones that the user *cleared* (so they aren't deleted).
+    final merged = <Map<String, dynamic>>[];
+
+    // Build a set of keys present in this visit
+    final Set<String> newKeys = newExercises.map(exKey).toSet();
+
+    // 1) Start with the new/edited ones (these will override existing)
+    merged.addAll(newExercises);
+
+    // 2) Add back any existing entries not touched/updated this visit
+    for (final e in existingExercises) {
+      if (!newKeys.contains(exKey(e))) {
+        merged.add(e);
+      }
+    }
+
+    // Install merged list back into payload before hashing/writing
+    payload['exercises'] = merged;
 
     final currentHash = payload.hashCode.toString();
     if (_lastSavedHash == currentHash) {
@@ -3698,8 +3744,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
 
     try {
-      print('📝 [WES upsert] Writing doc $docId for uid=$uid...');
-      await coll.doc(docId).set(payload, SetOptions(merge: false));
+      print('📝 [WES upsert] Writing doc $docId for uid=$uid (merged=${merged.length})...');
+      await docRef.set(payload, SetOptions(merge: false));
       print('✅ [WES upsert] Firestore write complete.');
 
       _lastSavedHash = currentHash;
@@ -3717,6 +3763,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       print('❌ [WES upsert] Firestore write failed: $e'); print(st);
     }
   }
+
 
 
 
@@ -4164,65 +4211,85 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
 
     // Merge logic
-    final existingNames = _selectedExercisesWithCircuits.map((e) => e['name']).toSet();
-    final newOnes = bb2Exercises.where((ex) => !existingNames.contains(ex['name'])).toList();
+    // Merge logic (use composite key: name + circuitIndex)
+    String _k(Map<String, dynamic> ex) {
+      final n = (ex['name'] ?? '').toString().trim();
+      final c = (ex['circuitIndex'] ?? 0) as int;
+      return _exerciseKey(n, c); // you already have this helper elsewhere
+    }
+
+// Keys already present in the draft (by name+circuit)
+    final existingKeys = _selectedExercisesWithCircuits
+        .map<String>((e) => _exerciseKey(
+      ((e['name'] ?? '') as String).trim(),
+      (e['circuitIndex'] ?? 0) as int,
+    ))
+        .toSet();
+
+// Any BB2 rows not yet present in the draft (by name+circuit)
+    final newOnes = bb2Exercises
+        .where((ex) => !existingKeys.contains(_k(ex)))
+        .toList();
 
     print('[WES] Found ${newOnes.length} new BB2 exercises to merge');
 
     if (newOnes.isNotEmpty) {
       setState(() {
         for (final newEx in newOnes) {
+          final name = (newEx['name'] ?? '').toString().trim();
+          final circuitIndex = (newEx['circuitIndex'] ?? 0) as int;
+
           _selectedExercisesWithCircuits.add({
-            'name': newEx['name'],
-            'circuitIndex': newEx['circuitIndex'] ?? 0,
+            'name': name,
+            'circuitIndex': circuitIndex,
           });
 
           _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
           _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
           _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
           _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-          _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController())); // ✅ NEW
-          _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));    // ✅ NEW
+          _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+          _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
         }
       });
 
+      // Seed initial values for the newly added rows (flat OR legacy sets[0])
       for (final newEx in newOnes) {
-        final name = newEx['name']?.toString().trim().toLowerCase();
-        if (name == null || _resolvedBB2Values.containsKey(name)) continue;
+        final nameKey = (newEx['name'] ?? '').toString().trim().toLowerCase();
+        if (nameKey.isEmpty || _resolvedBB2Values.containsKey(nameKey)) continue;
 
-        // 🔍 Try modern flat structure first
-        final flatReps = newEx['reps'];
+        final flatReps   = newEx['reps'];
         final flatWeight = newEx['weight'];
-        final flatRir = newEx['rir'];
+        final flatRir    = newEx['rir'];
 
         if (flatReps != null || flatWeight != null || flatRir != null) {
-          _resolvedBB2Values[name] = {
+          _resolvedBB2Values[nameKey] = {
             'reps': flatReps,
             'weight': flatWeight,
             'rir': flatRir,
           };
-          print('🧠 [WES Merge] Injected FLAT BB2 values for $name = ${_resolvedBB2Values[name]}');
+          print('🧠 [WES Merge] Injected FLAT BB2 values for $nameKey = ${_resolvedBB2Values[nameKey]}');
           continue;
         }
 
-        // 🔁 Fallback to legacy sets[0] structure
         final rawSets = newEx['sets'];
         if (rawSets is List && rawSets.isNotEmpty) {
-          final firstSet = rawSets.first;
-          _resolvedBB2Values[name] = {
+          final firstSet = rawSets.first as Map<String, dynamic>;
+          _resolvedBB2Values[nameKey] = {
             'reps': firstSet['reps'],
             'weight': firstSet['weight'],
             'rir': firstSet['rir'],
           };
-          print('🧠 [WES Merge] Injected SETS[0] BB2 values for $name = ${_resolvedBB2Values[name]}');
+          print('🧠 [WES Merge] Injected SETS[0] BB2 values for $nameKey = ${_resolvedBB2Values[nameKey]}');
         } else {
-          print('❌ [WES Merge] No valid sets or flat fields found for $name');
+          print('❌ [WES Merge] No valid sets or flat fields found for $nameKey');
         }
       }
 
       print("[WES] Merged ${newOnes.length} new BB2 exercises into draft");
       await _saveWorkoutDraftToCache();
     }
+
 
   }
 
