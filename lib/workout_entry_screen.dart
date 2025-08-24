@@ -1999,11 +1999,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       newDoc = await workoutsCol.doc(newDocId).get();
     }
 
-// ----- Legacy lookups: try all string variants + timestamp range -----
-    final isoLocal = DateTime(startOfDay.year, startOfDay.month, startOfDay.day).toIso8601String();   // …000
-    final isoUtc   = DateTime.utc(startOfDay.year, startOfDay.month, startOfDay.day).toIso8601String(); // …000Z
+// ----- Legacy lookups: try string equals, string range (ISO), and timestamp range -----
+    final isoLocal = DateTime(startOfDay.year, startOfDay.month, startOfDay.day).toIso8601String();    // …T00:00:00.000
+    final isoUtc   = DateTime.utc(startOfDay.year, startOfDay.month, startOfDay.day).toIso8601String(); // …T00:00:00.000Z
     final dateOnly = DateFormat('yyyy-MM-dd').format(startOfDay); // 2025-08-19
+    final nextDateOnly = DateFormat('yyyy-MM-dd').format(nextDay);
 
+// For string *equals* (covers old midnight saves, with and without Z, and date-only)
     Future<QuerySnapshot<Map<String, dynamic>>> _eq(String value) async {
       try {
         return await workoutsCol.where('date', isEqualTo: value)
@@ -2012,13 +2014,25 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         return await workoutsCol.where('date', isEqualTo: value).get();
       }
     }
-
-// String-equality variants
     final legacyStrLocal = await _eq(isoLocal);
     final legacyStrUtc   = await _eq(isoUtc);
     final legacyStrDate  = await _eq(dateOnly);
 
-// Timestamp day-range (only matches docs where `date` is a Timestamp)
+// NEW: For string *range* (catches ISO strings with time-of-day, e.g. 2025-08-14T09:00:29.295539)
+    QuerySnapshot<Map<String, dynamic>> legacyStrRange;
+    try {
+      legacyStrRange = await workoutsCol
+          .where('date', isGreaterThanOrEqualTo: '${dateOnly}T00:00:00') // lower bound (inclusive)
+          .where('date', isLessThan:        '${nextDateOnly}T00:00:00')  // upper bound (exclusive)
+          .get(const GetOptions(source: Source.server));
+    } catch (_) {
+      legacyStrRange = await workoutsCol
+          .where('date', isGreaterThanOrEqualTo: '${dateOnly}T00:00:00')
+          .where('date', isLessThan:        '${nextDateOnly}T00:00:00')
+          .get();
+    }
+
+// Timestamp day-range (only hits docs where `date` is a Timestamp)
     QuerySnapshot<Map<String, dynamic>> legacyTsSnap;
     try {
       legacyTsSnap = await workoutsCol
@@ -2032,12 +2046,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           .get();
     }
 
-// De-dup doc hits by id across all four legacy queries
+// De-dup doc hits by id across all legacy queries
     final Map<String, DocumentSnapshot<Map<String, dynamic>>> _legacyDocsById = {};
     for (final d in [
       ...legacyStrLocal.docs,
-      ...legacyStrUtc.docs,     // <-- this is the one your debug showed (…Z)
+      ...legacyStrUtc.docs,
       ...legacyStrDate.docs,
+      ...legacyStrRange.docs,  // << add the string-range hits
       ...legacyTsSnap.docs,
     ]) {
       _legacyDocsById[d.id] = d;
@@ -2058,9 +2073,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       for (final d in _legacyDocsById.values) ..._exListFromDoc(d),
     ];
 
-    print('   ℹ️ legacy candidates: local=${legacyStrLocal.docs.length}, '
-        'utcZ=${legacyStrUtc.docs.length}, dateOnly=${legacyStrDate.docs.length}, '
-        'tsRange=${legacyTsSnap.docs.length}, unique=${_legacyDocsById.length}, '
+    print('   ℹ️ legacy candidates: '
+        'eqLocal=${legacyStrLocal.docs.length}, eqUtcZ=${legacyStrUtc.docs.length}, '
+        'eqDateOnly=${legacyStrDate.docs.length}, strRange=${legacyStrRange.docs.length}, '
+        'tsRange=${legacyTsSnap.docs.length}, uniqueDocs=${_legacyDocsById.length}, '
         'legacyExList=${legacyExList.length}');
 
 // Build union keyed by (name|circuitIndex). Prefer NEW if both contain same exercise.
