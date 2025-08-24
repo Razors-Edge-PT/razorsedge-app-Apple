@@ -1989,87 +1989,112 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     print('   └─ primary docId = $newDocId');
 
     // 1) Primary: new-style doc keyed by date string
-    DocumentSnapshot<Map<String, dynamic>>? chosenDoc = await workoutsCol.doc(newDocId).get();
+    // --- BEGIN UNION LOOKUP (new-style preferred; include legacy-only) ---
 
-    // 2) Legacy fallback(s) if primary missing/empty
-    if (!chosenDoc.exists) {
-      print('   ⚠️ primary not found — trying legacy queries…');
-
-      // 2a) Legacy String ISO date (exact match)
-      final iso = DateTime(startOfDay.year, startOfDay.month, startOfDay.day).toIso8601String();
-      QuerySnapshot<Map<String, dynamic>> legacyIsoSnap;
-      try {
-        legacyIsoSnap = await workoutsCol.where('date', isEqualTo: iso).limit(3).get();
-      } catch (_) {
-        legacyIsoSnap = await workoutsCol.where('date', isEqualTo: iso).limit(3).get();
-      }
-
-      // 2b) Legacy Timestamp date (range match)
-      QuerySnapshot<Map<String, dynamic>> legacyTsSnap;
-      try {
-        legacyTsSnap = await workoutsCol
-            .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
-            .where('date', isLessThan: Timestamp.fromDate(nextDay))
-            .limit(3)
-            .get();
-      } catch (_) {
-        // If some docs have string 'date', this query simply returns none; that's OK.
-        legacyTsSnap = await workoutsCol
-            .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
-            .where('date', isLessThan: Timestamp.fromDate(nextDay))
-            .limit(3)
-            .get();
-      }
-
-      // Choose the best legacy candidate: prefer one with exercises; then most recent lastEditedAt
-      List<DocumentSnapshot<Map<String, dynamic>>> candidates = [
-        ...legacyIsoSnap.docs,
-        ...legacyTsSnap.docs,
-      ];
-
-      DocumentSnapshot<Map<String, dynamic>>? best;
-      int bestScore = -1; // heuristic: exercises length, then lastEditedAt recency
-
-      for (final d in candidates) {
-        final data = d.data() ?? const {};
-        final ex = (data['exercises'] as List?) ?? const [];
-        final int exLen = ex.length;
-        int score = exLen;
-        final lastEdited = data['lastEditedAt'];
-        if (lastEdited is Timestamp) {
-          score += ((lastEdited.millisecondsSinceEpoch / 1e5).floor()); // coarse tie-breaker
-        }
-        if (score > bestScore) {
-          best = d;
-          bestScore = score;
-        }
-      }
-
-      if (best != null) {
-        chosenDoc = best;
-        print('   ✅ legacy match: ${best!.id} (exercises=${((best!.data()?['exercises'] as List?) ?? []).length})');
-      } else {
-        print('   ❌ no legacy doc found for this date');
-      }
-    } else {
-      print('   ✅ primary doc hit (new style) — ${chosenDoc.id}');
+// Server-first reads so cross-device saves show up
+    DocumentSnapshot<Map<String, dynamic>>? newDoc;
+    try {
+      newDoc = await workoutsCol.doc(newDocId).get(const GetOptions(source: Source.server));
+    } catch (_) {
+      newDoc = await workoutsCol.doc(newDocId).get();
     }
 
-    // 3) If still nothing, persist whatever flags we had and exit
-    if (chosenDoc == null || !chosenDoc.exists) {
+// ----- Legacy lookups: try all string variants + timestamp range -----
+    final isoLocal = DateTime(startOfDay.year, startOfDay.month, startOfDay.day).toIso8601String();   // …000
+    final isoUtc   = DateTime.utc(startOfDay.year, startOfDay.month, startOfDay.day).toIso8601String(); // …000Z
+    final dateOnly = DateFormat('yyyy-MM-dd').format(startOfDay); // 2025-08-19
+
+    Future<QuerySnapshot<Map<String, dynamic>>> _eq(String value) async {
+      try {
+        return await workoutsCol.where('date', isEqualTo: value)
+            .get(const GetOptions(source: Source.server));
+      } catch (_) {
+        return await workoutsCol.where('date', isEqualTo: value).get();
+      }
+    }
+
+// String-equality variants
+    final legacyStrLocal = await _eq(isoLocal);
+    final legacyStrUtc   = await _eq(isoUtc);
+    final legacyStrDate  = await _eq(dateOnly);
+
+// Timestamp day-range (only matches docs where `date` is a Timestamp)
+    QuerySnapshot<Map<String, dynamic>> legacyTsSnap;
+    try {
+      legacyTsSnap = await workoutsCol
+          .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+          .where('date', isLessThan: Timestamp.fromDate(nextDay))
+          .get(const GetOptions(source: Source.server));
+    } catch (_) {
+      legacyTsSnap = await workoutsCol
+          .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+          .where('date', isLessThan: Timestamp.fromDate(nextDay))
+          .get();
+    }
+
+// De-dup doc hits by id across all four legacy queries
+    final Map<String, DocumentSnapshot<Map<String, dynamic>>> _legacyDocsById = {};
+    for (final d in [
+      ...legacyStrLocal.docs,
+      ...legacyStrUtc.docs,     // <-- this is the one your debug showed (…Z)
+      ...legacyStrDate.docs,
+      ...legacyTsSnap.docs,
+    ]) {
+      _legacyDocsById[d.id] = d;
+    }
+
+// Extract exercises from a doc
+    List<Map<String, dynamic>> _exListFromDoc(DocumentSnapshot<Map<String, dynamic>>? d) {
+      if (d == null || !d.exists) return const [];
+      final data = d.data();
+      if (data == null) return const [];
+      final raw = (data['exercises'] as List?) ?? const [];
+      return raw.map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map)).toList();
+    }
+
+// Gather lists
+    final List<Map<String, dynamic>> newExList = _exListFromDoc(newDoc);
+    final List<Map<String, dynamic>> legacyExList = [
+      for (final d in _legacyDocsById.values) ..._exListFromDoc(d),
+    ];
+
+    print('   ℹ️ legacy candidates: local=${legacyStrLocal.docs.length}, '
+        'utcZ=${legacyStrUtc.docs.length}, dateOnly=${legacyStrDate.docs.length}, '
+        'tsRange=${legacyTsSnap.docs.length}, unique=${_legacyDocsById.length}, '
+        'legacyExList=${legacyExList.length}');
+
+// Build union keyed by (name|circuitIndex). Prefer NEW if both contain same exercise.
+    String _key(Map<String, dynamic> e) =>
+        '${(e['name'] ?? '').toString().trim()}|${(e['circuitIndex'] ?? 0) as int}';
+
+
+    final Map<String, Map<String, dynamic>> newByKey = {
+      for (final e in newExList) _key(e): e,
+    };
+
+// Start with all NEW
+    final List<Map<String, dynamic>> combined = [...newExList];
+
+// Add LEGACY-ONLY exercises (skip if same exercise exists in NEW)
+    for (final e in legacyExList) {
+      final k = _key(e);
+      if (!newByKey.containsKey(k)) {
+        combined.add(e);
+      }
+    }
+
+    if (combined.isEmpty) {
+      print('   ❌ no workout exercises found (new or legacy) for this date');
       await _persistSavedFlagsLocally();
-      if (mounted) setState(() {}); // repaint with whatever we had
+      if (mounted) setState(() {});
       return;
     }
 
-    // 4) Local saved flags first for instant UI
-    final localFlags = await _loadSavedFlagsLocally();
-    _savedExerciseKeysForDate
-      ..clear()
-      ..addAll(localFlags);
+// This replaces your earlier `exList` assignment:
+    final List exList = combined;
 
-    final data = chosenDoc.data()!;
-    final List exList = (data['exercises'] as List?) ?? [];
+// --- END UNION LOOKUP ---
+
 
     // Mark saved keys from Firestore (for coloring/collapse)
     for (final e in exList) {
