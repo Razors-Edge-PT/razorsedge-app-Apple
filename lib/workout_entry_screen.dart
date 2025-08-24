@@ -4135,9 +4135,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     print('👤 [BB2 Merge] Using uid=$uid for athlete merge');
 
-    // ✅ Clear state only if the selected athlete has changed
+    // ✅ Clear state only if the selected athlete or date has changed
     final shouldForceMerge = _lastMergedUid != uid || _lastMergedDate != _selectedDate;
-
     if (shouldForceMerge) {
       print('🔁 [WES] Triggering BB2 merge due to athlete/date switch');
       setState(() {
@@ -4154,18 +4153,17 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       _lastMergedDate = _selectedDate;
     }
 
-    _attachDirtyListeners(); // ⭐ ensure freshly created controllers flip _pendingChanges
+    _attachDirtyListeners(); // keep controllers wired
 
     final blockId = _selectedBlockId!;
     final daysSinceStart = _selectedDate.difference(blockStartDate!).inDays;
     if (daysSinceStart < 0) return;
     print('[WES Merge] daysSinceStart = $daysSinceStart');
 
-
     final weekIndex = (daysSinceStart / 7).floor();
-    final dayIndex = daysSinceStart % 7;
+    final dayIndex  = daysSinceStart % 7;
 
-    // Try modern BB2 source: weeks > days
+    // 1) Primary: planned_blocks weeks/days
     final dayDoc = await FirebaseFirestore.instance
         .collection('planned_blocks')
         .doc(uid)
@@ -4181,13 +4179,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     print('[DEBUG] WES data = ${dayDoc.data()}');
 
     List<Map<String, dynamic>> bb2Exercises = [];
-
     if (dayDoc.exists && dayDoc.data()?['exercises'] != null) {
       bb2Exercises = List<Map<String, dynamic>>.from(dayDoc.data()!['exercises']);
       print('[WES] BB2 day doc exercises (weeks/days): ${bb2Exercises.length}');
     }
 
-    // 🔁 Fallback to block_data if no new BB2 exercises found
+    // 2) Fallback: planned_blocks/block_data/{yyyy-MM-dd}
     if (bb2Exercises.isEmpty) {
       final dateKey = DateFormat('yyyy-MM-dd').format(_selectedDate);
       final blockDataDoc = await FirebaseFirestore.instance
@@ -4205,20 +4202,41 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       }
     }
 
+    // 3) 💾 WES workouts fallback (completed/suppressed days):
+    //    If still empty, seed from users/{uid}/workouts/{yyyy-MM-dd}
     if (bb2Exercises.isEmpty) {
-      print('[WES] No BB2 exercises to merge for $_selectedDate');
+      try {
+        final docId   = _workoutDocIdForDate(_selectedDate);
+        final workout = await FirebaseFirestore.instance
+            .collection('users').doc(uid)
+            .collection('workouts').doc(docId)
+            .get();
+
+        if (workout.exists) {
+          final list = List<Map<String, dynamic>>.from(workout.data()?['exercises'] ?? const []);
+          // Keep only items that at least look like exercises; we’ll still seed empty sets so they’re editable.
+          if (list.isNotEmpty) {
+            bb2Exercises = list;
+            print('[WES] Using WES workouts fallback: ${bb2Exercises.length} exercise(s) from $docId');
+          }
+        }
+      } catch (e) {
+        print('⚠️ [WES] workouts fallback failed: $e');
+      }
+    }
+
+    if (bb2Exercises.isEmpty) {
+      print('[WES] No BB2/WES exercises to merge for $_selectedDate');
       return;
     }
 
-    // Merge logic
-    // Merge logic (use composite key: name + circuitIndex)
+    // Merge logic — composite key: name + circuitIndex
     String _k(Map<String, dynamic> ex) {
       final n = (ex['name'] ?? '').toString().trim();
       final c = (ex['circuitIndex'] ?? 0) as int;
-      return _exerciseKey(n, c); // you already have this helper elsewhere
+      return _exerciseKey(n, c);
     }
 
-// Keys already present in the draft (by name+circuit)
     final existingKeys = _selectedExercisesWithCircuits
         .map<String>((e) => _exerciseKey(
       ((e['name'] ?? '') as String).trim(),
@@ -4226,12 +4244,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     ))
         .toSet();
 
-// Any BB2 rows not yet present in the draft (by name+circuit)
-    final newOnes = bb2Exercises
-        .where((ex) => !existingKeys.contains(_k(ex)))
-        .toList();
-
-    print('[WES] Found ${newOnes.length} new BB2 exercises to merge');
+    final newOnes = bb2Exercises.where((ex) => !existingKeys.contains(_k(ex))).toList();
+    print('[WES] Found ${newOnes.length} new exercises to merge');
 
     if (newOnes.isNotEmpty) {
       setState(() {
@@ -4253,7 +4267,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         }
       });
 
-      // Seed initial values for the newly added rows (flat OR legacy sets[0])
+      // Seed initial values for newly added rows (prefer flat; else sets[0])
       for (final newEx in newOnes) {
         final nameKey = (newEx['name'] ?? '').toString().trim().toLowerCase();
         if (nameKey.isEmpty || _resolvedBB2Values.containsKey(nameKey)) continue;
@@ -4274,7 +4288,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
         final rawSets = newEx['sets'];
         if (rawSets is List && rawSets.isNotEmpty) {
-          final firstSet = rawSets.first as Map<String, dynamic>;
+          final firstSet = Map<String, dynamic>.from(rawSets.first as Map);
           _resolvedBB2Values[nameKey] = {
             'reps': firstSet['reps'],
             'weight': firstSet['weight'],
@@ -4282,16 +4296,45 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           };
           print('🧠 [WES Merge] Injected SETS[0] BB2 values for $nameKey = ${_resolvedBB2Values[nameKey]}');
         } else {
-          print('❌ [WES Merge] No valid sets or flat fields found for $nameKey');
+          // Even if there are no numbers, keep the exercise row so the user can edit it.
+          _resolvedBB2Values[nameKey] = {
+            'reps': null,
+            'weight': null,
+            'rir': null,
+          };
+          print('ℹ️ [WES Merge] No values found for $nameKey — seeding empty controllers');
+        }
+
+// ⬇️ INSERT HYDRATION BLOCK HERE
+        if (_resolvedBB2Values.containsKey(nameKey)) {
+          final values = _resolvedBB2Values[nameKey]!;
+          final idx = _selectedExercisesWithCircuits.indexWhere((e) =>
+          (e['name'] as String).trim().toLowerCase() == nameKey);
+
+          if (idx != -1) {
+            final sets = _workoutSets[idx];
+            if (sets.isNotEmpty) {
+              sets[0].reps = (values['reps'] as num?)?.toInt();
+              sets[0].weight = (values['weight'] as num?)?.toDouble();
+              sets[0].rir = (values['rir'] as num?)?.toDouble();
+            }
+
+            if (_repsControllers.length > idx && _repsControllers[idx].isNotEmpty) {
+              _repsControllers[idx][0].text = values['reps']?.toString() ?? '';
+              _weightControllers[idx][0].text = values['weight']?.toString() ?? '';
+              _rirControllers[idx][0].text = values['rir']?.toString() ?? '';
+            }
+          }
         }
       }
 
-      print("[WES] Merged ${newOnes.length} new BB2 exercises into draft");
+
+
+      print('[WES] Merged ${newOnes.length} exercise(s) into draft');
       await _saveWorkoutDraftToCache();
     }
-
-
   }
+
 
 
   void addSet(int exerciseIndex) {
