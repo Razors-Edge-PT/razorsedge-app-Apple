@@ -20,38 +20,129 @@ class TopSetsScreen extends StatefulWidget {
 
 
 class _TopSetsScreenState extends State<TopSetsScreen> {
-  List<Workout> _workouts = [];
+
   bool _isLoading = true;
-  int? _selectedRepTarget;
+
+  final int _pageSize = 50;
+  final ScrollController _scrollController = ScrollController();
+
+  List<Workout> _workouts = [];             // replaces using widget.recentWorkouts
+  DocumentSnapshot? _lastDoc;               // pagination anchor
+  bool _isInitialLoading = true;
+  bool _isLoadingMore = false;
+  bool _hasMore = true;
   String _sortOption = 'date';
+  int? _selectedRepTarget;
 
   @override
   void initState() {
     super.initState();
+    _loadInitialWorkouts();
+    _scrollController.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
+    super.dispose();
   }
 
 
-  Future<void> _fetchWorkoutHistory() async {
+  Future<void> _loadInitialWorkouts() async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      final snapshot = await FirebaseFirestore.instance
+    if (user == null) {
+      setState(() => _isInitialLoading = false);
+      return;
+    }
+
+    try {
+      final snap = await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
           .collection('workouts')
           .orderBy('date', descending: true)
-          .limit(4000)
+          .limit(_pageSize)
           .get();
 
+      final docs = snap.docs;
       setState(() {
-        _workouts = snapshot.docs.map((doc) => Workout.fromFirestore(doc)).toList();
-        _isLoading = false;
+        _workouts = docs.map((d) => Workout.fromFirestore(d)).toList();
+        _lastDoc = docs.isNotEmpty ? docs.last : null;
+        _hasMore = docs.length == _pageSize;
+        _isInitialLoading = false;
       });
-    } else {
-      setState(() {
-        _isLoading = false;
-      });
+
+      // 🧾 Debug print
+      print('📊 [TopSets] Loaded initial ${_workouts.length} workouts.');
+    } catch (e) {
+      print('❌ [TopSets] Error loading initial workouts: $e');
+      setState(() => _isInitialLoading = false);
     }
   }
+
+  Future<void> _loadMoreWorkouts() async {
+    if (!_hasMore || _isLoadingMore || _lastDoc == null) return;
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    setState(() => _isLoadingMore = true);
+
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('workouts')
+          .orderBy('date', descending: true)
+          .startAfterDocument(_lastDoc!)
+          .limit(_pageSize)
+          .get();
+
+      final docs = snap.docs;
+      setState(() {
+        _workouts.addAll(docs.map((d) => Workout.fromFirestore(d)));
+        _lastDoc = docs.isNotEmpty ? docs.last : _lastDoc;
+        _hasMore = docs.length == _pageSize;
+        _isLoadingMore = false;
+      });
+
+      // 🧾 Debug print
+      print('📊 [TopSets] Loaded +${docs.length} more workouts. Total = ${_workouts.length}');
+    } catch (e) {
+      print('❌ [TopSets] Error loading more workouts: $e');
+      setState(() => _isLoadingMore = false);
+    }
+  }
+
+
+  void _sortWorkouts() {
+    setState(() {
+      if (_sortOption == 'date') {
+        _workouts.sort((a, b) => b.date.compareTo(a.date));
+      } else if (_sortOption == 'e1rm') {
+        double topE1rm(Workout w) => w.exercises
+            .expand((e) => e.sets)
+            .map((s) => calculateE1RM(s.weight ?? 0, (s.reps ?? 0).toDouble(), s.rir ?? 0))
+            .fold(0.0, (p, c) => c > p ? c : p);
+        _workouts.sort((a, b) => topE1rm(b).compareTo(topE1rm(a)));
+      }
+    });
+  }
+
+
+// Trigger load-more when near the end of the list
+  void _onScroll() {
+    if (!_hasMore || _isLoadingMore) return;
+    if (!_scrollController.hasClients) return;
+
+    final threshold = 200.0; // px from bottom to trigger pagination
+    final position = _scrollController.position;
+    if (position.maxScrollExtent - position.pixels <= threshold) {
+      _loadMoreWorkouts();
+    }
+  }
+
 
   double calculateE1RM(double weight, double reps, double rir) {
     double totalReps = reps + rir;
@@ -60,27 +151,7 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
         : (weight * (1 + (0.0333 * totalReps)));
   }
 
-  void _sortWorkouts() {
-    setState(() {
-      if (_sortOption == 'date') {
-        widget.recentWorkouts.sort((a, b) => b.date.compareTo(a.date)); // ✅ Sorts by newest first
-      } else if (_sortOption == 'e1rm') {
-        widget.recentWorkouts.sort((a, b) {
-          double e1rmA = a.exercises
-              .expand((e) => e.sets)
-              .map((s) => calculateE1RM(s.weight ?? 0, s.reps?.toDouble() ?? 0, s.rir ?? 0))
-              .fold(0, (p, c) => c > p ? c : p);
 
-          double e1rmB = b.exercises
-              .expand((e) => e.sets)
-              .map((s) => calculateE1RM(s.weight ?? 0, s.reps?.toDouble() ?? 0, s.rir ?? 0))
-              .fold(0, (p, c) => c > p ? c : p);
-
-          return e1rmB.compareTo(e1rmA); // ✅ Sorts by highest E1RM first
-        });
-      }
-    });
-  }
 
 
   void _showFilterDialog(BuildContext context) {
@@ -185,44 +256,71 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
             ),
           ),
           Expanded(
-            child: widget.recentWorkouts.isEmpty
+            child: _isInitialLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _workouts.isEmpty
                 ? const Center(child: Text("No previous workouts found."))
                 : ListView.builder(
-              itemCount: widget.recentWorkouts.length,
+              controller: _scrollController,
+              itemCount: _workouts.length + 1, // +1 for footer
               itemBuilder: (context, index) {
-                final workout = widget.recentWorkouts[index];
+                // Footer row for load more / spinner / end
+                if (index == _workouts.length) {
+                  if (_isLoadingMore) {
+                    return const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 16),
+                      child: Center(child: CircularProgressIndicator()),
+                    );
+                  }
+                  if (_hasMore) {
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Center(
+                        child: TextButton(
+                          onPressed: _loadMoreWorkouts,
+                          child: const Text('Load more'),
+                        ),
+                      ),
+                    );
+                  }
+                  return const SizedBox(height: 16); // end spacer
+                }
+
+                final workout = _workouts[index];
+
+                // 🔎 Only consider sets for the selected exercise
                 SetDetails? topSet;
                 double highestE1RM = 0.0;
-                String? topExerciseName; // ✅ Store the name of the exercise for the top set
+                String? topExerciseName;
 
                 for (var exercise in workout.exercises) {
-                  if (exercise.name != widget.exerciseName) continue; // ✅ Filter by selected exercise
+                  if (exercise.name != widget.exerciseName) continue;
 
                   for (var set in exercise.sets) {
                     if (_selectedRepTarget != null && set.reps != _selectedRepTarget) {
                       continue;
                     }
-                    double weight = set.weight ?? 0.0;
-                    double reps = (set.reps ?? 0).toDouble();
-                    double rir = set.rir ?? 0.0;
-                    double e1rm = calculateE1RM(weight, reps, rir);
+                    final weight = set.weight ?? 0.0;
+                    final reps = (set.reps ?? 0).toDouble();
+                    final rir  = set.rir ?? 0.0;
+                    final e1rm = calculateE1RM(weight, reps, rir);
 
                     if (topSet == null || e1rm > highestE1RM) {
                       highestE1RM = e1rm;
                       topSet = set;
-                      topExerciseName = exercise.name; // ✅ Store the exercise name
+                      topExerciseName = exercise.name;
                     }
                   }
                 }
 
                 if (topSet == null) return const SizedBox.shrink();
-                bool highlight = _selectedRepTarget != null && topSet.reps == _selectedRepTarget;
+                final highlight = _selectedRepTarget != null && topSet!.reps == _selectedRepTarget;
 
                 return Card(
                   margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
                   shape: highlight
                       ? RoundedRectangleBorder(
-                    side: BorderSide(color: Colors.blue, width: 2.0),
+                    side: const BorderSide(color: Colors.blue, width: 2.0),
                     borderRadius: BorderRadius.circular(8.0),
                   )
                       : null,
@@ -235,13 +333,13 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
                       text: TextSpan(
                         style: DefaultTextStyle.of(context).style,
                         children: [
-                          TextSpan(text: '${topSet.weight}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.lightBlue)),
-                          TextSpan(text: 'kg ', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
-                          TextSpan(text: 'x ', style: const TextStyle(color: Colors.blue)),
-                          TextSpan(text: '${topSet.reps}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.lightBlue)),
-                          TextSpan(text: ', RIR: ', style: const TextStyle(color: Colors.blue)),
-                          TextSpan(text: '${topSet.rir}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.lightBlue)),
-                          TextSpan(text: ' | E1RM: ', style: const TextStyle(color: Colors.blue)),
+                          TextSpan(text: '${topSet!.weight}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.lightBlue)),
+                          const TextSpan(text: 'kg ', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
+                          const TextSpan(text: 'x ', style: TextStyle(color: Colors.blue)),
+                          TextSpan(text: '${topSet!.reps}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.lightBlue)),
+                          const TextSpan(text: ', RIR: ', style: TextStyle(color: Colors.blue)),
+                          TextSpan(text: '${topSet!.rir}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.lightBlue)),
+                          const TextSpan(text: ' | E1RM: ', style: TextStyle(color: Colors.blue)),
                           TextSpan(text: '${highestE1RM.toStringAsFixed(1)} kg', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.lightBlue)),
                         ],
                       ),
@@ -250,7 +348,8 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
                 );
               },
             ),
-          ),
+          )
+
         ],
       ),
 
