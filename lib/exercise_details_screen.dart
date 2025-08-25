@@ -6,7 +6,7 @@ import 'user_context.dart';
 import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart'; // for Timestamp & Firestore
-
+import 'package:flutter/services.dart'; // for FilteringTextInputFormatter
 
 enum TrendRange { d14, m1, m6, y1, y2 }
 
@@ -213,6 +213,32 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     }
   }
 
+
+  // --- Rep-target chart state ---
+  final TextEditingController _repTargetCtrl = TextEditingController(text: '5');
+  double? _repTarget = 5;        // default visible trend for 5 reps
+  bool _includeRIRForTarget = true;
+  TrendRange _trendTarget = TrendRange.d14;
+
+  void _cycleTrendTarget() {
+    final vals = TrendRange.values;
+    final i = vals.indexOf(_trendTarget);
+    setState(() => _trendTarget = vals[(i + 1) % vals.length]);
+  }
+
+  String _repTargetLabel() {
+    final r = _repTarget;
+    if (r == null) return 'Rep Target * ${_rangeLabel(_trendTarget)}';
+    final isInt = (r % 1).abs() < 1e-9;
+    final repsText = isInt ? r.toInt().toString() : r.toStringAsFixed(1);
+    return '$repsText Rep Target * ${_rangeLabel(_trendTarget)}';
+  }
+
+  String _rirToggleText() =>
+      _includeRIRForTarget ? 'Including RIR' : 'Excluding RIR';
+
+
+
   Set<int> _computeXTicks(int n, TrendRange t) {
     if (n <= 0) return {};
     final last = n - 1;
@@ -282,6 +308,12 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
   }
 
   @override
+  void dispose() {
+    _repTargetCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     // Full history (used by the list below)
     final List<Workout> sortedWorkouts =
@@ -320,6 +352,73 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
 
     print('📊 [Details] Workouts total=${_workouts.length}, matched=$matchedWorkouts, points=${series.length}');
 
+    // ===== Rep-target series (second chart) =====
+    final double? repTarget = _repTarget;
+    final List<E1RMPoint> seriesTarget = [];
+
+    if (repTarget != null) {
+      for (final workout in sortedWorkouts) {
+        // find the matching exercise in the workout (id first, fallback name)
+        Exercise? ex = workout.exercises.firstWhere(
+              (e) => (e.id != null && e.id == widget.exerciseId),
+          orElse: () => Exercise(name: '', sets: const [], circuitIndex: 0),
+        );
+        if (ex.name.isEmpty && widget.exerciseName != null) {
+          ex = workout.exercises.firstWhere(
+                (e) => e.name == widget.exerciseName,
+            orElse: () => Exercise(name: '', sets: const [], circuitIndex: 0),
+          );
+        }
+        if (ex.name.isEmpty || ex.sets.isEmpty) continue;
+
+        // filter sets with reps == target (allow tiny tolerance)
+        final tol = 1e-6;
+        final matching = ex.sets.where((s) {
+          final r = (s.reps ?? 0).toDouble();
+          return (r - repTarget).abs() < tol;
+        }).toList();
+        if (matching.isEmpty) continue;
+
+        // pick the strongest matching set (highest E1RM under chosen rule)
+        double best = double.negativeInfinity;
+        for (final s in matching) {
+          final weight = (s.weight ?? 0.0);
+          final reps   = (s.reps ?? 0).toDouble();
+          final rir    = _includeRIRForTarget ? (s.rir ?? 0.0) : 0.0;
+          final e1 = calculateE1RM(weight, reps, rir);
+          if (e1 > best) best = e1;
+        }
+        if (best.isFinite) {
+          seriesTarget.add(E1RMPoint(workout.date, best));
+        }
+      }
+    }
+
+// project to points/labels for the selected range
+    final cutoff2 = _cutoffFor(_trendTarget);
+    final filtered2 = seriesTarget.where((p) => !p.date.isBefore(cutoff2)).toList()
+      ..sort((a,b) => a.date.compareTo(b.date));
+
+    final spots2 = <FlSpot>[];
+    final labels2 = <String>[];
+    double maxY2 = 0;
+
+    for (var i = 0; i < filtered2.length; i++) {
+      spots2.add(FlSpot(i.toDouble(), filtered2[i].value));
+      labels2.add(_labelForDate(filtered2[i].date, _trendTarget));
+      if (filtered2[i].value > maxY2) maxY2 = filtered2[i].value;
+    }
+
+    final adjustedMaxY2 = spots2.isEmpty ? 100.0
+        : (maxY2 * 1.018).clamp(100.0, double.infinity) as double;
+
+    final xTickSet2 = _computeXTicks(labels2.length, _trendTarget);
+    final bool short2 = _trendTarget == TrendRange.d14 || _trendTarget == TrendRange.m1;
+
+// asym padding so first point is closer to Y axis but right edge has room
+    final double leftPadX2  = short2 ? 0.10 : 0.20;
+    final double rightPadX2 = short2 ? 0.20 : 0.15;
+
 
 // Filter to selected window & project to chart data
     final cutoff = _cutoffFor(_trend);
@@ -354,9 +453,11 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     final bool shortRange = _trend == TrendRange.d14 || _trend == TrendRange.m1;
     final double leftPadX  = shortRange ? 0.10 : 0.20;
     final double rightPadX = shortRange ? 0.10 : 0.15;
+    final double controlHeight = 40;
 
     return Scaffold(
       backgroundColor: Colors.black,
+      resizeToAvoidBottomInset: true, // <- make sure this is here
       appBar: AppBar(
         backgroundColor: Colors.black,
         title: Column(
@@ -383,9 +484,14 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
           ],
         ),
       ),
-
-      body: Column(
-        children: [
+    body: SingleChildScrollView(
+    keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+    padding: EdgeInsets.only(
+    bottom: MediaQuery.of(context).viewInsets.bottom + 8, // <- room for keyboard
+    ),
+    child: Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
           // Title + inline range toggle
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
@@ -535,6 +641,233 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
             ),
           ),
 
+          // ──────────────────────────────────────────────────────────────
+// E1RM @ Rep Target — Controls
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Title button centered
+                const SizedBox(height: 4),
+
+                // Controls below, wrapping when needed
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      // ── Reps (left, compact)
+                      SizedBox(
+                        width: 36,
+                        height: 32,
+                        child: TextField(
+                          controller: _repTargetCtrl,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
+                          ],
+                          onChanged: (s) => setState(() => _repTarget = double.tryParse(s)),
+                          cursorColor: Colors.cyanAccent,
+                          style: const TextStyle(
+                            color: Colors.cyanAccent,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          decoration: InputDecoration(
+                            hintText: 'Reps',
+                            hintStyle: const TextStyle(color: Colors.cyanAccent),
+                            isDense: true,
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                            filled: true,
+                            fillColor: Colors.cyanAccent.withOpacity(0.08),
+                            enabledBorder: OutlineInputBorder(
+                              borderSide: const BorderSide(color: Colors.cyanAccent),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderSide: const BorderSide(color: Colors.cyanAccent, width: 1.3),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+
+                      // ── Title toggle (center)
+                      Expanded(
+                        child: Center(
+                          child: SizedBox(
+                            height: 36,
+                            child: TextButton(
+                              onPressed: _cycleTrendTarget,
+                              style: TextButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(horizontal:6, vertical: 4),
+                                minimumSize: const Size(0, 32),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                  side: const BorderSide(color: Colors.cyanAccent),
+                                ),
+                              ),
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(
+                                  _repTargetLabel(), // e.g. "5 Rep Target * 1 Month"
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    color: Colors.cyanAccent,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      // ── Include RIR (right, compact)
+                      ConstrainedBox(
+                        constraints: const BoxConstraints.tightFor(height: 32),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(8),
+                          onTap: () => setState(() => _includeRIRForTarget = !_includeRIRForTarget),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.cyanAccent),
+                              borderRadius: BorderRadius.circular(8),
+                              color: Colors.cyanAccent.withOpacity(0.08),
+                            ),
+                            child: Text(
+                              _rirToggleText(), // e.g. "Including RIR" / "Excluding RIR"
+                              style: const TextStyle(
+                                color: Colors.cyanAccent,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ),
+                      )
+
+                    ],
+                  ),
+                )
+
+
+              ],
+            ),
+          ),
+
+
+// E1RM @ Rep Target — Chart
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: AspectRatio(
+              aspectRatio: 1.7,
+              child: LineChart(
+                LineChartData(
+                  minX: -leftPadX2,
+                  maxX: spots2.isEmpty ? rightPadX2 : (spots2.length - 1 + rightPadX2),
+                  maxY: adjustedMaxY2,
+
+                  gridData: FlGridData(
+                    show: true,
+                    getDrawingHorizontalLine: (_) => FlLine(color: Colors.white10),
+                    getDrawingVerticalLine: (_) => FlLine(color: Colors.white10),
+                  ),
+
+                  titlesData: FlTitlesData(
+                    leftTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        reservedSize: 36,
+                        getTitlesWidget: (value, meta) {
+                          const eps = 1e-6;
+                          if ((meta.max - value).abs() < eps) return const SizedBox.shrink();
+                          return Text(
+                            value.toInt().toString(),
+                            style: const TextStyle(color: Colors.white, fontSize: 10),
+                          );
+                        },
+                      ),
+                    ),
+                    bottomTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        interval: 1,
+                        getTitlesWidget: (value, meta) {
+                          // fix duplicate '-0.0' tick
+                          final double v = value;
+                          final double vr = v.roundToDouble();
+                          if ((v - vr).abs() > 1e-6) return const SizedBox.shrink();
+                          if (v == 0.0 && v.isNegative) return const SizedBox.shrink();
+
+                          final int i = vr.toInt();
+                          if (i < 0 || i >= labels2.length) return const SizedBox.shrink();
+                          if (!xTickSet2.contains(i)) return const SizedBox.shrink();
+
+                          return SideTitleWidget(
+                            axisSide: meta.axisSide,
+                            child: Transform.rotate(
+                              angle: short2 ? -0.4 : -0.5,
+                              child: Text(
+                                labels2[i],
+                                style: const TextStyle(color: Colors.white, fontSize: 10),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  ),
+
+                  lineBarsData: [
+                    LineChartBarData(
+                      spots: spots2,
+                      isCurved: true,
+                      color: Colors.cyanAccent,
+                      dotData: FlDotData(
+                        show: _trendTarget == TrendRange.d14 || _trendTarget == TrendRange.m1,
+                      ),
+                      barWidth: (_trendTarget == TrendRange.m6 ||
+                          _trendTarget == TrendRange.y1 ||
+                          _trendTarget == TrendRange.y2) ? 2.0 : 1.0,
+                      belowBarData: BarAreaData(
+                        show: true,
+                        color: Colors.cyanAccent.withOpacity(0.1),
+                      ),
+                    ),
+                  ],
+
+                  lineTouchData: LineTouchData(
+                    touchTooltipData: LineTouchTooltipData(
+                      tooltipBgColor: Colors.grey[900]!,
+                      getTooltipItems: (touchedSpots) {
+                        return touchedSpots.map((s) {
+                          final idx = s.x.toInt();
+                          final dateStr = (idx >= 0 && idx < filtered2.length)
+                              ? DateFormat('d MMM yyyy').format(filtered2[idx].date)
+                              : '';
+                          final e1rm = s.y.toStringAsFixed(1);
+                          return LineTooltipItem(
+                            'E1RM: $e1rm kg\n$dateStr',
+                            const TextStyle(color: Colors.white),
+                          );
+                        }).toList();
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+
 
           const Divider(color: Colors.white24),
 
@@ -550,41 +883,42 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
             ),
           ),
           const SizedBox(height: 8),
-          Expanded(
-            child: ListView.builder(
-              itemCount: sortedWorkouts.length,
-              itemBuilder: (context, index) {
-                final workout = sortedWorkouts[index];
-                final exercise = workout.exercises.firstWhere(
-                      (ex) => ex.name == widget.exerciseName,
-                  orElse: () => Exercise(name: '', sets: []),
-                );
+      ListView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(), // parent scrolls everything
+        itemCount: sortedWorkouts.length,
+        itemBuilder: (context, index) {
+          final workout = sortedWorkouts[index];
+          final exercise = workout.exercises.firstWhere(
+                (ex) => ex.name == widget.exerciseName,
+            orElse: () => Exercise(name: '', sets: []),
+          );
 
-                if (exercise.sets.isEmpty) return const SizedBox.shrink();
+          if (exercise.sets.isEmpty) return const SizedBox.shrink();
 
-                final topSet = exercise.sets.reduce((a, b) {
-                  final aE1 = calculateE1RM(a.weight ?? 0.0, (a.reps ?? 0).toDouble(), a.rir ?? 0.0);
-                  final bE1 = calculateE1RM(b.weight ?? 0.0, (b.reps ?? 0).toDouble(), b.rir ?? 0.0);
-                  return aE1 > bE1 ? a : b;
-                });
+          final topSet = exercise.sets.reduce((a, b) {
+            final aE1 = calculateE1RM(a.weight ?? 0.0, (a.reps ?? 0).toDouble(), a.rir ?? 0.0);
+            final bE1 = calculateE1RM(b.weight ?? 0.0, (b.reps ?? 0).toDouble(), b.rir ?? 0.0);
+            return aE1 > bE1 ? a : b;
+          });
 
-                final e1rm = calculateE1RM(topSet.weight ?? 0.0, (topSet.reps ?? 0).toDouble(), topSet.rir ?? 0.0);
+          final e1rm = calculateE1RM(topSet.weight ?? 0.0, (topSet.reps ?? 0).toDouble(), topSet.rir ?? 0.0);
 
-                return ListTile(
-                  title: Text(
-                    DateFormat('dd-MM-yyyy').format(workout.date),
-                    style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
-                  ),
-                  subtitle: Text(
-                    '${topSet.weight} kg × ${topSet.reps}, RIR ${topSet.rir} → E1RM: ${e1rm.toStringAsFixed(1)} kg',
-                    style: const TextStyle(color: Colors.cyanAccent),
-                  ),
-                );
-              },
+          return ListTile(
+            title: Text(
+              DateFormat('dd-MM-yyyy').format(workout.date),
+              style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
             ),
-          ),
-        ],
+            subtitle: Text(
+              '${topSet.weight} kg × ${topSet.reps}, RIR ${topSet.rir} → E1RM: ${e1rm.toStringAsFixed(1)} kg',
+              style: const TextStyle(color: Colors.cyanAccent),
+            ),
+          );
+        },
+      )
+
+    ],
       ),
-    );
+    ));
   }
 }
