@@ -84,6 +84,11 @@ class _HomeScreenState extends State<HomeScreen> {
         _fetchTrainingDaysForMonth(_focusedDay);
       });
     });
+
+    debugPrint('[UserContext] uid=${userContext.actorUid} '
+        'isCoach=${userContext.isCoach} '
+        'isAdmin=${userContext.isAdmin} '
+    );
   }
 
   Future<void> _ensureAtLeastOneBlockExists() async {

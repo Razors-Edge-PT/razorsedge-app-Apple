@@ -24,6 +24,7 @@ class UserContext extends ChangeNotifier {
   bool get isAdmin => [
     'Mxj2NXankQdVv4Xrj2sZzBBm4W92', // Richard
     'B3dWiljf4ISavFufZ0xN6o9LsD93', // Campbell
+    'SMTEVGPH1MXgOgbcBbJFU1HjU8G3', // Adam W
     // 'Rp6gFj16KMgsmOtC9tZGlUDCNRr1', // Courtney
   ].contains(actorUid);
 

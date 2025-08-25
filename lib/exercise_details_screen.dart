@@ -7,6 +7,7 @@ import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart'; // for Timestamp & Firestore
 import 'package:flutter/services.dart'; // for FilteringTextInputFormatter
+import 'user_context.dart';
 
 enum TrendRange { d14, m1, m6, y1, y2 }
 
@@ -35,6 +36,7 @@ class ExerciseDetailsScreen extends StatefulWidget {
 
 class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
   TrendRange _trend = TrendRange.d14; // 👈 our new toggle state
+  String get userId => UserContext.of(context, listen: false).currentUid;
 
 
   double calculateE1RM(double weight, double reps, double rir) {
@@ -87,8 +89,10 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     int lookbackDays = 730,
     int batchSize = 50,
   }) async {
+
+    String? userId = uidOverride;
     final user = FirebaseAuth.instance.currentUser;
-    final userId = uidOverride ?? user?.uid;
+    userId ??= FirebaseAuth.instance.currentUser?.uid;
     if (userId == null) return [];
 
     final cutoff = DateTime.now().subtract(Duration(days: lookbackDays));
@@ -279,17 +283,12 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     super.initState();
     print('🟦 [Details] init for id="${widget.exerciseId}", name="${widget.exerciseName}"');
 
-    // If caller gave us a small list, render it immediately (placeholder)…
-    if (widget.recentWorkouts != null && widget.recentWorkouts!.isNotEmpty) {
-      _workouts = [...widget.recentWorkouts!]..sort((a, b) => a.date.compareTo(b.date));
-      _loading = false;
-      print('🟦 [Details] Using passed-in placeholder: ${_workouts.length} workouts');
-    }
-
+    final selectedUid = UserContext.of(context, listen: false).currentUid;
     // …then fetch full 2y history and replace
     _fetchTwoYearHistoryForExercise(
       exerciseId: widget.exerciseId,
       exerciseName: widget.exerciseName, // nullable ok
+      uidOverride: selectedUid, // 👈 pass selected user id
     ).then((list) {
       if (!mounted) return;
       setState(() {

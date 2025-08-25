@@ -3,6 +3,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import 'workout_model.dart';
+import 'user_context.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class TopSetsScreen extends StatefulWidget {
   final String exerciseName; // ✅ Define exercise name
@@ -34,6 +36,8 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
   String _sortOption = 'date';
   int? _selectedRepTarget;
 
+  String get userId => UserContext.of(context, listen: false).currentUid;
+
   @override
   void initState() {
     super.initState();
@@ -50,16 +54,12 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
 
 
   Future<void> _loadInitialWorkouts() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      setState(() => _isInitialLoading = false);
-      return;
-    }
+    setState(() => _isInitialLoading = false); // or true if you show a spinner
 
     try {
       final snap = await FirebaseFirestore.instance
           .collection('users')
-          .doc(user.uid)
+          .doc(userId) // 👈 selected user, not logged-in
           .collection('workouts')
           .orderBy('date', descending: true)
           .limit(_pageSize)
@@ -73,26 +73,23 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
         _isInitialLoading = false;
       });
 
-      // 🧾 Debug print
-      print('📊 [TopSets] Loaded initial ${_workouts.length} workouts.');
+      print('📊 [TopSets] (uid=$userId) Loaded initial ${_workouts.length} workouts.');
     } catch (e) {
-      print('❌ [TopSets] Error loading initial workouts: $e');
+      print('❌ [TopSets] Error loading initial workouts for uid=$userId: $e');
       setState(() => _isInitialLoading = false);
     }
   }
 
+
   Future<void> _loadMoreWorkouts() async {
     if (!_hasMore || _isLoadingMore || _lastDoc == null) return;
-
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
 
     setState(() => _isLoadingMore = true);
 
     try {
       final snap = await FirebaseFirestore.instance
           .collection('users')
-          .doc(user.uid)
+          .doc(userId) // 👈 selected user, not logged-in
           .collection('workouts')
           .orderBy('date', descending: true)
           .startAfterDocument(_lastDoc!)
@@ -107,10 +104,9 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
         _isLoadingMore = false;
       });
 
-      // 🧾 Debug print
-      print('📊 [TopSets] Loaded +${docs.length} more workouts. Total = ${_workouts.length}');
+      print('📊 [TopSets] (uid=$userId) Loaded +${docs.length} more. Total=${_workouts.length}');
     } catch (e) {
-      print('❌ [TopSets] Error loading more workouts: $e');
+      print('❌ [TopSets] Error loading more workouts for uid=$userId: $e');
       setState(() => _isLoadingMore = false);
     }
   }
@@ -209,7 +205,7 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('${widget.exerciseName} - Top Sets'),
+        title: Text('${widget.exerciseName} '),
       ),
       body: Column(
         children: [
@@ -218,7 +214,16 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                SizedBox(width: 68), // Add spacing to move Sort closer to Filter
+                SizedBox(width: 18), // Add spacing to move Sort closer to Filter
+                Text(
+                  'Top Sets by E1RM',
+                  style: GoogleFonts.monda(
+                    fontSize: 19, fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                    // fontWeight: FontWeight.w700, // optional
+                  ),
+                ),
+                SizedBox(width: 2), // Add spacing to move Sort closer to Filter
 
                 PopupMenuButton<String>(
                   shape: RoundedRectangleBorder(
@@ -237,8 +242,8 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
                   child: ElevatedButton(
                     onPressed: null,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.lightBlue.shade200, // Sort button color
-                      disabledBackgroundColor: Colors.lightBlue.shade200,
+                      backgroundColor:Colors.blueGrey[700], // Sort button color
+                      disabledBackgroundColor: Colors.blueGrey[700],
                       disabledForegroundColor: Colors.grey,
                       elevation: 0,
                     ),
@@ -248,7 +253,7 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
                 ElevatedButton(
                   onPressed: () => _showFilterDialog(context),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.lightBlue.shade200, // Filter button color
+                    backgroundColor:  Colors.blueGrey[700], // Filter button color
                   ),
                   child: const Text("Filters", style: TextStyle(color: Colors.white)),
                 ),
@@ -334,12 +339,12 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
                         style: DefaultTextStyle.of(context).style,
                         children: [
                           TextSpan(text: '${topSet!.weight}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.lightBlue)),
-                          const TextSpan(text: 'kg ', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
-                          const TextSpan(text: 'x ', style: TextStyle(color: Colors.blue)),
+                          const TextSpan(text: 'kg ', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.lightBlue)),
+                          const TextSpan(text: 'x ', style: TextStyle(color: Colors.lightBlue)),
                           TextSpan(text: '${topSet!.reps}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.lightBlue)),
-                          const TextSpan(text: ', RIR: ', style: TextStyle(color: Colors.blue)),
+                          const TextSpan(text: ', RIR: ', style: TextStyle(color: Colors.lightBlue)),
                           TextSpan(text: '${topSet!.rir}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.lightBlue)),
-                          const TextSpan(text: ' | E1RM: ', style: TextStyle(color: Colors.blue)),
+                          const TextSpan(text: ' | E1RM: ', style: TextStyle(color: Colors.lightBlue)),
                           TextSpan(text: '${highestE1RM.toStringAsFixed(1)} kg', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.lightBlue)),
                         ],
                       ),

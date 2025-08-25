@@ -50,6 +50,7 @@ class AppRoot extends StatelessWidget {
             const devCoachUids = {
               'Mxj2NXankQdVv4Xrj2sZzBBm4W92', // Richard
               'B3dWiljf4ISavFufZ0xN6o9LsD93', //Campbell
+              'SMTEVGPH1MXgOgbcBbJFU1HjU8G3', // Adam
             };
             final isCoachClaim = token.claims?['isCoach'] == true;
             final isCoach = isCoachClaim || devCoachUids.contains(user.uid);

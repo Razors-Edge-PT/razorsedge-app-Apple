@@ -80,12 +80,18 @@ flutter_launcher_icons:
 
 flutter_native_splash:
   color: "#0B0B0B"
-  image: assets/branding/GL _Navy.png
+
+  # Used on Android 11 and below (can be wide)
+  image: assets/branding/GL_Navy.png   # (no spaces in the filename)
+
   android_12:
-    image: assets/branding/android12.png
+    image: assets/branding/splash_android12_1152.png   # padded square icon
+
     icon_background_color: "#0B0B0B"
+
   android: true
   ios: false
+
 
 
 # For information on the generic Dart part of this file, see the

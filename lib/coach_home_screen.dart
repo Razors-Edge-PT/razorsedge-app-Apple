@@ -262,9 +262,6 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
   }
 
 
-
-
-
   // ---------- Added: helper to remove athlete ----------
   Future<void> _removeAthlete(String uid) async {
     final coachUid = context.read<UserContext>().actorUid;
@@ -343,40 +340,213 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
                 tooltip: 'Seed athlete to coach (admin)',
                 icon: const Icon(Icons.admin_panel_settings),
                 onPressed: () async {
-                  final coachController = TextEditingController(text: 'B3dWiljf4ISavFufZ0xN6o9LsD93'); // Campbell default
-                  final emailController = TextEditingController();
+                  final coachSearchController = TextEditingController();
+                  final athleteEmailController = TextEditingController();
+                  String? selectedCoachUid;
+                  String? selectedCoachName;
+                  List<Map<String, String>> results = [];
+                  bool isSearching = false;
+
+                  Future<void> _search(String q) async {
+                    final query = q.trim();
+                    results = [];
+                    if (query.isEmpty) return;
+
+                    isSearching = true;
+                    try {
+                      final merged = <Map<String, String>>[];
+                      final seen = <String>{};
+
+                      String safe(Object? v) => (v ?? '').toString();
+
+                      // 0) If it looks like an email, try your user_lookup first (exact match)
+                      if (query.contains('@')) {
+                        final lu = await FirebaseFirestore.instance
+                            .collection('user_lookup')
+                            .doc(query.toLowerCase())
+                            .get();
+
+                        if (lu.exists) {
+                          final data = lu.data() as Map<String, dynamic>;
+                          final uid = safe(data['uid']);
+                          if (uid.isNotEmpty && seen.add(uid)) {
+                            merged.add({
+                              'uid': uid,
+                              'name': safe(data['displayName']),
+                              'email': safe(data['email']),
+                            });
+                          }
+                        }
+                      }
+
+                      // 1) Name search (case-sensitive, no lowercased field required)
+                      try {
+                        final byName = await FirebaseFirestore.instance
+                            .collection('users')
+                            .orderBy('displayName')                  // no displayNameLower needed
+                            .startAt([query])                        // prefix match (case sensitive)
+                            .endAt(['$query\uf8ff'])
+                            .limit(10)
+                            .get();
+
+                        for (final d in byName.docs) {
+                          final uid = d.id;
+                          if (seen.add(uid)) {
+                            final data = d.data() as Map<String, dynamic>;
+                            merged.add({
+                              'uid': uid,
+                              'name': safe(data['displayName']),
+                              'email': safe(data['email']),
+                            });
+                          }
+                        }
+                      } on FirebaseException catch (e) {
+                        // If you see "requires an index", create it in Firestore console.
+                        debugPrint('🔎 byName search failed: ${e.message}');
+                      }
+
+                      // 2) Email prefix search (no emailLower needed)
+                      try {
+                        final byEmail = await FirebaseFirestore.instance
+                            .collection('users')
+                            .orderBy('email')
+                            .startAt([query])
+                            .endAt(['$query\uf8ff'])
+                            .limit(10)
+                            .get();
+
+                        for (final d in byEmail.docs) {
+                          final uid = d.id;
+                          if (seen.add(uid)) {
+                            final data = d.data() as Map<String, dynamic>;
+                            merged.add({
+                              'uid': uid,
+                              'name': safe(data['displayName']),
+                              'email': safe(data['email']),
+                            });
+                          }
+                        }
+                      } on FirebaseException catch (e) {
+                        debugPrint('🔎 byEmail search failed: ${e.message}');
+                      }
+
+                      results = merged;
+                      debugPrint('🔍 coach search "${query}": ${results.length} result(s)');
+                    } catch (e, st) {
+                      debugPrint('❌ coach search error: $e\n$st');
+                      results = [];
+                    } finally {
+                      isSearching = false;
+                    }
+                  }
 
                   final result = await showDialog<Map<String, String>?>(
-                    context: context,
-                    builder: (ctx) => AlertDialog(
-                      title: const Text('Seed athlete to coach'),
-                      content: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          TextField(
-                            controller: coachController,
-                            decoration: const InputDecoration(labelText: 'Coach UID'),
-                          ),
-                          const SizedBox(height: 8),
-                          TextField(
-                            controller: emailController,
-                            decoration: const InputDecoration(labelText: 'Athlete email'),
-                            keyboardType: TextInputType.emailAddress,
-                            autofocus: true,
-                          ),
-                        ],
-                      ),
-                      actions: [
-                        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-                        TextButton(
-                          onPressed: () => Navigator.pop(ctx, {
-                            'coachUid': coachController.text,
-                            'email': emailController.text,
-                          }),
-                          child: const Text('Add'),
-                        ),
-                      ],
-                    ),
+                    context: context, // ✅ pass the BuildContext you already have
+                    builder: (ctx) {
+                      return StatefulBuilder(
+                        builder: (ctx, setLocalState) {
+                          Future<void> handleSearch(String v) async {
+                            await _search(v);
+                            setLocalState(() {}); // refresh list
+                          }
+
+                          return AlertDialog(
+                            title: const Text('Seed athlete to coach'),
+                            content: SingleChildScrollView( // ✅ prevents overflow
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  maxHeight: 400,  // cap total dialog height
+                                  minWidth: 320,
+                                ),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    // Coach search field
+                                    TextField(
+                                      controller: coachSearchController,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Coach name or email',
+                                        hintText: 'Type to search…',
+                                      ),
+                                      onChanged: (v) => handleSearch(v),
+                                      autofocus: true,
+                                    ),
+
+                                    if (selectedCoachUid != null) ...[
+                                      const SizedBox(height: 6),
+                                      Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: Text(
+                                          'Selected UID: $selectedCoachUid',
+                                          style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                                            color: Colors.grey,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+
+                                    const SizedBox(height: 8),
+
+                                    // Results list
+                                    Flexible( // ✅ results take remaining space, scroll inside
+                                      child: isSearching
+                                          ? const Center(child: Padding(
+                                        padding: EdgeInsets.all(12),
+                                        child: CircularProgressIndicator(),
+                                      ))
+                                          : ListView.builder(
+                                        shrinkWrap: true,
+                                        itemCount: results.length,
+                                        itemBuilder: (_, i) {
+                                          final r = results[i];
+                                          final name = (r['name']?.isNotEmpty ?? false) ? r['name']! : '(no name)';
+                                          final email = r['email'] ?? '';
+                                          final uid = r['uid'] ?? '';
+                                          return ListTile(
+                                            dense: true,
+                                            title: Text(name),
+                                            subtitle: Text('$email\n$uid'),
+                                            isThreeLine: true,
+                                            onTap: () {
+                                              selectedCoachUid = uid;
+                                              selectedCoachName = name;
+                                              coachSearchController.text = name.isNotEmpty ? name : email;
+                                              setLocalState(() {});
+                                            },
+                                          );
+                                        },
+                                      ),
+                                    ),
+
+                                    const SizedBox(height: 8),
+
+                                    TextField(
+                                      controller: athleteEmailController,
+                                      decoration: const InputDecoration(labelText: 'Athlete email'),
+                                      keyboardType: TextInputType.emailAddress,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            actions: [
+                              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+                              TextButton(
+                                onPressed: (selectedCoachUid != null && athleteEmailController.text.trim().isNotEmpty)
+                                    ? () => Navigator.pop(ctx, {
+                                  'coachUid': selectedCoachUid!,
+                                  'coachName': selectedCoachName ?? '',
+                                  'email': athleteEmailController.text.trim(),
+                                })
+                                    : null,
+                                child: const Text('Add'),
+                              ),
+                            ],
+                          );
+
+                        },
+                      );
+                    },
                   );
 
                   if (result != null) {

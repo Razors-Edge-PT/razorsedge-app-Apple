@@ -5204,8 +5204,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
               // …keep your existing info + Top Sets buttons…
               IconButton(
-                icon: const Icon(Icons.info_outline),
-                color: Colors.blueGrey,
+                icon: const Icon(Icons.insights),
+
+                color: Colors.lightBlueAccent,
                 onPressed: () {
                   _navigateToExerciseDetails(
                       _selectedExercisesWithCircuits[i]['name'] ?? '');
@@ -5214,17 +5215,17 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
               const SizedBox(width: 1),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blueGrey,
+                  backgroundColor: Colors.blueGrey[700],
                 ),
                 onPressed: () {
                   _navigateToTopSets(
                       _selectedExercisesWithCircuits[i]['name'] ?? '');
                 },
                 child: Text(
-                  'Top Sets',
+                  'History',
                   style: TextStyle(
                     fontFamily: 'Verdana',
-                    color: Colors.blueGrey.shade900,
+                    color: Colors.white70
                   ),
                 ),
               ),
