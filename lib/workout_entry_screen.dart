@@ -4659,27 +4659,40 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   }
 
   void _navigateToExerciseDetails(String exerciseName) async {
+    // fetch workouts as before
     List<Workout> recentWorkouts =
-        await getRecentWorkoutsForExercise(exerciseName, _selectedDate);
+    await getRecentWorkoutsForExercise(exerciseName, _selectedDate);
 
     if (recentWorkouts.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
             content: Text('No recent workouts found for this exercise.')),
       );
-      return; // ✅ Do not navigate if no workouts exist
+      return;
     }
 
+    // ✅ find the ID of the exercise from the most recent workout
+    final firstWithExercise = recentWorkouts.firstWhere(
+          (w) => w.exercises.any((ex) => ex.name == exerciseName),
+    );
+    final exercise = firstWithExercise.exercises
+        .firstWhere((ex) => ex.name == exerciseName);
+
+    final exerciseId = exercise.id ?? exerciseName;
+    // 👆 fallback to name if your Exercise model doesn’t yet expose `id`
+
+    print('➡️ [WES] Push ExerciseDetailsScreen id="${exercise.id}" name="${exercise.name}"');
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => ExerciseDetailsScreen(
-          exerciseName: exerciseName,
-          recentWorkouts: recentWorkouts,
+          exerciseId: exerciseId,
+          exerciseName: exerciseName,        // optional, but good for title
         ),
       ),
     );
   }
+
 
   void _navigateToTopSets(String exerciseName) async {
     final user = FirebaseAuth.instance.currentUser;

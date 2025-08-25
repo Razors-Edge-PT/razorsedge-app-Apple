@@ -46,11 +46,13 @@ class Workout {
 }
 
 class Exercise {
+  final String? id;                  // 👈 optional id
   final String name;
   final List<SetDetails> sets;
   final int circuitIndex; // ✅ Added for circuit support
 
   Exercise({
+    this.id,                         // 👈 not required
     required this.name,
     required this.sets,
     this.circuitIndex = 0, // ✅ Default to 0 for backward compatibility
@@ -64,6 +66,7 @@ class Exercise {
     }).toList();
 
     return Exercise(
+      id: data['id']?.toString(),                   // 👈 safely pick up id if present
       name: data['name'] ?? 'Unnamed Exercise',
       sets: sets,
       circuitIndex: data['circuitIndex'] ?? 0, // ✅ Read from Firestore or fallback
@@ -72,6 +75,7 @@ class Exercise {
 
   Map<String, dynamic> toFirestore() {
     return {
+      if (id != null) 'id': id,                     // 👈 only save if present
       'name': name,
       'circuitIndex': circuitIndex, // ✅ Include in save
       'sets': sets.map((s) => s.toMap()).toList(),

@@ -131,11 +131,12 @@ class _WorkoutDetailsScreenState extends State<WorkoutDetailsScreen> {
                             context,
                             MaterialPageRoute(
                               builder: (context) => ExerciseDetailsScreen(
-                                exerciseName: exercise.name,
-                                recentWorkouts: recentWorkouts,
+                                exerciseId: exercise.id ?? exercise.name,  // 👈 required
+                                exerciseName: exercise.name,               // optional
                               ),
                             ),
                           );
+
                         },
                       ),
                       children: exercise.sets.asMap().entries.map((entry) {
