@@ -1083,10 +1083,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         weekIndex: weekIndex,
       ).toDouble();
     }
-
     // Get default weight using rep and RIR logic.
-
-
     // Get the progression model info.
     final String? progressionModelName = _exerciseSettings[exerciseId]?['progressionModel'];
     print('🔧 [WES] progressionModelName for $exerciseId = $progressionModelName');
@@ -1108,6 +1105,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     if (increments == null || increments.isEmpty) {
     }
 
+    print('🧾 [WES→PMU] exId=$exerciseId exName=$exerciseName '
+        'repTarget=${repTarget.toInt()} rir=$rir '
+        'defaultWeight=${defaultWeight.toStringAsFixed(2)}');
+    final maxWeightMap = _exerciseSettings[exerciseId]?['maxWeightByReps'];
+    final maxWeightKeys = (maxWeightMap is Map) ? maxWeightMap.keys.toList() : 'null';
+
+    print('🧾 [WES→PMU] increments=${(increments ?? []).join(", ")} '
+        'maxWeightByRepsKeys=$maxWeightKeys');
+
+
     final Map<String, dynamic> progressed =
     PeriodizationModelUtils.getWeightByProgressionModel(
       model: progressionModel,
@@ -1122,8 +1129,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       weekIndex: PeriodizationModelUtils.getWeekIndexForDate(_selectedDate, blockStartDate!),
 
     );
+    print('🧾 [WES <- PMU] pre-overlay ${progressed['weight']} × ${progressed['reps']}');
 
+    final snapped = PeriodizationModelUtils.roundToNearestValidIncrement(targetWeight: (progressed['weight'] as num).toDouble(), exerciseName: exerciseName);
 
+    print('🧾 [WES overlay] ${progressed['weight']} → $snapped');
     // Cache and return
     _cachedProgressedValues[exerciseIndex] = progressed;
 

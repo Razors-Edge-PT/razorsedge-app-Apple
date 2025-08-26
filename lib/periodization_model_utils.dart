@@ -900,14 +900,16 @@ class PeriodizationModelUtils {
   }
 
   static List<double> getIncrementsForExercise(String exerciseNameOrId) {
+    print('🔧 [getIncrementsForExercise] START for key="$exerciseNameOrId"');
     final byName = _exerciseSettings[exerciseNameOrId]?['increments'];
+    print('🔧 [getIncrementsForExercise] byName=$byName');
 
     Map<String, dynamic>? byId;
     final id = nameToId[exerciseNameOrId];
     if (id != null && _exerciseSettings.containsKey(id)) {
       byId = _exerciseSettings[id]?['increments'];
+      print('🔧 [getIncrementsForExercise] byId=$byId (id=$id)');
     }
-
     final increments = byName ?? byId;
 
     if (increments == null) {
@@ -917,6 +919,7 @@ class PeriodizationModelUtils {
 
     final double primary = (increments['primary'] as num?)?.toDouble() ?? 2.5;
     final double secondary = (increments['secondary'] as num?)?.toDouble() ?? 0.0;
+    print('🔧 [getIncrementsForExercise] primary=$primary, secondary=$secondary');
 
     final Set<double> weightOptions = {};
 
@@ -931,7 +934,9 @@ class PeriodizationModelUtils {
     }
 
     final list = weightOptions.toList()..sort();
-    print('✅ [PMU] getIncrementsForExercise($exerciseNameOrId) → $list');
+    print('✅ [PMU] getIncrementsForExercise($exerciseNameOrId) '
+        '→ count=${list.length}, sample=${list.take(10).toList()}');
+
     return list;
   }
 
@@ -942,7 +947,14 @@ class PeriodizationModelUtils {
     required double baseWeight,
     required String exerciseName,
   }) {
+    print('🧰 [roundToAllValidIncrements] baseWeight=${baseWeight.toStringAsFixed(3)} '
+        'exerciseName="$exerciseName"');
+
     final increments = getIncrementsForExercise(exerciseName);
+
+    // 🔎 ADD THIS: show which increments were actually used
+    print('🧰 [roundToAllValidIncrements] incrementsUsed=${increments.join(", ")}');
+
     final Set<double> options = {};
 
     for (int i = 0; i < 100; i++) {
@@ -951,8 +963,25 @@ class PeriodizationModelUtils {
       }
     }
 
-    return options.toList()..sort();
+    final list = options.toList()..sort();
+
+    // 🔎 ADD THIS: quick coverage + neighborhood check around baseWeight
+    final min = list.isEmpty ? null : list.first;
+    final max = list.isEmpty ? null : list.last;
+    print('🧰 [roundToAllValidIncrements] generated count=${list.length} '
+        'range=${min}..${max}');
+
+    // nearest below / above to see rounding context
+    final below = list.where((w) => w <= baseWeight).toList();
+    final above = list.where((w) => w > baseWeight).toList();
+    final nb = below.isNotEmpty ? below.last : null;
+    final na = above.isNotEmpty ? above.first : null;
+    print('🧰 [roundToAllValidIncrements] nearestBelow=$nb nearestAbove=$na '
+        'Δup=${na != null ? (na - baseWeight).toStringAsFixed(3) : "—"}');
+
+    return list;
   }
+
 
 
 
@@ -1154,6 +1183,9 @@ class PeriodizationModelUtils {
       exerciseName: exerciseName,
     );
 
+    print('🧰 [SP] validWeights count=${validWeights.length} '
+        'first=${validWeights.first} last=${validWeights.last}');
+
 // 🎯 Center trials on the weight implied by baseE1RM at (repTarget, RIR),
 // then snap to the nearest valid increment.
     final double implied = PeriodizationModelUtils.reverseCalculateWeight(
@@ -1166,6 +1198,14 @@ class PeriodizationModelUtils {
     final double centerWeight = validWeights.reduce((a, b) =>
     ((a - implied).abs() < (b - implied).abs()) ? a : b
     );
+    final belowCW = validWeights.where((w) => w <= centerWeight).toList();
+    final aboveCW = validWeights.where((w) => w >  centerWeight).toList();
+    final nbCW = belowCW.isNotEmpty ? belowCW.last : null;
+    final naCW = aboveCW.isNotEmpty ? aboveCW.first : null;
+    print('🎯 [SP] center=${centerWeight.toStringAsFixed(1)} '
+        '(implied=${implied.toStringAsFixed(1)}) '
+        'neigh: below=$nbCW above=$naCW');
+
 
     print('🎯 [SmartProgression] Centering trials on '
         '${centerWeight.toStringAsFixed(1)} kg '
@@ -1191,8 +1231,31 @@ class PeriodizationModelUtils {
       ..sort((a, b) => (a - defaultWeight).abs().compareTo((b - defaultWeight).abs()));
 
 
+
+    // Find the local spacing in validWeights around centerWeight (tolerant to float mismatch)
+    int idx = validWeights.indexOf(centerWeight);
+    if (idx < 0) {
+      double minDiff = double.infinity;
+      int nearestIdx = 0;
+      for (int i = 0; i < validWeights.length; i++) {
+        final d = (validWeights[i] - centerWeight).abs();
+        if (d < minDiff) { minDiff = d; nearestIdx = i; }
+      }
+      idx = nearestIdx;
+    }
+
+    final int upIdx = (idx + 1 < validWeights.length) ? idx + 1 : idx;
+    final int dnIdx = (idx - 1 >= 0) ? idx - 1 : idx;
+
+    final double gapUp = validWeights[upIdx] - validWeights[idx];
+    final double gapDn = validWeights[idx] - validWeights[dnIdx];
+
+// Use the real local step (prefer upward gap if available)
+    final double delta = (gapUp > 0) ? gapUp : (gapDn > 0 ? gapDn : 0);
     final double base = centerWeight;
-    final double delta = increments.firstWhere((v) => v > 0.0, orElse: () => 0);
+
+    print('🧩 [SP] idx=$idx gapUp=${gapUp.toStringAsFixed(1)} gapDn=${gapDn.toStringAsFixed(1)} → delta=${delta.toStringAsFixed(1)}');
+
 
     final List<double> trialWeights = [
       base - delta,
@@ -1432,10 +1495,20 @@ class PeriodizationModelUtils {
       exerciseName: exerciseName,
     );
     validWeights.sort();
+    print('⚙️ [NextWeight] lastWeight=$lastWeight '
+        'indexOf=${validWeights.indexOf(lastWeight)}');
+
     final int weightIndex = validWeights.indexOf(lastWeight);
     final double? nextWeight = (weightIndex >= 0 && weightIndex + 1 < validWeights.length)
         ? validWeights[weightIndex + 1]
         : null;
+
+    print('⚙️ [NextWeight] validWeights(count)=${validWeights.length} '
+        'first=${validWeights.isNotEmpty ? validWeights.first : null} '
+        'last=${validWeights.isNotEmpty ? validWeights.last : null}');
+    print('⚙️ [NextWeight] listCount=${validWeights.length} '
+        'first=${validWeights.first} last=${validWeights.last}');
+
 
 
     if (nextWeight == null) {
@@ -1446,6 +1519,8 @@ class PeriodizationModelUtils {
       };
     }
 
+    print('🎯 [NextWeight] chosen nextWeight=$nextWeight '
+        '(weightIndex=$weightIndex / ${validWeights.length - 1})');
 
 
     // Gating logic
@@ -1536,10 +1611,15 @@ class PeriodizationModelUtils {
   {
 
     print("🧪 [Routing] About to run model logic: $model");
+    print('🧪 [PMU Router] model=$model repTarget=$repTarget '
+        'defaultWeight=${defaultWeight.toStringAsFixed(2)} '
+        'rirValue=$rirValue '
+        'increments(len)=${increments.length} sample=${increments.take(6).toList()}');
+
 
     switch (model) {
-      case ProgressionModelType.linearWeightIncrease:
-        return {
+      case ProgressionModelType.linearWeightIncrease: {
+        final result = {
           'weight': getProgressedWeight(
             exerciseName: exerciseName,
             repTarget: repTarget,
@@ -1549,24 +1629,25 @@ class PeriodizationModelUtils {
             topSetHistory: topSetHistory,
             weekIndex: weekIndex,
           ),
-          'reps': repTarget, // ← preserve original repTarget for now
+          'reps': repTarget, // preserve original repTarget for now
         };
 
-      case ProgressionModelType.smartProgression:
-        return smartProgressionModel(
-          exerciseName: exerciseName,
-          repTarget: repTarget,
-          defaultWeight: defaultWeight,
-          increments: increments,
-          maxWeightByReps: maxWeightByReps,
-          topSetHistory: topSetHistory,
-          weekIndex: weekIndex,
-          rirValue: rirValue, // ✅ add this
+        print('📦 [PMU Router] pre-overlay (linear) ${result['weight']} × ${result['reps']}');
 
+        final snapped = PeriodizationModelUtils.roundToNearestValidIncrement(
+          targetWeight: (result['weight'] as num).toDouble(),
+          exerciseName: exerciseName,
         );
 
-      case ProgressionModelType.addRepsProgressionModel:
-        return addRepsProgressionModel(
+        print('🧲 [Overlay] (linear) ${result['weight']} → $snapped');
+
+        result['weight'] = snapped;
+        return result;
+      }
+
+
+      case ProgressionModelType.smartProgression: {
+        final result = smartProgressionModel(
           exerciseName: exerciseName,
           repTarget: repTarget,
           defaultWeight: defaultWeight,
@@ -1577,6 +1658,43 @@ class PeriodizationModelUtils {
           rirValue: rirValue,
         );
 
+        print('📦 [PMU Router] pre-overlay (smart) ${result['weight']} × ${result['reps']}');
+
+        final snapped = PeriodizationModelUtils.roundToNearestValidIncrement(
+          targetWeight: (result['weight'] as num).toDouble(),
+          exerciseName: exerciseName,
+        );
+
+        print('🧲 [Overlay] (smart) ${result['weight']} → $snapped');
+
+        result['weight'] = snapped;
+        return result;
+      }
+
+      case ProgressionModelType.addRepsProgressionModel: {
+        final result = addRepsProgressionModel(
+          exerciseName: exerciseName,
+          repTarget: repTarget,
+          defaultWeight: defaultWeight,
+          increments: increments,
+          maxWeightByReps: maxWeightByReps,
+          topSetHistory: topSetHistory,
+          weekIndex: weekIndex,
+          rirValue: rirValue,
+        );
+
+        print('📦 [PMU Router] pre-overlay (addReps) ${result['weight']} × ${result['reps']}');
+
+        final snapped = PeriodizationModelUtils.roundToNearestValidIncrement(
+          targetWeight: (result['weight'] as num).toDouble(),
+          exerciseName: exerciseName,
+        );
+
+        print('🧲 [Overlay] (addReps) ${result['weight']} → $snapped');
+
+        result['weight'] = snapped;
+        return result;
+      }
 
 
       case ProgressionModelType.none:
@@ -1585,8 +1703,6 @@ class PeriodizationModelUtils {
           'reps': repTarget,
         };
     }
-
-
   }
 
   static ProgressionModelType parseProgressionModel(String? value) {

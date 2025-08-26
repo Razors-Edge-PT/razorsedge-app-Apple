@@ -1274,6 +1274,16 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       print('🧪 [BB2] sampleTopSet → w=${s['weight']} r=${s['reps']} rir=${s['rir']} date=${s['date']}');
     }
 
+    print('🧾 [BB2→PMU] exId=$exerciseId exName=$exerciseName '
+        'repTarget=$baseReps rir=$baseRir '
+        'defaultWeight=${baseWeight.toStringAsFixed(2)}');
+
+    final bb2Incs = PeriodizationModelUtils.getIncrementsForExercise(exerciseId ?? '');
+    print('🧾 [BB2→PMU] increments=${(bb2Incs ?? []).join(", ")} '
+        'maxWeightByRepsKeys=${plannedExerciseDetails[exerciseId]?['maxWeightByReps'] is Map
+        ? (plannedExerciseDetails[exerciseId]['maxWeightByReps'] as Map).keys.toList()
+        : 'null'}');
+
 
     final progressed = PeriodizationModelUtils.getWeightByProgressionModel(
       model: progressionModel,
