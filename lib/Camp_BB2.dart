@@ -3112,8 +3112,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           row: rowIndex,
         );
 
-
-
         // 🧠 First define hintRir (safe to use afterward)
         final String hintRir = rirController.text.isNotEmpty
             ? rirController.text

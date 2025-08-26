@@ -1314,11 +1314,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           '🔁 [WES] Using BB2-entered RIR for "$exerciseName" Set 1: $bb2Rir');
       return bb2Rir;
     }
+    print('🧭 [WES RIR] exercise="$exerciseName" '
+        'blockStartDate=$blockStartDate _selectedDate=$_selectedDate');
 
     final exerciseId =
         PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
     final weekIndex = _getApplicableWeekIndex(exerciseId);
     if (weekIndex == null) return setNumber == 1 ? 1 : 1.5;
+
+    print('🧭 [WES RIR] _getApplicableWeekIndex → weekIndex=$weekIndex');
 
     if (blockStartDate == null) {
       print(
@@ -1326,12 +1330,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       return 1; // fallback RIR value
     }
 
+    print('📞 [WES RIR] calling getInstanceCountForExerciseInWeek with '
+        'weekIndex=$weekIndex selectedDate=$_selectedDate');
+
     final sessionIndex =
     PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
       exerciseName: exerciseName,
       savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
       blockStartDate: blockStartDate!,
       weekIndex: weekIndex,
+      selectedDate: _selectedDate, // ← ensure this is present
     );
 
     final rirPlan =
@@ -2560,17 +2568,23 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   int? _getApplicableWeekIndex(String exerciseId) {
     final model =
         PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
+    print('🧮 [_getApplicableWeekIndex] start for exerciseId=$exerciseId '
+        'blockStartDate=$blockStartDate _selectedDate=$_selectedDate');
 
     if (model == PeriodizationModelType.linearClassic ||
         model == PeriodizationModelType.dailyUndulatingWeek ||
         model == PeriodizationModelType.dupSignature ||
         model == PeriodizationModelType.dailyUndulatingExposure) {
-      if (_blockStartDate == null) return 0;
+      print('🧩 [_getApplicableWeekIndex] _blockStartDate=$_blockStartDate (vs blockStartDate=$blockStartDate)');
 
-      final daysSinceStart = _selectedDate.difference(_blockStartDate!).inDays;
+      if (blockStartDate == null) return 0;
+
+      final daysSinceStart = _selectedDate.difference(blockStartDate!).inDays;
+
       final weekIndex = (daysSinceStart / 7).floor().clamp(0, 11);
 
       print('📆 [WES] Calculated weekIndex=$weekIndex for $exerciseId');
+
       return weekIndex;
     }
 

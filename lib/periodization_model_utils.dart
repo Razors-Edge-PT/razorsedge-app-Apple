@@ -2306,20 +2306,29 @@ class PeriodizationModelUtils {
     required String exerciseName,
     required List<Map<String, dynamic>> savedWorkouts,
     required DateTime blockStartDate,
-    int? weekIndex,                 // ← now optional
-    DateTime? selectedDate,         // ← new
+    int? weekIndex,
+    DateTime? selectedDate,
   }) {
+    // 🔍 ENTRY PRINT
+    print('🚦 [getInstanceCountForExerciseInWeek] START → ex="$exerciseName", '
+        'savedWorkouts=${savedWorkouts.length}, '
+        'blockStart=$blockStartDate, weekIndex=$weekIndex, selectedDate=$selectedDate');
+
     final base = DateTime(blockStartDate.year, blockStartDate.month, blockStartDate.day);
     final idx = weekIndex ??
         (selectedDate != null
             ? (DateTime(selectedDate.year, selectedDate.month, selectedDate.day)
             .difference(base)
-            .inDays ~/ 7)
+            .inDays ~/
+            7)
             : 0);
     final int safeWeekIndex = idx < 0 ? 0 : idx;
 
     final weekStart = base.add(Duration(days: safeWeekIndex * 7));
-    final weekEnd   = weekStart.add(const Duration(days: 7));
+    final weekEnd = weekStart.add(const Duration(days: 7));
+
+    // 🔍 PRINT WEEK WINDOW
+    print('🗓️ [Week Window] start=$weekStart → end=$weekEnd (exclusive)');
 
     final usedDates = <String>{};
 
@@ -2330,38 +2339,50 @@ class PeriodizationModelUtils {
     for (final workout in savedWorkouts) {
       final dateStr = (workout['date'] ?? '').toString();
       final date = DateTime.tryParse(dateStr);
+
+      // 🔍 PRINT EVERY WORKOUT DATE PARSE
+      print('📅 Checking workout date="$dateStr" → parsed=$date');
+
       if (date == null) continue;
-      // Keep only dates in [weekStart, weekEnd)
-      if (date.isBefore(weekStart) || !date.isBefore(weekEnd)) continue;
+      if (date.isBefore(weekStart) || !date.isBefore(weekEnd)) {
+        print('⏭️ Skipping $date (outside this week)');
+        continue;
+      }
 
       final exercises = workout['exercises'];
-      if (exercises is! List) continue;
+      if (exercises is! List) {
+        print('⏭️ Skipping $date (no exercises list)');
+        continue;
+      }
 
       final matched = exercises.any((ex) {
         final exId = ex['exerciseId']?.toString();
         final exName = (ex['name'] ?? '').toString().trim().toLowerCase();
-        final sets = (ex['sets'] is List) ? List<Map<String, dynamic>>.from(ex['sets']) : const <Map<String, dynamic>>[];
+        final sets = (ex['sets'] is List)
+            ? List<Map<String, dynamic>>.from(ex['sets'])
+            : const <Map<String, dynamic>>[];
 
-        if (sets.isEmpty) return false; // only count if at least one set exists (i.e., actually completed)
         final idMatch = (exId != null && exId == targetId);
         final nameMatch = exName == targetName;
-        return idMatch || nameMatch;
+
+        if (idMatch || nameMatch) {
+          print('🔍 Candidate match on $date → idMatch=$idMatch, nameMatch=$nameMatch, sets=${sets.length}');
+        }
+
+        return (idMatch || nameMatch) && sets.isNotEmpty;
       });
 
       if (matched) {
-        // Normalize to date-only so duplicates on the same day collapse
         usedDates.add(dateStr.length >= 10 ? dateStr.substring(0, 10) : dateStr);
+        print('✅ Matched "$exerciseName" on $date');
+      } else {
+        print('❌ "$exerciseName" not found in workout on $date');
       }
     }
 
     final count = usedDates.length;
-
-    // 🔧 Updated print
-    final label = selectedDate != null
-        ? 'week ${safeWeekIndex + 1} (from selectedDate)'
-        : 'week ${safeWeekIndex + 1} (from weekIndex param)';
-
-    print('📊 [Week Instance Count] "$exerciseName" used on $count day(s) in $label');
+    // 🔍 FINAL PRINT
+    print('📊 [Week Instance Count] "$exerciseName" used on $count unique day(s) this week. Dates=$usedDates');
 
     return count;
   }
