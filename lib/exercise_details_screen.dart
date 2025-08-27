@@ -115,15 +115,16 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     int lookbackDays = 730,
     int batchSize = 50,
   }) async {
-
-    String? userId = uidOverride;
-    final user = FirebaseAuth.instance.currentUser;
-    userId ??= FirebaseAuth.instance.currentUser?.uid;
+    // Prefer selected user if provided; fallback to logged-in only if needed
+    String? userId = uidOverride ?? FirebaseAuth.instance.currentUser?.uid;
     if (userId == null) return [];
 
     final cutoff = DateTime.now().subtract(Duration(days: lookbackDays));
 
-    final out = <Workout>[];
+    // Keep only ONE workout per local day: the one with the best top-set E1RM (incl RIR)
+    final Map<String, double> bestScoreByDay = {};
+    final Map<String, Workout> bestWorkoutByDay = {};
+
     DocumentSnapshot? lastDoc;
     int page = 0;
 
@@ -142,11 +143,10 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
         final snap = await q.get();
         if (snap.docs.isEmpty) break;
 
-        // Parse page
         for (final doc in snap.docs) {
           final data = doc.data();
 
-          // Date may be Timestamp or ISO string
+          // Parse date (Timestamp or ISO string)
           final rawDate = data['date'];
           DateTime? workoutDate;
           if (rawDate is Timestamp) {
@@ -154,70 +154,98 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
           } else if (rawDate is String) {
             workoutDate = DateTime.tryParse(rawDate);
           }
-          if (workoutDate == null) continue;
+          if (workoutDate == null || workoutDate.isBefore(cutoff)) continue;
 
-          // Stop early if this and all remaining will be older than cutoff
-          if (workoutDate.isBefore(cutoff)) {
-            // because we’re descending, once we see < cutoff, the rest of the page is also <= cutoff
-            // but there might be newer ones in earlier pages; still safe to skip adding older and continue to next page
-            continue;
-          }
-
-          // Raw exercises list to check ID/name before mapping
           final rawEx = data['exercises'];
           if (rawEx is! List) continue;
 
-          // Match by id first; also allow 'exerciseId' key; fallback to name (if provided)
-          bool anyMatch = rawEx.any((e) {
+          // Does this workout contain the exercise?
+          final matches = rawEx.any((e) {
             final m = e as Map<String, dynamic>;
             final rid = (m['id'] ?? m['exerciseId'] ?? '').toString();
             if (rid.isNotEmpty && rid == exerciseId) return true;
             if (exerciseName != null && (m['name'] ?? '') == exerciseName) return true;
             return false;
           });
-          if (!anyMatch) continue;
+          if (!matches) continue;
 
-          // Now map to your model
-          List<Exercise> exercises = [];
-          try {
-            exercises = rawEx
-                .map((e) => Exercise.fromFirestore(e as Map<String, dynamic>))
-                .toList();
-          } catch (_) {}
+          // Compute THIS WORKOUT'S top-set E1RM (including RIR) for the exercise
+          double workoutBestE1 = double.negativeInfinity;
+          for (final e in rawEx.cast<Map<String, dynamic>>()) {
+            final rid = (e['id'] ?? e['exerciseId'] ?? '').toString();
+            final rname = (e['name'] ?? '').toString();
+            final isMatch = (rid.isNotEmpty && rid == exerciseId) ||
+                (exerciseName != null && rname == exerciseName);
+            if (!isMatch) continue;
 
-          out.add(Workout(
-            name: (data['name'] ?? 'Unnamed Workout') as String,
-            date: workoutDate,
-            exercises: exercises,
-          ));
+            final sets = (e['sets'] as List?) ?? const [];
+            for (final s in sets.cast<Map<String, dynamic>>()) {
+              final weight = (s['weight'] as num?)?.toDouble() ?? 0.0;
+              final reps   = (s['reps']   as num?)?.toDouble() ?? 0.0;
+              final rir    = (s['rir']    as num?)?.toDouble() ?? 0.0;
+              if (weight <= 0 || reps <= 0) continue;
+
+              final e1 = calculateE1RM(weight, reps, rir); // ✅ include RIR
+              if (e1 > workoutBestE1) workoutBestE1 = e1;
+            }
+          }
+          if (!workoutBestE1.isFinite) continue;
+
+          // Day key (local midnight)
+          final day = DateTime(workoutDate.year, workoutDate.month, workoutDate.day);
+          final key = '${day.year.toString().padLeft(4, '0')}-'
+              '${day.month.toString().padLeft(2, '0')}-'
+              '${day.day.toString().padLeft(2, '0')}';
+
+          // If this workout beats the current day's best, keep this whole workout
+          final prev = bestScoreByDay[key];
+          if (prev == null || workoutBestE1 > prev) {
+            // Map the workout doc to your model
+            List<Exercise> exercises = [];
+            try {
+              exercises = (rawEx as List)
+                  .map((e) => Exercise.fromFirestore(e as Map<String, dynamic>))
+                  .toList();
+            } catch (_) {}
+
+            bestScoreByDay[key] = workoutBestE1;
+            bestWorkoutByDay[key] = Workout(
+              name: (data['name'] ?? 'Unnamed Workout') as String,
+              date: workoutDate,
+              exercises: exercises,
+            );
+          }
         }
 
         lastDoc = snap.docs.last;
 
-        // Heuristic early break: if last doc on this page is older than cutoff,
-        // and we got a full page, the next pages will also be older.
+        // Early exit if the last item on this page is older than cutoff
         final lastData = snap.docs.last.data();
-        final lastRaw = lastData['date'];
         DateTime? lastDate;
+        final lastRaw = lastData['date'];
         if (lastRaw is Timestamp) lastDate = lastRaw.toDate();
-        if (lastRaw is String) lastDate = DateTime.tryParse(lastRaw);
+        if (lastRaw is String)    lastDate = DateTime.tryParse(lastRaw);
         if (lastDate != null && lastDate.isBefore(cutoff)) break;
 
         if (snap.docs.length < batchSize) break; // no more pages
       }
 
-      out.sort((a, b) => a.date.compareTo(b.date));
-      print('🟦 [Details] Fetch done: kept ${out.length} workouts '
+      // Build final list (one workout per day), ascending
+      final out = bestWorkoutByDay.values.toList()
+        ..sort((a, b) => a.date.compareTo(b.date));
+
+      print('🟦 [Details] Daily top-set fetch: ${out.length} days '
           '(pages=$page, id="$exerciseId", name="${exerciseName ?? "null"}")');
       if (out.isNotEmpty) {
-        print('🟦 [Details] Range fetched: ${out.first.date.toIso8601String()} → ${out.last.date.toIso8601String()}');
+        print('🟦 [Details] Range: ${out.first.date.toIso8601String()} → ${out.last.date.toIso8601String()}');
       }
       return out;
     } catch (e) {
-      print('❌ [Details] fetch error: $e');
+      print('❌ [Details] fetch error (daily top-set): $e');
       return [];
     }
   }
+
 
   /// Per-day best E1RM (with/without RIR) for the past [lookbackDays].
   /// - Matches exercise by `exerciseId` first (also accepts `exerciseId` key),
@@ -521,46 +549,60 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     print('📊 [Details] Workouts total=${_workouts.length}, matched=$matchedWorkouts, points=${series.length}');
 
     // ===== Rep-target series (second chart) =====
+    // ===== Rep-target series (second chart)
+// Include a day IFF that day's TOP SET (chosen WITH RIR) has reps == repTarget.
+// The toggle only changes the Y value; included days don't change.
     final double? repTarget = _repTarget;
     final List<E1RMPoint> seriesTarget = [];
 
     if (repTarget != null) {
+      const tol = 1e-6;
+
       for (final workout in sortedWorkouts) {
         // find the matching exercise in the workout (id first, fallback name)
         Exercise? ex = workout.exercises.firstWhere(
               (e) => (e.id != null && e.id == widget.exerciseId),
           orElse: () => Exercise(name: '', sets: const [], circuitIndex: 0),
         );
-        if (ex.name.isEmpty && widget.exerciseName != null) {
+        if ((ex.name.isEmpty || ex.sets.isEmpty) && widget.exerciseName != null) {
           ex = workout.exercises.firstWhere(
                 (e) => e.name == widget.exerciseName,
             orElse: () => Exercise(name: '', sets: const [], circuitIndex: 0),
           );
         }
-        if (ex.name.isEmpty || ex.sets.isEmpty) continue;
+        if (ex.sets.isEmpty) continue;
 
-        // filter sets with reps == target (allow tiny tolerance)
-        final tol = 1e-6;
-        final matching = ex.sets.where((s) {
+        // 1) choose THE day's top set USING RIR (selection logic is fixed)
+        SetDetails? topSetInc;
+        double bestInc = double.negativeInfinity;
+        for (final s in ex.sets) {
+          final w = s.weight ?? 0.0;
           final r = (s.reps ?? 0).toDouble();
-          return (r - repTarget).abs() < tol;
-        }).toList();
-        if (matching.isEmpty) continue;
+          final rir = (s.rir ?? 0.0);
+          if (w <= 0 || r <= 0) continue;
 
-        // pick the strongest matching set (highest E1RM under chosen rule)
-        double best = double.negativeInfinity;
-        for (final s in matching) {
-          final weight = (s.weight ?? 0.0);
-          final reps   = (s.reps ?? 0).toDouble();
-          final rir    = _includeRIRForTarget ? (s.rir ?? 0.0) : 0.0;
-          final e1 = calculateE1RM(weight, reps, rir);
-          if (e1 > best) best = e1;
+          final e1 = calculateE1RM(w, r, rir); // WITH RIR
+          if (e1 > bestInc) {
+            bestInc = e1;
+            topSetInc = s;
+          }
         }
-        if (best.isFinite) {
-          seriesTarget.add(E1RMPoint(workout.date, best));
-        }
+        if (topSetInc == null) continue;
+
+        // 2) include the day only if that top set's reps == selected target
+        final topReps = (topSetInc!.reps ?? 0).toDouble();
+        if ((topReps - repTarget).abs() > tol) continue;
+
+        // 3) Y value depends on toggle, but it's the SAME set as selected above
+        final w = topSetInc!.weight ?? 0.0;
+        final r = (topSetInc!.reps ?? 0).toDouble();
+        final rirForY = _includeRIRForTarget ? (topSetInc!.rir ?? 0.0) : 0.0;
+        final y = calculateE1RM(w, r, rirForY);
+
+        seriesTarget.add(E1RMPoint(workout.date, y));
       }
     }
+
 
 // project to points/labels for the selected range
     final cutoff2 = _cutoffFor(_trendTarget);
@@ -1058,7 +1100,8 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
         physics: const NeverScrollableScrollPhysics(), // parent scrolls everything
         itemCount: sortedWorkouts.length,
         itemBuilder: (context, index) {
-          final workout = sortedWorkouts[index];
+          final revIndex = sortedWorkouts.length - 1 - index;
+          final workout = sortedWorkouts[revIndex];
           final exercise = workout.exercises.firstWhere(
                 (ex) => ex.name == widget.exerciseName,
             orElse: () => Exercise(name: '', sets: []),
