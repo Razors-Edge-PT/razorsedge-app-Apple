@@ -383,22 +383,76 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   Map<String, List<int>> exercisePreviousTopSetReps =
   {}; // ✅ Tracks reps per exercise
 
-  double getAverageE1RM(String exerciseName) {
-    final info = PeriodizationModelUtils.computeBaseE1RMFromHistory(
-      exerciseName: exerciseName.trim(),
-      // Neutral anchor for the helper's recent-match step.
-      // (If you prefer to anchor to the *actual planned* target for today,
-      // pass that rep target + planned RIR instead.)
-      repTarget: 5,
-      plannedRIR: 1.0,
-      topSetHistory: null,      // use global PMU cache (topSetsByExercise)
-      maxWeightByReps: null,    // optional fallback if you use it elsewhere
-      now: DateTime.now(),
+  double getAverageE1RM(
+      String exerciseName, {
+        DateTime? now,
+      }) {
+    // small local helper to parse num-or-string safely
+    num? _asNum(dynamic v) {
+      if (v is num) return v;
+      if (v is String) return double.tryParse(v);
+      return null;
+    }
+
+    final name = exerciseName.trim();
+    final String exerciseId =
+        PeriodizationModelUtils.nameToId[name] ?? name;
+
+    // Fallback if dates missing
+    if (blockStartDate == null || _selectedDate == null) {
+      final info = PeriodizationModelUtils.computeBaseE1RMFromHistory(
+        exerciseName: name,
+        repTarget: 5,
+        plannedRIR: 1.0,
+        topSetHistory: null,
+        maxWeightByReps: null,
+        now: now ?? DateTime.now(),
+      );
+      final double? base = info['baseE1RM'] as double?;
+      return (base != null && base.isFinite) ? base : 0.0;
+    }
+
+    // Same week/session logic as SP/WES
+    final base = DateTime(blockStartDate!.year, blockStartDate!.month, blockStartDate!.day);
+    final sel  = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day);
+    final weekIndex = ((sel.difference(base).inDays) ~/ 7).clamp(0, 11);
+
+    final sessionIndex = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+      exerciseName: name,
+      savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+      blockStartDate: blockStartDate!,
+      weekIndex: weekIndex,
+      selectedDate: _selectedDate,
     );
 
-    final double? base = info['baseE1RM'] as double?;
-    return (base != null && base.isFinite) ? base : 0.0;
+    final rirPlan = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['rirPlan'];
+    final weekKey = 'week${weekIndex + 1}';
+    final sessionKey = 'session${sessionIndex + 1}';
+    final Map<String, dynamic>? set1 =
+    (rirPlan?[weekKey]?[sessionKey]?['set1'] as Map?)?.cast<String, dynamic>();
+
+    // ✅ robust to num or string
+    final int repTarget =
+        (_asNum(set1?['reps'])?.toInt()) ?? 5;
+
+    final double plannedRIR =
+        (_asNum(set1?['rir'])?.toDouble()) ?? 1.0;
+
+    final info = PeriodizationModelUtils.computeBaseE1RMFromHistory(
+      exerciseName: name,
+      repTarget: repTarget,
+      plannedRIR: plannedRIR,
+      topSetHistory: null,
+      maxWeightByReps: null,
+      now: now ?? DateTime.now(),
+    );
+
+    final double? baseE1RM = info['baseE1RM'] as double?;
+    return (baseE1RM != null && baseE1RM.isFinite) ? baseE1RM : 0.0;
   }
+
+
+
 
 
   double getSet2E1RM(int exerciseIndex) {

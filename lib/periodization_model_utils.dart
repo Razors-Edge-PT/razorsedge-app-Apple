@@ -124,16 +124,7 @@ class PeriodizationModelUtils {
   }
 
 
-  /// Returns the best/practical base E1RM from history using the unified cascade.
-  /// NOTE: No week-1 or model-specific short-circuits here.
-  /// Callers (e.g., Smart Progression) can decide to ignore this on week 1.
-  ///
-  /// Returns:
-  /// {
-  ///   'baseE1RM': double?   // null if no viable source
-  ///   'baseSource': String  // recent_match | two_week_avg | last4_avg | recent_any_avg | maxWeightByReps | no_history
-  ///   'nUsed': int          // entries averaged (diagnostic)
-  /// }
+
   static Map<String, dynamic> computeBaseE1RMFromHistory({
     required String exerciseName,
     required int repTarget,
@@ -142,6 +133,7 @@ class PeriodizationModelUtils {
     Map<String, dynamic>? maxWeightByReps,
     DateTime? now,
   }) {
+
     final DateTime _now = now ?? DateTime.now();
     final List<Map<String, dynamic>> raw =
         topSetHistory ?? topSetsByExercise[exerciseName] ?? const [];
@@ -182,6 +174,15 @@ class PeriodizationModelUtils {
 
     final double targetEff = repTarget + plannedRIR;
 
+    print('📊 [computeBaseE1RM] historyWithE1RM count=${historyWithE1RM.length}, '
+        'targetEff=$targetEff (repTarget=$repTarget, plannedRIR=$plannedRIR)');
+    if (historyWithE1RM.isNotEmpty) {
+      for (final e in historyWithE1RM.take(5)) {
+        print('  • sample ${e['date']} → ${e['weight']}×${e['reps']} @RIR ${e['rir']} '
+            '→ E1RM=${(e['e1rm'] as num).toStringAsFixed(2)} effReps=${e['effectiveReps']}');
+      }
+    }
+
     // A) Recent match
     final recentMatch = historyWithE1RM.firstWhere(
           (e) {
@@ -193,6 +194,10 @@ class PeriodizationModelUtils {
       },
       orElse: () => {},
     );
+    print('🅰️ [computeBaseE1RM] Using recent_match → '
+        '${recentMatch['weight']}×${recentMatch['reps']} @RIR ${recentMatch['rir']} '
+        'E1RM=${recentMatch['e1rm']}');
+
     if (recentMatch.isNotEmpty) {
       return {
         'baseE1RM': recentMatch['e1rm'] as double,
@@ -1156,8 +1161,21 @@ class PeriodizationModelUtils {
       now: DateTime.now(),
     );
 
+// 👇 Define once
     final double? baseE1RMNullable = baseInfo['baseE1RM'] as double?;
     final String baseSource = (baseInfo['baseSource'] as String?) ?? 'no_history';
+    final List<Map<String, dynamic>>? baseSamples =
+    (baseInfo['samples'] as List?)?.cast<Map<String, dynamic>>();
+
+// 👇 Then print
+    print('🧭 [SP Base] source=$baseSource baseE1RM=${baseE1RMNullable?.toStringAsFixed(2)} '
+        'samples=${baseSamples?.length ?? 0}');
+    if (baseSamples != null) {
+      for (final s in baseSamples.take(6)) {
+        print('  • sample ${s['date']} → ${s['weight']}×${s['reps']} @RIR ${s['rir']} '
+            '→ E1RM=${(s['e1rm'] as num?)?.toStringAsFixed(2)}');
+      }
+    }
 
     if (baseE1RMNullable == null) {
       print('🧭 [SmartProgression] Base source = $baseSource');

@@ -18,6 +18,28 @@ class E1RMPoint {
   const E1RMPoint(this.date, this.value);
 }
 
+class DailyBestE1RM {
+  final DateTime date;            // day (midnight) in local time
+  final double withRIR;           // best E1RM using reps + rir
+  final double withoutRIR;        // best E1RM using reps only
+
+  DailyBestE1RM({
+    required this.date,
+    required this.withRIR,
+    required this.withoutRIR,
+  });
+
+
+}
+
+class _DailyAgg {
+  final DateTime date;
+  double bestWithRIR = double.negativeInfinity;
+  double bestWithoutRIR = double.negativeInfinity;
+  _DailyAgg(this.date);
+}
+
+
 class ExerciseDetailsScreen extends StatefulWidget {
   final String exerciseId;              // 👈 required for querying
   final String? exerciseName;           // 👈 optional, only for display
@@ -37,6 +59,10 @@ class ExerciseDetailsScreen extends StatefulWidget {
 class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
   TrendRange _trend = TrendRange.d14; // 👈 our new toggle state
   String get userId => UserContext.of(context, listen: false).currentUid;
+
+  List<DailyBestE1RM> _dailyBests = [];
+  bool _loadingDaily = true;
+
 
 
   double calculateE1RM(double weight, double reps, double rir) {
@@ -193,6 +219,137 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     }
   }
 
+  /// Per-day best E1RM (with/without RIR) for the past [lookbackDays].
+  /// - Matches exercise by `exerciseId` first (also accepts `exerciseId` key),
+  ///   then falls back to `exerciseName` if provided.
+  /// - Paginates in 50s by default; safe with mixed Timestamp/ISO dates.
+  Future<List<DailyBestE1RM>> _fetchTwoYearDailyBestsForExercise({
+    required String exerciseId,
+    String? exerciseName,
+    String? uidOverride,          // pass selected uid here (e.g., UserContext.currentUid)
+    int lookbackDays = 730,
+    int batchSize = 50,
+  }) async {
+    // Prefer the passed-in selected uid; fall back to logged-in only if needed
+    String? userId = uidOverride ?? FirebaseAuth.instance.currentUser?.uid;
+    if (userId == null) return [];
+
+    final cutoff = DateTime.now().subtract(Duration(days: lookbackDays));
+
+    // Aggregate per local day (midnight)
+    final Map<String, _DailyAgg> byDay = {};
+    DocumentSnapshot? lastDoc;
+    int page = 0;
+
+    try {
+      while (true) {
+        page++;
+        Query<Map<String, dynamic>> q = FirebaseFirestore.instance
+            .collection('users')
+            .doc(userId)
+            .collection('workouts')
+            .orderBy('date', descending: true)
+            .limit(batchSize);
+
+        if (lastDoc != null) q = q.startAfterDocument(lastDoc);
+
+        final snap = await q.get();
+        if (snap.docs.isEmpty) break;
+
+        for (final doc in snap.docs) {
+          final data = doc.data();
+
+          // Robust date parse (Timestamp or ISO string)
+          final rawDate = data['date'];
+          DateTime? workoutDate;
+          if (rawDate is Timestamp) {
+            workoutDate = rawDate.toDate();
+          } else if (rawDate is String) {
+            workoutDate = DateTime.tryParse(rawDate);
+          }
+          if (workoutDate == null || workoutDate.isBefore(cutoff)) continue;
+
+          final rawEx = data['exercises'];
+          if (rawEx is! List) continue;
+
+          // Match by id first; fallback to name if provided
+          final containsExercise = rawEx.any((e) {
+            final m = e as Map<String, dynamic>;
+            final rid = (m['id'] ?? m['exerciseId'] ?? '').toString();
+            if (rid.isNotEmpty && rid == exerciseId) return true;
+            if (exerciseName != null && (m['name'] ?? '') == exerciseName) return true;
+            return false;
+          });
+          if (!containsExercise) continue;
+
+          // Normalize to local midnight per-day key
+          final day = DateTime(workoutDate.year, workoutDate.month, workoutDate.day);
+          final key = '${day.year.toString().padLeft(4, '0')}-'
+              '${day.month.toString().padLeft(2, '0')}-'
+              '${day.day.toString().padLeft(2, '0')}';
+          final agg = byDay.putIfAbsent(key, () => _DailyAgg(day));
+
+          // Scan only the matching exercise(s) for this day
+          for (final e in rawEx.cast<Map<String, dynamic>>()) {
+            final rid = (e['id'] ?? e['exerciseId'] ?? '').toString();
+            final rname = (e['name'] ?? '').toString();
+            final isMatch = (rid.isNotEmpty && rid == exerciseId) ||
+                (exerciseName != null && rname == exerciseName);
+            if (!isMatch) continue;
+
+            final sets = (e['sets'] as List?) ?? const [];
+            for (final s in sets.cast<Map<String, dynamic>>()) {
+              final weight = (s['weight'] as num?)?.toDouble() ?? 0.0;
+              final reps   = (s['reps'] as num?)?.toDouble() ?? 0.0;
+              final rir    = (s['rir'] as num?)?.toDouble() ?? 0.0;
+              if (weight <= 0 || reps <= 0) continue;
+
+              final inc  = calculateE1RM(weight, reps, rir);  // including RIR
+              final excl = calculateE1RM(weight, reps, 0.0);  // excluding RIR
+
+              if (inc  > agg.bestWithRIR)    agg.bestWithRIR = inc;
+              if (excl > agg.bestWithoutRIR) agg.bestWithoutRIR = excl;
+            }
+          }
+        }
+
+        lastDoc = snap.docs.last;
+
+        // Early break if we've crossed the cutoff
+        final lastData = snap.docs.last.data();
+        DateTime? lastDate;
+        final lastRaw = lastData['date'];
+        if (lastRaw is Timestamp) lastDate = lastRaw.toDate();
+        if (lastRaw is String)    lastDate = DateTime.tryParse(lastRaw);
+        if (lastDate != null && lastDate.isBefore(cutoff)) break;
+
+        if (snap.docs.length < batchSize) break;
+      }
+
+      // Build output (ascending)
+      final out = byDay.values
+          .where((a) => a.bestWithRIR.isFinite || a.bestWithoutRIR.isFinite)
+          .map((a) => DailyBestE1RM(
+        date: a.date,
+        withRIR: a.bestWithRIR.isFinite ? a.bestWithRIR : 0.0,
+        withoutRIR: a.bestWithoutRIR.isFinite ? a.bestWithoutRIR : 0.0,
+      ))
+          .toList()
+        ..sort((a, b) => a.date.compareTo(b.date));
+
+      print('🟦 [Details] Daily bests: ${out.length} days '
+          '(pages=$page, id="$exerciseId", name="${exerciseName ?? "null"}")');
+      if (out.isNotEmpty) {
+        print('🟦 [Details] Range: ${out.first.date.toIso8601String()} → ${out.last.date.toIso8601String()}');
+      }
+      return out;
+    } catch (e) {
+      print('❌ [Details] daily bests error: $e');
+      return [];
+    }
+  }
+
+
 
   void _cycleTrend() {
     final values = TrendRange.values;
@@ -303,6 +460,18 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
       } else {
         print('🟦 [Details] Fetched 0 workouts');
       }
+    });
+
+    _fetchTwoYearDailyBestsForExercise(
+      exerciseId: widget.exerciseId,
+      exerciseName: widget.exerciseName,
+      uidOverride: selectedUid, // ✅ selected user
+    ).then((list) {
+      if (!mounted) return;
+      setState(() {
+        _dailyBests = list;
+        _loadingDaily = false;
+      });
     });
   }
 
@@ -527,6 +696,8 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
 
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
             child: AspectRatio(
+
+
               aspectRatio: 1.7,
               child: LineChart(
                 LineChartData(
