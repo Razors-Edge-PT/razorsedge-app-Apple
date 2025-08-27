@@ -2461,9 +2461,6 @@ class PeriodizationModelUtils {
     final weekStart = base.add(Duration(days: safeWeekIndex * 7));
     final weekEnd = weekStart.add(const Duration(days: 7));
 
-    // 🔍 PRINT WEEK WINDOW
-    print('🗓️ [Week Window] start=$weekStart → end=$weekEnd (exclusive)');
-
     final usedDates = <String>{};
 
     // Allow matching by id OR by name (case/whitespace-insensitive)
@@ -2474,20 +2471,12 @@ class PeriodizationModelUtils {
       final dateStr = (workout['date'] ?? '').toString();
       final date = DateTime.tryParse(dateStr);
 
-      // 🔍 PRINT EVERY WORKOUT DATE PARSE
-      print('📅 Checking workout date="$dateStr" → parsed=$date');
 
       if (date == null) continue;
-      if (date.isBefore(weekStart) || !date.isBefore(weekEnd)) {
-        print('⏭️ Skipping $date (outside this week)');
-        continue;
-      }
+
 
       final exercises = workout['exercises'];
-      if (exercises is! List) {
-        print('⏭️ Skipping $date (no exercises list)');
-        continue;
-      }
+
 
       final matched = exercises.any((ex) {
         final exId = ex['exerciseId']?.toString();
