@@ -3147,11 +3147,16 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         PeriodizationModelUtils.parseProgressionModel(progressionModelName);
 
 // 🧠 Calculate default E1RM-based suggested weight
+        final int repTargetForBase = int.tryParse(plannedRep?.split('x').first.trim() ?? '')
+            ?? repsValue.toInt();
         final double historyWeight = PeriodizationModelUtils.getSuggestedWeightFromRep(
           exerciseName,
-          repsValue.toInt(),
+          repTargetForBase,
           rirValue,
         );
+
+        print('🧱 [BB2 defaultWeight] = ${historyWeight.toStringAsFixed(2)} '
+            '(for repTarget=$repTargetForBase, rir=$rirValue)');
 
         final bool userTypedRir = rirController.text.isNotEmpty;
         final bool userTypedWeight = weightController.text.isNotEmpty;
@@ -3165,13 +3170,13 @@ class _BlockBuilder2State extends State<Camp_BB2> {
             _displayStart.add(Duration(days: weekIndex * 7 + dayIndex)),
             blockStartDate,
           ),
-
           dayIndex: dayIndex,
           rowIndex: rowIndex,
-          repTarget: repsValue.toInt(),
+          repTarget: repTargetForBase,   // << use planned target, same as WES seed
           defaultWeight: historyWeight,
           rir: rirValue,
         );
+
 
         final double progressedWeightRaw = progressed['weight'];
         final int progressedRepsRaw = progressed['reps'];
@@ -3870,159 +3875,41 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                       // 🟡 Workout Button – formatted like your sketch
                       Padding(
                         padding: const EdgeInsets.only(right: 0),
-                        child: TextButton(
-                          style: TextButton.styleFrom(
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 6,
-                                vertical: 6),
-                            minimumSize: const Size(0, 30),
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          ),
-                          onPressed: () async {
-                            // 1️⃣ Figure out your workout date & name first
-                            final DateTime workoutDate = blockStartDate.add(
-                              Duration(days: weekIndex * 7 + dayIndex),
-                            );
-                            final String formattedWorkoutName =
-                                "${DateFormat('EEE d MMM').format(workoutDate)} - Week ${weekIndex + 1}";
+                          child: TextButton(
+                            style: TextButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                              minimumSize: const Size(0, 30),
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            onPressed: () {
+                              // Compute the exact date for this BB2 cell (normalize to midnight)
+                              final DateTime base = DateTime(
+                                blockStartDate.year,
+                                blockStartDate.month,
+                                blockStartDate.day,
+                              );
+                              final DateTime workoutDate = base.add(
+                                Duration(days: weekIndex * 7 + dayIndex),
+                              );
 
-                            // 3️⃣ Build your prefilled list from the in-memory rows
-                            final rows = exerciseRows[weekIndex][dayIndex];
-                            final List<Map<String, dynamic>> prefilled = [];
-                            print('[BB2] exerciseRows for week $weekIndex, day $dayIndex:');
-                            for (final row in rows) {
-                              print('• ${row.exercise} | weight: ${row.weightController.text} | reps: ${row.repsController.text}');
-                              final name = row.exerciseController.text.trim();
-                              print('• $name | weight: ${row.weightController.text} | reps: ${row.repsController.text}');
-                              if (name.isNotEmpty) {
-                                prefilled.add({
-                                  'name': name,
-                                  'circuitIndex': row.circuitIndex,
-                                });
-                              }
-                            }
-
-                            print('🏷️ prefilledExercisesWithCircuits: $prefilled');
-
-                            // ✅ Ensure BB2 data is persisted for WES to access
-                            await saveDayToFirestore(weekIndex, dayIndex);
-
-                            final now = DateTime.now();
-                            final today = DateTime(now.year, now.month, now.day);
-                            final yesterday = today.subtract(const Duration(days: 1));
-                            final bool isOlderThanYesterday = workoutDate.isBefore(yesterday);
-
-                            if (isOlderThanYesterday) {
-                              final userContext = UserContext.of(context, listen: false);
-                              final userId = userContext.currentUid;
-
-                              final blockId =
-                                  _selectedBlockId!; // or however you’re storing the active block
-                              final dayDoc = await FirebaseFirestore.instance
-                                  .collection('planned_blocks')
-                                  .doc(userId)
-                                  .collection('blocks')
-                                  .doc(blockId)
-                                  .collection('weeks')
-                                  .doc('week_$weekIndex')
-                                  .collection('days')
-                                  .doc('day_$dayIndex')
-                                  .get();
-
-                              final savedExercises =
-                                  dayDoc.data()?['exercises'] ?? [];
-                              if (savedExercises.isNotEmpty) {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) => WorkoutSummaryScreen(
-                                      date: workoutDate,
-                                      workoutName: formattedWorkoutName,
-                                      exercises:
-                                          List<Map<String, dynamic>>.from(
-                                              savedExercises),
-                                    ),
+                              // Open WES with only the date; WES initState will handle everything else
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => WorkoutPage(
+                                    initialDate: workoutDate,
                                   ),
-                                );
-                                return;
-                              }
-                            }
-
-                            // 🚀 Open WES normally
-                            print("Selected Exercises${prefilled}");    // should show your two exercises
-                            final result = await Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => WorkoutPage(
-                                  prefilledExercisesWithCircuits: prefilled,
-                                  isNewWorkout: true,
-                                  initialDate: workoutDate,
-                                  initialWorkoutName: formattedWorkoutName,
-                                  blockId: _selectedBlockId!,
-                                  // isActive: true,
                                 ),
-                              ),
-                            );
+                              );
+                            },
+                            child: const Text(
+                              "Go to\nWorkout",
+                              style: TextStyle(fontSize: 11),
+                              textAlign: TextAlign.center,
+                            ),
+                          )
 
-                            // ✅ Pull back updated top sets from WES if available
-                            if (result != null && result['topSets'] != null) {
-                              final List<dynamic> topSets = result['topSets'];
-                              for (int i = 0; i < topSets.length; i++) {
-                                final entry = topSets[i];
-                                final row = exerciseRows[weekIndex][dayIndex][i];
-                                row.exerciseController.text = entry['exercise'] ?? '';
-                                row.weightController.text = entry['weight']?.toString() ?? '';
-                                row.repsController.text = entry['reps']?.toString() ?? '';
-                                row.rirController.text = entry['rir']?.toString() ?? '';
-                                row.velocityController.text = entry['velocity']?.toString() ?? '';
-                                row.notesController.text = entry['notes']?.toString() ?? '';
-                              }
-                              await saveDayToFirestore(weekIndex, dayIndex); // ✅ still needed for Firestore
-
-// 🧠 NEW: Also save BB2 in-memory values to SharedPrefs for WES
-                              final prefs = await SharedPreferences.getInstance();
-                              final dateKey = DateFormat('yyyy-MM-dd').format(workoutDate);
-
-                              final List<Map<String, dynamic>> bb2Exercises = [];
-                              for (final row in exerciseRows[weekIndex][dayIndex]) {
-                                final name = row.exerciseController.text.trim();
-                                if (name.isNotEmpty) {
-                                  bb2Exercises.add({
-                                    'name': name,
-                                    'circuitIndex': row.circuitIndex,
-                                    'sets': [
-                                      {
-                                        'reps': row.repsController.text,
-                                        'weight': row.weightController.text,
-                                        'rir': row.rirController.text,
-                                        'velocity': row.velocityController.text, // ✅ NEW
-                                        'notes': row.notesController.text,       // ✅ NEW
-                                      }
-                                    ],
-                                  });
-                                }
-                              }
-                              await prefs.setString('bb2_dayData_$dateKey', jsonEncode({'exercises': bb2Exercises}));
-                              print('💾 [BB2 → SharedPrefs] Wrote ${bb2Exercises.length} exercises to cache for $dateKey');
-
-                              setState(() {});
-                            }
-                            print('[BB2] Passing to WES:');
-                            for (var ex in prefilled) {
-                              print('→ ${ex['name']} (circuit: ${ex['circuitIndex']})');
-                            }
-
-                            print('[BB2 → WES] Prefilled from BB2:');
-                            for (final ex in prefilled) {
-                              print('• ${ex['name']} (circuitIndex: ${ex['circuitIndex']})');
-                            }
-                          },
-                          child: const Text(
-                            "Go to\nWorkout",
-                            style: TextStyle(fontSize: 11),
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
                       ),
                     ],
                   ),

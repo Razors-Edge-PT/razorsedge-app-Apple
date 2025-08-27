@@ -2473,7 +2473,10 @@ class PeriodizationModelUtils {
 
 
       if (date == null) continue;
-
+      if (date.isBefore(weekStart) || !date.isBefore(weekEnd)) {
+        print('⏭️ Skipping $date (outside this week ${weekStart.toIso8601String()}..${weekEnd.toIso8601String()})');
+        continue;
+      }
 
       final exercises = workout['exercises'];
 

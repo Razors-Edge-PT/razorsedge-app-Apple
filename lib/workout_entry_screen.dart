@@ -1409,8 +1409,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final rirPlan =
     PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['rirPlan'];
     final weekKey = 'week${weekIndex + 1}';
-    final sessionKey = 'session${sessionIndex + 1}';
+    final weekData = (rirPlan?[weekKey] as Map?)?.cast<String, dynamic>() ?? const {};
+    final maxSessions = weekData.keys.where((k) => k.startsWith('session')).length;
+    final safeSessionIndex = (maxSessions > 0) ? sessionIndex.clamp(0, maxSessions - 1) : 0;
+
+    final sessionKey = 'session${safeSessionIndex + 1}';
     final setKey = 'set$setNumber';
+
 
     final plannedRir = double.tryParse(
       rirPlan?[weekKey]?[sessionKey]?[setKey]?['rir']?.toString() ?? '',
