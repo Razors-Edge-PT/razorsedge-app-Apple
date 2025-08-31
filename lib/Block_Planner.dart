@@ -21,6 +21,22 @@ import 'dart:math' as math;
 class Block_Planner extends StatefulWidget {
   const Block_Planner({super.key});
 
+  // 👇 Static parser, same logic you provided
+  static Map<String, double> parseIncrements(String incString) {
+    final parts = incString
+        .split(',')
+        .map((s) => double.tryParse(s.trim()))
+        .whereType<double>()
+        .toList();
+
+    final keys = ['primary', 'secondary', 'tertiary', 'quaternary'];
+    final map = <String, double>{};
+    for (int i = 0; i < parts.length && i < keys.length; i++) {
+      map[keys[i]] = parts[i];
+    }
+    return map;
+  }
+
   @override
   State<Block_Planner> createState() => _BlockPlannerState();
 
@@ -490,29 +506,14 @@ class _BlockPlannerState extends State<Block_Planner> {
   }
 //Handles Default Settings for most Exercises
 
-  Map<String, double> parseIncrements(String incString) {
-    final parts = incString
-        .split(',')
-        .map((s) => double.tryParse(s.trim()))
-        .whereType<double>()
-        .toList();
 
-    final keys = ['primary', 'secondary', 'tertiary', 'quaternary'];
-    final map = <String, double>{};
-
-    for (int i = 0; i < parts.length && i < keys.length; i++) {
-      map[keys[i]] = parts[i];
-    }
-
-    return map;
-  }
 
 
   Map<String, dynamic> getDefaultSettings(String name, String category, String bodyPart) {
     Map<String, dynamic> sanitize(Map<String, dynamic> def) {
       return {
         'weeklyFrequency': def['weeklyFrequency'],
-        'increments': parseIncrements(def['increments']),
+        'increments': Block_Planner.parseIncrements(def['increments']),
         'periodizationModel': def['periodizationModel'],
         'repTargets': _buildRepTargetMap(def['repTargets']),
         'rirModel': def['rirModel'],
@@ -647,7 +648,7 @@ class _BlockPlannerState extends State<Block_Planner> {
   final Map<String, Map<String, dynamic>> _defaultsByGroup = {
     'Squat Pattern': {
       'weeklyFrequency': 2,
-      'increments': '1.3',
+      'increments': '2.5',
       'periodizationModel': 'DUP, By Week',
       'repTargets': [15, 9],
       'rirModel': 'Static RIR',
@@ -656,7 +657,7 @@ class _BlockPlannerState extends State<Block_Planner> {
     },
     'Hip Hinge': {
       'weeklyFrequency': 3,
-      'increments': '1.3',
+      'increments': '2.5',
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [15, 18, 9],
       'rirModel': 'Static RIR',
@@ -710,7 +711,7 @@ class _BlockPlannerState extends State<Block_Planner> {
     },
     'isolation': {
       'weeklyFrequency': 4,
-      'increments': '2.5, 1',
+      'increments': '2.5, 1.25',
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [9, 14, 6, 18],
       'rirModel': 'Static RIR',
@@ -1006,6 +1007,9 @@ class _BlockPlannerState extends State<Block_Planner> {
 
     for (final exercise in exercises) {
       final entry = Map<String, dynamic>.from(exerciseSettings[exercise] ?? {});
+      print("🧾 [SAVE] pre-normalize increments for $exercise → "
+          "${jsonEncode(entry['increments'])}");
+
       final repTargets = entry['repTargets'];
 
       // ✅ Normalize legacy List<String> format
@@ -1040,6 +1044,8 @@ class _BlockPlannerState extends State<Block_Planner> {
       entry['repTargets'] = savedTargets;
 
       print("🧪 Saving repTargets for $exercise: ${jsonEncode(savedTargets)}");
+// ⬇️ Add this line here
+      print('🔎 [BP] increments (raw) for $exercise → ${jsonEncode(entry['increments'])}');
 
       // ✅ Special handling for Daily Undulating Periodization
       final model = entry['periodizationModel'];
@@ -1085,7 +1091,10 @@ class _BlockPlannerState extends State<Block_Planner> {
           'notes': entry['notes'] ?? '',
         };
       }
+      print('💾 [BP] saving increments for $exercise → '
+          '${jsonEncode(existingDetails[exercise]['increments'])}');
     }
+
 
     // ✅ Inject block meta into plannedExerciseDetails if dates are valid
     if (_blockStartDate != null && _blockEndDate != null) {
@@ -2146,6 +2155,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         .join(', ');
     _incrementsController.text = cleaned;
 
+    // 🔎 ADD THIS: show the cleaned raw string
+    print("🧼 [DISPOSE] increments input (cleaned) for ${widget.exerciseName}: '$cleaned'");
+
     final List<double> parsedIncrements = cleaned
         .split(',')
         .map((s) => double.tryParse(s.trim()))
@@ -2153,6 +2165,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         .where((v) => v > 0)
         .toList();
 
+    print("🧮 [DISPOSE] parsedIncrements for ${widget.exerciseName}: $parsedIncrements");
     if (parsedIncrements.isNotEmpty) {
       final Map<String, double> incrementsMap = {};
       if (parsedIncrements.isNotEmpty) {
@@ -2170,6 +2183,10 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
       safeSave('increments', incrementsMap);
       print("💾 [DISPOSE] Saved increments for ${widget.exerciseName}: $incrementsMap");
+
+      print("🧾 [DISPOSE] post-save increments in settings for ${widget.exerciseId} → "
+          "${jsonEncode(widget.exerciseSettings[widget.exerciseId]?['increments'])}");
+
 
     }
 
@@ -4264,14 +4281,12 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                     focusNode: _incrementsFocusNode,
                     keyboardType: TextInputType.text,
                     inputFormatters: [
-                      FilteringTextInputFormatter.allow(RegExp(r'[0-9., ]'))
-
-                      // ❌ Removed auto-formatting to preserve cursor position
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9., ]')),
                     ],
                     style: const TextStyle(color: Colors.white, fontSize: 13),
                     decoration: InputDecoration(
                       labelText: 'Increments (kg)',
-                      hintText: '2.5, 1, 0.5, …',
+                      hintText: '2.5, 1, 0.5',
                       labelStyle: const TextStyle(color: Colors.white),
                       hintStyle: const TextStyle(color: Colors.white38),
                       floatingLabelBehavior: FloatingLabelBehavior.always,
@@ -4281,8 +4296,27 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                       isDense: true,
                       contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                     ),
+
+                    // live update while typing
+                    onChanged: (txt) {
+                      widget.onUpdateSetting(
+                        widget.exerciseId,
+                        'increments',
+                        Block_Planner.parseIncrements(txt),
+                      );
+                    },
+
+                    // commit on Enter / blur as well
+                    onEditingComplete: () {
+                      widget.onUpdateSetting(
+                        widget.exerciseId,
+                        'increments',
+                        Block_Planner.parseIncrements(_incrementsController.text),
+                      );
+                    },
                   ),
                 ),
+
 
                 _smallInput(
                   "Weekly Frequency",
@@ -4376,7 +4410,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   ),
                 ),
 
-
+//Rep target dialog UI
                 SizedBox(
                   width: 158, height: 48,
                   child: GestureDetector(

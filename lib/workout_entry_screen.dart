@@ -1154,9 +1154,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     );
 
     // Call the progression model (which contains its internal logic).
-    final increments = PeriodizationModelUtils.getIncrementsForExercise(exerciseId);
-    if (increments == null || increments.isEmpty) {
-    }
+    final incRaw = _exerciseSettings[exerciseId]?['increments'];
+    final incMap = PeriodizationModelUtils.incMapFromRaw(incRaw);
+    final increments = PeriodizationModelUtils.expandIncrementOptions(incMap);
+
+    print('🧷 [WES] increments (expanded) for $exerciseId → '
+        '${increments.take(12).toList()} … total=${increments.length}');
 
     print('🧾 [WES→PMU] exId=$exerciseId exName=$exerciseName '
         'repTarget=${repTarget.toInt()} rir=$rir '
@@ -1184,7 +1187,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     );
     print('🧾 [WES <- PMU] pre-overlay ${progressed['weight']} × ${progressed['reps']}');
 
-    final snapped = PeriodizationModelUtils.roundToNearestValidIncrement(targetWeight: (progressed['weight'] as num).toDouble(), exerciseName: exerciseName);
+    final target = (progressed['weight'] as num).toDouble();
+    final snapped = increments.reduce(
+          (a, b) => (a - target).abs() < (b - target).abs() ? a : b,
+    );
+
 
     print('🧾 [WES overlay] ${progressed['weight']} → $snapped');
     // Cache and return

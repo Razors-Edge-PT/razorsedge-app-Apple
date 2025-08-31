@@ -861,39 +861,61 @@ class PeriodizationModelUtils {
     required double targetWeight,
     required String exerciseName,
   }) {
-    // Try name first, then fallback to ID
-    final byName = _exerciseSettings[exerciseName]?['increments'];
-    final id = nameToId[exerciseName];
 
+    dynamic incRaw = _exerciseSettings[exerciseName]?['increments'];
+    final id = nameToId[exerciseName];
     print('🧠 [BB2] nameToId lookup for "$exerciseName" → $id');
     print('🧾 [BB2] Details for ID $id → ${_exerciseSettings[id]}');
 
-    Map<String, dynamic>? byId;
-    if (id != null && _exerciseSettings.containsKey(id)) {
-      byId = _exerciseSettings[id]?['increments'];
+    // 👇 ADD THESE PRINTS (no logic change)
+    print('🧭 [PMU:roundToNearestValidIncrement] key="$exerciseName" id=$id '
+        'hasByName=${_exerciseSettings[exerciseName]?['increments'] != null} '
+        'hasById=${id != null && _exerciseSettings.containsKey(id) && _exerciseSettings[id]?['increments'] != null} '
+        'chosen=${_exerciseSettings[exerciseName]?['increments'] != null ? 'NAME' : ((id != null && _exerciseSettings.containsKey(id) && _exerciseSettings[id]?['increments'] != null) ? 'ID' : 'FALLBACK')}');
+
+    if (_exerciseSettings[exerciseName]?['increments'] != null) {
+      print('   ↳ byName increments: ${_exerciseSettings[exerciseName]?['increments']}');
+    }
+    if (id != null && _exerciseSettings.containsKey(id) && _exerciseSettings[id]?['increments'] != null) {
+      print('   ↳ byId   increments: ${_exerciseSettings[id]?['increments']}');
     }
 
-    final increments = byName ?? byId;
+    if (incRaw == null && id != null && _exerciseSettings.containsKey(id)) {
+      incRaw = _exerciseSettings[id]?['increments'];
+    }
 
-    if (increments == null) {
+    if (incRaw == null) {
+      // fallback to standard 2.5 if truly nothing saved
       return (targetWeight / 2.5).round() * 2.5;
     }
 
-    final double primary = increments['primary']?.toDouble() ?? 2.5;
-    final double secondary = increments['secondary']?.toDouble() ?? 0.0;
+    Map<String, double> inc;
+    if (incRaw is String) {
+      // use the BP parser (already in Block_Planner)
+      inc = Block_Planner.parseIncrements(incRaw);
+    } else if (incRaw is Map) {
+      final m = incRaw.map((k, v) => MapEntry(k.toString(), (v as num?)?.toDouble()));
+      inc = {
+        'primary': (m['primary'] ?? m['week'] ?? 2.5) ?? 2.5,
+        'secondary': (m['secondary'] ?? m['block'] ?? 0.0) ?? 0.0,
+        if (m['tertiary'] != null) 'tertiary': m['tertiary']!,
+        if (m['quaternary'] != null) 'quaternary': m['quaternary']!,
+      };
+    } else {
+      inc = {'primary': 2.5, 'secondary': 0.0};
+    }
+
+    final double primary = inc['primary']!;
+    final double secondary = inc['secondary'] ?? 0.0;
 
     final Set<double> options = {};
-
     for (int i = 0; i < 100; i++) {
       options.add(i * primary); // ✅ Start from 0
     }
+    // 🔧 BB2 bugfix: ignore secondary to avoid stale default merge
+    print('🧰 [BB2] Ignoring secondary increment ($secondary) — using primary=$primary only');
+// (no secondary ladder added)
 
-
-    if (secondary > 0) {
-      for (final base in options.toList()) {
-        options.add(base + secondary);
-      }
-    }
 
     final rounded = options.reduce((a, b) =>
     (a - targetWeight).abs() < (b - targetWeight).abs() ? a : b);
@@ -902,51 +924,62 @@ class PeriodizationModelUtils {
     print('🎯 [BB2] Chose: $rounded from target: $targetWeight');
 
     return rounded;
+
   }
 
   static List<double> getIncrementsForExercise(String exerciseNameOrId) {
     print('🔧 [getIncrementsForExercise] START for key="$exerciseNameOrId"');
     final byName = _exerciseSettings[exerciseNameOrId]?['increments'];
-    print('🔧 [getIncrementsForExercise] byName=$byName');
+    print('🔧 [getIncrementsForExercise] START for key="$exerciseNameOrId"');
 
-    Map<String, dynamic>? byId;
+    dynamic incRaw = _exerciseSettings[exerciseNameOrId]?['increments'];
+    print('🔧 [getIncrementsForExercise] byNameOrId=$incRaw');
+
     final id = nameToId[exerciseNameOrId];
-    if (id != null && _exerciseSettings.containsKey(id)) {
-      byId = _exerciseSettings[id]?['increments'];
-      print('🔧 [getIncrementsForExercise] byId=$byId (id=$id)');
+    if (incRaw == null && id != null && _exerciseSettings.containsKey(id)) {
+      incRaw = _exerciseSettings[id]?['increments'];
+      print('🔧 [getIncrementsForExercise] fallback byId=$incRaw (id=$id)');
     }
-    final increments = byName ?? byId;
 
-    if (increments == null) {
+    if (incRaw == null) {
       print('❌ [PMU] No increments found for $exerciseNameOrId by name or ID');
-      return List.generate(100, (i) => 20 + i * 2.5); // fallback: standard 2.5kg plates
+      return List.generate(100, (i) => 20 + i * 2.5); // fallback
     }
 
-    final double primary = (increments['primary'] as num?)?.toDouble() ?? 2.5;
-    final double secondary = (increments['secondary'] as num?)?.toDouble() ?? 0.0;
+    Map<String, double> inc;
+    if (incRaw is String) {
+      inc = Block_Planner.parseIncrements(incRaw);
+    } else if (incRaw is Map) {
+      final m = incRaw.map((k, v) => MapEntry(k.toString(), (v as num?)?.toDouble()));
+      inc = {
+        'primary': (m['primary'] ?? m['week'] ?? 2.5) ?? 2.5,
+        'secondary': (m['secondary'] ?? m['block'] ?? 0.0) ?? 0.0,
+        if (m['tertiary'] != null) 'tertiary': m['tertiary']!,
+        if (m['quaternary'] != null) 'quaternary': m['quaternary']!,
+      };
+    } else {
+      inc = {'primary': 2.5, 'secondary': 0.0};
+    }
+
+    final double primary = inc['primary']!;
+    final double secondary = inc['secondary'] ?? 0.0;
     print('🔧 [getIncrementsForExercise] primary=$primary, secondary=$secondary');
 
     final Set<double> weightOptions = {};
-
     for (int i = 0; i < 100; i++) {
       weightOptions.add(i * primary);
     }
-
-    if (secondary > 0 && secondary != primary) {
-      for (final base in weightOptions.toList()) {
-        weightOptions.add(base + secondary);
-      }
-    }
+    // 🔧 BB2 bugfix: ignore secondary to avoid stale default merge
+    print('🧰 [BB2] getIncrementsForExercise: ignoring secondary ($secondary); primary=$primary');
+// (no secondary ladder added)
 
     final list = weightOptions.toList()..sort();
     print('✅ [PMU] getIncrementsForExercise($exerciseNameOrId) '
         '→ count=${list.length}, sample=${list.take(10).toList()}');
 
     return list;
+
   }
-
-
-
 
   static List<double> roundToAllValidIncrements({
     required double baseWeight,
@@ -987,7 +1020,49 @@ class PeriodizationModelUtils {
     return list;
   }
 
+  static Map<String, double> incMapFromRaw(dynamic incRaw) {
+    if (incRaw is String) {
+      final parts = incRaw
+          .split(',')
+          .map((s) => double.tryParse(s.trim()))
+          .whereType<double>()
+          .toList();
 
+      final m = <String, double>{};
+      if (parts.isNotEmpty) m['primary'] = parts[0];
+      if (parts.length > 1) m['secondary'] = parts[1];
+      if (parts.length > 2) m['tertiary'] = parts[2];
+      if (parts.length > 3) m['quaternary'] = parts[3];
+      return m;
+    }
+    if (incRaw is Map) {
+      final m = incRaw.map((k, v) => MapEntry(k.toString(), (v as num?)?.toDouble()));
+      // prefer canonical keys; fall back to legacy week/block
+      return <String, double>{
+        if (m['primary'] != null) 'primary': m['primary']!,
+        if (m['secondary'] != null) 'secondary': m['secondary']!,
+        if (m['tertiary'] != null) 'tertiary': m['tertiary']!,
+        if (m['quaternary'] != null) 'quaternary': m['quaternary']!,
+        if (m['primary'] == null && m['week'] != null) 'primary': m['week']!,
+        if (m['secondary'] == null && m['block'] != null) 'secondary': m['block']!,
+      };
+    }
+    return {'primary': 2.5}; // absolute fallback
+  }
+
+  /// Expand a canonical increments map into a sorted list of valid weights.
+  static List<double> expandIncrementOptions(Map<String, double> inc) {
+    final primary = inc['primary'] ?? 2.5;
+    final secondary = inc['secondary'] ?? 0.0;
+
+    final opts = <double>{};
+    for (int i = 0; i < 100; i++) opts.add(i * primary);
+    if (secondary > 0 && secondary != primary) {
+      for (final base in opts.toList()) opts.add(base + secondary);
+    }
+    final list = opts.toList()..sort();
+    return list;
+  }
 
 
   // Progression model logic
@@ -1652,10 +1727,11 @@ class PeriodizationModelUtils {
 
         print('📦 [PMU Router] pre-overlay (linear) ${result['weight']} × ${result['reps']}');
 
-        final snapped = PeriodizationModelUtils.roundToNearestValidIncrement(
-          targetWeight: (result['weight'] as num).toDouble(),
-          exerciseName: exerciseName,
+        final target = (result['weight'] as num).toDouble();
+        final snapped = (increments.isNotEmpty ? increments : [2.5]).reduce(
+              (a, b) => (a - target).abs() < (b - target).abs() ? a : b,
         );
+
 
         print('🧲 [Overlay] (linear) ${result['weight']} → $snapped');
 
@@ -1678,10 +1754,11 @@ class PeriodizationModelUtils {
 
         print('📦 [PMU Router] pre-overlay (smart) ${result['weight']} × ${result['reps']}');
 
-        final snapped = PeriodizationModelUtils.roundToNearestValidIncrement(
-          targetWeight: (result['weight'] as num).toDouble(),
-          exerciseName: exerciseName,
+        final target = (result['weight'] as num).toDouble();
+        final snapped = (increments.isNotEmpty ? increments : [2.5]).reduce(
+              (a, b) => (a - target).abs() < (b - target).abs() ? a : b,
         );
+
 
         print('🧲 [Overlay] (smart) ${result['weight']} → $snapped');
 
@@ -1703,10 +1780,11 @@ class PeriodizationModelUtils {
 
         print('📦 [PMU Router] pre-overlay (addReps) ${result['weight']} × ${result['reps']}');
 
-        final snapped = PeriodizationModelUtils.roundToNearestValidIncrement(
-          targetWeight: (result['weight'] as num).toDouble(),
-          exerciseName: exerciseName,
+        final target = (result['weight'] as num).toDouble();
+        final snapped = (increments.isNotEmpty ? increments : [2.5]).reduce(
+              (a, b) => (a - target).abs() < (b - target).abs() ? a : b,
         );
+
 
         print('🧲 [Overlay] (addReps) ${result['weight']} → $snapped');
 
