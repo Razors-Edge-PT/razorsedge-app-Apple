@@ -977,20 +977,20 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         ).toDouble();
       }
     } else if (model == PeriodizationModelType.dailyUndulatingWeek) {
-      final weekKey = 'week${(weekIndex ?? 0) + 1}';
-      final weekMap = _exerciseSettings[exerciseId]?['repTargets']?[weekKey];
+      // 🔁 DUP Weekly: reuse week1's instance list every week
+      final weekMap = _exerciseSettings[exerciseId]?['repTargets']?['week1'];
 
       if (weekMap is Map<String, dynamic>) {
         final sorted = weekMap.entries
             .where((e) => e.key.startsWith('instance'))
             .toList()
-          ..sort((a, b) => a.key.compareTo(b.key));
+          ..sort((a, b) => a.key.compareTo(b.key)); // keep your existing ordering
 
         if (sorted.isNotEmpty) {
-          if (blockStartDate == null) {
+          if (blockStartDate == null || _selectedDate == null) {
             repTarget = 10.0;
           } else {
-            // ✅ Compute completedEarlierThisWeek (before today) from savedWorkoutsList
+            // ✅ Count only *actual* completions earlier this week (strictly before today)
             int completedEarlierThisWeek = 0;
             final matchedDates = <String>{};
 
@@ -1056,19 +1056,17 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
               print('⚠️ [WES DUP Week] completedEarlierThisWeek calc failed: $e');
             }
 
-            // ✅ Final weekly index = completed earlier this week + planned rows before on this day
-            final plannedIndex = completedEarlierThisWeek + plannedCountBefore;
+            // 🔑 WES rule: planned rows don't affect DUP Weekly indexing
+            final plannedIndex = completedEarlierThisWeek;
             final index = plannedIndex % sorted.length;
 
             print('🧮 [WES DUP Week] completedEarlierThisWeek=$completedEarlierThisWeek '
-                'plannedBefore=$plannedCountBefore → plannedIndex=$plannedIndex '
-                '→ instance=${index + 1}/${sorted.length}');
+                '→ plannedIndex=$plannedIndex → instance=${index + 1}/${sorted.length}');
 
             final raw = sorted[index].value?.toString() ?? '';
             final match = RegExp(r'^(\d+)').firstMatch(raw);
-
             repTarget = match != null
-                ? int.tryParse(match.group(1)!)?.toDouble() ?? 10.0
+                ? (int.tryParse(match.group(1)!)?.toDouble() ?? 10.0)
                 : 10.0;
           }
         } else {
@@ -1078,7 +1076,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         repTarget = 10.0;
       }
 
-      print('🎯 [WES] dailyUndulatingWeek → repTarget = $repTarget for $exerciseName on $weekKey');
+      print('🎯 [WES] dailyUndulatingWeek → repTarget = $repTarget for $exerciseName (using week1 pattern)');
+
 
 
     } else if (model == PeriodizationModelType.linearClassic) {

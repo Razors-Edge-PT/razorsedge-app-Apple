@@ -2474,7 +2474,7 @@ class PeriodizationModelUtils {
 
       if (date == null) continue;
       if (date.isBefore(weekStart) || !date.isBefore(weekEnd)) {
-        print('⏭️ Skipping $date (outside this week ${weekStart.toIso8601String()}..${weekEnd.toIso8601String()})');
+
         continue;
       }
 
@@ -2502,7 +2502,6 @@ class PeriodizationModelUtils {
         usedDates.add(dateStr.length >= 10 ? dateStr.substring(0, 10) : dateStr);
         print('✅ Matched "$exerciseName" on $date');
       } else {
-        print('❌ "$exerciseName" not found in workout on $date');
       }
     }
 
