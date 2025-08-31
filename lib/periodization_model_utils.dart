@@ -912,9 +912,24 @@ class PeriodizationModelUtils {
     for (int i = 0; i < 100; i++) {
       options.add(i * primary); // ✅ Start from 0
     }
-    // 🔧 BB2 bugfix: ignore secondary to avoid stale default merge
-    print('🧰 [BB2] Ignoring secondary increment ($secondary) — using primary=$primary only');
-// (no secondary ladder added)
+    bool useSecondary = secondary > 0 && secondary != primary;
+
+    if (incRaw is Map) {
+      final hasLegacy = incRaw.containsKey('week') || incRaw.containsKey('block');
+      if ((hasLegacy && secondary == 1.0) || (secondary == 1.0 && primary != 2.5)) {
+        useSecondary = false;
+        print('🧰 [BB2] roundToNearest: ignoring secondary=$secondary (primary=$primary)');
+      } else if (useSecondary) {
+        print('🧰 [BB2] roundToNearest: using secondary=$secondary with primary=$primary');
+      }
+    }
+
+    if (useSecondary) {
+      for (final base in options.toList()) {
+        options.add(base + secondary);
+      }
+    }
+
 
 
     final rounded = options.reduce((a, b) =>
@@ -969,9 +984,29 @@ class PeriodizationModelUtils {
     for (int i = 0; i < 100; i++) {
       weightOptions.add(i * primary);
     }
-    // 🔧 BB2 bugfix: ignore secondary to avoid stale default merge
-    print('🧰 [BB2] getIncrementsForExercise: ignoring secondary ($secondary); primary=$primary');
-// (no secondary ladder added)
+    bool useSecondary = secondary > 0 && secondary != primary;
+
+// Same guard against legacy/default-injected 1.0 with week/block keys
+    // useSecondary was set above: secondary > 0 && secondary != primary
+    if (incRaw is Map) {
+      final hasLegacy = incRaw.containsKey('week') || incRaw.containsKey('block');
+      final isDefaultGhost = (secondary == 1.0 && primary != 2.5);
+
+      if ((hasLegacy && secondary == 1.0) || isDefaultGhost) {
+        useSecondary = false;
+        print('🧰 [BB2] getIncrementsForExercise: ignoring secondary=$secondary (primary=$primary)');
+      } else if (useSecondary) {
+        print('🧰 [BB2] getIncrementsForExercise: using secondary=$secondary with primary=$primary');
+      }
+    }
+
+    if (useSecondary) {
+      for (final base in weightOptions.toList()) {
+        weightOptions.add(base + secondary);
+      }
+    }
+
+
 
     final list = weightOptions.toList()..sort();
     print('✅ [PMU] getIncrementsForExercise($exerciseNameOrId) '

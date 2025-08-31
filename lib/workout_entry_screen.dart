@@ -1521,10 +1521,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         rir: rirToUse,
       );
 
-      final double rounded = PeriodizationModelUtils.roundToNearestValidIncrement(
-        targetWeight: derived,
-        exerciseName: exerciseName,
-      );
+      final String _exId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
+      final List<double> _candidates = PeriodizationModelUtils.getIncrementsForExercise(_exId);
+      final double rounded = (_candidates.isNotEmpty ? _candidates : List<double>.generate(200, (i) => i * 2.5))
+          .reduce((a, b) => (a - derived).abs() < (b - derived).abs() ? a : b);
+      print('🧲 [WES snap] $derived → $rounded (candidates=${_candidates.take(10).toList()} …)');
+
 
       final double newE1RM = PeriodizationModelUtils.calculateE1RM(
         rounded,
@@ -1539,11 +1541,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
 
     // ✅ Step 7: No overrides — fallback to rounded base weight
-    final double fallbackRounded =
-    PeriodizationModelUtils.roundToNearestValidIncrement(
-      targetWeight: baseWeight,
-      exerciseName: exerciseName,
-    );
+    final String _exId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
+    final List<double> _candidates = PeriodizationModelUtils.getIncrementsForExercise(_exId);
+    final double fallbackRounded = (_candidates.isNotEmpty ? _candidates : List<double>.generate(200, (i) => i * 2.5))
+        .reduce((a, b) => (a - baseWeight).abs() < (b - baseWeight).abs() ? a : b);
+    print('🧲 [WES snap fallback] $baseWeight → $fallbackRounded (candidates=${_candidates.take(10).toList()} …)');
+
     print(
         '🎯 [WES] Final progression for $exerciseName using default RIR $modelRir → $fallbackRounded kg');
     return fallbackRounded;
@@ -2408,8 +2411,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final sw = Stopwatch()..start(); // ⏱️ Start timer
     final user = FirebaseAuth.instance.currentUser;
     if (user == null || _selectedBlockId == null) return {};
-    print('🔍 [WES] _loadPlannedExerciseDetails() using blockId: $_selectedBlockId');
-
 
     // ✅ 1. Load from BB2-style Firestore path using _selectedBlockId
     final ref = FirebaseFirestore.instance
@@ -2436,7 +2437,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
 
     if (!doc.exists) {
-      print('❌ [WES] No plannedExerciseDetails found in block $_selectedBlockId');
       return {};
     }
 
@@ -2444,10 +2444,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     // ✅ 2. Extract data and handle blockMeta separately
     final data = doc.data()!;
     final blockMeta = data['blockMeta'] as Map<String, dynamic>? ?? {};
-
     final details = Map<String, dynamic>.from(data['plannedExerciseDetails'] ?? {});
-    print('📦 [WES] Firestore plannedExerciseDetails keys: ${details.keys}');
-    print('🧪 [WES] Raw plannedExerciseDetails contents:');
+
     details.forEach((exerciseId, entry) {
       print('  🔍 $exerciseId → $entry');
     });
@@ -2456,7 +2454,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
             (k, v) => MapEntry(k.toString(), Map<String, dynamic>.from(v)),
       ),
     );
-    print('📦 [WES] Firestore exerciseSettings keys: ${_exerciseSettings.keys}');
+
 
 
     // ✅ 3. Do NOT setState() with plannedExercises — skipped by request
@@ -2471,8 +2469,28 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     PeriodizationModelUtils.exercisePeriodizationModels.clear();
 
     // Inject into PMU
-    PeriodizationModelUtils.setExerciseSettings(details);
-    print('✅ [WES] Injected exerciseSettings into PMU with keys: ${details.keys}');
+    // Inject into PMU, but override increments with the ones from _exerciseSettings
+    final mergedForPMU = <String, Map<String, dynamic>>{};
+
+// start with details
+    details.forEach((k, v) {
+      mergedForPMU[k.toString()] = Map<String, dynamic>.from(v as Map);
+    });
+
+// overlay increments from _exerciseSettings (replace, don't merge)
+    _exerciseSettings.forEach((exId, v) {
+      final inc = v['increments'];
+      if (inc != null) {
+        mergedForPMU[exId] = Map<String, dynamic>.from(mergedForPMU[exId] ?? {});
+        mergedForPMU[exId]!['increments'] = inc;
+        print('🩹 [WES LOAD] overriding increments for $exId → $inc');
+      }
+    });
+
+// now inject
+    PeriodizationModelUtils.setExerciseSettings(mergedForPMU);
+    print('✅ [WES] Injected exerciseSettings into PMU with keys: ${mergedForPMU.keys}');
+
 
     // Walk each exercise entry
     details.forEach((exerciseId, entry) {

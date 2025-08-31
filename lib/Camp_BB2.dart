@@ -21,7 +21,7 @@ import 'package:uuid/uuid.dart';
 import 'user_context.dart';
 import 'dart:async';
 import 'package:flutter/foundation.dart';
-
+import 'dart:convert'; // (top of file if not already)
 
 part 'block_data_loader.dart';
 
@@ -1278,12 +1278,32 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         'repTarget=$baseReps rir=$baseRir '
         'defaultWeight=${baseWeight.toStringAsFixed(2)}');
 
-    final bb2Incs = PeriodizationModelUtils.getIncrementsForExercise(exerciseId ?? '');
-    print('🧾 [BB2→PMU] increments=${(bb2Incs ?? []).join(", ")} '
+// 🔩 ES-only increments (no PD), sanitize any stray secondary
+    final incRawES = _exerciseSettings[exerciseId]?['increments']
+        ?? _exerciseSettings[exerciseName]?['increments'];
+    final incMapES = PeriodizationModelUtils.incMapFromRaw(incRawES);
+
+// If ES has no secondary, remove it
+    final esHasSecondary = (incRawES is Map) && (incRawES['secondary'] is num) && ((incRawES['secondary'] as num) > 0);
+    if (!esHasSecondary) incMapES.remove('secondary');
+
+// 🔁 Push a tiny patch into PMU so internal lookups match ES
+    final Map<String, Map<String, dynamic>> pmuPatch = {};
+    if ((exerciseId ?? '').isNotEmpty) {
+      pmuPatch[exerciseId!] = {'increments': Map<String, dynamic>.from(incMapES)};
+    }
+    pmuPatch[exerciseName] = {'increments': Map<String, dynamic>.from(incMapES)};
+    PeriodizationModelUtils.setExerciseSettings(pmuPatch);
+    print('🧷 [BB2→PMU set] increments patched for ${pmuPatch.keys.toList()} → ${incMapES}');
+
+// Build options from sanitized ES and pass them in
+    final esOptions = PeriodizationModelUtils.expandIncrementOptions(incMapES);
+    print('🧾 [BB2→PMU] ES increments primary=${incMapES['primary']} '
+        'secondary=${incMapES['secondary'] ?? 0} '
+        'sample=${esOptions.take(10).toList()} … total=${esOptions.length} '
         'maxWeightByRepsKeys=${plannedExerciseDetails[exerciseId]?['maxWeightByReps'] is Map
         ? (plannedExerciseDetails[exerciseId]['maxWeightByReps'] as Map).keys.toList()
         : 'null'}');
-
 
     final progressed = PeriodizationModelUtils.getWeightByProgressionModel(
       model: progressionModel,
@@ -1291,11 +1311,12 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       repTarget: baseReps,
       defaultWeight: baseWeight,
       rirValue: baseRir,
-      increments: PeriodizationModelUtils.getIncrementsForExercise(exerciseId ?? ''),
+      increments: esOptions, // ← only ES-based candidates
       maxWeightByReps: plannedExerciseDetails[exerciseId]?['maxWeightByReps'],
-      topSetHistory: topSetHistory, // ✅ now injected
+      topSetHistory: topSetHistory,
       weekIndex: weekIndex,
     );
+
 
     final double? weight = progressed['weight'];
     final int? reps = progressed['reps'];
@@ -1942,6 +1963,15 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
     // 3) Exercise settings — load once & cache globally if already loaded
     final blockData = parentBlockSnap.data();
+    // 🚚 Give PMU the planned details (same source WES uses)
+    final plannedDetails = Map<String, Map<String, dynamic>>.from(
+      ((blockData?['plannedExerciseDetails'] ?? const {}) as Map).map(
+            (k, v) => MapEntry(k.toString(), Map<String, dynamic>.from(v as Map)),
+      ),
+    );
+    PeriodizationModelUtils.setExerciseSettings(plannedDetails);
+    print('🧭 [BB2→PMU] injected plannedExerciseDetails keys=${plannedDetails.keys}');
+
     final settings = blockData?['exerciseSettings'];
 
     final needSettingsReload =
@@ -1960,6 +1990,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         debugPrint('📦 [BB2] exerciseSettings reloaded for uid=$uid, block=$_selectedBlockId '
             '(${_exerciseSettings.length} exercises)');
       }
+
     }
 
     // 4) Ensure all 7 day docs exist (handle partial weeks too)
@@ -3096,6 +3127,21 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         final exerciseId = nameToIdMap[exerciseName];
         print('🔍 ID for $exerciseName: $exerciseId');
 
+
+
+// 🧷 Use exerciseSettings (ES) ONLY to build valid options
+        final incRawES = _exerciseSettings[exerciseId]?['increments']
+            ?? _exerciseSettings[exerciseName]?['increments'];
+
+        final incMapES = PeriodizationModelUtils.incMapFromRaw(incRawES);
+        final optionsES = PeriodizationModelUtils.expandIncrementOptions(incMapES);
+
+        print('🔎 ES inc (raw) for $exerciseName/$exerciseId → ${jsonEncode(incRawES)}');
+        print('🧷 [BB2:chosen increments] $exerciseName → '
+            'primary=${incMapES['primary'] ?? 2.5} '
+            'secondary=${incMapES['secondary'] ?? 0.0} '
+            'sample=${optionsES.take(10).toList()} … total=${optionsES.length}');
+
         final String? plannedRep = getRepTargetForExercise(
           exerciseName,
           weekIndex,
@@ -3262,12 +3308,21 @@ class _BlockBuilder2State extends State<Camp_BB2> {
               rir: effectiveRir,
             );
 
-            // 🎯 Round to nearest valid increment
-            trialWeight = PeriodizationModelUtils.roundToNearestValidIncrement(
-              targetWeight: trialWeight,
-              exerciseName: exerciseName,
-            );
-
+            // 🎯 Round to nearest valid increment — ES only
+            if (optionsES.isNotEmpty) {
+              final t = trialWeight;
+              trialWeight = optionsES.reduce(
+                    (a, b) => (a - t).abs() < (b - t).abs() ? a : b,
+              );
+              print('🧲 [BB2 snap ES] $t → $trialWeight');
+            } else {
+              final snapped = PeriodizationModelUtils.roundToNearestValidIncrement(
+                targetWeight: trialWeight,
+                exerciseName: exerciseName,
+              );
+              print('🧲 [BB2 snap fallback] $trialWeight → $snapped (PMU)');
+              trialWeight = snapped;
+            }
 
             print('🎯 [BB2] Rounded weight to nearest valid increment → $trialWeight');
 
@@ -3305,9 +3360,20 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           }
 
         } else {
-          // 🧠 Default fallback
-          effectiveWeight = weight ?? progressedWeightRaw;
+          // 🧠 Default fallback: snap PMU result to ES options
+          final base = progressedWeightRaw;
+          final snapped = optionsES.isNotEmpty
+              ? optionsES.reduce((a, b) => (a - base).abs() < (b - base).abs() ? a : b)
+              : base;
+
+          if (snapped != base) {
+            print('🧲 [BB2 default snap ES] ${base.toStringAsFixed(1)} → ${snapped.toStringAsFixed(1)}');
+          }
+          effectiveWeight = weight ?? snapped;
         }
+
+
+
 
 // ✅ Now that effectiveReps is defined, compute hintReps from it
         final int roundedReps = effectiveReps != null

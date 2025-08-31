@@ -1072,7 +1072,7 @@ class _BlockPlannerState extends State<Block_Planner> {
           'rirPlan': entry['rirPlan'], // ✅ Add this
           'rirModel': entry['rirModel'], // ✅ add this line
           'progressionModel': entry['progressionModel'] ?? 'Linear Weight Increase',
-          'increments': entry['increments'] ?? {'week': 2.5, 'block': 5.0},
+          'increments': entry['increments'] ?? {'primary': 2.5},
           'weeklyFrequency': entry['weeklyFrequency'] ?? 3,
           'maxWeightXReps': entry['maxWeightXReps'] ?? '',
           'notes': entry['notes'] ?? '',
@@ -1085,7 +1085,7 @@ class _BlockPlannerState extends State<Block_Planner> {
           'rirPlan': entry['rirPlan'], // ✅ Add this
           'rirModel': entry['rirModel'], // ✅ add this line
           'progressionModel': entry['progressionModel'] ?? 'Linear Weight Increase',
-          'increments': entry['increments'] ?? {'week': 2.5, 'block': 5.0},
+          'increments': entry['increments'] ?? {'primary': 2.5},
           'weeklyFrequency': entry['weeklyFrequency'] ?? 3,
           'maxWeightXReps': entry['maxWeightXReps'] ?? '',
           'notes': entry['notes'] ?? '',
