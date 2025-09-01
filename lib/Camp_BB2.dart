@@ -3385,16 +3385,32 @@ class _BlockBuilder2State extends State<Camp_BB2> {
             : repsController.text;
 
         final String hintWeight = (weightController.text.isEmpty && isExerciseNamed)
-            ? ((userTypedRir || repsController.text.isNotEmpty) && effectiveWeight != null
+            ? (() {
+          final bool isBwEx = PeriodizationModelUtils.isBodyweightExercise(
+            id: exerciseId, name: exerciseName,
+          );
 
-            ? effectiveWeight.toStringAsFixed(1)
-            : progressedWeightRaw.toStringAsFixed(1))
+          final double absVal = ((userTypedRir || repsController.text.isNotEmpty) && effectiveWeight != null)
+              ? effectiveWeight!
+              : progressedWeightRaw;
+
+          if (isBwEx) {
+            final added = PeriodizationModelUtils.toDisplayAddedWeight(
+              uid: _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '',
+              absoluteKg: absVal,
+              exerciseId: exerciseId,
+              exerciseName: exerciseName,
+            );
+            return added.toStringAsFixed(1);
+          } else {
+            return absVal.toStringAsFixed(1);
+          }
+        })()
             : '';
+
 
         print('[TRACE] Checking effectiveReps: reps="${repsController.text}", weight="${weightController.text}", hintWeight="$hintWeight", hintReps="$hintReps"');
         print('📋 repsController: "${repsController.text}", plannedRep: "$plannedRep", hintReps: "$hintReps"');
-
-
 
 
         final double? e1rm = PeriodizationModelUtils.calculateE1RM(
@@ -3403,10 +3419,29 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           effectiveRir,
         );
 
-        print('🧠 [BB2] Final E1RM used for $exerciseName = ${e1rm?.toStringAsFixed(2)} '
+// BW-only: compute display E1RM = (absolute E1RM − BW); normal keeps original 'e1rm'
+        final bool _isBwEx = PeriodizationModelUtils.isBodyweightExercise(
+          id: exerciseId, name: exerciseName,
+        );
+        final double? e1rmUi = !_isBwEx
+            ? e1rm
+            : (e1rm == null
+            ? null
+            : PeriodizationModelUtils.e1rmForDisplay(
+          uid: _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '',
+          absoluteKg: effectiveWeight ?? progressedWeightRaw,
+          reps: (effectiveReps ?? progressedRepsRaw).round(),
+          rir: effectiveRir,
+          exerciseId: exerciseId,
+          exerciseName: exerciseName,
+        ));
+
+// Print: normal exercises print 'e1rm' exactly as before; BW prints the display-only number
+        print('🧠 [BB2] Final E1RM used for $exerciseName = ${(_isBwEx ? e1rmUi : e1rm)?.toStringAsFixed(2)} '
             '(weight = ${effectiveWeight?.toStringAsFixed(1) ?? "null"}, '
             'reps = ${effectiveReps?.toStringAsFixed(1) ?? "null"}, '
             'RIR = ${effectiveRir?.toStringAsFixed(1) ?? "null"})');
+
 
 
         print("🧠 [BB2 UI] Calculating E1RM from weight=$effectiveWeight, reps=$effectiveReps, rir=$effectiveRir → E1RM=$e1rm");
@@ -3524,13 +3559,31 @@ class _BlockBuilder2State extends State<Camp_BB2> {
               // E1RM
               SizedBox(
                 width: 48,
-                child: Container(
-                  alignment: Alignment.center,
-                  child: Text(
-                    e1rm != null && e1rm > 0 ? e1rm.toStringAsFixed(1) : '',
-                    style: const TextStyle(color: Colors.white, fontSize: 12),
-                  ),
+                child: Text(
+                      () {
+                    if (e1rm != null && e1rm > 0) {
+                      final bool isBwEx = PeriodizationModelUtils.isBodyweightExercise(
+                        id: exerciseId, name: exerciseName,
+                      );
+                      if (isBwEx) {
+                        final double? e1rmUi = PeriodizationModelUtils.e1rmForDisplay(
+                          uid: _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '',
+                          absoluteKg: effectiveWeight ?? progressedWeightRaw,
+                          reps: (effectiveReps ?? progressedRepsRaw).round(),
+                          rir: effectiveRir,
+                          exerciseId: exerciseId,
+                          exerciseName: exerciseName,
+                        );
+                        return e1rmUi?.toStringAsFixed(1) ?? '';
+                      } else {
+                        return e1rm.toStringAsFixed(1);
+                      }
+                    }
+                    return '';
+                  }(),
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
                 ),
+
               ),
 
               // Notes
