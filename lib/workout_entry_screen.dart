@@ -878,31 +878,52 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
         _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
 
-        // seed flat values as hints (your merge pattern)
-        final key = name.toLowerCase();
-        _resolvedBB2Values[key] = {
-          'reps': m['reps'],
-          'weight': m['weight'],
-          'rir': m['rir'],
-        };
+        // ----- NEW: seed only if non-zero / non-empty -----
+        // ----- REPLACE the current seeding/hydration block with this -----
 
-        // hydrate set 1
+        final repsVal    = (m['reps'] as num?)?.toInt();
+        final weightVal  = (m['weight'] as num?)?.toDouble();
+        final rirVal     = (m['rir'] as num?)?.toDouble();
+        final velVal     = (m['velocity']?.toString() ?? '').trim();
+        final notesVal   = (m['notes']?.toString() ?? '').trim();
+
+        final hasReps    = repsVal != null && repsVal != 0;
+        final hasWeight  = weightVal != null && weightVal != 0.0;
+        final hasRir     = rirVal != null && rirVal != 0.0;
+
+        final key = name.toLowerCase();
+
+// 1) Put non-zero BB2 values into hint storage ONLY
+        if (hasReps || hasWeight || hasRir) {
+          _resolvedBB2Values[key] = {
+            if (hasReps)   'reps': repsVal,
+            if (hasWeight) 'weight': weightVal,
+            if (hasRir)    'rir': rirVal,
+          };
+        }
+
+// 2) Do NOT hydrate sets or controllers with reps/weight/rir.
+//    Leave them blank so they render as hint, not as user-entered.
+//
+//    If you still want to carry velocity/notes (not part of hint logic),
+//    it's okay to set them only when non-empty:
+
         final idx = _selectedExercisesWithCircuits.length - 1;
-        final sets = _workoutSets[idx];
-        if (sets.isNotEmpty) {
-          sets[0].reps = (m['reps'] as num?)?.toInt();
-          sets[0].weight = (m['weight'] as num?)?.toDouble();
-          sets[0].rir = (m['rir'] as num?)?.toDouble();
+
+        if (_velocityControllers.length > idx && _velocityControllers[idx].isNotEmpty) {
+          if (velVal.isNotEmpty)   _velocityControllers[idx][0].text = velVal;
         }
-        if (_repsControllers.length > idx && _repsControllers[idx].isNotEmpty) {
-          _repsControllers[idx][0].text = m['reps']?.toString() ?? '';
-          _weightControllers[idx][0].text = m['weight']?.toString() ?? '';
-          _rirControllers[idx][0].text = m['rir']?.toString() ?? '';
-          _velocityControllers[idx][0].text = (m['velocity'] ?? '').toString();
-          _notesControllers[idx][0].text = (m['notes'] ?? '').toString();
+        if (_notesControllers.length > idx && _notesControllers[idx].isNotEmpty) {
+          if (notesVal.isNotEmpty) _notesControllers[idx][0].text = notesVal;
         }
+
+// Also: do NOT set any _savedFields[...] flags here.
+// -----------------------------------------------
+
+        // ----- END NEW -----
       }
     });
+
 
     await _saveWorkoutDraftToCache();
     if (mounted) setState(() {});
