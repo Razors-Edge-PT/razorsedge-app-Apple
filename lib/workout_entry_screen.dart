@@ -685,38 +685,108 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       builder: (ctx) {
         return StatefulBuilder(
           builder: (ctx, setLocal) {
-            return AlertDialog(
+            final theme = Theme.of(context);
+            final cs = theme.colorScheme;
+            final isDark = theme.brightness == Brightness.dark;
+
+            final bg = isDark ? const Color(0xFF121212) : cs.surface;
+            final titleColor = isDark ? cs.tertiary : cs.primary;
+            final chipColor = isDark ? const Color(0xFF1E1E1E) : cs.surfaceVariant;
+            final chipSelectedElevation = 4.0;
+
+            return AlertDialog
+              (
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              backgroundColor: bg,
+              elevation: 8,
+              titlePadding: const EdgeInsets.fromLTRB(20, 16, 12, 0),
+              contentPadding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+              actionsPadding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+
               title: Row(
                 children: [
-                  const Expanded(child: Text('Missed exercises')),
+                  Expanded(
+                    child: Text(
+                      'Missed exercises',
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: titleColor,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                  ),
                   InkWell(
+                    borderRadius: BorderRadius.circular(20),
                     onTap: () => Navigator.of(ctx).pop(),
-                    child: const Icon(Icons.close),
+                    child: Padding(
+                      padding: const EdgeInsets.all(6.0),
+                      child: Icon(Icons.close, color: isDark ? Colors.white70 : Colors.black54),
+                    ),
                   ),
                 ],
               ),
+
               content: ConstrainedBox(
                 constraints: const BoxConstraints(maxHeight: 420, minWidth: 320),
                 child: SingleChildScrollView(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      for (int i = 0; i < items.length; i++) ...[
-                        CheckboxListTile(
-                          dense: true,
-                          controlAffinity: ListTileControlAffinity.leading,
-                          value: selections[i],
-                          onChanged: (v) => setLocal(() => selections[i] = v ?? false),
-                          title: Text('${items[i].name} — missed on ${_weekdayShortLabel(items[i].sourceDayIndex)}'),
+                      for (int i = 0; i < items.length; i++)
+                        Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          decoration: BoxDecoration(
+                            color: chipColor,
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: selections[i]
+                                ? [
+                              BoxShadow(
+                                blurRadius: 10,
+                                spreadRadius: 0,
+                                offset: const Offset(0, 4),
+                                color: (cs.primary.withOpacity(0.25)),
+                              ),
+                            ]
+                                : null,
+                          ),
+                          child: Material(
+                            type: MaterialType.transparency,
+                            child: CheckboxListTile(
+                              dense: true,
+                              controlAffinity: ListTileControlAffinity.leading,
+                              value: selections[i],
+                              onChanged: (v) => setLocal(() => selections[i] = v ?? false),
+                              checkboxShape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                              activeColor: cs.primary,
+                              title: Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 2),
+                                child: Text(
+                                  '${items[i].name} Missed on ${_weekdayShortLabel(items[i].sourceDayIndex)}',
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    fontWeight: selections[i] ? FontWeight.w700 : FontWeight.w500,
+                                    color: isDark
+                                        ? (selections[i] ? Colors.white : Colors.white70)
+                                        : (selections[i] ? Colors.black : Colors.black87),
+                                  ),
+                                ),
+                              ),
+                              // subtle visual lift on select
+                              tileColor: selections[i] ? chipColor.withOpacity(0.92) : chipColor,
+                            ),
+                          ),
                         ),
-                      ],
                     ],
                   ),
                 ),
               ),
-              actionsPadding: const EdgeInsets.only(right: 12, bottom: 8),
+
               actions: [
                 TextButton(
+                  style: TextButton.styleFrom(
+                    foregroundColor: isDark ? Colors.white70 : cs.onSurfaceVariant,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    textStyle: theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w600),
+                  ),
                   onPressed: () async {
                     final chosen = <_MissedItem>[];
                     for (int i = 0; i < items.length; i++) {
@@ -730,6 +800,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                   child: const Text('Add selected'),
                 ),
                 FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: cs.primary,
+                    foregroundColor: cs.onPrimary,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    textStyle: theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
+                    elevation: 3,
+                    shadowColor: cs.primary.withOpacity(0.4),
+                  ),
                   onPressed: () async {
                     await _applyMissedExercisesToToday(items);
                     if (mounted) Navigator.of(ctx).pop();
@@ -740,6 +819,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
             );
           },
         );
+
       },
     );
   }
