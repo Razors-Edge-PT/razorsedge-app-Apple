@@ -2417,12 +2417,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       if (changed && mounted) setState(() {});
     }));
 
-
-
-
-
-
-
     // 8) Commit to state once
     if (!mounted) return;
     setState(() {

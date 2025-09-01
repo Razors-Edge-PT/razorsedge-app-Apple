@@ -58,6 +58,25 @@ class BlockMeta {
   });
 }
 
+// ——— Missed exercises model ———
+class _MissedItem {
+  final int sourceWeekIndex;
+  final int sourceDayIndex;
+  final int rowIndex;           // index within source day's exercises[]
+  final String name;            // planned row 'name'
+  final int circuitIndex;       // planned row 'circuitIndex'
+  final Map<String, dynamic> row; // full planned row map (weight/reps/rir/velocity/notes/circuitIndex)
+
+  _MissedItem({
+    required this.sourceWeekIndex,
+    required this.sourceDayIndex,
+    required this.rowIndex,
+    required this.name,
+    required this.circuitIndex,
+    required this.row,
+  });
+}
+
 
 
 class WorkoutPage extends StatefulWidget {
@@ -346,11 +365,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
   }
 
-
-
-
-
-
   // ✅ Custom Hybrid E1RM Formula: Brzycki for ≤6 reps, Epley for >6 reps
   double calculateE1RM(double? weight, double? reps, double? rir) {
     double w = weight ?? 0.0;
@@ -451,8 +465,452 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     return (baseE1RM != null && baseE1RM.isFinite) ? baseE1RM : 0.0;
   }
 
+// Missing exercises block begins...
+
+  final Set<String> _missedDialogShownForDateKeys = {}; // "yyyy-MM-dd"
+
+// Lowercase "yyyy-MM-dd"
+  String _ymd(DateTime d) {
+    final dd = DateTime(d.year, d.month, d.day);
+    final m = dd.month.toString().padLeft(2, '0');
+    final day = dd.day.toString().padLeft(2, '0');
+    return '${dd.year}-$m-$day';
+  }
+
+  String _weekdayShortLabel(int dayIndex) {
+    // 0=Mon … 6=Sun (matches your week layout)
+    const names = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+    return names[(dayIndex.clamp(0, 6))];
+  }
+
+// Build a name->id map from exerciseSettings if possible.
+// Falls back gracefully when no mapping exists.
+  Map<String, String> _buildNameToIdLookup() {
+    // You already populate `_exerciseSettings` keys = exerciseId.
+    // We try common "name" fields inside each settings map.
+    final out = <String,String>{};
+    _exerciseSettings.forEach((exId, cfg) {
+      final maybeNames = <String?>[
+        cfg['displayName']?.toString(),
+        cfg['name']?.toString(),
+        cfg['exerciseName']?.toString(),
+      ].where((s) => s != null && s!.trim().isNotEmpty).cast<String>().toList();
+
+      for (final n in maybeNames) {
+        out[n.trim().toLowerCase()] = exId;
+      }
+    });
+    return out;
+  }
+
+// Create a composite planned key for dedupe (prefer ID when resolvable).
+  String _plannedKey({String? id, required String name}) {
+    final nk = name.trim().toLowerCase();
+    if (id != null && id.trim().isNotEmpty) return 'id#$id';
+    return 'name#$nk';
+  }
+
+  Future<List<_MissedItem>> _computeMissedExercisesForWeek() async {
+    if (_selectedBlockId == null || _selectedDate == null || blockStartDate == null) return const [];
+    final uid = UserContext.of(context, listen: false).currentUid;
+    if ((uid ?? '').isEmpty) return const [];
+
+    final daysSinceStart = _selectedDate!.difference(blockStartDate!).inDays;
+    if (daysSinceStart < 0) return const [];
+    final weekIndex = (daysSinceStart / 7).floor();
+    final todayIndex = daysSinceStart % 7;
+
+    // Paths
+    final blocksCol = FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(uid)
+        .collection('blocks');
+    final weekDocRef = blocksCol.doc(_selectedBlockId)
+        .collection('weeks')
+        .doc('week_$weekIndex');
+    final daysCol = weekDocRef.collection('days');
+
+    // 1) Load planned for all 7 days (server, fallback cache)
+    final dayDocsServer = await daysCol.get(const GetOptions(source: Source.server))
+        .catchError((_) => null);
+    final dayDocs = dayDocsServer ??
+        await daysCol.get(const GetOptions(source: Source.cache));
+
+    // Build: planned per dayIndex
+    final plannedByDay = <int, List<Map<String, dynamic>>>{};
+    for (final d in dayDocs.docs) {
+      final di = int.tryParse(d.id.replaceFirst('day_', '')) ?? 0;
+      plannedByDay[di] = List<Map<String, dynamic>>.from(d.data()['exercises'] ?? const []);
+    }
+    for (int i = 0; i < 7; i++) {
+      plannedByDay.putIfAbsent(i, () => <Map<String, dynamic>>[]);
+    }
+
+    // 2) Load completed workouts for all 7 days of this week (doc-id + legacy auto-ID)
+    final weekStart = DateTime(blockStartDate!.year, blockStartDate!.month, blockStartDate!.day)
+        .add(Duration(days: weekIndex * 7));
+    final workoutsCol = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('workouts');
+
+    String isoDay(DateTime d) => '${DateTime(d.year, d.month, d.day).toIso8601String().split(".").first}.000';
+
+    final weekServer = await workoutsCol
+        .where('date', isGreaterThanOrEqualTo: isoDay(weekStart))
+        .where('date', isLessThan: isoDay(weekStart.add(const Duration(days: 7))))
+        .get(const GetOptions(source: Source.server))
+        .catchError((_) => null);
+
+    final weekCache = weekServer ??
+        await workoutsCol
+            .where('date', isGreaterThanOrEqualTo: isoDay(weekStart))
+            .where('date', isLessThan: isoDay(weekStart.add(const Duration(days: 7))))
+            .get(const GetOptions(source: Source.cache));
+
+    final legacyByDate = <String, List<Map<String, dynamic>>>{};
+    for (final doc in weekCache.docs) {
+      final raw = doc.data()['date'];
+      final dt = (raw is Timestamp) ? raw.toDate() : DateTime.tryParse(raw?.toString() ?? '');
+      if (dt == null) continue;
+      final key = _ymd(dt);
+      (legacyByDate[key] ??= []).addAll(List<Map<String, dynamic>>.from(doc.data()['exercises'] ?? const []));
+    }
+
+    // Also try doc-id per day (server preferred)
+    final completedByDay = <int, List<Map<String, dynamic>>>{};
+    for (int d = 0; d < 7; d++) {
+      final date = weekStart.add(Duration(days: d));
+      final key = _ymd(date);
+      final docServer = await workoutsCol.doc(key).get(const GetOptions(source: Source.server))
+          .catchError((_) => null);
+      final docCache  = (docServer?.exists == true ? docServer : await workoutsCol.doc(key).get(const GetOptions(source: Source.cache)));
+
+      final merged = <Map<String, dynamic>>[];
+      if (docCache?.exists == true) {
+        merged.addAll(List<Map<String, dynamic>>.from(docCache!.data()?['exercises'] ?? const []));
+      }
+      if ((legacyByDate[key] ?? const []).isNotEmpty) {
+        merged.addAll(legacyByDate[key]!);
+      }
+      completedByDay[d] = merged;
+    }
+
+    // 3) Build dedupe keys for TODAY planned (use both id and name)
+    final nameToId = _buildNameToIdLookup();
+    final todayPlanned = plannedByDay[todayIndex]!;
+    final plannedTodayKeys = <String>{};
+    for (final ex in todayPlanned) {
+      final name = (ex['name'] ?? '').toString().trim();
+      if (name.isEmpty) continue;
+      final id = nameToId[name.toLowerCase()];
+      plannedTodayKeys.add(_plannedKey(id: id, name: name));
+    }
+
+    // 4) Walk earlier days of this week; collect "missed"
+    final missed = <_MissedItem>[];
+    for (int d = 0; d < todayIndex; d++) {
+      final planned = plannedByDay[d]!;
+      if (planned.isEmpty) continue;
+
+      // Build completed set for day d (use composite by name+circuitIndex)
+      final completed = completedByDay[d]!;
+      final completedKeys = <String>{};
+      for (final cx in completed) {
+        final n = (cx['name'] ?? '').toString().trim().toLowerCase();
+        final c = (cx['circuitIndex'] ?? 0) as int;
+        if (n.isEmpty) continue;
+        completedKeys.add('$n@$c');
+      }
+
+      for (int i = 0; i < planned.length; i++) {
+        final row = planned[i];
+        final n = (row['name'] ?? '').toString().trim();
+        if (n.isEmpty) continue;
+        final c = (row['circuitIndex'] ?? 0) as int;
+
+        final alreadyDone = completedKeys.contains('${n.toLowerCase()}@$c');
+        if (alreadyDone) continue;
+
+        // suppress if planned today (by id or name)
+        final id = nameToId[n.toLowerCase()];
+        final key = _plannedKey(id: id, name: n);
+        if (plannedTodayKeys.contains(key)) {
+          // "damage mitigation": do not offer today, but still considered missed globally
+          continue;
+        }
+
+        missed.add(_MissedItem(
+          sourceWeekIndex: weekIndex,
+          sourceDayIndex: d,
+          rowIndex: i,
+          name: n,
+          circuitIndex: c,
+          row: Map<String, dynamic>.from(row),
+        ));
+      }
+    }
+
+    // Collapse duplicates by name for this feature (show once per exercise), per your rule 5
+    final seen = <String>{};
+    final deduped = <_MissedItem>[];
+    for (final m in missed) {
+      final k = m.name.trim().toLowerCase();
+      if (seen.contains(k)) continue;
+      seen.add(k);
+      deduped.add(m);
+    }
+    return deduped;
+  }
+
+  Future<void> _maybePromptForMissedExercises() async {
+    if (_selectedDate == null) return;
+    final key = _ymd(_selectedDate!);
+    if (_missedDialogShownForDateKeys.contains(key)) return;
+
+    final items = await _computeMissedExercisesForWeek();
+    if (items.isEmpty) {
+      _missedDialogShownForDateKeys.add(key);
+      return;
+    }
+
+    _missedDialogShownForDateKeys.add(key);
+
+    final selections = List<bool>.filled(items.length, false); // default unchecked
+
+    if (!mounted) return;
+    await showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            return AlertDialog(
+              title: Row(
+                children: [
+                  const Expanded(child: Text('Missed exercises')),
+                  InkWell(
+                    onTap: () => Navigator.of(ctx).pop(),
+                    child: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+              content: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 420, minWidth: 320),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (int i = 0; i < items.length; i++) ...[
+                        CheckboxListTile(
+                          dense: true,
+                          controlAffinity: ListTileControlAffinity.leading,
+                          value: selections[i],
+                          onChanged: (v) => setLocal(() => selections[i] = v ?? false),
+                          title: Text('${items[i].name} — missed on ${_weekdayShortLabel(items[i].sourceDayIndex)}'),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              actionsPadding: const EdgeInsets.only(right: 12, bottom: 8),
+              actions: [
+                TextButton(
+                  onPressed: () async {
+                    final chosen = <_MissedItem>[];
+                    for (int i = 0; i < items.length; i++) {
+                      if (selections[i]) chosen.add(items[i]);
+                    }
+                    if (chosen.isNotEmpty) {
+                      await _applyMissedExercisesToToday(chosen);
+                    }
+                    if (mounted) Navigator.of(ctx).pop();
+                  },
+                  child: const Text('Add selected'),
+                ),
+                FilledButton(
+                  onPressed: () async {
+                    await _applyMissedExercisesToToday(items);
+                    if (mounted) Navigator.of(ctx).pop();
+                  },
+                  child: const Text('Add all'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _scheduleMissedDialogAfterPaint() {
+    if (_selectedDate == null) return;
+    final dateKey = _ymd(_selectedDate!);
+    if (_missedDialogShownForDateKeys.contains(dateKey)) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future.microtask(() async {
+        if (!mounted) return;
+        await _maybePromptForMissedExercises(); // 👈 call the same function
+      });
+    });
+  }
 
 
+  Future<void> _applyMissedExercisesToToday(List<_MissedItem> chosen) async {
+    if (_selectedBlockId == null || _selectedDate == null || blockStartDate == null) return;
+    final uid = UserContext.of(context, listen: false).currentUid;
+    if ((uid ?? '').isEmpty) return;
+
+    final daysSinceStart = _selectedDate!.difference(blockStartDate!).inDays;
+    final weekIndex = (daysSinceStart / 7).floor();
+    final dayIndex  = daysSinceStart % 7;
+
+    final blocksCol = FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(uid)
+        .collection('blocks');
+    final weekDocRef = blocksCol.doc(_selectedBlockId!)
+        .collection('weeks')
+        .doc('week_$weekIndex');
+    final todayRef = weekDocRef.collection('days').doc('day_$dayIndex');
+
+    // 1) Read today's doc (server→cache), determine new circuit index
+    final todaySnapServer = await todayRef.get(const GetOptions(source: Source.server)).catchError((_) => null);
+    final todaySnap = (todaySnapServer?.exists == true ? todaySnapServer
+        : await todayRef.get(const GetOptions(source: Source.cache)));
+
+    final todayExercises = todaySnap?.data()?['exercises'];
+    final List<Map<String, dynamic>> todayList =
+    todayExercises != null ? List<Map<String, dynamic>>.from(todayExercises) : <Map<String, dynamic>>[];
+
+    // Determine next circuit index (new circuit for all moved items)
+    int maxCircuit = 0;
+    for (final ex in todayList) {
+      final ci = (ex['circuitIndex'] ?? 0) as int;
+      if (ci > maxCircuit) maxCircuit = ci;
+    }
+    final int newCircuitIndex = maxCircuit + 1;
+
+    // 2) Group chosen by source day (so we only read/write each source once)
+    final bySource = <int, List<_MissedItem>>{};
+    for (final m in chosen) {
+      (bySource[m.sourceDayIndex] ??= []).add(m);
+    }
+
+    // 3) Build batch: remove from each source day; append to today
+    final batch = FirebaseFirestore.instance.batch();
+
+    // Ensure week doc exists (metadata merge—keeps consistent with your save)
+    batch.set(weekDocRef, {'exists': true}, SetOptions(merge: true));
+
+    // Load & update sources
+    for (final entry in bySource.entries) {
+      final sDay = entry.key;
+      final srcRef = weekDocRef.collection('days').doc('day_$sDay');
+
+      // Read source (server→cache)
+      final srcSrv = await srcRef.get(const GetOptions(source: Source.server)).catchError((_) => null);
+      final srcSnap = (srcSrv?.exists == true ? srcSrv
+          : await srcRef.get(const GetOptions(source: Source.cache)));
+
+      final List<Map<String, dynamic>> srcList =
+      List<Map<String, dynamic>>.from(srcSnap?.data()?['exercises'] ?? const []);
+
+      // Remove the specific rows (by (name,circuitIndex) matching FIRST occurrence)
+      for (final m in entry.value) {
+        final idx = srcList.indexWhere((e) =>
+        (e['name'] ?? '').toString().trim().toLowerCase() == m.name.trim().toLowerCase() &&
+            (e['circuitIndex'] ?? 0) == m.circuitIndex);
+        if (idx >= 0) srcList.removeAt(idx);
+      }
+
+      batch.set(srcRef, {'exercises': srcList}, SetOptions(merge: true));
+    }
+
+    // Append moved rows to today with the NEW circuit index
+    final appended = <Map<String, dynamic>>[];
+    for (final m in chosen) {
+      final row = Map<String, dynamic>.from(m.row);
+      row['circuitIndex'] = newCircuitIndex; // force new circuit
+      appended.add(row);
+    }
+    final newToday = <Map<String, dynamic>>[];
+    newToday.addAll(todayList);
+    newToday.addAll(appended);
+
+    // circuitStartIndices: ensure new circuit header at the append start
+    final savedStarts = List<int>.from(todaySnap?.data()?['circuitStartIndices'] ?? const [0]);
+    final appendStartIndex = todayList.length; // first index of appended rows
+    final newStarts = List<int>.from(savedStarts);
+    if (!newStarts.contains(appendStartIndex)) newStarts.add(appendStartIndex);
+    newStarts.sort();
+
+    // workoutName/date (like saveDayToFirestore)
+    final date = blockStartDate!.add(Duration(days: weekIndex * 7 + dayIndex));
+    final workoutName = "${DateFormat('EEE d MMM').format(date)} - Week ${weekIndex + 1}";
+
+    batch.set(todayRef, {
+      'exercises': newToday,
+      'circuitStartIndices': newStarts,
+      'date': Timestamp.fromDate(date),
+      'workoutName': workoutName,
+    }, SetOptions(merge: true));
+
+    await batch.commit();
+
+    // 4) Mirror into WES state (append rows with new circuit)
+    if (!mounted) return;
+    setState(() {
+      // add to UI lists
+      for (final m in appended) {
+        final name = (m['name'] ?? '').toString().trim();
+        _selectedExercisesWithCircuits.add({
+          'name': name,
+          'circuitIndex': newCircuitIndex,
+        });
+
+        _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
+        _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+        _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+        _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+        _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+        _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+
+        // seed flat values as hints (your merge pattern)
+        final key = name.toLowerCase();
+        _resolvedBB2Values[key] = {
+          'reps': m['reps'],
+          'weight': m['weight'],
+          'rir': m['rir'],
+        };
+
+        // hydrate set 1
+        final idx = _selectedExercisesWithCircuits.length - 1;
+        final sets = _workoutSets[idx];
+        if (sets.isNotEmpty) {
+          sets[0].reps = (m['reps'] as num?)?.toInt();
+          sets[0].weight = (m['weight'] as num?)?.toDouble();
+          sets[0].rir = (m['rir'] as num?)?.toDouble();
+        }
+        if (_repsControllers.length > idx && _repsControllers[idx].isNotEmpty) {
+          _repsControllers[idx][0].text = m['reps']?.toString() ?? '';
+          _weightControllers[idx][0].text = m['weight']?.toString() ?? '';
+          _rirControllers[idx][0].text = m['rir']?.toString() ?? '';
+          _velocityControllers[idx][0].text = (m['velocity'] ?? '').toString();
+          _notesControllers[idx][0].text = (m['notes'] ?? '').toString();
+        }
+      }
+    });
+
+    await _saveWorkoutDraftToCache();
+    if (mounted) setState(() {});
+  }
+
+
+
+  //...Missing exercises block ends
 
 
   double getSet2E1RM(int exerciseIndex) {
@@ -1707,6 +2165,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           } else {
             print('✅ [WES Init] Skipping BB2 re-merge — WES already has user-entered data');
           }
+          _scheduleMissedDialogAfterPaint();
 
           Future.delayed(const Duration(milliseconds: 10), () {
             if (_selectedExercisesWithCircuits.isNotEmpty) {
