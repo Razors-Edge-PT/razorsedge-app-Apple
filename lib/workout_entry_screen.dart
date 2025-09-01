@@ -1013,6 +1013,43 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
   //...Missing exercises block ends
 
+  //Bodyweight exercises block begins...
+
+  Future<void> _primeLatestBodyweightCache(String uid) async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('weights')
+          .orderBy('timestamp', descending: true)
+          .limit(1)
+          .get();
+
+      if (snap.docs.isNotEmpty) {
+        final d = snap.docs.first.data();
+        final bw = (d['weight'] as num?)?.toDouble();
+        final ts = (d['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now();
+        if (bw != null && bw > 0) {
+          PeriodizationModelUtils.setLatestBodyweight(
+            uid: uid,
+            weightKg: bw,
+            asOf: ts,
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('⚠️ _primeLatestBodyweightCache failed → using default 80kg: $e');
+    }
+  }
+
+//... Bodyweight exercises block ends
+
+
+  String formatWeight(double w) =>
+      (w % 1 == 0) ? w.toStringAsFixed(0) : // whole number → "62"
+      (w * 10 % 1 == 0) ? w.toStringAsFixed(1) : // one decimal clean → "62.5"
+      w.toStringAsFixed(2); // otherwise show two decimals
+
 
   double getSet2E1RM(int exerciseIndex) {
     String exerciseName =
@@ -1339,13 +1376,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
     final exerciseId =
         PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
+    final uidForBw = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '';
 
     final weekIndex = _getApplicableWeekIndex(exerciseId);
     print('📅 [WES] selectedDate = $_selectedDate');
     print('📅 [WES] blockStartDate = $blockStartDate');
     print('🧮 [WES] Computed weekIndex = ${blockStartDate != null ? PeriodizationModelUtils.getWeekIndexForDate(_selectedDate, blockStartDate!) : '⚠️ blockStartDate is null!'}');
-
-
 
     // Determine how many times this exercise appeared before.
     int plannedCountBefore = 0;
@@ -1747,12 +1783,59 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     print('🧾 [WES <- PMU] pre-overlay ${progressed['weight']} × ${progressed['reps']}');
 
     final target = (progressed['weight'] as num).toDouble();
-    final snapped = increments.reduce(
-          (a, b) => (a - target).abs() < (b - target).abs() ? a : b,
+
+// keep variable name `snapped` so nothing else downstream changes
+    double snapped;
+
+    final bool _isBwEx = PeriodizationModelUtils.isBodyweightExercise(
+      id: exerciseId,
+      name: exerciseName,
     );
 
+    if (_isBwEx) {
+      // convert ABS → ADDED
+      final double _targetAdded = PeriodizationModelUtils.toDisplayAddedWeight(
+        uid: uidForBw,
+        absoluteKg: target,
+        exerciseId: exerciseId,
+        exerciseName: exerciseName,
+      );
+
+      // snap on ADDED (use your expanded increments)
+      final List<double> _opts = (increments == null || increments.isEmpty)
+          ? <double>[2.5]
+          : increments;
+      double _snappedAdded = _opts.reduce(
+            (a, b) => (a - _targetAdded).abs() < (b - _targetAdded).abs() ? a : b,
+      );
+
+      // cap min at 0 for display semantics
+      if (_snappedAdded < 0) _snappedAdded = 0.0;
+
+      // convert back to ABS for storage/math and assign to your usual `snapped`
+      snapped = PeriodizationModelUtils.toAbsoluteWeight(
+        uid: uidForBw,
+        displayAddedKg: _snappedAdded,
+        exerciseId: exerciseId,
+        exerciseName: exerciseName,
+      );
+
+      // optional: expose display-only value for your hint UI (no impact to normal exercises)
+      progressed['weightDisplayAdded'] = _snappedAdded;
+    } else {
+      // 🔁 NORMAL EXERCISES: unchanged behavior and names
+      snapped = increments.reduce(
+            (a, b) => (a - target).abs() < (b - target).abs() ? a : b,
+      );
+      // for non-BW, display == absolute (this key is optional; omit if you prefer)
+      progressed['weightDisplayAdded'] = snapped;
+    }
+
+// write back absolute weight as before
+    progressed['weight'] = snapped;
 
     print('🧾 [WES overlay] ${progressed['weight']} → $snapped');
+
     // Cache and return
     _cachedProgressedValues[exerciseIndex] = progressed;
 
@@ -2025,14 +2108,26 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final exerciseName =
         _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
     final normalizedKey = exerciseName.toLowerCase();
+    final String exerciseId =
+        PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
+
     final bb2Entry = _resolvedBB2Values[normalizedKey];
 
     // ✅ Step 1: Use BB2-entered weight if available
     final double? bb2Weight = bb2Entry?['weight']?.toDouble();
     if (bb2Weight != null && bb2Weight > 0) {
       print('🔁 [WES] Using BB2-entered weight for $exerciseName: $bb2Weight');
+      if (PeriodizationModelUtils.isBodyweightExercise(id: exerciseId, name: exerciseName)) {
+        return PeriodizationModelUtils.toDisplayAddedWeight(
+          uid: _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '',
+          absoluteKg: bb2Weight,
+          exerciseId: exerciseId,
+          exerciseName: exerciseName,
+        );
+      }
       return bb2Weight;
     }
+
 
     // ✅ Step 2: Pull user-entered text fields
     final String weightText = _weightControllers[exerciseIndex][0].text;
@@ -2054,8 +2149,17 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     // 🛑 Step 3: Respect user-entered weight
     if (userWeight != null) {
       print('✍️ [WES] User-entered weight for $exerciseName = $userWeight');
+      if (PeriodizationModelUtils.isBodyweightExercise(id: exerciseId, name: exerciseName)) {
+        return PeriodizationModelUtils.toDisplayAddedWeight(
+          uid: _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '',
+          absoluteKg: userWeight,
+          exerciseId: exerciseId,
+          exerciseName: exerciseName,
+        );
+      }
       return userWeight;
     }
+
 
     // ✅ Step 4: Pull model progression values
     final progressed = _getProgressedValues(exerciseIndex);
@@ -2095,7 +2199,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
       print('🔁 [WES] Derived weight = $rounded using reps = $repsToUse and RIR = $rirToUse → new E1RM = ${newE1RM.toStringAsFixed(2)}');
 
+      if (PeriodizationModelUtils.isBodyweightExercise(id: _exId, name: exerciseName)) {
+        return PeriodizationModelUtils.toDisplayAddedWeight(
+          uid: _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '',
+          absoluteKg: rounded,
+          exerciseId: _exId,
+          exerciseName: exerciseName,
+        );
+      }
       return rounded;
+
     }
 
 
@@ -2108,7 +2221,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     print(
         '🎯 [WES] Final progression for $exerciseName using default RIR $modelRir → $fallbackRounded kg');
+    if (PeriodizationModelUtils.isBodyweightExercise(id: _exId, name: exerciseName)) {
+      return PeriodizationModelUtils.toDisplayAddedWeight(
+        uid: _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '',
+        absoluteKg: fallbackRounded,
+        exerciseId: _exId,
+        exerciseName: exerciseName,
+      );
+    }
     return fallbackRounded;
+
   }
 
   double set2SuggestedWeight(int exerciseIndex) {
@@ -2233,7 +2355,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
           await _initializeDayDocIfNeeded(_selectedDate);
 
-
+          _primeLatestBodyweightCache(_cachedUid!);
 
           if (widget.initialDate != null) {
             _selectedDate = widget.initialDate!;
@@ -4524,6 +4646,30 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     List<Map<String, dynamic>>.from((payload['exercises'] as List?) ?? const []);
     print('📦 [WES upsert] Built payload: newExercises=${newExercises.length} (hadExisting=$hadExisting)');
 
+    // ── BW-only: convert display "added" → ABSOLUTE for newly edited rows ──
+    for (final e in newExercises) {
+      final name = (e['name'] ?? '').toString();
+      if (name.isEmpty) continue;
+
+      final id = PeriodizationModelUtils.nameToId[name] ?? name;
+
+      // If not a BW exercise, do nothing (leave normal behavior untouched)
+      if (!PeriodizationModelUtils.isBodyweightExercise(id: id, name: name)) continue;
+
+      // Parse typed "added" weight; cap minimum at 0 (no negatives)
+      double added = (e['weight'] as num?)?.toDouble() ?? 0.0;
+      if (added < 0) added = 0.0;
+
+      // Convert to ABSOLUTE using latest BW (80kg fallback handled internally)
+      final abs = PeriodizationModelUtils.toAbsoluteWeight(
+        uid: uid,
+        displayAddedKg: added,
+        exerciseId: id,
+        exerciseName: name,
+      );
+
+      e['weight'] = abs; // store absolute for BW exercises (history/math invariant)
+    }
     // Helper key for matching (same fields you already use elsewhere)
     String exKey(Map e) => '${(e['name'] ?? '').toString().trim()}|${e['circuitIndex'] ?? 0}';
 
@@ -6224,11 +6370,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                                     hintText: !_isInitialized
                                         ? ''
                                         : (j == 0)
-                                        ? set1SuggestedWeight(i).toStringAsFixed(1)
+                                        ? formatWeight(set1SuggestedWeight(i))
                                         : (j == 1)
-                                        ? set2SuggestedWeight(i).toStringAsFixed(1)
+                                        ? formatWeight(set2SuggestedWeight(i))
                                         : (j == 2)
-                                        ? set3SuggestedWeight(i).toStringAsFixed(1)
+                                        ? formatWeight(set3SuggestedWeight(i))
                                         : '20',
                                     hintStyle: const TextStyle(
                                       color: Colors.grey,

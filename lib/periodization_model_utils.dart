@@ -263,12 +263,15 @@ class PeriodizationModelUtils {
     };
   }
 
-
-
-
   static String resolveExerciseName(String key) {
     return idToName[key] ?? key;
   }
+
+  static const Map<String, bool> _bwById = {
+    'XM9026peNIu0R8qh7UqY': true, // Chin-Up
+    'RFyjAjezFs8Rf7CQoaXz': true, // Pull-Up
+    'KPewxxYYrhsOp84lIQr5': true, // Suspended High Row
+  };
 
 
   static Future<void> loadPeriodizationModelsFromFirestore({String? uid}) async {
@@ -346,6 +349,89 @@ class PeriodizationModelUtils {
   }) {
     if (blockStartDate == null || blockEndDate == null) return 12;
     return ((blockEndDate.difference(blockStartDate).inDays + 6) ~/ 7);
+  }
+
+
+  // BodyWeight Exercises Block begins...
+
+// fallback by normalized name (lowercase, hyphens kept)
+  static const Map<String, bool> _bwByName = {
+    'chin-up': true,
+    'pull-up': true,
+    'suspended high row': true,
+  };
+
+  static bool isBodyweightExercise({String? id, String? name}) {
+    if (id != null && _bwById[id] == true) return true;
+    if (name != null) {
+      final n = name.trim().toLowerCase();
+      if (_bwByName[n] == true) return true;
+    }
+    return false;
+  }
+
+  // 2) Latest BW cache (set once by WES/BB2 on load)
+  static final Map<String, double> _latestBwByUid = {};
+  static final Map<String, DateTime> _latestBwDateByUid = {};
+
+  /// WES/BB2 should call this once after they fetch the newest weigh-in.
+  static void setLatestBodyweight({
+    required String uid,
+    required double weightKg,
+    required DateTime asOf,
+  }) {
+    _latestBwByUid[uid] = weightKg;
+    _latestBwDateByUid[uid] = asOf;
+  }
+
+  /// Gets the newest known BW for uid; falls back to 80 kg if unknown.
+  static double latestBodyweightKg({required String uid}) {
+    return _latestBwByUid[uid] ?? 80.0;
+  }
+
+  // 3) Conversions (display <-> absolute). Date not needed since we use "most recent".
+  static double toAbsoluteWeight({
+    required String uid,
+    required double displayAddedKg,
+    String? exerciseId,
+    String? exerciseName,
+  }) {
+    if (!isBodyweightExercise(id: exerciseId, name: exerciseName)) {
+      return displayAddedKg;
+    }
+    final bw = latestBodyweightKg(uid: uid);
+    // "0" means BW only; no negatives allowed
+    return (displayAddedKg <= 0) ? bw : (bw + displayAddedKg);
+  }
+
+  static double toDisplayAddedWeight({
+    required String uid,
+    required double absoluteKg,
+    String? exerciseId,
+    String? exerciseName,
+  }) {
+    if (!isBodyweightExercise(id: exerciseId, name: exerciseName)) {
+      return absoluteKg;
+    }
+    final bw = latestBodyweightKg(uid: uid);
+    final added = absoluteKg - bw;
+    return (added < 0) ? 0.0 : added;
+  }
+
+  /// Normal E1RM for math. For UI: if BW exercise, show "how much I could add for 1 rep".
+  static double e1rmForDisplay({
+    required String uid,
+    required double absoluteKg,
+    required int reps,
+    required double rir,
+    String? exerciseId,
+    String? exerciseName,
+  }) {
+    final e = calculateE1RM(absoluteKg, reps.toDouble(), rir);
+    if (!isBodyweightExercise(id: exerciseId, name: exerciseName)) return e;
+    final bw = latestBodyweightKg(uid: uid);
+    final addOnly = e - bw;
+    return (addOnly < 0) ? 0.0 : addOnly;
   }
 
 
@@ -429,10 +515,6 @@ class PeriodizationModelUtils {
         return PeriodizationModelType.dupSignature;
     }
   }
-
-
-
-
 
   static int getLinearClassicRepTarget({
     required String exerciseId,
