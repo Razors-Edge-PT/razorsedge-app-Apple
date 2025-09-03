@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'user_context.dart';
+import 'periodization_model_utils.dart';
 
 
 enum TrendRange { d14, m30 }
@@ -63,9 +64,22 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
           };
         }));
 
+      // ➕ NEW: publish full history to PMU so asOf lookups work everywhere
+      PeriodizationModelUtils.setBodyweightHistory(
+        uid: userId,
+        entries: _weights.map((w) => {
+          'date': w['date'] as DateTime,
+          'weight': (w['weight'] as num).toDouble(),
+          'unit': (w['unit'] ?? 'kg').toString(),
+        }).toList(),
+      );
+
+
       _recomputeSeries();
 
       if (mounted) setState(() {});
+
+
     } catch (e) {
       debugPrint('❌ _fetchWeights failed: $e');
     }

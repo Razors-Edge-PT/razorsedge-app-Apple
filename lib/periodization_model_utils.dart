@@ -373,7 +373,34 @@ class PeriodizationModelUtils {
   // 2) Latest BW cache (set once by WES/BB2 on load)
   static final Map<String, double> _latestBwByUid = {};
   static final Map<String, DateTime> _latestBwDateByUid = {};
+// 2b) Full BW history cache (sorted descending by date)
+  static final Map<String, List<Map<String, dynamic>>> _bwHistoryByUid = {};
 
+  /// Call once whenever you (re)fetch the user's weights from Firestore.
+  /// Expect entries like: {'date': DateTime, 'weight': double, 'unit': 'kg'}
+  static void setBodyweightHistory({
+    required String uid,
+    required List<Map<String, dynamic>> entries,
+  }) {
+    // keep only kg for now
+    final filtered = entries
+        .where((e) => (e['weight'] != null) && (e['unit'] == 'kg'))
+        .map((e) => {
+      'date': (e['date'] as DateTime),
+      'weight': (e['weight'] as num).toDouble(),
+    })
+        .toList();
+
+    // sort DESC by date (newest first)
+    filtered.sort((a, b) => (b['date'] as DateTime).compareTo(a['date'] as DateTime));
+    _bwHistoryByUid[uid] = filtered;
+
+    // keep the existing "latest" cache in sync (used when asOf is null)
+    if (filtered.isNotEmpty) {
+      _latestBwByUid[uid] = filtered.first['weight'] as double;
+      _latestBwDateByUid[uid] = filtered.first['date'] as DateTime;
+    }
+  }
   /// WES/BB2 should call this once after they fetch the newest weigh-in.
   static void setLatestBodyweight({
     required String uid,
@@ -395,11 +422,12 @@ class PeriodizationModelUtils {
     required double displayAddedKg,
     String? exerciseId,
     String? exerciseName,
+    DateTime? asOfDate, // ⬅️ new
   }) {
     if (!isBodyweightExercise(id: exerciseId, name: exerciseName)) {
       return displayAddedKg;
     }
-    final bw = latestBodyweightKg(uid: uid);
+    final bw = bodyweightKgForDate(uid: uid, asOf: asOfDate);
     // "0" means BW only; no negatives allowed
     return (displayAddedKg <= 0) ? bw : (bw + displayAddedKg);
   }
@@ -409,11 +437,13 @@ class PeriodizationModelUtils {
     required double absoluteKg,
     String? exerciseId,
     String? exerciseName,
+    DateTime? asOfDate, // ⬅️ new
   }) {
     if (!isBodyweightExercise(id: exerciseId, name: exerciseName)) {
       return absoluteKg;
     }
-    final bw = latestBodyweightKg(uid: uid);
+    final bw = bodyweightKgForDate(uid: uid, asOf: asOfDate);
+
     final added = absoluteKg - bw;
     return (added < 0) ? 0.0 : added;
   }
@@ -426,15 +456,56 @@ class PeriodizationModelUtils {
     required double rir,
     String? exerciseId,
     String? exerciseName,
+    DateTime? asOfDate, // ⬅️ new
   }) {
     final e = calculateE1RM(absoluteKg, reps.toDouble(), rir);
     if (!isBodyweightExercise(id: exerciseId, name: exerciseName)) return e;
-    final bw = latestBodyweightKg(uid: uid);
+    final bw = bodyweightKgForDate(uid: uid, asOf: asOfDate);
     final addOnly = e - bw;
     return (addOnly < 0) ? 0.0 : addOnly;
   }
 
+  /// If asOf is provided, return BW valid for that date.
+  /// Otherwise fallback to the latest known BW.
+  /// If asOf is provided, return BW valid for that date (latest entry <= asOf end-of-day).
+  /// Otherwise fallback to the latest known BW (or 80.0).
+  static double bodyweightKgForDate({
+    required String uid,
+    DateTime? asOf,
+  }) {
+    final latest = _latestBwByUid[uid];
+    if (asOf == null) {
+      return latest ?? 80.0;
+    }
 
+    final history = _bwHistoryByUid[uid];
+    if (history == null || history.isEmpty) {
+      // no history loaded yet → behave like before
+      final latestDate = _latestBwDateByUid[uid];
+      if (latest != null && latestDate != null && !latestDate.isAfter(asOf)) {
+        return latest;
+      }
+      return 80.0;
+    }
+
+    // end-of-day cutoff so a weigh-in on the same date counts
+    final dayEnd = DateTime(asOf.year, asOf.month, asOf.day, 23, 59, 59);
+
+    // history is newest-first; find first entry with date <= cutoff
+    for (final e in history) {
+      final d = e['date'] as DateTime;
+      if (!d.isAfter(dayEnd)) {
+        return (e['weight'] as num).toDouble();
+      }
+    }
+
+    // all entries are after the cutoff → we had no earlier weigh-in
+    return 80.0;
+  }
+
+
+
+  //...bodyweight exercise block ends
 
   static Map<String, Map<String, String>> getDefaultReps(
       PeriodizationModelType model, int frequency) {

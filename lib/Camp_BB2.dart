@@ -2703,16 +2703,45 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       final name = (row.exercise ?? '').trim();
       if (name.isEmpty) continue;
 
+      final String exId = PeriodizationModelUtils.nameToId[name] ?? name;
+      final bool isBw   = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
+
+      final double typed = double.tryParse(row.weightController.text) ?? 0.0; // what user typed in the weight box
+      final int reps     = int.tryParse(row.repsController.text) ?? 0;
+      final double rir   = double.tryParse(row.rirController.text) ?? 0.0;
+
+      double saveWeight = typed;           // default (normal exercises)
+      double? saveAdded;                   // only set for BW
+
+      if (isBw) {
+        // typed is ADDED kg → convert to absolute using the workout day date below
+        final date = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
+        final asOfDate = DateTime(date.year, date.month, date.day, 12);
+
+        final double added = typed <= 0 ? 0.0 : typed;
+        final double absolute = PeriodizationModelUtils.toAbsoluteWeight(
+          uid: _cachedUid,
+          displayAddedKg: added,
+          exerciseId: exId,
+          exerciseName: name,
+          asOfDate: asOfDate,
+        );
+        saveWeight = absolute;
+        saveAdded  = added; // persist typed ADDED weight for stability
+      }
+
       exercises.add({
         'name': name,
-        'weight': double.tryParse(row.weightController.text) ?? 0.0,
-        'reps': int.tryParse(row.repsController.text) ?? 0,
-        'rir': double.tryParse(row.rirController.text) ?? 0.0,
-        'velocity': row.velocityController.text.trim(), // ✅ NEW
-        'notes': row.notesController.text.trim(),       // ✅ NEW
+        'weight': saveWeight,                 // absolute for BW; typed for normal
+        'reps': reps,
+        'rir': rir,
+        'velocity': row.velocityController.text.trim(),
+        'notes': row.notesController.text.trim(),
         'circuitIndex': row.circuitIndex,
+        if (isBw) 'addedWeight': saveAdded,   // only for BW
       });
     }
+
 
     print('📝 [SAVE] Week $weekIndex, Day $dayIndex → Saving ${exercises.length} exercises:');
     for (final ex in exercises) {
@@ -3400,6 +3429,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
               absoluteKg: absVal,
               exerciseId: exerciseId,
               exerciseName: exerciseName,
+
             );
             return added.toStringAsFixed(1);
           } else {
@@ -3773,13 +3803,24 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     }
 
     final rawSaved = completedWesRows[dateKey] ?? [];
+
+// 🔐 Ensure every exercise carries the workout date (for BW as-of lookups)
+    final List<Map<String, dynamic>> rawWithDate = rawSaved.map((e) {
+      final m = Map<String, dynamic>.from(e);
+      if (m['date'] == null) {
+        m['date'] = Timestamp.fromDate(date); // 👈 use the block’s day date
+      }
+      return m;
+    }).toList();
+
     final Set<String> seen = {};
-    final savedWesExercises = rawSaved.where((e) {
+    final savedWesExercises = rawWithDate.where((e) {
       final key = '${e['name']?.toString().trim()}_${e['circuitIndex']}';
       if (seen.contains(key)) return false;
       seen.add(key);
       return true;
     }).toList();
+
 
     final dayLabel =
         DateFormat('E d MMM y').format(date); // e.g., "Mon 17 Mar 2025"
@@ -4145,7 +4186,15 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                   return e1 >= e2 ? a : b;
                                 });
 
+                                final DateTime? workoutDate = (exercise['date'] is Timestamp)
+                                    ? (exercise['date'] as Timestamp).toDate()
+                                    : null;
+
                                 final allSets = List<Map<String, dynamic>>.from(sets);
+
+                                print('🕒 [BB2 SavedEx] name=${exercise['name']} '
+                                    'dateRaw=${exercise['date']} '
+                                    '→ workoutDate=$workoutDate');
 
                                 final name = exercise['name'] ?? 'Unnamed';
                                 final weight = (topSet['weight'] ?? 0).toDouble();
@@ -4215,7 +4264,24 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                                 child: Container(
                                                   alignment: Alignment.center,
                                                   child: Text(
-                                                    weight.toStringAsFixed(1),
+                                                        () {
+                                                      final bool isBwEx = PeriodizationModelUtils.isBodyweightExercise(
+                                                        id: exercise['exerciseId'] ?? '',
+                                                        name: name,
+                                                      );
+                                                      if (isBwEx) {
+                                                        final added = PeriodizationModelUtils.toDisplayAddedWeight(
+                                                          uid: _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '',
+                                                          absoluteKg: weight,
+                                                          exerciseId: exercise['exerciseId'] ?? '',
+                                                          exerciseName: name,
+                                                          asOfDate: workoutDate, // 👈 NEW
+                                                        );
+                                                        return added.toStringAsFixed(1);
+
+                                                      }
+                                                      return weight.toStringAsFixed(1);
+                                                    }(),
                                                     textAlign: TextAlign.center,
                                                     style: const TextStyle(
                                                       fontSize: 12,
@@ -4223,6 +4289,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                                       fontStyle: FontStyle.italic,
                                                     ),
                                                   ),
+
                                                 ),
                                               ),
 
@@ -4266,13 +4333,33 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                                 child: Align(
                                                   alignment: Alignment.centerRight,
                                                   child: Text(
-                                                    ' ${e1rm.toStringAsFixed(1)}', // 👈 space before value
+                                                        () {
+                                                      final bool isBwEx = PeriodizationModelUtils.isBodyweightExercise(
+                                                        id: exercise['exerciseId'] ?? '',
+                                                        name: name,
+                                                      );
+                                                      if (isBwEx) {
+                                                        final e1rmUi = PeriodizationModelUtils.e1rmForDisplay(
+                                                          uid: _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '',
+                                                          absoluteKg: weight,
+                                                          reps: reps.round(),
+                                                          rir: rir,
+                                                          exerciseId: exercise['exerciseId'] ?? '',
+                                                          exerciseName: name,
+                                                          asOfDate: workoutDate, // 👈 NEW
+                                                        );
+                                                        return ' ${e1rmUi?.toStringAsFixed(1) ?? ''}';
+
+                                                      }
+                                                      return ' ${e1rm.toStringAsFixed(1)}';
+                                                    }(),
                                                     style: const TextStyle(
                                                       fontSize: 12,
                                                       color: Colors.white70,
                                                       fontStyle: FontStyle.italic,
                                                     ),
                                                   ),
+
                                                 ),
                                               ),
                                             ],
@@ -4412,10 +4499,32 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                                 SizedBox(
                                                   width: 60,
                                                   child: Text(
-                                                    setWeight.toStringAsFixed(1),
+                                                        () {
+                                                      final bool isBwEx = PeriodizationModelUtils.isBodyweightExercise(
+                                                        id: exercise['exerciseId'] ?? '',
+                                                        name: name,
+                                                      );
+                                                      if (isBwEx) {
+                                                        final added = PeriodizationModelUtils.toDisplayAddedWeight(
+                                                          uid: _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '',
+                                                          absoluteKg: setWeight,
+                                                          exerciseId: exercise['exerciseId'] ?? '',
+                                                          exerciseName: name,
+                                                          asOfDate: workoutDate, // 👈 NEW
+                                                        );
+                                                        return added.toStringAsFixed(1);
+
+                                                      }
+                                                      return setWeight.toStringAsFixed(1);
+                                                    }(),
                                                     textAlign: TextAlign.center,
-                                                    style: const TextStyle(fontSize: 12, color: Colors.white, fontStyle: FontStyle.italic),
+                                                    style: const TextStyle(
+                                                      fontSize: 12,
+                                                      color: Colors.white,
+                                                      fontStyle: FontStyle.italic,
+                                                    ),
                                                   ),
+
                                                 ),
 
                                                 // Reps
@@ -4445,10 +4554,34 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                                 SizedBox(
                                                   width: 40,
                                                   child: Text(
-                                                    setE1RM.toStringAsFixed(1),
+                                                        () {
+                                                      final bool isBwEx = PeriodizationModelUtils.isBodyweightExercise(
+                                                        id: exercise['exerciseId'] ?? '',
+                                                        name: name,
+                                                      );
+                                                      if (isBwEx) {
+                                                        final e1rmUi = PeriodizationModelUtils.e1rmForDisplay(
+                                                          uid: _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '',
+                                                          absoluteKg: setWeight,
+                                                          reps: setReps.round(),
+                                                          rir: setRir,
+                                                          exerciseId: exercise['exerciseId'] ?? '',
+                                                          exerciseName: name,
+                                                          asOfDate: workoutDate, // 👈 NEW
+                                                        );
+                                                        return e1rmUi?.toStringAsFixed(1) ?? '';
+
+                                                      }
+                                                      return setE1RM.toStringAsFixed(1);
+                                                    }(),
                                                     textAlign: TextAlign.center,
-                                                    style: const TextStyle(fontSize: 12, color: Colors.white70, fontStyle: FontStyle.italic),
+                                                    style: const TextStyle(
+                                                      fontSize: 12,
+                                                      color: Colors.white70,
+                                                      fontStyle: FontStyle.italic,
+                                                    ),
                                                   ),
+
                                                 ),
 
                                                 // Spacer before Velocity
@@ -4467,7 +4600,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                                 // Spacer before Notes
                                                 const SizedBox(width: 11),
 
-                                                // Notes
                                                 // Notes (scrollable only if overflow)
                                                 SizedBox(
                                                   width: 50,
