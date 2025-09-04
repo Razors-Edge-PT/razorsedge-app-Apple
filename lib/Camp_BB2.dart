@@ -461,6 +461,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     print("🧪 [BB2] Starting loadAllData()…");
     final total = Stopwatch()..start();
     final uid = _cachedUid; // avoid context lookup
+    await _primeLatestBodyweightCacheBB2(_cachedUid!);
 
     // 0) Pre-size template id grid (cheap, unblocks UI later)
     selectedTemplateIds = List.generate(totalWeeks, (_) => List.generate(7, (_) => null));
@@ -774,6 +775,59 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
   }
 
+  //..body weight exercises bit...
+
+  Future<void> _primeLatestBodyweightCacheBB2(String uid) async {
+    try {
+      final weightsCol = FirebaseFirestore.instance
+          .collection('users').doc(uid).collection('weights');
+
+      // Latest (for fast fallback)
+      final latestSnap = await weightsCol
+          .orderBy('timestamp', descending: true)
+          .limit(1)
+          .get();
+
+      if (latestSnap.docs.isNotEmpty) {
+        final d = latestSnap.docs.first.data();
+        final bw = (d['weight'] as num?)?.toDouble();
+        final ts = (d['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now();
+        if (bw != null && bw > 0) {
+          PeriodizationModelUtils.setLatestBodyweight(
+            uid: uid,
+            weightKg: bw,
+            asOf: ts,
+          );
+        }
+      }
+
+      // History (so bodyweightKgForDate(asOf) works on first open)
+      final histSnap = await weightsCol
+          .orderBy('timestamp', descending: true)
+          .limit(180) // ~6 months; adjust as you like
+          .get();
+
+      final entries = histSnap.docs.map((doc) {
+        final data = doc.data();
+        final w = (data['weight'] as num?)?.toDouble();
+        final t = (data['timestamp'] as Timestamp?)?.toDate();
+        if (w == null || t == null) return null;
+        return {
+          'date': t,
+          'weight': w,
+          'unit': 'kg',
+        };
+      }).where((e) => e != null).cast<Map<String, dynamic>>().toList();
+
+      if (entries.isNotEmpty) {
+        PeriodizationModelUtils.setBodyweightHistory(uid: uid, entries: entries);
+      }
+    } catch (e) {
+      debugPrint('⚠️ _primeLatestBodyweightCacheBB2 failed → using default 80kg: $e');
+    }
+  }
+
+
   // Periodization logic...
 
   Map<String, dynamic>? getPlannedRirSetValues({
@@ -920,11 +974,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
               '(week $week, unifiedIndex=$plannedIndex)');
           return rep.toString();
         }
-
-
-
-
-
 
         case PeriodizationModelType.dupSignature: {
           // 🔢 Completed exposures across the whole block
@@ -2545,6 +2594,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     // 5) now pull in all of your Firestore + template + WES + progression data
     await loadAllData();
     await loadPlannedExercisesFromFirestore();
+
 
     // 6) finally, turn off the loading spinner
     setState(() {
