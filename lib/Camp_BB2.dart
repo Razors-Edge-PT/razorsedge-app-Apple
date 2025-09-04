@@ -197,7 +197,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
   DateTime _bb2StartTime = DateTime.now();
 
-
+  //Debug bits:
+  final Set<TextEditingController> _dbgTrackedWeights = {};
 
 // Key = weekday index (0=Mon...6=Sun), Value = latest edited structure
   VoidCallback? _lastUndoAction;
@@ -258,6 +259,45 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
     return total.clamp(minHeight, maxHeight);
   }
+
+  void _trackWeightController({
+    required TextEditingController c,
+    required String exerciseName,
+    required int weekIndex,
+    required int dayIndex,
+    required int rowIndex,
+  }) {
+    if (_dbgTrackedWeights.contains(c)) return; // only hook once
+
+    // Log initial value at attach time
+    debugPrint('🔧 [track attach] weightController '
+        '(ex="$exerciseName" w$weekIndex d$dayIndex r$rowIndex) '
+        'initial="${c.text}"');
+
+    String last = c.text;
+
+    c.addListener(() {
+      final newText = c.text;
+      if (newText == last) return;
+      last = newText;
+
+      final ts = DateTime.now().toIso8601String();
+      debugPrint('🕵️ weightController change '
+          '(ex="$exerciseName" w$weekIndex d$dayIndex r$rowIndex @ $ts): '
+          '"${(newText.length > 80 ? newText.substring(0,80)+'…' : newText)}"');
+
+      // Print stack line-by-line to avoid truncation
+      final lines = StackTrace.current.toString().split('\n');
+      for (int i = 0; i < lines.length && i < 20; i++) {
+        debugPrint('   ↳ $i) ${lines[i]}');
+      }
+    });
+
+    _dbgTrackedWeights.add(c);
+  }
+
+
+
 
   @override
   void initState() {
@@ -1703,199 +1743,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     }
   }
 
-  //Big function, calls full week
-  Future<void> loadBlockDataFromFirestore() async {
-    final stopwatch = Stopwatch()..start();
-    print('⏳ [BB2] Starting loadBlockDataFromFirestore');
-    final userId = UserContext.of(context, listen: false).currentUid;
-    if (userId.isEmpty || _selectedBlockId == null) return;
-
-
-    final weeksSnapshot = await FirebaseFirestore.instance
-        .collection('planned_blocks')
-        .doc(userId)
-        .collection('blocks')
-        .doc(_selectedBlockId!)
-        .collection('weeks')
-        .get();
-    print('🧩 Found ${weeksSnapshot.docs.length} week documents');
-
-    for (final weekDoc in weeksSnapshot.docs) {
-      final weekIndex = int.tryParse(weekDoc.id.replaceAll('week_', '')) ?? 0;
-      final daySnapshots = await weekDoc.reference.collection('days').get();
-      print('📆 Week $weekIndex → ${daySnapshots.docs.length} day docs '
-          '[${stopwatch.elapsedMilliseconds}ms]');
-
-      for (final dayDoc in daySnapshots.docs) {
-        final dayIndex = int.tryParse(dayDoc.id.replaceAll('day_', '')) ?? 0;
-        final data = dayDoc.data();
-
-        final parseStart = stopwatch.elapsedMilliseconds;
-        final exercises =
-            List<Map<String, dynamic>>.from(data['exercises'] ?? []);
-        final savedCircuitIndices =
-            List<int>.from(data['circuitStartIndices'] ?? [0]);
-
-        final List<ExerciseRow> loadedRows = [];
-
-        for (int i = 0; i < exercises.length; i++) {
-          final ex = exercises[i];
-          final name = (ex['name'] ?? '').toString().trim();
-          if (name.isEmpty) continue;
-
-          final row = ExerciseRow(
-            id: const Uuid().v4(),
-            exercise: name,
-            circuitIndex: ex.containsKey('circuitIndex')
-                ? ex['circuitIndex']
-                : _getCircuitIndexForRow(i, savedCircuitIndices),
-          );
-
-          row.exerciseController.text = name;
-          final dynamic rawWeight = ex['weight'];
-          final dynamic rawReps = ex['reps'];
-          final dynamic rawRIR = ex['rir'];
-
-          final double? weightVal =
-              rawWeight != null ? double.tryParse(rawWeight.toString()) : null;
-          final int? repsVal =
-              rawReps != null ? int.tryParse(rawReps.toString()) : null;
-          final double? rirVal =
-              rawRIR != null ? double.tryParse(rawRIR.toString()) : null;
-
-// ✅ Only populate if user likely typed something in (i.e., not default 0)
-          if (weightVal != null && weightVal != 0.0) {
-            row.weightController.text = weightVal.toString();
-          }
-          if (repsVal != null && repsVal != 0) {
-            row.repsController.text = repsVal.toString();
-          }
-          if (rirVal != null && rirVal != 0.0) {
-            row.rirController.text = rirVal.toString();
-          }
-
-          final rowIndex = loadedRows.length;
-          final baseKey = 'w${weekIndex}_d${dayIndex}_r$rowIndex';
-
-          if (row.weightController.text.trim().isNotEmpty &&
-              double.tryParse(row.weightController.text.trim()) != null &&
-              double.tryParse(row.weightController.text.trim()) != 0.0) {
-            _savedFields['${baseKey}_weight'] = true;
-          }
-
-          if (row.repsController.text.trim().isNotEmpty &&
-              int.tryParse(row.repsController.text.trim()) != null &&
-              int.tryParse(row.repsController.text.trim()) != 0) {
-            _savedFields['${baseKey}_reps'] = true;
-          }
-
-          if (row.rirController.text.trim().isNotEmpty &&
-              double.tryParse(row.rirController.text.trim()) != null) {
-            _savedFields['${baseKey}_rir'] = true;
-          }
-
-          loadedRows.add(row);
-        }
-
-        print('[Parse] Week $weekIndex Day $dayIndex parse time: ${stopwatch.elapsedMilliseconds - parseStart}ms');
-
-        // ⛓ Assign to map
-
-        exerciseRows[weekIndex][dayIndex] = loadedRows;
-        print('[BLOCK LOAD] Week $weekIndex, Day $dayIndex loaded ${loadedRows.length} rows from block_data');
-
-        for (final row in loadedRows) {
-          print('  • ${row.exercise} | weight: ${row.weightController.text} | reps: ${row.repsController.text} | RIR: ${row.rirController.text}');
-        }
-
-        final List<int> newStarts = [];
-        int? lastCircuit;
-        for (int i = 0; i < loadedRows.length; i++) {
-          final currentCircuit = loadedRows[i].circuitIndex;
-          if (i == 0 || currentCircuit != lastCircuit) {
-            newStarts.add(i);
-            lastCircuit = currentCircuit;
-          }
-        }
-
-        _ensureCircuitStartIndicesInitialized(weekIndex, dayIndex);
-        circuitStartIndices[weekIndex][dayIndex] = newStarts;
-
-// 🔁 Inject saved WES workout override logic
-        final DateTime date =
-            blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
-        final String dateKey = DateFormat('yyyy-MM-dd').format(date);
-
-        final wesStart = stopwatch.elapsedMilliseconds;
-
-        print('[WES Check] Checking for saved workout on $dateKey...');
-        print('[WES OVERRIDE] blockStartDate = $blockStartDate');
-        print('[WES OVERRIDE] dateKey = $dateKey');
-
-        final workoutDoc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(userId)
-            .collection('workouts')
-            .doc(dateKey)
-            .get();
-
-        if (!workoutDoc.exists) {
-          print('[WES Check] No saved workout for $dateKey.');
-        } else {
-          print(
-              '[WES Check] Found saved WES workout. Attempting to override...');
-        }
-
-// 🕓 Print how long this WES lookup took
-        print(
-            '[WES Check] Week $weekIndex Day $dayIndex override time: ${stopwatch.elapsedMilliseconds - wesStart}ms');
-
-        if (workoutDoc.exists) {
-          final workoutData = workoutDoc.data();
-          final savedExercises =
-              List<Map<String, dynamic>>.from(workoutData?['exercises'] ?? []);
-
-          print(
-              '[WES OVERRIDE] Overriding Week $weekIndex, Day $dayIndex with ${savedExercises.length} WES exercises');
-
-          for (int i = 0; i < savedExercises.length; i++) {
-            final ex = savedExercises[i];
-            final name = ex['name'] ?? '';
-            final circuit = ex['circuitIndex'] ?? 0;
-            final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? []);
-
-            ExerciseRow? matchingRow;
-            try {
-              matchingRow = loadedRows.firstWhere(
-                (r) => r.exercise == name && r.circuitIndex == circuit,
-              );
-            } catch (_) {
-              matchingRow = null;
-            }
-
-            if (matchingRow == null || sets.isEmpty) continue;
-
-            final rowIndex = loadedRows.indexOf(matchingRow);
-            final baseKey = 'w${weekIndex}_d${dayIndex}_r$rowIndex';
-
-            matchingRow.weightController.text =
-                sets[0]['weight']?.toString() ?? '';
-            matchingRow.repsController.text = sets[0]['reps']?.toString() ?? '';
-            matchingRow.rirController.text = sets[0]['rir']?.toString() ?? '';
-
-            _savedFields['${baseKey}_weight'] = true;
-            _savedFields['${baseKey}_reps'] = true;
-            _savedFields['${baseKey}_rir'] = true;
-          }
-        }
-      }
-    }
-
-    print(
-        '✅ [BB2] loadBlockDataFromFirestore done in ${stopwatch.elapsedMilliseconds}ms');
-    setState(() {});
-  }
-
   // Week specific function, calls current week on start up and triggered by page scroll
 
   Future<void> loadBlockDataForWeek(int weekIndex) async {
@@ -2044,11 +1891,23 @@ class _BlockBuilder2State extends State<Camp_BB2> {
               ? ex['circuitIndex']
               : _getCircuitIndexForRow(i, savedCircuitIndices),
         );
-
         // ⬅️ NAME RESTORE: put the name into the controller for hint logic
         row.exerciseController.text = name;
 
-        final rowIndex = rows.length;
+
+
+        // ⬇️ ADD THIS after creating the row:
+        final rowIndex = rows.length;  // <-- define it first
+        _trackWeightController(
+          c: row.weightController,
+          exerciseName: name,
+          weekIndex: weekIndex,
+          dayIndex: dayIndex,
+          rowIndex: rowIndex,
+        );
+        debugPrint('🧩 [RowNew] "$name" created (w$weekIndex d$dayIndex r$rowIndex) '
+            'initial weight="${row.weightController.text}" '
+            'reps="${row.repsController.text}" rir="${row.rirController.text}"');
         final baseKey = 'w${weekIndex}_d${dayIndex}_r${rowIndex}';
 
         // Restore fields
@@ -2068,6 +1927,13 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
         // weight
         if (weightVal != null && weightVal != 0.0) {
+          debugPrint(
+            '🪪 [Step5 Loader] ex="$name" '
+                'w$weekIndex d$dayIndex r$rowIndex '
+                '→ weightVal=$weightVal '
+                'from ex["weight"]=${ex['weight']} '
+                '(type=${ex['weight']?.runtimeType})',
+          );
           row.weightController.text = '$weightVal';
           _savedFields['${baseKey}_weight'] = true;  // ✅ save bit
         }
@@ -2213,6 +2079,17 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
       // Keep original name so the rest of the loop stays unchanged
       final savedExercises = mergedSaved;
+
+      // Right after: final savedExercises = mergedSaved;
+      for (final ex in savedExercises) {
+        final nameDbg = (ex['name'] ?? '').toString();
+        if (nameDbg.trim().isEmpty) continue;
+        final setsDbg = List<Map<String, dynamic>>.from(ex['sets'] ?? const []);
+        if (setsDbg.isEmpty) continue;
+        final wDbg = setsDbg[0]['weight'];
+        debugPrint('📦 [SavedSnapshot] $nameDbg w${weekIndex} d${dayIndex} → set0.weight=$wDbg');
+      }
+
       completedWesRows[dateKey] = savedExercises;
 
       // Planned rows may be null/empty; only apply top-set values if present
@@ -2229,19 +2106,36 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           if (idx < 0) continue;
           final r = rows[idx];
 
-          r.weightController.text   = sets[0]['weight']?.toString()   ?? '';
+          // ⬇️ BW-only guard: do not prefill planned BW weight as user text
+          final bool _isBw = PeriodizationModelUtils.isBodyweightExercise(name: name);
+          final bool _isCompleted = (ex['savedAt'] != null) || (ex['status'] == 'completed');
+          final String _w = sets.isNotEmpty ? (sets[0]['weight']?.toString() ?? '') : '';
+
+          if (_isBw && !_isCompleted) {
+            r.weightController.text = '';                  // planned BW → keep blank
+          } else {
+            r.weightController.text = _w;                  // non-BW or completed BW → restore as before
+          }
+
+          // Unchanged for other fields
           r.repsController.text     = sets[0]['reps']?.toString()     ?? '';
           r.rirController.text      = sets[0]['rir']?.toString()      ?? '';
           r.velocityController.text = sets[0]['velocity']?.toString() ?? '';
           r.notesController.text    = sets[0]['notes']?.toString()    ?? '';
 
           final baseKey = 'w${weekIndex}_d${dayIndex}_r$idx';
-          _savedFields['${baseKey}_weight']   = r.weightController.text.trim().isNotEmpty;
+
+          // ⬇️ Only adjust the weight saved flag to match the guard above
+          _savedFields['${baseKey}_weight']   =
+          (_isBw && !_isCompleted) ? false : r.weightController.text.trim().isNotEmpty;
+
+          // Everything else unchanged
           _savedFields['${baseKey}_reps']     = r.repsController.text.trim().isNotEmpty;
           _savedFields['${baseKey}_rir']      = r.rirController.text.trim().isNotEmpty;
           _savedFields['${baseKey}_velocity'] = r.velocityController.text.trim().isNotEmpty;
           _savedFields['${baseKey}_notes']    = r.notesController.text.trim().isNotEmpty;
         }
+
       }
 
       // ✅ Prune planned dupes in-memory so UI shows only one per exercise that day
@@ -2325,19 +2219,25 @@ class _BlockBuilder2State extends State<Camp_BB2> {
               final ve = v(sets[0]['velocity']);
               final no = v(sets[0]['notes']);
 
-              if (r.weightController.text != w ||
+              // ⬇️ BW-only guard: do not prefill planned BW weight as user text
+              final bool _isBw = PeriodizationModelUtils.isBodyweightExercise(name: name);
+              final bool _isCompleted = (ex['savedAt'] != null) || (ex['status'] == 'completed');
+              final String wApplied = (_isBw && !_isCompleted) ? '' : w;
+
+              if (r.weightController.text != wApplied ||
                   r.repsController.text   != rp ||
                   r.rirController.text    != rr ||
                   r.velocityController.text != ve ||
                   r.notesController.text  != no) {
-                r.weightController.text   = w;
+
+                r.weightController.text   = wApplied;
                 r.repsController.text     = rp;
                 r.rirController.text      = rr;
                 r.velocityController.text = ve;
                 r.notesController.text    = no;
 
                 final baseKey = 'w${weekIndex}_d${dayIndex}_r$idx';
-                _savedFields['${baseKey}_weight']   = w.isNotEmpty;
+                _savedFields['${baseKey}_weight']   = (_isBw && !_isCompleted) ? false : wApplied.isNotEmpty;
                 _savedFields['${baseKey}_reps']     = rp.isNotEmpty;
                 _savedFields['${baseKey}_rir']      = rr.isNotEmpty;
                 _savedFields['${baseKey}_velocity'] = ve.isNotEmpty;
@@ -2346,6 +2246,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
               }
             }
           }
+
         }
 
         // Compute keys that are currently "completed" (must have ≥1 set)
@@ -2714,32 +2615,50 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       double? saveAdded;                   // only set for BW
 
       if (isBw) {
-        // typed is ADDED kg → convert to absolute using the workout day date below
-        final date = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
-        final asOfDate = DateTime(date.year, date.month, date.day, 12);
+        // Only convert to ABSOLUTE if the user actually typed a positive ADDED kg.
+        if (typed > 0) {
+          final date = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
+          final asOfDate = DateTime(date.year, date.month, date.day, 12);
 
-        final double added = typed <= 0 ? 0.0 : typed;
-        final double absolute = PeriodizationModelUtils.toAbsoluteWeight(
-          uid: _cachedUid,
-          displayAddedKg: added,
-          exerciseId: exId,
-          exerciseName: name,
-          asOfDate: asOfDate,
-        );
-        saveWeight = absolute;
-        saveAdded  = added; // persist typed ADDED weight for stability
+          final double absolute = PeriodizationModelUtils.toAbsoluteWeight(
+            uid: _cachedUid,
+            displayAddedKg: typed,         // user-typed ADDED
+            exerciseId: exId,
+            exerciseName: name,
+            asOfDate: asOfDate,
+          );
+          saveWeight = absolute;           // ABSOLUTE = BW + ADDED
+          saveAdded  = typed;              // preserve typed ADDED alongside
+        } else {
+          // No user entry for BW → do not persist weight at all.
+          saveWeight = 0.0;                // will be omitted from the map below
+          saveAdded  = null;
+        }
       }
 
-      exercises.add({
+// Build the exercise map, only including 'weight' when meaningful
+      final exMap = <String, dynamic>{
         'name': name,
-        'weight': saveWeight,                 // absolute for BW; typed for normal
         'reps': reps,
         'rir': rir,
         'velocity': row.velocityController.text.trim(),
         'notes': row.notesController.text.trim(),
         'circuitIndex': row.circuitIndex,
-        if (isBw) 'addedWeight': saveAdded,   // only for BW
-      });
+      };
+
+// Non-BW: store typed weight only if > 0
+      if (!isBw && typed > 0) {
+        exMap['weight'] = saveWeight;      // (== typed)
+      }
+
+// BW: store ABSOLUTE only if user typed an added value; also store addedWeight
+      if (isBw && saveAdded != null && saveAdded > 0) {
+        exMap['weight'] = saveWeight;      // ABSOLUTE (BW + added)
+        exMap['addedWeight'] = saveAdded;  // typed ADDED kg
+      }
+
+      exercises.add(exMap);
+
     }
 
 
@@ -3174,9 +3093,23 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
         print('🔢 plannedRep returned: $plannedRep');
 
+        _trackWeightController(
+          c: weightController,
+          exerciseName: exerciseName,
+          weekIndex: weekIndex,
+          dayIndex: dayIndex,
+          rowIndex: rowIndex,
+        );
+        debugPrint('🔎 attach tracker for "$exerciseName" w$weekIndex d$dayIndex r$rowIndex; current="${weightController.text}"');
+        final uid = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '';
+        final asOf = _displayStart.add(Duration(days: weekIndex * 7 + dayIndex));
+        final bwForDay = PeriodizationModelUtils.bodyweightKgForDate(uid: uid, asOf: asOf);
+        debugPrint('⚖️ BW for plan date = ${bwForDay.toStringAsFixed(2)}');
+
         final double? weight = double.tryParse(weightController.text);
         final int? reps = int.tryParse(repsController.text);
         final double? rir = double.tryParse(rirController.text);
+
 
         final bool isExerciseNamed = exerciseName.isNotEmpty;
         final double repsValue = reps?.toDouble() ??
