@@ -3290,7 +3290,22 @@ class _BlockBuilder2State extends State<Camp_BB2> {
               rirValue,
             );
 
-            final double newWeight = double.tryParse(weightController.text) ?? baseWeight;
+            // ⬇️ CHANGE THIS: treat typed weight as ADDED for BW → convert to ABSOLUTE
+            final double newWeight = (() {
+              final double? typed = double.tryParse(weightController.text);
+              if (typed == null) return baseWeight;
+              final bool isBwHere = PeriodizationModelUtils.isBodyweightExercise(
+                id: exerciseId, name: exerciseName,
+              );
+              if (!isBwHere) return typed;
+              return PeriodizationModelUtils.toAbsoluteWeight(
+                uid: uid,
+                displayAddedKg: typed,
+                exerciseId: exerciseId,
+                exerciseName: exerciseName,
+                asOfDate: asOf,
+              );
+            })();
 
             effectiveReps = PeriodizationModelUtils.reverseCalculateReps(
               targetE1RM: baseE1RM,
