@@ -5595,10 +5595,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
             'reps': flatReps,
             'weight': flatWeight,
             'rir': flatRir,
+            'addedWeight': flatAdded, // ✅ preserve BB2’s addedWeight for hydration
           };
           print('🧠 [WES Merge] Injected FLAT BB2 values for $nameKey = ${_resolvedBB2Values[nameKey]}');
+          debugPrint('🧾[BB2→WES flat] name=$nameKey '
+              'isBw=${PeriodizationModelUtils.isBodyweightExercise(name: (newEx['name'] ?? '').toString())} '
+              'reps=$flatReps weight(abs)=$flatWeight addedWeight=$flatAdded rir=$flatRir');
+
           continue;
         }
+
 
         final rawSets = newEx['sets'];
         if (rawSets is List && rawSets.isNotEmpty) {
@@ -5612,6 +5618,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
             'addedWeight': setAdded, // 👈 carry addedWeight
           };
           print('🧠 [WES Merge] Injected SETS[0] BB2 values for $nameKey = ${_resolvedBB2Values[nameKey]}');
+          debugPrint('🧾[BB2→WES sets0] name=$nameKey '
+              'isBw=${PeriodizationModelUtils.isBodyweightExercise(name: (newEx['name'] ?? '').toString())} '
+              'reps=${firstSet['reps']} weight(abs)=${firstSet['weight']} '
+              'addedWeight=$setAdded rir=${firstSet['rir']}');
+
         } else {
           // Even if there are no numbers, keep the exercise row so the user can edit it.
           _resolvedBB2Values[nameKey] = {
@@ -5625,10 +5636,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 // ⬇️ INSERT HYDRATION BLOCK HERE
         if (_resolvedBB2Values.containsKey(nameKey)) {
           final values = _resolvedBB2Values[nameKey]!;
+          debugPrint('➡️[WES Hydrate BEGIN] nameKey=$nameKey values=$values');
+
           final idx = _selectedExercisesWithCircuits.indexWhere((e) =>
           (e['name'] as String).trim().toLowerCase() == nameKey);
 
           if (idx != -1) {
+
             final sets = _workoutSets[idx];
             if (sets.isNotEmpty) {
               final exName = (_selectedExercisesWithCircuits[idx]['name'] as String).trim();
@@ -5658,6 +5672,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
               sets[0].weight = display;
               sets[0].rir    = (values['rir'] as num?)?.toDouble();
             }
+
+            debugPrint('🧮[WES Hydrate Check] ex=${_selectedExercisesWithCircuits[idx]['name']} '
+                'repsField="${_repsControllers[idx][0].text}" '
+                'weightField="${_weightControllers[idx][0].text}"');
 
             if (_repsControllers.length > idx && _repsControllers[idx].isNotEmpty) {
               _repsControllers[idx][0].text  = values['reps']?.toString() ?? '';
