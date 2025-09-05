@@ -1960,8 +1960,12 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         final baseKey = 'w${weekIndex}_d${dayIndex}_r${rowIndex}';
 
         // Restore fields
-        final rawWeight = ex['weight']; final rawReps = ex['reps']; final rawRIR = ex['rir'];
-        final rawVelocity = ex['velocity']; final rawNotes = ex['notes'];
+        // Restore fields
+        final rawWeight = ex['weight'];
+        final rawReps   = ex['reps'];
+        final rawRIR    = ex['rir'];
+        final rawVelocity = ex['velocity'];
+        final rawNotes    = ex['notes'];
 
         if (rawVelocity != null && rawVelocity.toString().trim().isNotEmpty) {
           row.velocityController.text = rawVelocity.toString().trim();
@@ -1971,33 +1975,55 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         }
 
         final weightVal = rawWeight != null ? double.tryParse(rawWeight.toString()) : null;
-        final repsVal = rawReps != null ? int.tryParse(rawReps.toString()) : null;
-        final rirVal = rawRIR != null ? double.tryParse(rawRIR.toString()) : null;
+        final repsVal   = rawReps   != null ? int.tryParse(rawReps.toString())      : null;
+        final rirVal    = rawRIR    != null ? double.tryParse(rawRIR.toString())    : null;
 
-        // weight
-        if (weightVal != null && weightVal != 0.0) {
-          debugPrint(
-            '🪪 [Step5 Loader] ex="$name" '
-                'w$weekIndex d$dayIndex r$rowIndex '
-                '→ weightVal=$weightVal '
-                'from ex["weight"]=${ex['weight']} '
-                '(type=${ex['weight']?.runtimeType})',
-          );
-          row.weightController.text = '$weightVal';
-          _savedFields['${baseKey}_weight'] = true;  // ✅ save bit
+// 👇 BW-aware weight restore for PLANNED rows
+        final exIdForRow = PeriodizationModelUtils.nameToId[name] ?? name;
+        final bool _isBw = PeriodizationModelUtils.isBodyweightExercise(id: exIdForRow, name: name);
+        final DateTime _planDate = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
+
+        if (_isBw) {
+          final num? awRaw = (ex['addedWeight'] as num?) ?? (ex['weightAdded'] as num?); // legacy alias
+          double? displayAdded;
+
+          if (awRaw != null) {
+            displayAdded = awRaw.toDouble();
+          } else if (weightVal != null && weightVal != 0.0) {
+            // derive once from absolute if we don't have addedWeight yet
+            displayAdded = PeriodizationModelUtils.toDisplayAddedWeight(
+              uid: _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '',
+              absoluteKg: weightVal,
+              exerciseId: exIdForRow,
+              exerciseName: name,
+              asOfDate: _planDate,
+            );
+          }
+
+          if (displayAdded != null) {
+            debugPrint( '🪪 [Step5 Loader] ex="$name" ' 'w$weekIndex d$dayIndex r$rowIndex ' '→ weightVal=$weightVal ' 'from ex["weight"]=${ex['weight']} ' '(type=${ex['weight']?.runtimeType})', );
+            row.weightController.text = displayAdded.toString();
+            _savedFields['${baseKey}_weight'] = true;
+          }
+        } else {
+          if (weightVal != null && weightVal != 0.0) {
+            row.weightController.text = '$weightVal';
+            _savedFields['${baseKey}_weight'] = true;
+          }
         }
 
 // reps
         if (repsVal != null && repsVal != 0) {
           row.repsController.text = '$repsVal';
-          _savedFields['${baseKey}_reps'] = true;    // ✅ save bit
+          _savedFields['${baseKey}_reps'] = true;
         }
 
 // RIR
         if (rirVal != null && rirVal != 0.0) {
           row.rirController.text = '$rirVal';
-          _savedFields['${baseKey}_rir'] = true;     // ✅ save bit
+          _savedFields['${baseKey}_rir'] = true;
         }
+
 
 // velocity
         if (rawVelocity != null && rawVelocity.toString().trim().isNotEmpty) {
@@ -3373,8 +3399,27 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           effectiveWeight = weight ?? snapped;
         }
 
+        // 🔒 Always use ABSOLUTE for math; treat typed BW weight as ADDED
+        final bool isBwEx = PeriodizationModelUtils.isBodyweightExercise(
+          id: exerciseId, name: exerciseName,
+        );
 
-
+        double absForCalc = effectiveWeight ?? progressedWeightRaw;
+        if (isBwEx) {
+          if (userTypedWeight && weightController.text.isNotEmpty) {
+            final double addedTyped = double.tryParse(weightController.text) ?? 0.0;
+            absForCalc = PeriodizationModelUtils.toAbsoluteWeight(
+              uid: uid,
+              displayAddedKg: addedTyped,
+              exerciseId: exerciseId,
+              exerciseName: exerciseName,
+              asOfDate: asOf,
+            );
+          } else {
+            // progressedWeightRaw/effectiveWeight already absolute suggestions
+            absForCalc = effectiveWeight ?? progressedWeightRaw;
+          }
+        }
 
 // ✅ Now that effectiveReps is defined, compute hintReps from it
         final int roundedReps = effectiveReps != null
@@ -3393,28 +3438,22 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
         final String hintWeight = (weightController.text.isEmpty && isExerciseNamed)
             ? (() {
-          final bool isBwEx = PeriodizationModelUtils.isBodyweightExercise(
-            id: exerciseId, name: exerciseName,
-          );
-
-          final double absVal = ((userTypedRir || repsController.text.isNotEmpty) && effectiveWeight != null)
-              ? effectiveWeight!
-              : progressedWeightRaw;
-
+          // absForCalc is always absolute here
           if (isBwEx) {
             final added = PeriodizationModelUtils.toDisplayAddedWeight(
-              uid: _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '',
-              absoluteKg: absVal,
+              uid: uid,
+              absoluteKg: absForCalc,
               exerciseId: exerciseId,
               exerciseName: exerciseName,
-
+              asOfDate: asOf,
             );
             return added.toStringAsFixed(1);
           } else {
-            return absVal.toStringAsFixed(1);
+            return absForCalc.toStringAsFixed(1);
           }
         })()
             : '';
+
 
 
         print('[TRACE] Checking effectiveReps: reps="${repsController.text}", weight="${weightController.text}", hintWeight="$hintWeight", hintReps="$hintReps"');
@@ -3422,7 +3461,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
 
         final double? e1rm = PeriodizationModelUtils.calculateE1RM(
-          effectiveWeight,
+          absForCalc,
           effectiveReps,
           effectiveRir,
         );
@@ -3436,13 +3475,15 @@ class _BlockBuilder2State extends State<Camp_BB2> {
             : (e1rm == null
             ? null
             : PeriodizationModelUtils.e1rmForDisplay(
-          uid: _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '',
-          absoluteKg: effectiveWeight ?? progressedWeightRaw,
+          uid: uid,
+          absoluteKg: absForCalc,
           reps: (effectiveReps ?? progressedRepsRaw).round(),
           rir: effectiveRir,
           exerciseId: exerciseId,
           exerciseName: exerciseName,
+          asOfDate: asOf,
         ));
+
 
 // Print: normal exercises print 'e1rm' exactly as before; BW prints the display-only number
         print('🧠 [BB2] Final E1RM used for $exerciseName = ${(_isBwEx ? e1rmUi : e1rm)?.toStringAsFixed(2)} '
