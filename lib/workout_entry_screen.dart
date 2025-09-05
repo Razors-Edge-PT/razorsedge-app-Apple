@@ -4608,18 +4608,25 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       final setsWithData = _workoutSets[i].where((s) {
         final reps = s.reps ?? 0;
         final double? wOpt = s.weight;                 // preserve null vs 0.0
+
+        // BW: require reps AND an explicit weight entry (0 allowed if typed)
         final hasWR = isBw
-            ? (reps > 0 && wOpt != null)              // ✅ BW: allow 0.0 if user entered it
-            : (reps > 0 && (wOpt ?? 0.0) > 0.0);      // non-BW unchanged: must be > 0
-        final hasOther = ((s.velocity ?? 0.0) > 0) || ((s.notes ?? '').trim().isNotEmpty);
-        return hasWR || hasOther;
+            ? (reps > 0 && wOpt != null)
+            : (reps > 0 && (wOpt ?? 0.0) > 0.0);       // non-BW unchanged
+
+        final hasOther = ((s.velocity ?? 0.0) > 0) ||
+            ((s.notes ?? '').trim().isNotEmpty);
+
+        // BW must meet hasWR; non-BW can also save on notes/velocity
+        return isBw ? hasWR : (hasWR || hasOther);
       }).toList();
 
       if (setsWithData.isEmpty) continue; // “No data gets nothing saved”
 
 // lock BW resolution to the WES workout date (local noon to avoid TZ edges)
-
       final asOfDate = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, 12);
+
+
 
       final ex = <String, dynamic>{
         'name': name,
