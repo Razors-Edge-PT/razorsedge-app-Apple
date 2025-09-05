@@ -2856,6 +2856,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     final String newDocId = _workoutDocIdForDate(_selectedDate); // e.g. 2025-08-24
     final DateTime startOfDay = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day);
     final DateTime nextDay = startOfDay.add(const Duration(days: 1));
+    bool _printedLoadBw = false;
 
     print('🔎 [WES LoadExisting] Looking up workout for ${DateFormat('yyyy-MM-dd').format(_selectedDate)}');
     print('   └─ primary docId = $newDocId');
@@ -3027,14 +3028,25 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           final double? abs = (s['weight'] is num)
               ? (s['weight'] as num).toDouble()
               : null;
-          final double? display = (isBw && abs != null)
+          final num? awRaw = (s['addedWeight'] as num?) ?? (s['weightAdded'] as num?); // legacy fallback
+
+          final double? display = isBw
+              ? (awRaw != null
+              ? awRaw.toDouble() // ✅ prefer saved addedWeight
+              : (abs != null
               ? PeriodizationModelUtils.toDisplayAddedWeight(
             uid: uid ?? '',
             absoluteKg: abs,
             exerciseName: nameRaw,
             asOfDate: asOf,
           )
+              : null))
               : abs;
+          if (isBw && !_printedLoadBw) {
+            print('🔎[LOAD] $nameRaw savedAdded=$awRaw, savedAbs=$abs → display=$display');
+            _printedLoadBw = true;
+          }
+
 
           return SetDetails(
             reps: reps,
@@ -3102,14 +3114,21 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         final double? abs = (s['weight'] is num)
             ? (s['weight'] as num).toDouble()
             : null;
-        final double? display = (isBw && abs != null)
+        final num? awRaw = (s['addedWeight'] as num?) ?? (s['weightAdded'] as num?); // legacy fallback
+
+        final double? display = isBw
+            ? (awRaw != null
+            ? awRaw.toDouble() // ✅ prefer saved addedWeight
+            : (abs != null
             ? PeriodizationModelUtils.toDisplayAddedWeight(
           uid: uid ?? '',
           absoluteKg: abs,
           exerciseName: name,
           asOfDate: asOf,
         )
+            : null))
             : abs;
+
 
         return SetDetails(
           reps: reps,
@@ -4583,19 +4602,23 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
       // Only count sets with BOTH weight & reps as training sets.
       // (Optionally keep velocity/notes-only rows if desired.)
+      final exId = PeriodizationModelUtils.nameToId[name] ?? name;
+      final isBw  = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
+
       final setsWithData = _workoutSets[i].where((s) {
-        final reps   = s.reps ?? 0;
-        final w      = s.weight ?? 0.0;
-        final hasWR  = reps > 0 && w > 0; // strict gate
+        final reps = s.reps ?? 0;
+        final double? wOpt = s.weight;                 // preserve null vs 0.0
+        final hasWR = isBw
+            ? (reps > 0 && wOpt != null)              // ✅ BW: allow 0.0 if user entered it
+            : (reps > 0 && (wOpt ?? 0.0) > 0.0);      // non-BW unchanged: must be > 0
         final hasOther = ((s.velocity ?? 0.0) > 0) || ((s.notes ?? '').trim().isNotEmpty);
         return hasWR || hasOther;
       }).toList();
 
       if (setsWithData.isEmpty) continue; // “No data gets nothing saved”
 
-      final exId = PeriodizationModelUtils.nameToId[name] ?? name;
-      final isBw  = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
-      // lock BW resolution to the WES workout date (local noon to avoid TZ edges)
+// lock BW resolution to the WES workout date (local noon to avoid TZ edges)
+
       final asOfDate = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, 12);
 
       final ex = <String, dynamic>{
@@ -4621,6 +4644,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
               'reps': s.reps ?? 0,
               'weight': abs,           // ✅ persist ABSOLUTE for math/history
               'weightAdded': added,    // ✅ persist ADDED for stable display
+              'addedWeight': added,     // 👈 add this key so upsert/loader can rely on it
               'rir': s.rir ?? 0.0,
               if (s.velocity != null) 'velocity': s.velocity,
               if ((s.notes ?? '').trim().isNotEmpty) 'notes': s.notes,
@@ -4833,7 +4857,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
     // Ensure controllers → _workoutSets are in sync for the first-exit case
     await _persistDraftLocally();
-
+    bool _printedUpsertBw = false;
     // Resolve the acting UID WITHOUT using context (dispose-safe)
     final uid = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) {
@@ -4872,23 +4896,77 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
       final id = PeriodizationModelUtils.nameToId[name] ?? name;
 
-      // If not a BW exercise, do nothing (leave normal behavior untouched)
+      // Leave non-BW untouched
       if (!PeriodizationModelUtils.isBodyweightExercise(id: id, name: name)) continue;
 
-      // Parse typed "added" weight; cap minimum at 0 (no negatives)
-      double added = (e['weight'] as num?)?.toDouble() ?? 0.0;
-      if (added < 0) added = 0.0;
+      // Prefer set-level structure; support legacy top-level too
+      final sets = (e['sets'] is List) ? List<Map<String, dynamic>>.from(e['sets']) : null;
 
-      // Convert to ABSOLUTE using latest BW (80kg fallback handled internally)
-      final abs = PeriodizationModelUtils.toAbsoluteWeight(
-        uid: uid,
-        displayAddedKg: added,
-        exerciseId: id,
-        exerciseName: name,
-      );
+      // Use the selected date so ABSOLUTE is anchored to that day’s BW at time of save
+      final DateTime? asOf = _selectedDate;
 
-      e['weight'] = abs; // store absolute for BW exercises (history/math invariant)
+      if (sets != null) {
+        // Map this exercise to its UI row so we can read the typed controllers
+        final String nameKey = name.trim().toLowerCase();
+        final int i = _selectedExercisesWithCircuits.indexWhere((row) =>
+        ((row['name'] ?? '') as String).trim().toLowerCase() == nameKey &&
+            (row['circuitIndex'] ?? 0) == (e['circuitIndex'] ?? 0));
+
+        for (int j = 0; j < sets.length; j++) {
+          final s = sets[j];
+
+          // ✅ Always take the user-typed "added" (controllers) for BW sets.
+          // Ignore whatever is currently in s['weight'] for BW.
+          double added = 0.0;
+          if (i >= 0 &&
+              i < _weightControllers.length &&
+              j < _weightControllers[i].length) {
+            added = double.tryParse(_weightControllers[i][j].text) ?? 0.0;
+          } else {
+            // Fallback: if controller index not found, use explicit addedWeight if present, else the map
+            added = (s['addedWeight'] as num?)?.toDouble()
+                ?? (s['weight'] as num?)?.toDouble()
+                ?? 0.0;
+          }
+          if (added < 0) added = 0.0;
+
+          final DateTime? asOf = _selectedDate;
+          final double abs = PeriodizationModelUtils.toAbsoluteWeight(
+            uid: uid,
+            displayAddedKg: added,
+            exerciseId: id,
+            exerciseName: name,
+            asOfDate: asOf,
+          );
+
+          final double bw = PeriodizationModelUtils.bodyweightKgForDate(uid: uid, asOf: asOf);
+          print('🧪[UP] $name set#$j typedAdded=$added, bw=$bw → save abs=$abs');
+
+          // Persist both: absolute for math/history, and the exact typed added value
+          s['weight'] = abs;            // ABSOLUTE = BW + ADDED
+          s['addedWeight'] = added;     // the typed ADDED kg
+        }
+
+        e['sets'] = sets; // write back
+      }
+      else {
+        // Legacy: single top-level weight
+        double added = (e['weight'] as num?)?.toDouble() ?? 0.0;
+        if (added < 0) added = 0.0;
+
+        final abs = PeriodizationModelUtils.toAbsoluteWeight(
+          uid: uid,
+          displayAddedKg: added,
+          exerciseId: id,
+          exerciseName: name,
+          asOfDate: asOf,
+        );
+
+        e['weight'] = abs;
+        e['addedWeight'] = added;
+      }
     }
+
     // Helper key for matching (same fields you already use elsewhere)
     String exKey(Map e) => '${(e['name'] ?? '').toString().trim()}|${e['circuitIndex'] ?? 0}';
 
@@ -5502,6 +5580,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         final flatReps   = newEx['reps'];
         final flatWeight = newEx['weight'];
         final flatRir    = newEx['rir'];
+        final flatAdded  = (newEx['addedWeight'] as num?)?.toDouble()
+            ?? (newEx['weightAdded'] as num?)?.toDouble(); // legacy fallback
 
         if (flatReps != null || flatWeight != null || flatRir != null) {
           _resolvedBB2Values[nameKey] = {
@@ -5516,10 +5596,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         final rawSets = newEx['sets'];
         if (rawSets is List && rawSets.isNotEmpty) {
           final firstSet = Map<String, dynamic>.from(rawSets.first as Map);
+          final setAdded  = (firstSet['addedWeight'] as num?)?.toDouble()
+              ?? (firstSet['weightAdded'] as num?)?.toDouble(); // legacy fallback
           _resolvedBB2Values[nameKey] = {
             'reps': firstSet['reps'],
             'weight': firstSet['weight'],
             'rir': firstSet['rir'],
+            'addedWeight': setAdded, // 👈 carry addedWeight
           };
           print('🧠 [WES Merge] Injected SETS[0] BB2 values for $nameKey = ${_resolvedBB2Values[nameKey]}');
         } else {
@@ -5548,7 +5631,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
               final DateTime? asOf = _selectedDate;
 
               final abs   = (values['weight'] as num?)?.toDouble();
-              final added = (values['weightAdded'] as num?)?.toDouble();
+              final added = (values['addedWeight'] as num?)?.toDouble()
+                  ?? (values['weightAdded'] as num?)?.toDouble();
+
               final display = isBwEx
                   ? (added ??
                   (abs != null
@@ -5576,7 +5661,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
               final DateTime? asOf = _selectedDate;
 
               final abs   = (values['weight'] as num?)?.toDouble();
-              final added = (values['weightAdded'] as num?)?.toDouble();
+              final added = (values['addedWeight'] as num?)?.toDouble()
+                  ?? (values['weightAdded'] as num?)?.toDouble();
+
               final display = isBwEx
                   ? (added ??
                   (abs != null

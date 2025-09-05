@@ -3296,12 +3296,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
 
           // 🧠 Recalculate weight to preserve E1RM with new RIR at same reps
-          final double baseWeight = progressedWeightRaw;
-          final double baseReps = progressedRepsRaw.toDouble();
-
           final double? baseE1RM = progressed['e1rm']; // ✅ Use cached base E1RM
-          final List<double> increments = PeriodizationModelUtils.getIncrementsForExercise(exerciseId ?? '');
-
 
           if (baseE1RM == null) {
             print('❌ [BB2] No cached baseE1RM found — falling back to original weight');
@@ -4253,16 +4248,10 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                                         name: name,
                                                       );
                                                       if (isBwEx) {
-                                                        final added = PeriodizationModelUtils.toDisplayAddedWeight(
-                                                          uid: _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '',
-                                                          absoluteKg: weight,
-                                                          exerciseId: exercise['exerciseId'] ?? '',
-                                                          exerciseName: name,
-                                                          asOfDate: workoutDate, // 👈 NEW
-                                                        );
-                                                        return added.toStringAsFixed(1);
-
+                                                        final num? awRaw = topSet['addedWeight'] as num?;
+                                                        return (awRaw != null) ? awRaw.toStringAsFixed(1) : '';
                                                       }
+
                                                       return weight.toStringAsFixed(1);
                                                     }(),
                                                     textAlign: TextAlign.center,
@@ -4488,16 +4477,10 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                                         name: name,
                                                       );
                                                       if (isBwEx) {
-                                                        final added = PeriodizationModelUtils.toDisplayAddedWeight(
-                                                          uid: _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '',
-                                                          absoluteKg: setWeight,
-                                                          exerciseId: exercise['exerciseId'] ?? '',
-                                                          exerciseName: name,
-                                                          asOfDate: workoutDate, // 👈 NEW
-                                                        );
-                                                        return added.toStringAsFixed(1);
-
+                                                        final num? awRaw = set['addedWeight'] as num?;
+                                                        return (awRaw != null) ? awRaw.toStringAsFixed(1) : '';
                                                       }
+
                                                       return setWeight.toStringAsFixed(1);
                                                     }(),
                                                     textAlign: TextAlign.center,
