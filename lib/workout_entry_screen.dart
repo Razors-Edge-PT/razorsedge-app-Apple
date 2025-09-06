@@ -105,7 +105,7 @@ class WorkoutPage extends StatefulWidget {
   _WorkoutPageState createState() => _WorkoutPageState();
 }
 
-class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
+class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   List<String> exercises = []; // Store selected exercises from dialog
   final TextEditingController _workoutNameController = TextEditingController();
   late DateTime _selectedDate;
@@ -235,7 +235,21 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   }
 
 
-  //autosave bits finish
+  //...autosave bits finish
+
+  //Missing Exercises bits...
+// Missed cache for today
+  List<_MissedItem> _missedItemsForToday = [];
+  bool _hasMissedForToday = false;
+
+// One-time shine per page open (per date)
+  bool _didShineThisOpen = false;
+
+// Shine animation
+  late final AnimationController _catchupShineCtl;
+  late final Animation<double> _catchupShineAnim;
+
+
 
   //UI bits
   late ScrollController _horizontalScrollController;
@@ -663,20 +677,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     return deduped;
   }
 
-  Future<void> _maybePromptForMissedExercises() async {
+  Future<void> _maybePromptForMissedExercises({List<_MissedItem>? precomputed}) async {
     if (_selectedDate == null) return;
-    final key = _ymd(_selectedDate!);
-    if (_missedDialogShownForDateKeys.contains(key)) return;
 
-    final items = await _computeMissedExercisesForWeek();
-    if (items.isEmpty) {
-      _missedDialogShownForDateKeys.add(key);
-      return;
-    }
+    final items = precomputed ?? await _computeMissedExercisesForWeek();
+    if (items.isEmpty) return;
 
-    _missedDialogShownForDateKeys.add(key);
-
-    final selections = List<bool>.filled(items.length, false); // default unchecked
+    // ✅ Keep selections outside the builder so it persists across setLocal rebuilds
+    final selections = List<bool>.filled(items.length, false);
 
     if (!mounted) return;
     await showDialog(
@@ -688,14 +696,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
             final theme = Theme.of(context);
             final cs = theme.colorScheme;
             final isDark = theme.brightness == Brightness.dark;
-
             final bg = isDark ? const Color(0xFF121212) : cs.surface;
             final titleColor = isDark ? cs.tertiary : cs.primary;
             final chipColor = isDark ? const Color(0xFF1E1E1E) : cs.surfaceVariant;
-            final chipSelectedElevation = 4.0;
 
-            return AlertDialog
-              (
+            return AlertDialog(
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
               backgroundColor: bg,
               elevation: 8,
@@ -742,9 +747,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                                 ? [
                               BoxShadow(
                                 blurRadius: 10,
-                                spreadRadius: 0,
                                 offset: const Offset(0, 4),
-                                color: (cs.primary.withOpacity(0.25)),
+                                color: cs.primary.withOpacity(0.25),
                               ),
                             ]
                                 : null,
@@ -761,7 +765,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                               title: Padding(
                                 padding: const EdgeInsets.symmetric(vertical: 2),
                                 child: Text(
-                                  '${items[i].name} Missed on ${_weekdayShortLabel(items[i].sourceDayIndex)}',
+                                  '${items[i].name} — missed on ${_weekdayShortLabel(items[i].sourceDayIndex)}',
                                   style: theme.textTheme.bodyMedium?.copyWith(
                                     fontWeight: selections[i] ? FontWeight.w700 : FontWeight.w500,
                                     color: isDark
@@ -770,7 +774,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                                   ),
                                 ),
                               ),
-                              // subtle visual lift on select
                               tileColor: selections[i] ? chipColor.withOpacity(0.92) : chipColor,
                             ),
                           ),
@@ -782,33 +785,17 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
 
               actions: [
                 TextButton(
-                  style: TextButton.styleFrom(
-                    foregroundColor: isDark ? Colors.white70 : cs.onSurfaceVariant,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    textStyle: theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w600),
-                  ),
                   onPressed: () async {
                     final chosen = <_MissedItem>[];
                     for (int i = 0; i < items.length; i++) {
                       if (selections[i]) chosen.add(items[i]);
                     }
-                    if (chosen.isNotEmpty) {
-                      await _applyMissedExercisesToToday(chosen);
-                    }
+                    if (chosen.isNotEmpty) await _applyMissedExercisesToToday(chosen);
                     if (mounted) Navigator.of(ctx).pop();
                   },
                   child: const Text('Add selected'),
                 ),
                 FilledButton(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: cs.primary,
-                    foregroundColor: cs.onPrimary,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                    textStyle: theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
-                    elevation: 3,
-                    shadowColor: cs.primary.withOpacity(0.4),
-                  ),
                   onPressed: () async {
                     await _applyMissedExercisesToToday(items);
                     if (mounted) Navigator.of(ctx).pop();
@@ -819,10 +806,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
             );
           },
         );
-
       },
     );
   }
+
+
 
   void _scheduleMissedDialogAfterPaint() {
     if (_selectedDate == null) return;
@@ -2544,7 +2532,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
           } else {
             print('✅ [WES Init] Skipping BB2 re-merge — WES already has user-entered data');
           }
-          _scheduleMissedDialogAfterPaint();
+          _scheduleMissedButtonAfterPaint(); // compute in background; show button when ready
+          _catchupShineCtl = AnimationController(
+            vsync: this,
+            duration: const Duration(milliseconds: 1200),
+          );
+          _catchupShineAnim = CurvedAnimation(
+            parent: _catchupShineCtl,
+            curve: Curves.easeInOut,
+          );
 
           Future.delayed(const Duration(milliseconds: 10), () {
             if (_selectedExercisesWithCircuits.isNotEmpty) {
@@ -3873,6 +3869,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
       }
     }
     WidgetsBinding.instance.removeObserver(this);
+    _catchupShineCtl.dispose();
 
     _horizontalScrollController.dispose();
     print('✅ [WES dispose] Completed cleanup.');
@@ -5767,6 +5764,33 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
   }
 
+  void _scheduleMissedButtonAfterPaint() {
+    if (_selectedDate == null) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future.microtask(() async {
+        if (!mounted) return;
+
+        final items = await _computeMissedExercisesForWeek();
+        if (!mounted) return;
+
+        setState(() {
+          _missedItemsForToday = items;
+          _hasMissedForToday = items.isNotEmpty;
+        });
+
+        // One-time shine each page open if we have missed items
+        if (_hasMissedForToday && !_didShineThisOpen) {
+          _didShineThisOpen = true;
+          _catchupShineCtl
+            ..reset()
+            ..forward();
+        }
+      });
+    });
+  }
+
+
   void addSet(int exerciseIndex) {
     setState(() {
       // 0) Make sure the outer row exists for every parallel structure
@@ -6055,6 +6079,68 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
     }
   }
 
+  Widget _buildCatchUpButton() {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    final childText = Text(
+      'Catch up exercises?',
+      style: theme.textTheme.labelMedium?.copyWith(
+        fontWeight: FontWeight.w700,
+        // Match your Circuit 1 label height by keeping text small:
+        fontSize: 12,
+        color: cs.primary,
+        letterSpacing: 0.1,
+      ),
+    );
+
+    return AnimatedBuilder(
+      animation: _catchupShineAnim,
+      builder: (context, _) {
+        // t goes 0 → 1 once per open
+        final t = _catchupShineAnim.value;
+
+        return TextButton(
+          onPressed: _hasMissedForToday
+              ? () => _maybePromptForMissedExercises(precomputed: _missedItemsForToday)
+              : null,
+          style: TextButton.styleFrom(
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            minimumSize: const Size(0, 0),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+            visualDensity: VisualDensity.compact,
+          ),
+          child: ShaderMask(
+            shaderCallback: (rect) {
+              // Width fraction of the bright band
+              const band = 0.25; // 25% of the width
+              double a = (t - band / 2).clamp(0.0, 1.0);
+              double b = t.clamp(0.0, 1.0);
+              double c = (t + band / 2).clamp(0.0, 1.0);
+
+              // ensure increasing order
+              const eps = 0.001;
+              if (b <= a) b = (a + eps).clamp(0.0, 1.0);
+              if (c <= b) c = (b + eps).clamp(0.0, 1.0);
+
+              return LinearGradient(
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+                colors: const [Colors.white24, Colors.white, Colors.white24],
+                stops: [a, b, c], // 👈 just put the stops here
+              ).createShader(rect);
+            },
+            blendMode: BlendMode.srcATop,
+            child: childText,
+          ),
+
+        );
+      },
+    );
+  }
+
+
+
   @override
   Widget build(BuildContext context) {
 
@@ -6319,18 +6405,28 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
                     key: ValueKey("column_$i"), // 🔑 Required for ReorderableListView
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (isNewCircuit)
+                      if (isNewCircuit) ...[
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                          child: Text(
-                            'Circuit ${current['circuitIndex'] + 1}',
-                            style: const TextStyle(
-                              color: Colors.lightBlueAccent,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12,
-                            ),
+                          child: Row(
+                            children: [
+                              Text(
+                                'Circuit ${current['circuitIndex'] + 1}',
+                                style: const TextStyle(
+                                  color: Colors.lightBlueAccent,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              const Spacer(),
+                              // Only on Circuit 1 AND when we have missed items (no extra height)
+                              if ((current['circuitIndex'] ?? 0) == 0 && _hasMissedForToday)
+                                _buildCatchUpButton(),
+                            ],
                           ),
                         ),
+                      ],
+
                       Dismissible(
                         key: ValueKey(current['name']),
                         direction: DismissDirection.endToStart,
