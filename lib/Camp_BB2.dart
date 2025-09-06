@@ -3366,7 +3366,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           // 🧠 Recalculate weight to preserve E1RM with new RIR at same reps
           final double? baseE1RM = progressed['e1rm']; // ✅ cached base E1RM
 
-          // Parity debug: confirm both possible targets
+          // Parity debug (optional; keep if helpful)
           final double _e1rm_progressed_local = PeriodizationModelUtils.calculateE1RM(
             progressedWeightRaw,
             progressedRepsRaw.toDouble(),
@@ -3380,27 +3380,30 @@ class _BlockBuilder2State extends State<Camp_BB2> {
             print('❌ [BB2] No cached baseE1RM found — falling back to original weight');
             effectiveWeight = progressedWeightRaw;
           } else {
-            // 🔎 Decide which E1RM to preserve (WES parity for BW + RIR-only)
+            // 📐 BW-only parity; non-BW stays exactly the same as before
             final bool _isBwHere_forSnap =
             PeriodizationModelUtils.isBodyweightExercise(id: exerciseId, name: exerciseName);
             final bool _rirOnlyBw = _isBwHere_forSnap && userTypedRir && !repsController.text.isNotEmpty;
 
-            print('🔎 [BW RIR parity] rirOnlyBw=$_rirOnlyBw '
-                'plannedRIR=${(double.tryParse(hintRir) ?? 1.0).toStringAsFixed(1)} '
-                'effectiveRIR=${effectiveRir.toStringAsFixed(1)} '
-                'baseE1RM=${baseE1RM.toStringAsFixed(2)}');
-
-            final double _targetE1RM = _rirOnlyBw
-            // BW + RIR-only → preserve BASE (planned-RIR) E1RM
+            // For BW:
+            //  - if RIR-only change → preserve BASE (planned-RIR) E1RM
+            //  - otherwise use progressed-now
+            // For non-BW:
+            //  - always preserve BASE E1RM (original behavior)
+            final double _targetE1RM = _isBwHere_forSnap
+                ? (_rirOnlyBw
                 ? baseE1RM
-            // otherwise keep progressed-now behavior
                 : PeriodizationModelUtils.calculateE1RM(
               progressedWeightRaw,
               progressedRepsRaw.toDouble(),
               effectiveRir,
+            ))
+                : (baseE1RM // ← non-BW unchanged
             );
 
-            print('🎯 [TargetE1RM chosen] ${_rirOnlyBw ? "BASE" : "PROG_NOW"} target=${_targetE1RM.toStringAsFixed(2)}');
+            print('🎯 [TargetE1RM chosen] '
+                '${_isBwHere_forSnap ? (_rirOnlyBw ? "BASE_BW" : "PROG_NOW_BW") : "NON_BW_BASE"} '
+                'target=${_targetE1RM.toStringAsFixed(2)}');
 
             // 🔁 Recompute trial weight using the chosen target
             double trialWeight = PeriodizationModelUtils.reverseCalculateWeight(
@@ -3408,6 +3411,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
               reps: effectiveReps.toInt(),
               rir: effectiveRir,
             );
+
+
 
 // 🎯 Snap: BW → snap in ADDED domain; non-BW → snap in ABS (existing behavior)
             if (_isBwHere_forSnap) {
