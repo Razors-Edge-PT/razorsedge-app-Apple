@@ -1886,7 +1886,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
   //Determine hint texts for this workout:NEW METHOD
 
   double set1SuggestedReps(int exerciseIndex) {
-
     final exerciseName =
         _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
     final rirText = _rirControllers[exerciseIndex][0].text;
@@ -1906,71 +1905,124 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver {
         ? (bb2RirRaw as num).toDouble()
         : null;
 
-    final double usedRIR = bb2Rir ?? rawRIR?? 1.0;
+    final double usedRIR = bb2Rir ?? rawRIR ?? 1.0;
 
+    // 🔎 BW detection & context we need for conversions
+    final bool isBwEx = PeriodizationModelUtils.isBodyweightExercise(
+      name: exerciseName,
+    );
+    final String uid = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '';
+    final DateTime? asOf = _selectedDate;
+
+    // Compute baseline (unchanged)
     final progressed = _getProgressedValues(exerciseIndex);
     final double baseWeight = (progressed['weight'] ?? 20.0).toDouble();
     final double baseReps = (progressed['reps'] ?? 10).toDouble();
-    final double baseE1RM = progressed['e1rm'] ?? PeriodizationModelUtils.calculateE1RM(
-      baseWeight,
-      baseReps,
-      usedRIR,
-    );
-    print('🧠 [WES] Base E1RM used for ${exerciseName} = ${baseE1RM.toStringAsFixed(2)} '
+    final double baseE1RM = progressed['e1rm'] ??
+        PeriodizationModelUtils.calculateE1RM(
+          baseWeight,
+          baseReps,
+          usedRIR,
+        );
+    print('🧠 [WES] Base E1RM used for $exerciseName = ${baseE1RM.toStringAsFixed(2)} '
         '(weight = ${baseWeight.toStringAsFixed(1)}, reps = ${baseReps.toStringAsFixed(1)}, RIR = $usedRIR)');
 
-// Prioritization logic
+    // Prioritization (unchanged for reps)
     final bool hasUserReps = reps != null;
     final bool hasBB2Reps = bb2Reps != null && bb2Reps > 0;
-    final double? usedWeight = weight ?? (bb2Weight != null && bb2Weight > 0 ? bb2Weight : null);
 
-// CASE 1: Reps already entered by user → use it
+    // CASE 1: Reps already entered by user → use it
     if (hasUserReps) return reps!;
 
-// CASE 2: BB2-entered reps → use them
+    // CASE 2: BB2-entered reps → use them
     if (hasBB2Reps) {
       print('🔁 [WES] Using BB2-entered reps for $exerciseName = $bb2Reps');
       return bb2Reps!;
     }
 
-// CASE 3: Weight (from user or BB2) → derive reps
     // CASE 3: Weight (from user or BB2) → derive reps
-    if (usedWeight != null) {
-      double effectiveWeight = usedWeight;
-      final isBwEx = PeriodizationModelUtils.isBodyweightExercise(
-        name: exerciseName,
-      );
-      if (isBwEx) {
-        effectiveWeight = PeriodizationModelUtils.toAbsoluteWeight(
-          uid: _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '',
-          displayAddedKg: usedWeight,
-          exerciseName: exerciseName,
-          asOfDate: _selectedDate,
+    if (!isBwEx) {
+      // ✅ NORMAL EXERCISES: unchanged behavior
+      final double? usedWeight =
+          weight ?? (bb2Weight != null && bb2Weight > 0 ? bb2Weight : null);
+
+      if (usedWeight != null) {
+        final derivedReps = PeriodizationModelUtils.reverseCalculateReps(
+          targetE1RM: baseE1RM,
+          weight: usedWeight,
+          baseWeight: baseWeight,
+          rir: usedRIR,
+          minReps: baseReps,
         );
+        final double roundedReps = derivedReps % 1 >= 0.85
+            ? derivedReps.ceilToDouble()
+            : derivedReps.floorToDouble();
+        print('🔁 [WES] Using weight = $usedWeight & RIR = $usedRIR → derived reps = $derivedReps → rounded = $roundedReps (target E1RM = ${baseE1RM.toStringAsFixed(2)})');
+        return roundedReps;
       }
 
-      final derivedReps = PeriodizationModelUtils.reverseCalculateReps(
-        targetE1RM: baseE1RM,
-        weight: effectiveWeight,
-        baseWeight: baseWeight,
-        rir: usedRIR,
-        minReps: baseReps,
-      );
+      // No override → model default
+      return baseReps;
+    } else {
+      // ✅ BODYWEIGHT EXERCISES: treat "weight" as ADDED kg (display domain)
+      // Priority: user field (added) → bb2.addedWeight → convert bb2.absolute → added
+      final double? bb2Added =
+      (bb2Entry?['addedWeight'] as num?)?.toDouble();
 
+      double? usedAddedKg;
+      if (weight != null) {
+        // WES field for BW shows ADDED kg
+        usedAddedKg = weight;
+      } else if (bb2Added != null && bb2Added > 0) {
+        usedAddedKg = bb2Added;
+      } else if (bb2Weight != null && bb2Weight > 0) {
+        // Convert ABS → ADDED so we don't add BW twice
+        usedAddedKg = PeriodizationModelUtils.toDisplayAddedWeight(
+          uid: uid,
+          absoluteKg: bb2Weight,
+          exerciseName: exerciseName,
+          asOfDate: asOf,
+        );
+      } else {
+        usedAddedKg = null;
+      }
 
-      final double roundedReps = derivedReps % 1 >= 0.85
-          ? derivedReps.ceilToDouble()
-          : derivedReps.floorToDouble();
+      if (usedAddedKg != null) {
+        // Convert ADDED → ABS exactly once for the math
+        final double effectiveWeight = PeriodizationModelUtils.toAbsoluteWeight(
+          uid: uid,
+          displayAddedKg: usedAddedKg,
+          exerciseName: exerciseName,
+          asOfDate: asOf,
+        );
 
-      print('🔁 [WES] Using weight = $usedWeight & RIR = $usedRIR → derived reps = $derivedReps → rounded = $roundedReps (target E1RM = ${baseE1RM.toStringAsFixed(2)})');
+        final double bwUsed =
+        PeriodizationModelUtils.bodyweightKgForDate(uid: uid, asOf: asOf);
 
-      return roundedReps;
+        final derivedReps = PeriodizationModelUtils.reverseCalculateReps(
+          targetE1RM: baseE1RM,
+          weight: effectiveWeight,
+          baseWeight: baseWeight,
+          rir: usedRIR,
+          minReps: baseReps,
+        );
+
+        final double roundedReps = derivedReps % 1 >= 0.85
+            ? derivedReps.ceilToDouble()
+            : derivedReps.floorToDouble();
+
+        print('🧰 [WES BW] displayAdded=$usedAddedKg, bwUsed=$bwUsed → effectiveAbs=$effectiveWeight');
+        print('🔁 [WES] Using weight(added) = $usedAddedKg & RIR = $usedRIR '
+            '→ derived reps = $derivedReps → rounded = $roundedReps (target E1RM = ${baseE1RM.toStringAsFixed(2)})');
+
+        return roundedReps;
+      }
+
+      // No override → model default
+      return baseReps;
     }
-
-
-    // CASE 3: No override → use model default
-    return baseReps;
   }
+
 
   double set2SuggestedReps(int exerciseIndex) {
     String exerciseName =
