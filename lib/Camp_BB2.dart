@@ -3251,16 +3251,20 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         final double historyWeight = PeriodizationModelUtils.getSuggestedWeightFromRep(
           exerciseName,
           repTargetForBase,
-          rirValue,
+          PeriodizationModelUtils.isBodyweightExercise(id: exerciseId, name: exerciseName)
+              ? (double.tryParse(hintRir) ?? 1.0)   // BW: planned RIR
+              : rirValue,                           // non-BW: existing RIR
         );
 
         print('🧱 [BB2 defaultWeight] = ${historyWeight.toStringAsFixed(2)} '
-            '(for repTarget=$repTargetForBase, rir=$rirValue)');
+            '(for repTarget=$repTargetForBase, rir='
+            '${PeriodizationModelUtils.isBodyweightExercise(id: exerciseId, name: exerciseName) ? (double.tryParse(hintRir) ?? 1.0) : rirValue})');
 
         final bool userTypedRir = rirController.text.isNotEmpty;
         final bool userTypedWeight = weightController.text.isNotEmpty;
 
         print('🧪 [BB2] Top set history used for base E1RM: ${topSetsByExercise[exerciseName]}');
+
 // 🚀 Progression logic (only triggers if model is explicitly selected)
         final Map<String, dynamic> progressed = _getCachedProgressedValues(
           exerciseName: exerciseName,
@@ -3271,11 +3275,12 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           ),
           dayIndex: dayIndex,
           rowIndex: rowIndex,
-          repTarget: repTargetForBase,   // << use planned target, same as WES seed
+          repTarget: repTargetForBase,   // same seed as before
           defaultWeight: historyWeight,
-          rir: rirValue,
+          rir: PeriodizationModelUtils.isBodyweightExercise(id: exerciseId, name: exerciseName)
+              ? (double.tryParse(hintRir) ?? 1.0)   // BW: planned RIR
+              : rirValue,                           // non-BW: existing RIR
         );
-
 
         final double progressedWeightRaw = progressed['weight'];
         final int progressedRepsRaw = progressed['reps'];
@@ -3354,13 +3359,14 @@ class _BlockBuilder2State extends State<Camp_BB2> {
               'at ${progressedRepsRaw} reps, RIR $rirValue');
 
         } else if ((userTypedRir || repsController.text.isNotEmpty) && effectiveReps != null) {
-          print('🔁 [BB2] Triggered weight recalculation due to ${userTypedRir ? "RIR" : ""}${(userTypedRir && repsController.text.isNotEmpty) ? " + " : ""}${repsController.text.isNotEmpty ? "reps" : ""}');
-
+          print('🔁 [BB2] Triggered weight recalculation due to ${userTypedRir ? "RIR" : ""}'
+              '${(userTypedRir && repsController.text.isNotEmpty) ? " + " : ""}'
+              '${repsController.text.isNotEmpty ? "reps" : ""}');
 
           // 🧠 Recalculate weight to preserve E1RM with new RIR at same reps
-          final double? baseE1RM = progressed['e1rm']; // ✅ Use cached base E1RM
+          final double? baseE1RM = progressed['e1rm']; // ✅ cached base E1RM
 
-          // 🔎 Parity debug: confirm which E1RM we’re preserving on BW vs non-BW
+          // Parity debug: confirm both possible targets
           final double _e1rm_progressed_local = PeriodizationModelUtils.calculateE1RM(
             progressedWeightRaw,
             progressedRepsRaw.toDouble(),
@@ -3370,37 +3376,34 @@ class _BlockBuilder2State extends State<Camp_BB2> {
               '| e1rm_progressed_now=${_e1rm_progressed_local.toStringAsFixed(2)} '
               '(from ${progressedWeightRaw.toStringAsFixed(2)} × ${progressedRepsRaw} @ RIR ${effectiveRir})');
 
-
           if (baseE1RM == null) {
             print('❌ [BB2] No cached baseE1RM found — falling back to original weight');
             effectiveWeight = progressedWeightRaw;
           } else {
-            // 🔁 Calculate trial weight to maintain E1RM
-            double trialWeight = PeriodizationModelUtils.reverseCalculateWeight(
-              targetE1RM: baseE1RM,
-              reps: effectiveReps.toInt(),
-              rir: effectiveRir,
-            );
-            // 📐 Pre-snap visibility (BW vs non-BW)
-            final bool _isBwHere_forSnap = PeriodizationModelUtils.isBodyweightExercise(
-              id: exerciseId, name: exerciseName,
-            );
+            // 🔎 Decide which E1RM to preserve (WES parity for BW + RIR-only)
+            final bool _isBwHere_forSnap =
+            PeriodizationModelUtils.isBodyweightExercise(id: exerciseId, name: exerciseName);
+            final bool _rirOnlyBw = _isBwHere_forSnap && userTypedRir && !repsController.text.isNotEmpty;
 
-// 🎯 Use the same target E1RM WES uses on BW: from the progressed seed (weight × reps @ RIR)
-            final double _targetE1RM = _isBwHere_forSnap
-                ? PeriodizationModelUtils.calculateE1RM(
-              progressedWeightRaw,                 // e.g., 90.0
-              progressedRepsRaw.toDouble(),        // e.g., 11
-              effectiveRir,                        // e.g., 1.0
-            )
-                : (baseE1RM ?? PeriodizationModelUtils.calculateE1RM(
+            print('🔎 [BW RIR parity] rirOnlyBw=$_rirOnlyBw '
+                'plannedRIR=${(double.tryParse(hintRir) ?? 1.0).toStringAsFixed(1)} '
+                'effectiveRIR=${effectiveRir.toStringAsFixed(1)} '
+                'baseE1RM=${baseE1RM.toStringAsFixed(2)}');
+
+            final double _targetE1RM = _rirOnlyBw
+            // BW + RIR-only → preserve BASE (planned-RIR) E1RM
+                ? baseE1RM
+            // otherwise keep progressed-now behavior
+                : PeriodizationModelUtils.calculateE1RM(
               progressedWeightRaw,
               progressedRepsRaw.toDouble(),
               effectiveRir,
-            ));
+            );
 
-// 🔁 Recompute trial weight using the chosen target
-            trialWeight = PeriodizationModelUtils.reverseCalculateWeight(
+            print('🎯 [TargetE1RM chosen] ${_rirOnlyBw ? "BASE" : "PROG_NOW"} target=${_targetE1RM.toStringAsFixed(2)}');
+
+            // 🔁 Recompute trial weight using the chosen target
+            double trialWeight = PeriodizationModelUtils.reverseCalculateWeight(
               targetE1RM: _targetE1RM,
               reps: effectiveReps.toInt(),
               rir: effectiveRir,
@@ -3552,6 +3555,10 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         })()
             : '';
 
+// ⬇️ add this just before _buildFieldBox(weightController, ...)
+        final bool _isBwRow = PeriodizationModelUtils.isBodyweightExercise(id: exerciseId, name: exerciseName);
+        print('🧩 [BW HintCheck] isBw=$_isBwRow repsTyped=${repsController.text.isNotEmpty} '
+            'rirTyped=${rirController.text.isNotEmpty} hintWeight=$hintWeight');
 
 
         print('[TRACE] Checking effectiveReps: reps="${repsController.text}", weight="${weightController.text}", hintWeight="$hintWeight", hintReps="$hintReps"');
@@ -3695,6 +3702,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
             children: [
               SizedBox(width: 3),
             _buildFieldBox(weightController, hintWeight, weekIndex, dayIndex, rowIndex, "weight", localSetState),
+
               SizedBox(width: 1),
               // Reps
               _buildFieldBox(repsController, hintReps, weekIndex, dayIndex, rowIndex, "reps", localSetState),
@@ -3802,6 +3810,13 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     };
     final width = fieldWidths[fieldKey] ?? 40.0;
 
+    // keep your current print if you like, add this tiny one
+    if (fieldKey == "weight") {
+      final bool _controllerEmpty = controller.text.trim().isEmpty;
+      final String? _appliedHint = _controllerEmpty ? hint : null;
+      print('🎯 [Field weight] empty=$_controllerEmpty hintParam=$hint appliedHint=$_appliedHint');
+    }
+
     return SizedBox(
       width: width,
       child: TextField(
@@ -3817,14 +3832,17 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           hintStyle: TextStyle(color: color.withOpacity(0.6)),
           border: InputBorder.none,
         ),
-        onChanged: (_) => localSetState(() {}),
+        onChanged: (_) {
+          if (fieldKey == "rir") {
+            print('⏩ [RIR onChanged] new="${controller.text}" → localSetState()');
+          }
+          localSetState(() {});
+        },
+
         onEditingComplete: () => _getFocusNode(key).unfocus(),
       ),
     );
   }
-
-
-
 
   /// A compact card showing “Rest Day” on a date that isn’t in `_selectedDays`.
   Widget _buildRestDayRow(String dayAbbrev, DateTime date) {
