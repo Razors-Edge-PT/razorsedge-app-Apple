@@ -1406,6 +1406,27 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       weekIndex: weekIndex,
     );
 
+    // 🔎 Parity debug: which E1RM are we preserving?
+    final double _e1rm_default = PeriodizationModelUtils.calculateE1RM(
+      baseWeight,
+      baseReps.toDouble(),
+      baseRir,
+    );
+    final double _e1rm_progressed = PeriodizationModelUtils.calculateE1RM(
+      (progressed['weight'] as num?)?.toDouble() ?? 0.0,
+      (progressed['reps'] as num?)?.toDouble() ?? 0.0,
+      baseRir,
+    );
+    print('🎯 [BB2 parity] e1rm_default   = ${_e1rm_default.toStringAsFixed(2)} '
+        'from ${baseWeight.toStringAsFixed(2)} × ${baseReps} @ RIR ${baseRir}');
+    print('🎯 [BB2 parity] e1rm_progressed= ${_e1rm_progressed.toStringAsFixed(2)} '
+        'from ${(progressed['weight'] as num?)?.toDouble() ?? 0.0} × '
+        '${(progressed['reps'] as num?)?.toDouble() ?? 0.0} @ RIR ${baseRir}');
+    print('🧰 [BB2 parity] ES increments primary=${incMapES['primary']} '
+        'secondary=${incMapES['secondary'] ?? 0} '
+        'sample=${esOptions.take(10).toList()} … total=${esOptions.length}');
+//parity debug ends
+
 
     final double? weight = progressed['weight'];
     final int? reps = progressed['reps'];
@@ -3339,6 +3360,17 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           // 🧠 Recalculate weight to preserve E1RM with new RIR at same reps
           final double? baseE1RM = progressed['e1rm']; // ✅ Use cached base E1RM
 
+          // 🔎 Parity debug: confirm which E1RM we’re preserving on BW vs non-BW
+          final double _e1rm_progressed_local = PeriodizationModelUtils.calculateE1RM(
+            progressedWeightRaw,
+            progressedRepsRaw.toDouble(),
+            effectiveRir,
+          );
+          print('🎯 [BB2 BW parity] targetE1RM_used=${(baseE1RM ?? -1).toStringAsFixed(2)} '
+              '| e1rm_progressed_now=${_e1rm_progressed_local.toStringAsFixed(2)} '
+              '(from ${progressedWeightRaw.toStringAsFixed(2)} × ${progressedRepsRaw} @ RIR ${effectiveRir})');
+
+
           if (baseE1RM == null) {
             print('❌ [BB2] No cached baseE1RM found — falling back to original weight');
             effectiveWeight = progressedWeightRaw;
@@ -3349,38 +3381,89 @@ class _BlockBuilder2State extends State<Camp_BB2> {
               reps: effectiveReps.toInt(),
               rir: effectiveRir,
             );
+            // 📐 Pre-snap visibility (BW vs non-BW)
+            final bool _isBwHere_forSnap = PeriodizationModelUtils.isBodyweightExercise(
+              id: exerciseId, name: exerciseName,
+            );
 
-            // 🎯 Round to nearest valid increment — ES only
-            if (optionsES.isNotEmpty) {
-              final t = trialWeight;
-              trialWeight = optionsES.reduce(
-                    (a, b) => (a - t).abs() < (b - t).abs() ? a : b,
+// 🎯 Use the same target E1RM WES uses on BW: from the progressed seed (weight × reps @ RIR)
+            final double _targetE1RM = _isBwHere_forSnap
+                ? PeriodizationModelUtils.calculateE1RM(
+              progressedWeightRaw,                 // e.g., 90.0
+              progressedRepsRaw.toDouble(),        // e.g., 11
+              effectiveRir,                        // e.g., 1.0
+            )
+                : (baseE1RM ?? PeriodizationModelUtils.calculateE1RM(
+              progressedWeightRaw,
+              progressedRepsRaw.toDouble(),
+              effectiveRir,
+            ));
+
+// 🔁 Recompute trial weight using the chosen target
+            trialWeight = PeriodizationModelUtils.reverseCalculateWeight(
+              targetE1RM: _targetE1RM,
+              reps: effectiveReps.toInt(),
+              rir: effectiveRir,
+            );
+
+// 🎯 Snap: BW → snap in ADDED domain; non-BW → snap in ABS (existing behavior)
+            if (_isBwHere_forSnap) {
+              final double _bwUsed = PeriodizationModelUtils.bodyweightKgForDate(
+                uid: uid,
+                asOf: asOf,
               );
-              print('🧲 [BB2 snap ES] $t → $trialWeight');
+              final double _preSnapAbs   = trialWeight;
+              final double _preSnapAdded = _preSnapAbs - _bwUsed;
+              print('🧍 [BB2 BW] bwUsed=${_bwUsed.toStringAsFixed(2)}');
+              print('📐 [BB2 BW] preSnapAbs=${_preSnapAbs.toStringAsFixed(2)} → preSnapAdded=${_preSnapAdded.toStringAsFixed(2)}');
+
+              // Snap on ADDED using ES options (same grid WES uses)
+              double snappedAdded = optionsES.isNotEmpty
+                  ? optionsES.reduce((a, b) =>
+              (a - _preSnapAdded).abs() < (b - _preSnapAdded).abs() ? a : b)
+                  : _preSnapAdded;
+              if (snappedAdded < 0) snappedAdded = 0.0; // no negative added
+
+              final double snappedAbs = _bwUsed + snappedAdded;
+              print('📏 [BB2 BW] snappingDomain=ADDED | ES options sample=${optionsES.take(10).toList()}');
+              print('🧲 [BB2 BW parity] trialAbs=${_preSnapAbs.toStringAsFixed(2)} '
+                  '→ trialAdded=${_preSnapAdded.toStringAsFixed(2)} '
+                  '→ snappedAdded=${snappedAdded.toStringAsFixed(2)} '
+                  '→ snappedAbs=${snappedAbs.toStringAsFixed(2)}');
+
+              trialWeight = snappedAbs;
             } else {
-              final snapped = PeriodizationModelUtils.roundToNearestValidIncrement(
-                targetWeight: trialWeight,
-                exerciseName: exerciseName,
-              );
-              print('🧲 [BB2 snap fallback] $trialWeight → $snapped (PMU)');
-              trialWeight = snapped;
+              // Non-BW: keep existing ABS snap logic
+              if (optionsES.isNotEmpty) {
+                final t = trialWeight;
+                trialWeight = optionsES.reduce(
+                      (a, b) => (a - t).abs() < (b - t).abs() ? a : b,
+                );
+                print('🧲 [BB2 snap ES] $t → $trialWeight');
+              } else {
+                final snapped = PeriodizationModelUtils.roundToNearestValidIncrement(
+                  targetWeight: trialWeight,
+                  exerciseName: exerciseName,
+                );
+                print('🧲 [BB2 snap fallback] $trialWeight → $snapped (PMU)');
+                trialWeight = snapped;
+              }
+              print('📏 [BB2] snappingDomain=ABS | ES options sample=${optionsES.take(10).toList()}');
             }
 
-            print('🎯 [BB2] Rounded weight to nearest valid increment → $trialWeight');
-
-            // 🧠 Recalculate E1RM using rounded weight
+// 🧠 Recalculate E1RM using snapped weight
             final double actualE1RM = PeriodizationModelUtils.calculateE1RM(
               trialWeight,
               effectiveReps.toDouble(),
               effectiveRir,
             );
 
-            final double minE1RM = baseE1RM * 0.85;
-            final double maxE1RM = baseE1RM * 1.02;
+// Use the chosen (parity) target for range checks and prints
+            final double minE1RM = _targetE1RM * 0.85;
+            final double maxE1RM = _targetE1RM * 1.02;
 
             const double epsilon = 0.01;
-            if ((actualE1RM < minE1RM - epsilon) || (actualE1RM > maxE1RM + epsilon))
-            {
+            if ((actualE1RM < minE1RM - epsilon) || (actualE1RM > maxE1RM + epsilon)) {
               print('⚠️ [BB2] Adjusted weight = ${trialWeight.toStringAsFixed(1)} '
                   'would cause E1RM = ${actualE1RM.toStringAsFixed(1)} '
                   '(outside range ${minE1RM.toStringAsFixed(1)}–${maxE1RM.toStringAsFixed(1)}) '
@@ -3390,13 +3473,13 @@ class _BlockBuilder2State extends State<Camp_BB2> {
               effectiveWeight = trialWeight;
 
               print('🎯 [BB2] Updated weight for $exerciseName = ${trialWeight.toStringAsFixed(1)} '
-                  '(to preserve E1RM ${baseE1RM.toStringAsFixed(2)} '
+                  '(to preserve E1RM ${_targetE1RM.toStringAsFixed(2)} '
                   'using reps = ${effectiveReps?.toStringAsFixed(1)}, RIR = $effectiveRir)');
-
               print('✅ [BB2] Accepted adjusted weight = ${trialWeight.toStringAsFixed(1)} '
-                  'for E1RM = ${actualE1RM.toStringAsFixed(1)} (base = ${baseE1RM.toStringAsFixed(1)})');
-
+                  'for E1RM = ${actualE1RM.toStringAsFixed(1)} '
+                  '(base = ${_targetE1RM.toStringAsFixed(1)})');
             }
+
             print('📏 [BB2] Comparing actual E1RM = ${actualE1RM.toStringAsFixed(4)} with range ${minE1RM.toStringAsFixed(4)} – ${maxE1RM.toStringAsFixed(4)}');
 
           }
