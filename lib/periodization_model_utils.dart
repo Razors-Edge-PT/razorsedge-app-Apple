@@ -1412,7 +1412,11 @@ class PeriodizationModelUtils {
         'weight': defaultWeight,
         'reps': repTarget,
       };
-    }
+    }// [ADD PRINT] —— target eff reps + router increments snapshot
+    print('🔢 [SP] targetEffReps(planned) = ${repTarget + rirValue} '
+        '(reps=$repTarget + rir=$rirValue) '
+        'routerIncrements(len=${increments.length} head=${increments.take(6).toList()})');
+
 
 // 🔎 Unified history-based E1RM (no week-1 logic here)
     final baseInfo = PeriodizationModelUtils.computeBaseE1RMFromHistory(
@@ -1466,6 +1470,16 @@ class PeriodizationModelUtils {
 
     print('🧰 [SP] validWeights count=${validWeights.length} '
         'first=${validWeights.first} last=${validWeights.last}');
+    // [ADD PRINT] —— are SP’s internal candidates consistent with router-provided increments near default?
+    final bool _gridsDifferNearDefault = (() {
+      if (validWeights.isEmpty || increments.isEmpty) return true;
+      double nearest(List<double> xs, double t) =>
+          xs.reduce((a,b)=> (a - t).abs() < (b - t).abs() ? a : b);
+      final vNear = nearest(validWeights, defaultWeight);
+      final rNear = nearest(increments,   defaultWeight);
+      return (vNear - rNear).abs() > 0.01;
+    })();
+    print('🧮 [SP] gridMismatchNearDefault=${_gridsDifferNearDefault} (default=${defaultWeight.toStringAsFixed(2)})');
 
 // 🎯 Center trials on the weight implied by baseE1RM at (repTarget, RIR),
 // then snap to the nearest valid increment.
@@ -1895,8 +1909,8 @@ class PeriodizationModelUtils {
     print('🧪 [PMU Router] model=$model repTarget=$repTarget '
         'defaultWeight=${defaultWeight.toStringAsFixed(2)} '
         'rirValue=$rirValue '
-        'increments(len)=${increments.length} sample=${increments.take(6).toList()}');
-
+        'incLen=${increments.length} incHead=${increments.take(6).toList()} '
+        'incIsSparse=${increments.length < 3}');
 
     switch (model) {
       case ProgressionModelType.linearWeightIncrease: {

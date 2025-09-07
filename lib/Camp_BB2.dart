@@ -1414,6 +1414,11 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 // If ES has no secondary, remove it
     final esHasSecondary = (incRawES is Map) && (incRawES['secondary'] is num) && ((incRawES['secondary'] as num) > 0);
     if (!esHasSecondary) incMapES.remove('secondary');
+    // [ADD PRINT] —— ES origin tag (again)
+    final String esOrigin = _exerciseSettings[exerciseId]?['increments'] != null
+        ? 'byId' : (_exerciseSettings[exerciseName]?['increments'] != null ? 'byName' : 'fallback');
+    print('🧷 [BB2→PMU set] increments patched → origin=$esOrigin map=$incMapES');
+
 
 // 🔁 Push a tiny patch into PMU so internal lookups match ES
     final Map<String, Map<String, dynamic>> pmuPatch = {};
@@ -1444,6 +1449,9 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       topSetHistory: topSetHistory,
       weekIndex: weekIndex,
     );
+    final double? pW = (progressed['weight'] as num?)?.toDouble();
+    final int?   pR = (progressed['reps'] as num? )?.toInt();
+
 
     // 🔎 Parity debug: which E1RM are we preserving?
     final double _e1rm_default = PeriodizationModelUtils.calculateE1RM(
@@ -1456,6 +1464,15 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       (progressed['reps'] as num?)?.toDouble() ?? 0.0,
       baseRir,
     );
+    print('🧮 [PROG OUT] weight=$pW reps=$pR '
+        'base(repTarget=$baseReps, rir=$baseRir) '
+        'e1rm_default=${_e1rm_default.toStringAsFixed(2)} '
+        'e1rm_progressed=${_e1rm_progressed.toStringAsFixed(2)}');
+
+    if (pR != null && pR != baseReps && baseRir != 0) {
+      print('⚠️ [RIR-only drift check] Progression changed reps '
+          '(baseReps=$baseReps → progressedReps=$pR) at same RIR=$baseRir');
+    }
     print('🎯 [BB2 parity] e1rm_default   = ${_e1rm_default.toStringAsFixed(2)} '
         'from ${baseWeight.toStringAsFixed(2)} × ${baseReps} @ RIR ${baseRir}');
     print('🎯 [BB2 parity] e1rm_progressed= ${_e1rm_progressed.toStringAsFixed(2)} '
@@ -3301,6 +3318,11 @@ class _BlockBuilder2State extends State<Camp_BB2> {
             'primary=${incMapES['primary'] ?? 2.5} '
             'secondary=${incMapES['secondary'] ?? 0.0} '
             'sample=${optionsES.take(10).toList()} … total=${optionsES.length}');
+
+        final String incOrigin = _exerciseSettings[exerciseId]?['increments'] != null
+            ? 'byId'
+            : (_exerciseSettings[exerciseName]?['increments'] != null ? 'byName' : 'fallback');
+        print('🧭 [INC ORIGIN] $exerciseName/$exerciseId → origin=$incOrigin');
 
         final String? plannedRep = getRepTargetForExercise(
           exerciseName,
