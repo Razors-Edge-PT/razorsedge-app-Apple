@@ -2240,6 +2240,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         ((bb2Entry?['rir'] is num && (bb2Entry?['rir'] as num) > 0)
             ? (bb2Entry?['rir'] as num).toDouble()
             : null);
+    print('🎛️ [WES S1Weight] weightTxt="$weightText" repsTxt="$repsText" rirTxt="$rirText" '
+        '→ parsed userWeight=$userWeight userReps=$userReps userRir=$userRir');
+    print('🔎 [WES S1Weight] hasUserReps=${userReps != null} hasUserRir=${userRir != null}');
+    // ADD PRINT ↓
+    print('🎛️ [WES S1Weight Flags] '
+        'isBw=${PeriodizationModelUtils.isBodyweightExercise(name: exerciseName)} '
+        'userReps=${userReps?.toStringAsFixed(1) ?? "null"} '
+        'userRir=${userRir?.toStringAsFixed(1) ?? "null"}');
+
 
 
     // 🛑 Step 3: Respect user-entered weight
@@ -2260,16 +2269,78 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final double baseReps = progressed['reps']?.toDouble() ?? 10.0;
     final double modelRir = getRirFromPlanOrInput(exerciseIndex, 1);
 
-    // ✅ Step 5: Calculate base E1RM using progression model only
-    final double baseE1RM =
-    PeriodizationModelUtils.calculateE1RM(baseWeight, baseReps, modelRir);
-    print('🧠 [WES] Base progression E1RM = ${baseE1RM.toStringAsFixed(2)} '
-        '(from $baseWeight × $baseReps @ RIR $modelRir)');
+    // ✅ Step 5: Seed base E1RM
+    final String _exId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
+    final bool _isBwEx = PeriodizationModelUtils.isBodyweightExercise(id: _exId, name: exerciseName);
+
+// Current controller texts (WES fields)
+    final String _repsTxt = _repsControllers[exerciseIndex][0].text.trim();
+    final String _rirTxt  = _rirControllers[exerciseIndex][0].text.trim();
+    final double? _userRir = double.tryParse(_rirTxt);
+
+// BB2-merged RIR (if any)
+    final String _normKey = exerciseName.trim().toLowerCase();
+    final dynamic _bb2RirRaw = _resolvedBB2Values[_normKey]?['rir'];
+    final double? _bb2Rir = (_bb2RirRaw is num)
+        ? _bb2RirRaw.toDouble()
+        : double.tryParse(_bb2RirRaw?.toString() ?? '');
+
+// Planned RIR for set 1 (pure plan; no BB2 overlay)
+    double _plannedRirForSet1() {
+      final plan = PeriodizationModelUtils.plannedExerciseDetails[_exId]?['rirPlan'];
+      if (plan == null || blockStartDate == null) return modelRir;
+
+      final int? wk = _getApplicableWeekIndex(_exId);
+      if (wk == null) return modelRir;
+
+      final int sessionIndex = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+        exerciseName: exerciseName,
+        savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+        blockStartDate: blockStartDate!,
+        weekIndex: wk,
+        selectedDate: _selectedDate,
+      );
+
+      final String weekKey = 'week${wk + 1}';
+      final Map? weekData = plan[weekKey] as Map?;
+      final int maxSessions = weekData?.keys.where((k) => k.toString().startsWith('session')).length ?? 0;
+      final int safeSession = (maxSessions > 0) ? sessionIndex.clamp(0, maxSessions - 1) : 0;
+
+      final String sessionKey = 'session${safeSession + 1}';
+      final String setKey = 'set1';
+      final String? raw = plan[weekKey]?[sessionKey]?[setKey]?['rir']?.toString();
+      return double.tryParse(raw ?? '') ?? modelRir;
+    }
+
+// BW + RIR-only (from BB2 hint) detection:
+// - BW exercise
+// - No reps typed in WES
+// - No RIR typed in WES (so the value in play is from BB2 hint)
+// - BB2 RIR exists
+    final bool _rirOnlyBw = _isBwEx && _repsTxt.isEmpty && _userRir == null && _bb2Rir != null;
+
+// Use planned RIR as the seed ONLY for that one case; otherwise keep existing modelRir
+    final double _seedRIR = _rirOnlyBw ? _plannedRirForSet1() : modelRir;
+
+// Compute base using the chosen seed
+    final double baseE1RM = PeriodizationModelUtils.calculateE1RM(
+      baseWeight,
+      baseReps,
+      _seedRIR,
+    );
+
+// (Optional, compact trace to confirm seeds during testing)
+    print('🎯 [WES Seed] isBw=$_isBwEx rirOnlyBw=$_rirOnlyBw seedRIR=${_seedRIR.toStringAsFixed(2)} '
+        '→ baseE1RM=${baseE1RM.toStringAsFixed(2)} (base=${baseWeight.toStringAsFixed(2)}×${baseReps.toStringAsFixed(1)})');
+
+
 
     // ✅ Step 6: Use user RIR and/or reps if available
     if (userReps != null || userRir != null) {
       final double repsToUse = userReps ?? set1SuggestedReps(exerciseIndex);
-      final double rirToUse = userRir ?? modelRir;
+      final double rirToUse  = userRir  ?? modelRir;
+      print('⚙️ [WES S1Weight] override path → repsToUse=$repsToUse rirToUse=$rirToUse baseWeight=$baseWeight baseReps=$baseReps');
+
 
       final double derived = PeriodizationModelUtils.reverseCalculateWeight(
         targetE1RM: baseE1RM,
@@ -2281,50 +2352,60 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       final List<double> _candidates = PeriodizationModelUtils.getIncrementsForExercise(_exId);
       final double rounded = (_candidates.isNotEmpty ? _candidates : List<double>.generate(200, (i) => i * 2.5))
           .reduce((a, b) => (a - derived).abs() < (b - derived).abs() ? a : b);
-      print('🧲 [WES snap] $derived → $rounded (candidates=${_candidates.take(10).toList()} …)');
 
+// NEW: compact summary of the override calc
+      print('⚙️ [WES OverrideCalc] reps=$repsToUse rir=$rirToUse '
+          'derivedAbs=${derived.toStringAsFixed(2)} roundedAbs=${rounded.toStringAsFixed(2)}');
+
+      print('🧲 [WES snap] $derived → $rounded (candidates=${_candidates.take(10).toList()} …)');
 
       final double newE1RM = PeriodizationModelUtils.calculateE1RM(
         rounded,
         repsToUse,
         rirToUse,
       );
+      print('🔁 [WES] Derived weight = $rounded using reps = $repsToUse and RIR = $rirToUse '
+          '→ new E1RM = ${newE1RM.toStringAsFixed(2)}');
 
-      print('🔁 [WES] Derived weight = $rounded using reps = $repsToUse and RIR = $rirToUse → new E1RM = ${newE1RM.toStringAsFixed(2)}');
-
+// ✅ Single BW branch: log THEN return display-added
       if (PeriodizationModelUtils.isBodyweightExercise(id: _exId, name: exerciseName)) {
-        return PeriodizationModelUtils.toDisplayAddedWeight(
+        final double displayAdded = PeriodizationModelUtils.toDisplayAddedWeight(
           uid: _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '',
           absoluteKg: rounded,
           exerciseId: _exId,
           exerciseName: exerciseName,
-          asOfDate: _selectedDate, // 👈 add this
+          asOfDate: _selectedDate,
         );
+        print('⚖️ [WES BW Convert] abs=${rounded.toStringAsFixed(2)} → displayAdded=${displayAdded.toStringAsFixed(2)}');
+        return displayAdded;
       }
-      return rounded;
 
+// non-BW stays absolute
+      print('🟢 [WES S1Weight] non-BW override → abs=$rounded');
+      return rounded;
     }
 
-
     // ✅ Step 7: No overrides — fallback to rounded base weight
-    final String _exId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
+
     final List<double> _candidates = PeriodizationModelUtils.getIncrementsForExercise(_exId);
     final double fallbackRounded = (_candidates.isNotEmpty ? _candidates : List<double>.generate(200, (i) => i * 2.5))
         .reduce((a, b) => (a - baseWeight).abs() < (b - baseWeight).abs() ? a : b);
     print('🧲 [WES snap fallback] $baseWeight → $fallbackRounded (candidates=${_candidates.take(10).toList()} …)');
 
-    print(
-        '🎯 [WES] Final progression for $exerciseName using default RIR $modelRir → $fallbackRounded kg');
+    print('🎯 [WES] Final progression for $exerciseName using default RIR $modelRir → $fallbackRounded kg');
+
+// 👇 print first, then return (BW converts to display)
+    print('🟡 [WES S1Weight] fallback path (no overrides used) → abs=$fallbackRounded');
     if (PeriodizationModelUtils.isBodyweightExercise(id: _exId, name: exerciseName)) {
-      return PeriodizationModelUtils.toDisplayAddedWeight(
+      final double displayAdded = PeriodizationModelUtils.toDisplayAddedWeight(
         uid: _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '',
         absoluteKg: fallbackRounded,
         exerciseId: _exId,
         exerciseName: exerciseName,
       );
+      return displayAdded;
     }
     return fallbackRounded;
-
   }
 
   double set2SuggestedWeight(int exerciseIndex) {
@@ -5752,6 +5833,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                   : abs;
 
               _weightControllers[idx][0].text = (display ?? 0).toString();
+              print('🪙 [WES HydrateWeight] ex=$exName isBW=$isBwEx abs=$abs added=$added display=$display '
+                  '→ wrote text="${_weightControllers[idx][0].text}"');
+
               _rirControllers[idx][0].text    = values['rir']?.toString() ?? '';
             }
 
