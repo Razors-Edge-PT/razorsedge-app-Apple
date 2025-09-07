@@ -151,7 +151,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   Map<String, Map<String, dynamic>> _bb2DataByExercise = {};
   Map<String, Map<String, dynamic>> _resolvedBB2Values = {};
   Map<String, String> _progressionModelsByExercise = {};
-  final Map<int, Map<String, dynamic>> _cachedProgressedValues = {};
+  final Map<String, Map<String, dynamic>> _cachedProgressedValues = {};
+
 
   bool _isLoadingData = true;
   bool _isInitialized = false;
@@ -523,6 +524,18 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     if (id != null && id.trim().isNotEmpty) return 'id#$id';
     return 'name#$nk';
   }
+
+  String _rowCacheKey(int rowIndex) {
+    var id = _selectedExercisesWithCircuits[rowIndex]['rowId'];
+    if (id == null || (id as String).isEmpty) {
+      // generate stable identity once
+      id = '${DateTime.now().microsecondsSinceEpoch}_$rowIndex';
+      _selectedExercisesWithCircuits[rowIndex]['rowId'] = id;
+    }
+    final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate ?? DateTime.now());
+    return '$id|$ymd';
+  }
+
 
   Future<List<_MissedItem>> _computeMissedExercisesForWeek() async {
     if (_selectedBlockId == null || _selectedDate == null || blockStartDate == null) return const [];
@@ -1389,10 +1402,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   Map<String, dynamic> _getProgressedValues(int exerciseIndex) {
 
     // 🧠 STEP 1: If we already cached a GOOD value, return it
-    final cached = _cachedProgressedValues[exerciseIndex];
+    final key = _rowCacheKey(exerciseIndex);
+    final cached = _cachedProgressedValues[key];
     if (cached != null && blockStartDate != null && blockEndDate != null) {
+      final exName = _selectedExercisesWithCircuits[exerciseIndex]['name'];
+      print('🧳 [WES cache HIT] key=$key for "$exName" '
+          '→ cachedFor="${cached['exerciseName']}" '
+          'weight=${cached['weight']} reps=${cached['reps']}');
       return cached;
     }
+
 
     _debugPrintBlockDates();
     // Get exercise info.
@@ -1864,7 +1883,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     print('🧾 [WES overlay] ${progressed['weight']} → $snapped');
 
     // Cache and return
-    _cachedProgressedValues[exerciseIndex] = progressed;
+// Cache and return
+    progressed['exerciseName'] = exerciseName;
+    progressed['exerciseId'] = exerciseId;
+    _cachedProgressedValues[_rowCacheKey(exerciseIndex)] = progressed;
+
 
     print('🧮 [WES] Progressed for ${exerciseName} = ${progressed['weight']} kg @ ${repTarget} reps, RIR $rir');
 
