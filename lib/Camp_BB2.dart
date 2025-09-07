@@ -123,6 +123,10 @@ class  Camp_BB2  extends StatefulWidget {
 }
 
 class _BlockBuilder2State extends State<Camp_BB2> {
+
+  bool completedWesRowsReady = false;
+  Map<String, Map<String, dynamic>>? _pendingPmuPatch;
+
   late final BlockPlannerRepository _repo;
   List<String> _selectedDays = [];
   String? _activeBlockId;
@@ -1097,6 +1101,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                   countedDebug.add({'date': dateKey, 'weight': wTxt ?? '—', 'reps': rTxt ?? '—', 'rir': rirTxt ?? '—'});
                 }
               }
+
             } else {
               print('⚠️ [BB2] blockStartDate is null — treating completedCount=0');
             }
@@ -1157,37 +1162,70 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
 
   int getExerciseCountInWeek(String exerciseName, int week, int day, int row) {
+    final _keys = (completedWesRows?.keys ?? const <String>[]).toList()..sort();
+    print('🗂️ [BB2 Count Enter] ex="$exerciseName" week=$week day=$day row=$row keys=$_keys');
+
     int count = 0;
     final target = exerciseName.trim();
     if (target.isEmpty) return 0;
 
     for (int d = 0; d <= day; d++) {
-      // 1) Check completed (WES) for this day first
+      // 1) Check completed (WES) for this day first — cache-first, then fallback to savedWorkoutsList
       final date = blockStartDate.add(Duration(days: week * 7 + d));
       final dateKey = DateFormat('yyyy-MM-dd').format(date);
-      final rawSaved = List<Map<String, dynamic>>.from(completedWesRows[dateKey] ?? const []);
+
+      final cacheSaved = List<Map<String, dynamic>>.from(
+        completedWesRows[dateKey] ?? const <Map<String, dynamic>>[],
+      );
+
+      // Fallback to savedWorkoutsList if cache is empty for this day
+      List<Map<String, dynamic>> fallbackSaved = const <Map<String, dynamic>>[];
+      if (cacheSaved.isEmpty) {
+        fallbackSaved = PeriodizationModelUtils.savedWorkoutsList
+            .where((w) => (w['date'] ?? '').toString().startsWith(dateKey))
+            .expand((w) {
+          final exs = w['exercises'];
+          return (exs is List)
+              ? exs.cast<Map<String, dynamic>>()
+              : const <Map<String, dynamic>>[];
+        })
+            .toList();
+      }
+
+      final source = cacheSaved.isNotEmpty ? cacheSaved : fallbackSaved;
+      final sourceTag = cacheSaved.isNotEmpty ? 'cache' : 'fallback';
+
+      print('📅 [BB2 Count] d=$d date=$dateKey saved=${source.length} '
+          'planned=${exerciseRows[week][d].length} src=$sourceTag');
 
       bool countedCompletedForDay = false;
-      for (final ex in rawSaved) {
-        final name = (ex['name'] ?? '').toString().trim();
-        if (name != target) continue;
 
-        // only count as completed if at least one set exists
-        final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? const []);
+      // ID-first matching, then name (only if id missing)
+      final targetId = nameToIdMap[exerciseName] ?? target;
+      for (final ex in source) {
+        final exId   = (ex['exerciseId'] ?? ex['id'] ?? ex['exercise_id'] ?? '').toString().trim();
+        final exName = (ex['name'] ?? ex['exercise'] ?? ex['title'] ?? '').toString().trim();
+        final idMatches   = exId.isNotEmpty && exId == targetId;
+        final nameMatches = exId.isEmpty     && exName == target;
+        if (!(idMatches || nameMatches)) continue;
+
+        final sets = (ex['sets'] is List)
+            ? List<Map<String, dynamic>>.from(ex['sets'])
+            : const <Map<String, dynamic>>[];
         if (sets.isEmpty) continue;
 
-        // Count each completed occurrence of this exercise on this day
         count += 1;
         countedCompletedForDay = true;
-        // If you want to count multiple circuits of the same exercise on the same day,
-        // remove the 'break'. Keeping one per day? keep the 'break'.
-        break;
+        print('✅ [BB2 Count] matched COMPLETED "${exName.isNotEmpty ? exName : target}" '
+            'on $dateKey → +1 (sets=${sets.length}) src=$sourceTag');
+        break; // keep "one per day" behavior
       }
 
       if (countedCompletedForDay) {
         // Completed exists → do not also count planned for this day
         continue;
       }
+
 
       // 2) No completed entry → fall back to planned rows (your existing logic)
       final rows = exerciseRows[week][d];
@@ -1197,6 +1235,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         final thisName = (rows[r].exercise ?? '').toString().trim();
         if (thisName == target) {
           count++;
+          print('📝 [BB2 Count] matched PLANNED "$thisName" on d=$d r=$r (lastRow=$lastRow) → +1');
         }
       }
     }
@@ -1936,6 +1975,86 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       print('   ↳ created ${missingIds.length} day docs in ${t.elapsedMilliseconds}ms');
     }
 
+    // === 4.5) Pre-hydrate completedWesRows for counting across the block (CACHE-ONLY) ===
+// This makes DUP-by-exposure indexing correct on first paint, before opening WES.
+        {
+      String _ymd(DateTime d) {
+        final m = d.month.toString().padLeft(2, '0');
+        final day = d.day.toString().padLeft(2, '0');
+        return '${d.year}-$m-$day';
+      }
+      String _isoDay(DateTime d) =>
+          '${DateTime(d.year, d.month, d.day).toIso8601String().split(".").first}.000';
+
+      final workoutsCol = FirebaseFirestore.instance
+          .collection('users')
+          .doc(_cachedUid)
+          .collection('workouts');
+
+      // Cover from block start through the END of this week (inclusive of this week)
+      final rangeStart = DateTime(blockStartDate.year, blockStartDate.month, blockStartDate.day);
+      final rangeEnd   = rangeStart.add(Duration(days: (weekIndex * 7) + 7));
+
+      // 1) Per-day doc-id snapshots (CACHE)
+      final futures   = <Future<DocumentSnapshot<Map<String, dynamic>>>>[];
+      final dateKeys  = <String>[];
+      final totalDays = (weekIndex * 7) + 7;
+      for (int d = 0; d < totalDays; d++) {
+        final date = rangeStart.add(Duration(days: d));
+        final key  = _ymd(date);
+        dateKeys.add(key);
+        futures.add(workoutsCol.doc(key).get(const GetOptions(source: Source.cache)));
+      }
+      final docIdSnaps = await Future.wait(futures);
+
+      // 2) Legacy auto-ID snapshots for the whole range (CACHE)
+      final legacyCacheSnap = await workoutsCol
+          .where('date', isGreaterThanOrEqualTo: _isoDay(rangeStart))
+          .where('date', isLessThan: _isoDay(rangeEnd))
+          .get(const GetOptions(source: Source.cache));
+
+      // Index legacy docs by day
+      final legacyByDateCache = <String, List<Map<String, dynamic>>>{};
+      for (final d in legacyCacheSnap.docs) {
+        final raw = d.data()['date'];
+        final dt  = (raw is Timestamp) ? raw.toDate() : DateTime.tryParse(raw?.toString() ?? '');
+        if (dt == null) continue;
+        final key = _ymd(DateTime(dt.year, dt.month, dt.day));
+        final exs = List<Map<String, dynamic>>.from(d.data()['exercises'] ?? const []);
+        (legacyByDateCache[key] ??= <Map<String, dynamic>>[]).addAll(exs);
+      }
+
+      // 3) Merge doc-id + legacy into completedWesRows if not already present
+      int seeded = 0;
+      for (int i = 0; i < docIdSnaps.length; i++) {
+        final dateKey = dateKeys[i];
+        final snap    = docIdSnaps[i];
+
+        final fromDocId = snap.exists
+            ? List<Map<String, dynamic>>.from(snap.data()?['exercises'] ?? const [])
+            : const <Map<String, dynamic>>[];
+
+        final fromLegacy = legacyByDateCache[dateKey] ?? const <Map<String, dynamic>>[];
+
+        if ((fromDocId.isEmpty && fromLegacy.isEmpty) || completedWesRows.containsKey(dateKey)) {
+          continue;
+        }
+
+        final merged = <Map<String, dynamic>>[];
+        if (fromDocId.isNotEmpty) merged.addAll(fromDocId);
+        if (fromLegacy.isNotEmpty) merged.addAll(fromLegacy);
+
+        if (merged.isNotEmpty) {
+          completedWesRows[dateKey] = merged;
+          seeded++;
+        }
+      }
+
+      print('📦 [BB2 Count PreHydrate] seeded $seeded day(s) from cache '
+          'for ${dateKeys.length} target days (block → endOfWeek ${_ymd(rangeEnd.subtract(const Duration(days: 1)))})');
+    }
+// === end 4.5 ===
+
 
     // 5) Build day data first (parse Firestore)
     final parsedByDayIndex = <int, List<ExerciseRow>>{};
@@ -2426,6 +2545,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     });
 
     print('✅ [BB2] loadBlockDataForWeek($weekIndex) done in ${total.elapsedMilliseconds}ms');
+    print('📦 [BB2 Count Ready] week=$weekIndex hydratedKeys=${completedWesRows.keys.toList()..sort()}');
+
   }
 
 
