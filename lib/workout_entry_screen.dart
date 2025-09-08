@@ -126,6 +126,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   late final String _cachedUid;
   DateTime? _lastMergedDate;
 
+  // ✅ Tracks BB2-planned keys for the currently selected date (exerciseId|circuitIndex)
+  final Set<String> _bb2PlannedKeysForSelectedDate = {};
+
 
 
   final int _defaultSets = 3;
@@ -173,6 +176,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
 // Stable exercise key (name + circuitIndex)
   String _exerciseKey(String name, int circuitIndex) => '${name.trim()}__$circuitIndex';
+  String _wesKeyPrefId(String name, int circuitIndex) {
+    final id = PeriodizationModelUtils.nameToId[name] ?? name;
+    return '$id|$circuitIndex';
+  }
 
 // Has any non-zero data in sets?
   bool _hasAnyDataForExercise(int exerciseIndex) {
@@ -525,6 +532,28 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     return 'name#$nk';
   }
 
+  // 🔎 Filter a candidate list of missed exercises against what's already on today's UI
+  List<_MissedItem> _filterStillMissingNow(List<_MissedItem> items) {
+    final nameToId = _buildNameToIdLookup();
+
+    // Build today keys from current WES state (local, instant)
+    final plannedTodayKeys = <String>{};
+    for (final e in _selectedExercisesWithCircuits) {
+      final n = (e['name'] ?? '').toString().trim();
+      if (n.isEmpty) continue;
+      final id = nameToId[n.toLowerCase()];
+      plannedTodayKeys.add(_plannedKey(id: id, name: n));
+    }
+
+    // Keep only those not already present today
+    return items.where((m) {
+      final id   = nameToId[m.name.toLowerCase()];
+      final key  = _plannedKey(id: id, name: m.name);
+      return !plannedTodayKeys.contains(key);
+    }).toList();
+  }
+
+
   String _rowCacheKey(int rowIndex) {
     var id = _selectedExercisesWithCircuits[rowIndex]['rowId'];
     if (id == null || (id as String).isEmpty) {
@@ -633,6 +662,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       final id = nameToId[name.toLowerCase()];
       plannedTodayKeys.add(_plannedKey(id: id, name: name));
     }
+    // Also suppress anything already present in today's *current UI state*
+    for (final e in _selectedExercisesWithCircuits) {
+      final n = (e['name'] ?? '').toString().trim();
+      if (n.isEmpty) continue;
+      final id = nameToId[n.toLowerCase()];
+      plannedTodayKeys.add(_plannedKey(id: id, name: n));
+    }
+
 
     // 4) Walk earlier days of this week; collect "missed"
     final missed = <_MissedItem>[];
@@ -693,7 +730,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   Future<void> _maybePromptForMissedExercises({List<_MissedItem>? precomputed}) async {
     if (_selectedDate == null) return;
 
-    final items = precomputed ?? await _computeMissedExercisesForWeek();
+    var items = precomputed ?? await _computeMissedExercisesForWeek();
+    items = _filterStillMissingNow(items);
     if (items.isEmpty) return;
 
     // ✅ Keep selections outside the builder so it persists across setLocal rebuilds
@@ -910,13 +948,46 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       batch.set(srcRef, {'exercises': srcList}, SetOptions(merge: true));
     }
 
-    // Append moved rows to today with the NEW circuit index
+    // Append moved rows to today with the NEW circuit index (DEDUPE by id or name)
+    final existingTodayKeys = <String>{};
+// current Firestore state for today
+    for (final ex in todayList) {
+      final n  = (ex['name'] ?? '').toString().trim().toLowerCase();
+      final id = (ex['exerciseId'] ?? '').toString().trim().toLowerCase();
+      if (n.isNotEmpty) existingTodayKeys.add('name#$n');
+      if (id.isNotEmpty) existingTodayKeys.add('id#$id');
+    }
+
+// avoid dupes within this single batch too
+    final willAppendKeys = <String>{};
+
     final appended = <Map<String, dynamic>>[];
     for (final m in chosen) {
       final row = Map<String, dynamic>.from(m.row);
+      final n  = (row['name'] ?? '').toString().trim().toLowerCase();
+      final id = (row['exerciseId'] ?? '').toString().trim().toLowerCase();
+
+      final kName = n.isNotEmpty  ? 'name#$n' : null;
+      final kId   = id.isNotEmpty ? 'id#$id'  : null;
+
+      final alreadyPlanned =
+          (kId   != null && existingTodayKeys.contains(kId))   ||
+              (kName != null && existingTodayKeys.contains(kName)) ||
+              (kId   != null && willAppendKeys.contains(kId))      ||
+              (kName != null && willAppendKeys.contains(kName));
+
+      if (alreadyPlanned) {
+        // Skip duplicate
+        continue;
+      }
+
       row['circuitIndex'] = newCircuitIndex; // force new circuit
       appended.add(row);
+
+      if (kName != null) willAppendKeys.add(kName);
+      if (kId   != null) willAppendKeys.add(kId);
     }
+
     final newToday = <Map<String, dynamic>>[];
     newToday.addAll(todayList);
     newToday.addAll(appended);
@@ -950,6 +1021,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         _selectedExercisesWithCircuits.add({
           'name': name,
           'circuitIndex': newCircuitIndex,
+          'rowId': UniqueKey().toString(), // ensure stable identity for caching/UI
         });
 
         _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
@@ -2636,6 +2708,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           } else {
             print('✅ [WES Init] Skipping BB2 re-merge — WES already has user-entered data');
           }
+          print('🔄 [WES Init] Overlaying saved workout (completed + WES-planned) after final BB2 merge…');
+          await _loadExistingWorkoutIfAny();   // <- puts the WES-planned rows back
+          if (mounted) setState(() {});        // <- repaint
+
           _scheduleMissedButtonAfterPaint(); // compute in background; show button when ready
           _catchupShineCtl = AnimationController(
             vsync: this,
@@ -3091,6 +3167,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       final raw = (data['exercises'] as List?) ?? const [];
       return raw.map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map)).toList();
     }
+    List<Map<String, dynamic>> _wesPlannedFromDoc(DocumentSnapshot<Map<String, dynamic>>? d) {
+      if (d == null || !d.exists) return const [];
+      final data = d.data();
+      if (data == null) return const [];
+      final raw = (data['wesPlannedExercises'] as List?) ?? const [];
+      return raw.map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map)).toList();
+    }
+
 
 // Gather lists
     final List<Map<String, dynamic>> newExList = _exListFromDoc(newDoc);
@@ -3124,15 +3208,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       }
     }
 
-    if (combined.isEmpty) {
-      print('   ❌ no workout exercises found (new or legacy) for this date');
-      await _persistSavedFlagsLocally();
-      if (mounted) setState(() {});
-      return;
-    }
 
 // This replaces your earlier `exList` assignment:
     final List exList = combined;
+    // NEW: pull WES-planned placeholders from new-style doc
+    final List<Map<String, dynamic>> wesPlannedList = _wesPlannedFromDoc(newDoc);
+    print('   ℹ️ wesPlannedExercises count: ${wesPlannedList.length}');
+
+    print('   → wesPlanned: ${wesPlannedList.map((p)=>"${(p['name']??'').toString().trim()}|${(p['circuitIndex']??0)}").toList()}');
+
 
 // --- END UNION LOOKUP ---
 
@@ -3325,6 +3409,68 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
     print('🧩 [WES LoadExisting] Added $added saved-only exercise row(s) from Firestore');
 
+    // 7.5) Pass 3 (NEW): add WES-planned rows (placeholders) that aren’t in UI yet
+    int plannedAdded = 0;
+
+// Use your existing name|circuitIndex set for quick dedupe
+    final existingNameKeys = _selectedExercisesWithCircuits
+        .map<String>((e) => _exerciseKey(((e['name'] ?? '') as String).trim(), (e['circuitIndex'] ?? 0) as int))
+        .toSet();
+
+    for (final p in wesPlannedList) {
+      print('🧪 Pass3: consider ${(p['name'] ?? '').toString().trim()}|${p['circuitIndex'] ?? 0}');
+
+
+      final name = (p['name'] ?? '').toString().trim();
+      if (name.isEmpty) continue;
+      final ci = (p['circuitIndex'] ?? 0) as int;
+
+      final keyName = _exerciseKey(name, ci);
+      final keyId   = _wesKeyPrefId(name, ci);
+
+      final __inUI = _selectedExercisesWithCircuits.any(
+              (e) => _exerciseKey(((e['name'] ?? '') as String).trim(), (e['circuitIndex'] ?? 0) as int)
+              == (/* use your var */ keyName /* or key */)
+      );
+      print('   inUI? → $__inUI');
+
+
+      // Precedence: skip if already present (completed or BB2 planned)
+      final isBb2Planned = _bb2PlannedKeysForSelectedDate.contains(keyId);
+      print('   ⏭️ skip: already in UI');
+
+      if (existingNameKeys.contains(keyName) || isBb2Planned) continue;
+
+      // Append placeholder row with empty sets (padded to default set count)
+      final sets = List<SetDetails>.generate(_defaultSets, (_) => SetDetails());
+
+      print('   ✅ ADD placeholder: $name|$ci');
+
+      _selectedExercisesWithCircuits.add({'name': name, 'circuitIndex': ci});
+      _workoutSets.add(sets);
+      _repsControllers.add(List.generate(sets.length, (_) => TextEditingController()));
+      _weightControllers.add(List.generate(sets.length, (_) => TextEditingController()));
+      _rirControllers.add(List.generate(sets.length, (_) => TextEditingController()));
+      _velocityControllers.add(List.generate(sets.length, (_) => TextEditingController()));
+      _notesControllers.add(List.generate(sets.length, (_) => TextEditingController()));
+
+      // Seed empty text (placeholders only)
+      final idx = _selectedExercisesWithCircuits.length - 1;
+      for (int j = 0; j < sets.length; j++) {
+        _repsControllers[idx][j].text = '';
+        _weightControllers[idx][j].text = '';
+        _rirControllers[idx][j].text = '';
+        _velocityControllers[idx][j].text = '';
+        _notesControllers[idx][j].text = '';
+      }
+
+      existingNameKeys.add(keyName);
+      plannedAdded++;
+    }
+
+    print('🧩 [WES LoadExisting] Added $plannedAdded WES-planned placeholder row(s)');
+
+
     // 7) Ensure listeners on any new controllers
     _attachDirtyListeners();
 
@@ -3335,10 +3481,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     _lastSavedHash = null;
 
     if (mounted) setState(() {}); // repaint now that overlay + additions are in
+    if (exList.isEmpty && plannedAdded == 0) {
+      print('   ❌ no workout items (completed or WES-planned) for this date');
+    }
+
   }
-
-
-
 
   Future<void> loadExercisesFromFirestoreForWES() async {
     print('➡️ [WES] loadExercisesFromFirestoreForWES START');
@@ -4851,7 +4998,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
 
   Future<void> _pushTopSetsToBlockDataIfAny() async {
-    final uid = UserContext.of(context, listen: false).currentUid ?? FirebaseAuth.instance.currentUser?.uid;
+    final uid = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid;  // ← context-free
+
     final blockId = _selectedBlockId ?? widget.blockId; // prefer selected, fallback to prop
     if (uid == null || blockId == null || blockId.isEmpty) {
       print('🚫 [BB2 Push] Missing uid or blockId — skipping.');
@@ -5033,6 +5181,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final existingSnap = await docRef.get();
     final List<Map<String, dynamic>> existingExercises =
     List<Map<String, dynamic>>.from(existingSnap.data()?['exercises'] ?? const []);
+    final List<Map<String, dynamic>> existingWesPlanned =
+    List<Map<String, dynamic>>.from(existingSnap.data()?['wesPlannedExercises'] ?? const []);
+
     final bool hadExisting = existingExercises.isNotEmpty;
 
     Map<String, dynamic> payload;
@@ -5130,63 +5281,83 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     // Helper key for matching (same fields you already use elsewhere)
     String exKey(Map e) => '${(e['name'] ?? '').toString().trim()}|${e['circuitIndex'] ?? 0}';
 
-    // If user cleared everything this visit:
-    // - If there was an existing workout → DO NOT overwrite; keep existing as-is (skip write)
-    // - If there was nothing before → keep current behavior (write/clear as needed)
-    if (newExercises.isEmpty) {
-      if (hadExisting) {
-        print('🔸 [WES upsert] User left insufficient data; preserving existing workout (no write).');
+    // NEW BEHAVIOR: even if no qualifying sets were entered this visit,
+// build wesPlannedExercises from current UI rows (per-athlete, per-date)
+// and write that (no BB2 push). This enables "revert to WES-planned".
+        {
+      // Safety: if user truly made no changes and UI is empty, don't clobber.
+      if (_selectedExercisesWithCircuits.isEmpty && hadExisting && !_pendingChanges) {
+        print('🔸 [WES upsert] No UI rows & no changes; preserving existing workout (no write).');
         _pendingChanges = false;
         _lastSavedHash = null;
         await _persistSavedFlagsLocally();
         await _persistDraftLocally();
-        return; // ← early exit: do not clobber existing doc
+        return;
       }
-
-      // No new data and no existing → write minimal empty doc (unchanged behavior)
-      print('🔸 [WES upsert] No exercises with data AND no existing — writing empty shell.');
-      try {
-        await docRef.set({
-          'name': _workoutNameController.text.trim().isEmpty
-              ? _formatWorkoutDate(_selectedDate)
-              : _workoutNameController.text.trim(),
-          'date': _selectedDate.toIso8601String(),
-          'userId': uid,
-          'exercises': <Map<String, dynamic>>[],
-          'lastEditedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: false));
-        print('✅ [WES upsert] Wrote empty exercises array.');
-
-        _pendingChanges = false;
-        _lastSavedHash = null;
-        _savedExerciseKeysForDate.clear();
-        await _persistSavedFlagsLocally();
-        await _persistDraftLocally();
-      } catch (e, st) {
-        print('❌ [WES upsert] Failed to write empty shell: $e'); print(st);
-      }
-      return;
+      // fall-through — we will compute wesPlanned from the live UI below for all cases
     }
 
-    // NEW: Merge logic — replace only the entries the user actually edited this visit,
-    // and keep any existing ones that the user *cleared* (so they aren't deleted).
-    final merged = <Map<String, dynamic>>[];
+    // === Compute WES PLANNED (no qualifying sets) from the current UI ===
+// Map existing planned by key to preserve createdAt when possible
+    final Map<String, Map<String, dynamic>> existingPlannedByKey = {
+      for (final p in existingWesPlanned)
+        _wesKeyPrefId((p['name'] ?? '').toString().trim(), (p['circuitIndex'] ?? 0) as int): Map<String, dynamic>.from(p)
+    };
 
-    // Build a set of keys present in this visit
-    final Set<String> newKeys = newExercises.map(exKey).toSet();
+// Helper to check if a row has at least one qualifying set (same semantics as builder)
+    bool _rowHasQualifyingSet({
+      required int rowIndex,
+      required String name,
+    }) {
+      final exId = PeriodizationModelUtils.nameToId[name] ?? name;
+      final isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
+      for (final s in _workoutSets[rowIndex]) {
+        final reps = s.reps ?? 0;
+        final double? wOpt = s.weight;
+        final hasWR = isBw ? (reps > 0 && wOpt != null)
+            : (reps > 0 && (wOpt ?? 0.0) > 0.0);
+        final hasOther = ((s.velocity ?? 0.0) > 0) || ((s.notes ?? '').trim().isNotEmpty);
+        if (isBw ? hasWR : (hasWR || hasOther)) return true;
+      }
+      return false;
+    }
 
-    // 1) Start with the new/edited ones (these will override existing)
-    merged.addAll(newExercises);
+// Build fresh planned list ONLY from rows currently in UI that do NOT qualify,
+// and are NOT BB2-planned (so they remain BB2-owned).
+    final Map<String, Map<String, dynamic>> wesPlannedByKey = {};
+    for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+      final name = ((_selectedExercisesWithCircuits[i]['name'] ?? '') as String).trim();
+      final ci   = (_selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0) as int;
+      if (name.isEmpty) continue;
 
-    // 2) Add back any existing entries not touched/updated this visit
-    for (final e in existingExercises) {
-      if (!newKeys.contains(exKey(e))) {
-        merged.add(e);
+      final keyId = _wesKeyPrefId(name, ci);
+      final qualifies = _rowHasQualifyingSet(rowIndex: i, name: name);
+      final isBb2Planned = _bb2PlannedKeysForSelectedDate.contains(keyId);
+      print('   bb2Owned? → $isBb2Planned');
+
+      if (!qualifies && !isBb2Planned) {
+        final prior = existingPlannedByKey[keyId];
+        wesPlannedByKey[keyId] = {
+          'exerciseId': PeriodizationModelUtils.nameToId[name] ?? name,
+          'name': name,
+          'circuitIndex': ci,
+          'source': 'wes',
+          if (prior != null && prior['createdAt'] != null) 'createdAt': prior['createdAt'],
+          if (prior == null) 'createdAt': Timestamp.now(),
+
+        };
       }
     }
 
-    // Install merged list back into payload before hashing/writing
-    payload['exercises'] = merged;
+// Install planned list into payload (fresh each write based on UI)
+    payload['wesPlannedExercises'] = wesPlannedByKey.values.toList();
+
+
+    // NEW: Exercises now reflect ONLY rows with qualifying sets currently in UI.
+// (If a previously completed row was cleared, it is excluded here and
+// represented in wesPlannedExercises above.)
+    payload['exercises'] = newExercises;
+
 
     final currentHash = payload.hashCode.toString();
     if (_lastSavedHash == currentHash) {
@@ -5195,7 +5366,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     }
 
     try {
-      print('📝 [WES upsert] Writing doc $docId for uid=$uid (merged=${merged.length})...');
+      final _exCount  = (payload['exercises'] as List?)?.length ?? 0;
+      final _wesCount = (payload['wesPlannedExercises'] as List?)?.length ?? 0;
+      print('📝 [WES upsert] Writing doc $docId for uid=$uid (exercises=$_exCount, wesPlanned=$_wesCount)...');
+
       await docRef.set(payload, SetOptions(merge: false));
       print('✅ [WES upsert] Firestore write complete.');
 
@@ -5688,6 +5862,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         }
       }
     }
+    // NEW: Capture BB2-planned keys for this date for later dedupe/upsert
+    _bb2PlannedKeysForSelectedDate.clear();
+    for (final ex in bb2Exercises) {
+      final name = (ex['name'] ?? '').toString().trim();
+      if (name.isEmpty) continue;
+      final ci = (ex['circuitIndex'] ?? 0) as int;
+      _bb2PlannedKeysForSelectedDate.add(_wesKeyPrefId(name, ci));
+    }
+    print('🧭 [WES] bb2PlannedKeysForSelectedDate=${_bb2PlannedKeysForSelectedDate.length}');
+
 
     if (bb2Exercises.isEmpty) {
       print('[WES] No BB2 exercises to merge for $_selectedDate');
