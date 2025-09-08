@@ -5109,19 +5109,58 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       if ((best.velocity ?? 0) > 0) topSet['velocity'] = best.velocity;
       if ((best.notes ?? '').toString().trim().isNotEmpty) topSet['notes'] = best.notes;
 
+      topSet['wesOverlay'] = true;  // ← tag as WES overlay so we can prune later
       updatedExercises.add(topSet);
     }
 
-    if (updatedExercises.isEmpty) {
-      print('🔸 [BB2 Push] No valid top sets to push.');
-      return;
-    }
+
 
     // Merge with existing day doc, keeping highest E1RM per exercise
     final dayDocRef = weekDocRef.collection('days').doc('day_$dayIndex');
-    final existingSnap = await dayDocRef.get();
+    // Read server-first so we prune against fresh data
+    DocumentSnapshot<Map<String, dynamic>> existingSnap;
+    try {
+      existingSnap = await dayDocRef.get(const GetOptions(source: Source.server));
+    } catch (_) {
+      existingSnap = await dayDocRef.get();
+    }
     final List<Map<String, dynamic>> existing =
     List<Map<String, dynamic>>.from(existingSnap.data()?['exercises'] ?? []);
+
+// --- BEGIN: prune stale WES overlays when this save has no valid sets for them ---
+    String _k(Map e) => '${(e['name'] ?? '').toString().trim()}|${e['circuitIndex'] ?? 0}';
+    final Set<String> updatedKeys = { for (final e in updatedExercises) _k(e) };
+
+    bool _prunedAny = false;
+    for (int i = 0; i < existing.length; i++) {
+      final e = existing[i];
+      if (e is! Map) continue;
+      if (e['wesOverlay'] == true && !updatedKeys.contains(_k(e))) {
+        e.remove('reps');
+        e.remove('weight');
+        e.remove('rir');
+        e.remove('velocity');
+        e.remove('notes');
+        e.remove('sets');
+        e.remove('wesOverlay');
+        existing[i] = e;
+        _prunedAny = true;
+      }
+    }
+// --- END: prune stale WES overlays ---
+
+// If there are no new top sets to push this save, we may still need to write the prune result.
+    if (updatedExercises.isEmpty) {
+      if (_prunedAny) {
+        await dayDocRef.set({'exercises': existing}, SetOptions(merge: true));
+        print('🧹 [BB2 Push] Cleared stale WES overlays for $_prunedAny exercise(s).');
+      } else {
+        print('🔸 [BB2 Push] No valid sets and nothing to prune.');
+      }
+      return;  // ← safe exit after handling demotion case
+    }
+
+
 
     for (final newEx in updatedExercises) {
       final idx = existing.indexWhere((e) =>
@@ -6049,7 +6088,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                       : null))
                   : abs;
 
-              _weightControllers[idx][0].text = (display ?? 0).toString();
+              _weightControllers[idx][0].text = display?.toString() ?? '';
+
               print('🪙 [WES HydrateWeight] ex=$exName isBW=$isBwEx abs=$abs added=$added display=$display '
                   '→ wrote text="${_weightControllers[idx][0].text}"');
 
