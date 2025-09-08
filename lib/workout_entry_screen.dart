@@ -3885,7 +3885,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.detached) {
       print('📦 [WES] App $state — persisting local draft...');
-      _persistDraftLocally();
+      await _persistDraftLocally();
 
       // Guard against overlapping lifecycle saves
       if (_lifecycleSaveInFlight) {
@@ -3895,16 +3895,40 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       _lifecycleSaveInFlight = true;
 
       try {
-        if (_pendingChanges) {
-          print('💾 [WES] Autosaving to Firestore (with BB2 push)…');
+        final bool hasAnyRows    = _selectedExercisesWithCircuits.isNotEmpty; // covers WES shells
+        final bool hasSavedFlags = _savedExerciseKeysForDate.isNotEmpty;      // covers completed rows
+
+// Reuse your existing completed semantics to detect "qualifying sets"
+        bool hasQualifyingSets = false;
+        for (int i = 0; i < _selectedExercisesWithCircuits.length && !hasQualifyingSets; i++) {
+          final name = ((_selectedExercisesWithCircuits[i]['name'] ?? '') as String).trim();
+          if (name.isEmpty) continue;
+          final exId = PeriodizationModelUtils.nameToId[name] ?? name;
+          final isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
+          for (final s in _workoutSets[i]) {
+            final reps = s.reps ?? 0;
+            final double? w = s.weight;
+            final hasWR = isBw ? (reps > 0 && w != null) : (reps > 0 && (w ?? 0.0) > 0.0);
+            final hasOther = ((s.velocity ?? 0.0) > 0) || ((s.notes ?? '').trim().isNotEmpty);
+            if (isBw ? hasWR : (hasWR || hasOther)) { hasQualifyingSets = true; break; }
+          }
+        }
+
+        final bool shouldSave = _pendingChanges || hasAnyRows || hasSavedFlags;
+
+        if (shouldSave) {
+          final pushBB2 = hasQualifyingSets; // only push if we actually have completed sets
+          print('💾 [WES] Autosaving to Firestore (pushBB2=$pushBB2)…');
           await _upsertWorkoutToFirestore(
-            alsoPushToBB2: true, // ← you asked for BB2 merge on autosave
-            markAllSaved: false, // ← don’t force saved-format on autosave
+            alsoPushToBB2: pushBB2,
+            markAllSaved: false,
           );
           print('✅ [WES] Autosave complete.');
         } else {
-          print('🔸 [WES] No pending changes — skipping autosave.');
+          print('🔸 [WES] Nothing to save — skipping autosave.');
         }
+
+
       } catch (e, st) {
         print('❌ [WES] Autosave failed: $e');
         print(st);
