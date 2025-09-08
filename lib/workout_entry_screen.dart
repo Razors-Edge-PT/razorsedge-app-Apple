@@ -553,6 +553,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     }).toList();
   }
 
+  Future<void> _refreshMissedState() async {
+    final items = await _computeMissedExercisesForWeek();
+    final filtered = _filterStillMissingNow(items);
+    setState(() {
+      _missedItemsForToday = filtered;      // make sure this field exists (List<_MissedItem>)
+      _hasMissedForToday   = filtered.isNotEmpty; // and this (bool)
+    });
+  }
 
   String _rowCacheKey(int rowIndex) {
     var id = _selectedExercisesWithCircuits[rowIndex]['rowId'];
@@ -729,6 +737,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
   Future<void> _maybePromptForMissedExercises({List<_MissedItem>? precomputed}) async {
     if (_selectedDate == null) return;
+    await _refreshMissedState();
 
     var items = precomputed ?? await _computeMissedExercisesForWeek();
     items = _filterStillMissingNow(items);
@@ -1079,6 +1088,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
 
     await _saveWorkoutDraftToCache();
+    await _refreshMissedState();  // 👈 recompute; will flip _hasMissedForToday to false if none left
     if (mounted) setState(() {});
   }
 
@@ -6660,17 +6670,28 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
             ),
 
             const SizedBox(height: 4.0),
-            if (_selectedExercisesWithCircuits.isEmpty)
+
+            if (_selectedExercisesWithCircuits.isEmpty) ...[
+              // Empty-state info
               Column(
-                children: [
+                children: const [
                   Text(
                     'No exercises selected yet. Add some to get started.',
                     style: TextStyle(color: Colors.white, fontSize: 14),
                   ),
-                  const SizedBox(height: 6),
+                  SizedBox(height: 6),
                 ],
-              )
+              ),
+
+              // Row with Catch-up (left) and Add Circuit (right)
+
+
+              const SizedBox(height: 0),
+            ]
             else
+            // 👇 your existing “not empty” branch continues here
+
+
               ReorderableListView(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
@@ -6696,7 +6717,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                     key: ValueKey("column_$i"), // 🔑 Required for ReorderableListView
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (isNewCircuit) ...[
+                      if (isNewCircuit)if (isNewCircuit) ...[
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
                           child: Row(
@@ -6710,13 +6731,19 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                                 ),
                               ),
                               const Spacer(),
-                              // Only on Circuit 1 AND when we have missed items (no extra height)
-                              if ((current['circuitIndex'] ?? 0) == 0 && _hasMissedForToday)
+
+                              // ✅ Show button on the *first circuit header*, whatever its index is
+                              if (_hasMissedForToday &&
+                                  current['circuitIndex'] ==
+                                      (_selectedExercisesWithCircuits.isNotEmpty
+                                          ? _selectedExercisesWithCircuits.first['circuitIndex']
+                                          : 0))
                                 _buildCatchUpButton(),
                             ],
                           ),
                         ),
                       ],
+
 
                       Dismissible(
                         key: ValueKey(current['name']),
@@ -7434,19 +7461,28 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                   );
                 }),
               ),
+
             Padding(
               padding: const EdgeInsets.only(top: 12.0),
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: ElevatedButton.icon(
-                  onPressed: _addNewCircuitExercise,
-                  icon: const Icon(Icons.add),
-                  label: const Text("Add Circuit"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blueGrey,
-                    foregroundColor: Colors.white,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  // 👇 show catch-up only when no circuits AND there are missed items
+                  if (_selectedExercisesWithCircuits.isEmpty && _hasMissedForToday) ...[
+                    _buildCatchUpButton(),
+                    const SizedBox(width: 12), // space between buttons
+                  ],
+
+                  ElevatedButton.icon(
+                    onPressed: _addNewCircuitExercise,
+                    icon: const Icon(Icons.add),
+                    label: const Text("Add Circuit"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blueGrey,
+                      foregroundColor: Colors.white,
+                    ),
                   ),
-                ),
+                ],
               ),
             ),
 
