@@ -47,8 +47,6 @@ class _PointMeta {
   const _PointMeta(this.weight, this.reps, this.rir);
 }
 
-
-
 class ExerciseDetailsScreen extends StatefulWidget {
   final String exerciseId;              // 👈 required for querying
   final String? exerciseName;           // 👈 optional, only for display
@@ -687,6 +685,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
 
     for (final group in effectiveGroups) {
       final pts = <E1RMPoint>[];
+      final metaForGroup = <DateTime, _PointMeta>{};
 
       for (final workout in sortedWorkouts) {
         // find the matching exercise in the workout (id first, fallback name)
@@ -731,12 +730,14 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
 
         if (!workout.date.isBefore(cutoff2)) {
           pts.add(E1RMPoint(workout.date, y));
+          metaForGroup[workout.date] = _PointMeta(w, r.toInt(), (topSetInc!.rir ?? 0.0));
           allDates.add(workout.date);
         }
       }
 
       pts.sort((a, b) => a.date.compareTo(b.date));
       groupPoints.add(pts);
+      metaByGroup.add(metaForGroup);
     }
 
 // Master timeline (shared x-axis for all lines)
@@ -1027,16 +1028,49 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                     touchTooltipData: LineTouchTooltipData(
                       tooltipBgColor: Colors.grey[900]!,
                       getTooltipItems: (touchedSpots) {
-                        return touchedSpots.map((s) {
-                          final idx = s.x.toInt();
-                          final dateStr = (idx >= 0 && idx < filtered.length)
-                              ? DateFormat('d MMM yyyy').format(filtered[idx].date)
+                        return touchedSpots.map((spot) {
+                          final gi = spot.barIndex;                 // which series (group) was touched
+                          final xi = spot.x.toInt();                // x index on the master axis
+                          final date = (xi >= 0 && xi < masterDates2.length) ? masterDates2[xi] : null;
+                          final e1rm = spot.y.toStringAsFixed(1);
+
+                          // Group label (e.g., "Reps 5–6" or "5 reps") from the parse step
+                          final groupLabel = (gi >= 0 && gi < repGroupLabels2.length)
+                              ? repGroupLabels2[gi]
                               : '';
-                          final e1rm = s.y.toStringAsFixed(1);
-                          return LineTooltipItem('E1RM: $e1rm kg\n$dateStr',
-                              const TextStyle(color: Colors.white));
+
+                          // Look up actual performed set meta for this group at this date
+                          String metaLine = '';
+                          if (date != null && gi >= 0 && gi < metaByGroup.length) {
+                            final meta = metaByGroup[gi][date];
+                            if (meta != null) {
+                              final w = meta.weight.toStringAsFixed(1);
+                              if (meta.rir.abs() > 1e-6) {
+                                metaLine = '$w kg × ${meta.reps} @ RIR ${meta.rir.toStringAsFixed(1)}';
+                              } else {
+                                metaLine = '$w kg × ${meta.reps}';
+                              }
+                            }
+                          }
+
+                          final header = groupLabel.isEmpty
+                              ? 'E1RM: $e1rm kg'
+                              : 'E1RM: $e1rm kg ($groupLabel)';
+                          final dateStr = (date != null) ? DateFormat('d MMM yyyy').format(date) : '';
+
+                          final lines = [
+                            header,
+                            if (metaLine.isNotEmpty) metaLine,
+                            if (dateStr.isNotEmpty) dateStr,
+                          ].join('\n');
+
+                          return LineTooltipItem(
+                            lines,
+                            const TextStyle(color: Colors.white),
+                          );
                         }).toList();
                       },
+
                     ),
                   ),
                 ),
@@ -1237,26 +1271,41 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                       tooltipBgColor: Colors.grey[900]!,
                       getTooltipItems: (touchedSpots) {
                         return touchedSpots.map((spot) {
-                          final idx = spot.x.toInt();
-                          final dateStr = (idx >= 0 && idx < masterDates2.length)
-                              ? DateFormat('d MMM yyyy').format(masterDates2[idx])
-                              : '';
+                          final gi = spot.barIndex;              // which series
+                          final xi = spot.x.toInt();             // index on shared axis
+                          final date = (xi >= 0 && xi < masterDates2.length) ? masterDates2[xi] : null;
                           final e1rm = spot.y.toStringAsFixed(1);
 
-                          // Which group line was touched?
-                          final gi = spot.barIndex;
-                          final groupLabel = (gi >= 0 && gi < _repGroupLabels.length)
-                              ? _repGroupLabels[gi]
-                              : '';
+                          // Look up actual performed set values captured earlier
+                          String weightRepsLine = '';
+                          String rirLine = '';
+                          if (date != null && gi >= 0 && gi < metaByGroup.length) {
+                            final meta = metaByGroup[gi][date];
+                            if (meta != null) {
+                              weightRepsLine = '${meta.weight.toStringAsFixed(1)} kg × ${meta.reps}';
+                              if (meta.rir.abs() > 1e-6) {
+                                rirLine = 'RIR ${meta.rir.toStringAsFixed(1)}';
+                              }
+                            }
+                          }
 
-                          // e.g. "E1RM: 182.5 kg (Reps 5–6)\n12 Mar 2025"
-                          final title = groupLabel.isEmpty ? 'E1RM: $e1rm kg' : 'E1RM: $e1rm kg ($groupLabel)';
+                          // Full month name like "23 July"
+                          final dateStr = (date != null) ? DateFormat('d MMMM').format(date) : '';
+
+                          final text = [
+                            'E1RM: $e1rm kg',
+                            if (weightRepsLine.isNotEmpty) weightRepsLine,
+                            if (rirLine.isNotEmpty) rirLine,
+                            if (dateStr.isNotEmpty) dateStr,
+                          ].join('\n');
+
                           return LineTooltipItem(
-                            '$title\n$dateStr',
+                            text,
                             const TextStyle(color: Colors.white),
                           );
                         }).toList();
                       },
+
                     ),
                   ),
                 ),
