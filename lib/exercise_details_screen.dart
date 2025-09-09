@@ -603,6 +603,8 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     [..._workouts]..sort((a, b) => a.date.compareTo(b.date));
 
     final List<E1RMPoint> series = [];
+    final Map<DateTime, _PointMeta> _metaAllTop = {};
+
     int matchedWorkouts = 0;
 
     for (final workout in sortedWorkouts) {
@@ -631,6 +633,12 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
 
       final e1 = calculateE1RM(top.weight ?? 0.0, (top.reps ?? 0).toDouble(), top.rir ?? 0.0);
       series.add(E1RMPoint(workout.date, e1));
+      _metaAllTop[workout.date] = _PointMeta(
+        (top.weight ?? 0.0),
+        (top.reps ?? 0),
+        (top.rir ?? 0.0),
+      );
+
     }
 
     print('📊 [Details] Workouts total=${_workouts.length}, matched=$matchedWorkouts, points=${series.length}');
@@ -1029,47 +1037,42 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                       tooltipBgColor: Colors.grey[900]!,
                       getTooltipItems: (touchedSpots) {
                         return touchedSpots.map((spot) {
-                          final gi = spot.barIndex;                 // which series (group) was touched
-                          final xi = spot.x.toInt();                // x index on the master axis
-                          final date = (xi >= 0 && xi < masterDates2.length) ? masterDates2[xi] : null;
+                          final idx   = spot.x.toInt();
+                          final inRan = idx >= 0 && idx < filtered.length;
+                          final date  = inRan ? filtered[idx].date : null;
+
                           final e1rm = spot.y.toStringAsFixed(1);
 
-                          // Group label (e.g., "Reps 5–6" or "5 reps") from the parse step
-                          final groupLabel = (gi >= 0 && gi < repGroupLabels2.length)
-                              ? repGroupLabels2[gi]
-                              : '';
+                          String weightRepsLine = '';
+                          String rirLine = '';
 
-                          // Look up actual performed set meta for this group at this date
-                          String metaLine = '';
-                          if (date != null && gi >= 0 && gi < metaByGroup.length) {
-                            final meta = metaByGroup[gi][date];
+                          if (date != null) {
+                            final meta = _metaAllTop[date];
                             if (meta != null) {
-                              final w = meta.weight.toStringAsFixed(1);
+                              weightRepsLine = '${meta.weight.toStringAsFixed(1)} kg × ${meta.reps}';
                               if (meta.rir.abs() > 1e-6) {
-                                metaLine = '$w kg × ${meta.reps} @ RIR ${meta.rir.toStringAsFixed(1)}';
-                              } else {
-                                metaLine = '$w kg × ${meta.reps}';
+                                rirLine = 'RIR ${meta.rir.toStringAsFixed(1)}';
                               }
                             }
                           }
 
-                          final header = groupLabel.isEmpty
-                              ? 'E1RM: $e1rm kg'
-                              : 'E1RM: $e1rm kg ($groupLabel)';
-                          final dateStr = (date != null) ? DateFormat('d MMM yyyy').format(date) : '';
+                          // e.g., "23 July"
+                          final dateStr = (date != null) ? DateFormat('d MMMM').format(date) : '';
 
-                          final lines = [
-                            header,
-                            if (metaLine.isNotEmpty) metaLine,
+                          final text = [
+                            'E1RM: $e1rm kg',
+                            if (weightRepsLine.isNotEmpty) weightRepsLine,
+                            if (rirLine.isNotEmpty) rirLine,
                             if (dateStr.isNotEmpty) dateStr,
                           ].join('\n');
 
                           return LineTooltipItem(
-                            lines,
+                            text,
                             const TextStyle(color: Colors.white),
                           );
                         }).toList();
                       },
+
 
                     ),
                   ),
