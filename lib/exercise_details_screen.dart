@@ -39,6 +39,15 @@ class _DailyAgg {
   _DailyAgg(this.date);
 }
 
+// Tooltip helper: actual performed set values for a point
+class _PointMeta {
+  final double weight;
+  final int reps;
+  final double rir;
+  const _PointMeta(this.weight, this.reps, this.rir);
+}
+
+
 
 class ExerciseDetailsScreen extends StatefulWidget {
   final String exerciseId;              // 👈 required for querying
@@ -71,6 +80,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
         ? (weight * (36 / (37 - totalReps)))
         : (weight * (1 + (0.0333 * totalReps)));
   }
+
 
   List<Workout> _workouts = [];
   bool _loading = true;
@@ -415,17 +425,96 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     setState(() => _trendTarget = vals[(i + 1) % vals.length]);
   }
 
-  String _repTargetLabel() {
-    final r = _repTarget;
-    if (r == null) return 'Rep Target * ${_rangeLabel(_trendTarget)}';
-    final isInt = (r % 1).abs() < 1e-9;
-    final repsText = isInt ? r.toInt().toString() : r.toStringAsFixed(1);
-    return '$repsText Rep Target * ${_rangeLabel(_trendTarget)}';
-  }
+  String _repTargetLabel() => _multiRepLabel();
+
 
   String _rirToggleText() =>
       _includeRIRForTarget ? 'Including RIR' : 'Excluding RIR';
 
+// --- New: multi-target state ---
+  List<Set<int>> _repGroups = [ {5} ];            // one series per comma token (ranges collapse into one set)
+  List<String> _repGroupLabels = ['5 reps'];      // aligned with _repGroups
+
+// Parse "4,6-8,10" → [{4}, {6,7,8}, {10}] and labels ["4 reps","Reps 6–8","10 reps"]
+  void _onRepTargetChanged(String raw) {
+    final txt = raw.trim();
+    final groups = <Set<int>>[];
+    final labels = <String>[];
+
+    if (txt.isEmpty) {
+      _repGroups = [];
+      _repGroupLabels = [];
+      _repTarget = null;
+      return;
+    }
+
+    for (final token in txt.split(',')) {
+      final t = token.trim();
+      if (t.isEmpty) continue;
+
+      if (t.contains('-')) {
+        final parts = t.split('-').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+        if (parts.length == 2) {
+          final a = int.tryParse(parts[0]);
+          final b = int.tryParse(parts[1]);
+          if (a != null && b != null) {
+            final lo = a <= b ? a : b;
+            final hi = a <= b ? b : a;
+            final set = <int>{for (int r = lo; r <= hi; r++) r};
+            groups.add(set);
+            labels.add('Reps $lo–$hi');
+          }
+        }
+      } else {
+        final v = int.tryParse(t);
+        if (v != null) {
+          groups.add({v});
+          labels.add('$v reps');
+        }
+      }
+    }
+
+    _repGroups = groups;
+    _repGroupLabels = labels;
+
+    // Back-compat: only one single value → keep _repTarget
+    if (_repGroups.length == 1 && _repGroups.first.length == 1) {
+      _repTarget = _repGroups.first.first.toDouble();
+    } else {
+      _repTarget = null;
+    }
+  }
+
+// Friendly label for the title button
+  String _multiRepLabel() {
+    if (_repGroups.isEmpty) return 'Rep Target • ${_rangeLabel(_trendTarget)}';
+    if (_repGroups.length == 1) {
+      final g = _repGroups.first.toList()..sort();
+      if (g.length == 1) return '${g.first} Rep Target • ${_rangeLabel(_trendTarget)}';
+      final minR = g.first, maxR = g.last;
+      final isRange = (maxR - minR + 1) == g.length;
+      return isRange
+          ? 'Reps $minR–$maxR • ${_rangeLabel(_trendTarget)}'
+          : 'Reps ${g.join(",")} • ${_rangeLabel(_trendTarget)}';
+    }
+    // multiple groups → mirror the input shape: per-group labels joined by " | "
+    return '${_repGroupLabels.join(" | ")} • ${_rangeLabel(_trendTarget)}';
+  }
+
+// Deterministic colors per group
+  Color _colorForGroupIndex(int i) {
+    const palette = <Color>[
+      Colors.cyanAccent,
+      Colors.amberAccent,
+      Colors.pinkAccent,
+      Colors.lightGreenAccent,
+      Colors.orangeAccent,
+      Colors.blueAccent,
+      Colors.purpleAccent,
+      Colors.redAccent,
+    ];
+    return palette[i % palette.length];
+  }
 
 
   Set<int> _computeXTicks(int n, TrendRange t) {
@@ -467,7 +556,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
   void initState() {
     super.initState();
     print('🟦 [Details] init for id="${widget.exerciseId}", name="${widget.exerciseName}"');
-
+    _onRepTargetChanged(_repTargetCtrl.text); // seed groups from "5"
     final selectedUid = UserContext.of(context, listen: false).currentUid;
     // …then fetch full 2y history and replace
     _fetchTwoYearHistoryForExercise(
@@ -548,15 +637,56 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
 
     print('📊 [Details] Workouts total=${_workouts.length}, matched=$matchedWorkouts, points=${series.length}');
 
-    // ===== Rep-target series (second chart) =====
-    // ===== Rep-target series (second chart)
-// Include a day IFF that day's TOP SET (chosen WITH RIR) has reps == repTarget.
-// The toggle only changes the Y value; included days don't change.
-    final double? repTarget = _repTarget;
-    final List<E1RMPoint> seriesTarget = [];
+    // ===== Rep-target series (second chart) — Multi-line support =====
+// One line per COMMA token; dash ranges collapse into a single line.
+// Inclusion rule: include a day IFF that day's TOP SET (by E1RM WITH RIR) has reps ∈ group's set.
+// Y value respects the Include RIR toggle.
 
-    if (repTarget != null) {
-      const tol = 1e-6;
+// Parse the TextField on the fly (works even if you haven't added _repGroups yet)
+    final rawTargets = _repTargetCtrl.text.trim();
+    final List<Set<int>> parsedGroups = <Set<int>>[];
+    final List<String> repGroupLabels2 = <String>[];
+
+    if (rawTargets.isNotEmpty) {
+      for (final token in rawTargets.split(',')) {
+        final t = token.trim();
+        if (t.isEmpty) continue;
+
+        if (t.contains('-')) {
+          final parts = t.split('-').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+          if (parts.length == 2) {
+            final a = int.tryParse(parts[0]);
+            final b = int.tryParse(parts[1]);
+            if (a != null && b != null) {
+              final lo = a <= b ? a : b;
+              final hi = a <= b ? b : a;
+              parsedGroups.add({for (int r = lo; r <= hi; r++) r});
+              repGroupLabels2.add('Reps $lo–$hi');
+            }
+          }
+        } else {
+          final v = int.tryParse(t);
+          if (v != null) {
+            parsedGroups.add({v});
+            repGroupLabels2.add('$v reps');
+          }
+        }
+      }
+    }
+
+// Back-compat: if nothing parsed but a single _repTarget exists, use that as one group
+    final List<Set<int>> effectiveGroups =
+    parsedGroups.isNotEmpty ? parsedGroups : (_repTarget != null ? [ {_repTarget!.toInt()} ] : []);
+
+    final cutoff2 = _cutoffFor(_trendTarget);
+
+// Build per-group points and collect all dates for a master x-axis
+    final List<List<E1RMPoint>> groupPoints = [];
+    final Set<DateTime> allDates = {};
+    final List<Map<DateTime, _PointMeta>> metaByGroup = [];
+
+    for (final group in effectiveGroups) {
+      final pts = <E1RMPoint>[];
 
       for (final workout in sortedWorkouts) {
         // find the matching exercise in the workout (id first, fallback name)
@@ -572,7 +702,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
         }
         if (ex.sets.isEmpty) continue;
 
-        // 1) choose THE day's top set USING RIR (selection logic is fixed)
+        // choose THE day's top set USING RIR
         SetDetails? topSetInc;
         double bestInc = double.negativeInfinity;
         for (final s in ex.sets) {
@@ -581,7 +711,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
           final rir = (s.rir ?? 0.0);
           if (w <= 0 || r <= 0) continue;
 
-          final e1 = calculateE1RM(w, r, rir); // WITH RIR
+          final e1 = calculateE1RM(w, r, rir);
           if (e1 > bestInc) {
             bestInc = e1;
             topSetInc = s;
@@ -589,45 +719,106 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
         }
         if (topSetInc == null) continue;
 
-        // 2) include the day only if that top set's reps == selected target
-        final topReps = (topSetInc!.reps ?? 0).toDouble();
-        if ((topReps - repTarget).abs() > tol) continue;
+        // include only if top set reps is in current group's set
+        final topReps = (topSetInc!.reps ?? 0);
+        if (!group.contains(topReps)) continue;
 
-        // 3) Y value depends on toggle, but it's the SAME set as selected above
+        // Y value depends on Include RIR toggle (same set selected above)
         final w = topSetInc!.weight ?? 0.0;
         final r = (topSetInc!.reps ?? 0).toDouble();
         final rirForY = _includeRIRForTarget ? (topSetInc!.rir ?? 0.0) : 0.0;
         final y = calculateE1RM(w, r, rirForY);
 
-        seriesTarget.add(E1RMPoint(workout.date, y));
+        if (!workout.date.isBefore(cutoff2)) {
+          pts.add(E1RMPoint(workout.date, y));
+          allDates.add(workout.date);
+        }
       }
+
+      pts.sort((a, b) => a.date.compareTo(b.date));
+      groupPoints.add(pts);
     }
 
+// Master timeline (shared x-axis for all lines)
+    final masterDates2 = allDates.toList()..sort();
+    final Map<DateTime, double> dateToX2 = {
+      for (int i = 0; i < masterDates2.length; i++) masterDates2[i]: i.toDouble()
+    };
 
-// project to points/labels for the selected range
-    final cutoff2 = _cutoffFor(_trendTarget);
-    final filtered2 = seriesTarget.where((p) => !p.date.isBefore(cutoff2)).toList()
-      ..sort((a,b) => a.date.compareTo(b.date));
-
-    final spots2 = <FlSpot>[];
-    final labels2 = <String>[];
-    double maxY2 = 0;
-
-    for (var i = 0; i < filtered2.length; i++) {
-      spots2.add(FlSpot(i.toDouble(), filtered2[i].value));
-      labels2.add(_labelForDate(filtered2[i].date, _trendTarget));
-      if (filtered2[i].value > maxY2) maxY2 = filtered2[i].value;
-    }
-
-    final adjustedMaxY2 = spots2.isEmpty ? 100.0
-        : (maxY2 * 1.018).clamp(100.0, double.infinity) as double;
-
+// Labels (shared) and ticks
+    final labels2 = [
+      for (final d in masterDates2) _labelForDate(d, _trendTarget)
+    ];
     final xTickSet2 = _computeXTicks(labels2.length, _trendTarget);
-    final bool short2 = _trendTarget == TrendRange.d14 || _trendTarget == TrendRange.m1;
 
+// Build FlSpots per group and compute Y max
+    final List<List<FlSpot>> spotsByGroup = [];
+    double maxY2 = 0.0;
+
+    for (final pts in groupPoints) {
+      final spots = <FlSpot>[];
+      for (final p in pts) {
+        final x = dateToX2[p.date]!;
+        spots.add(FlSpot(x, p.value));
+        if (p.value > maxY2) maxY2 = p.value;
+      }
+      spotsByGroup.add(spots);
+    }
+
+// Back-compat placeholders so existing single-line code compiles until you switch to lineBarsData2:
+// - filtered2 = the first group's raw points (or empty if multiple groups)
+// - spots2    = the first group's spots (or empty if multiple groups)
+    final List<E1RMPoint> filtered2 = groupPoints.length == 1 ? groupPoints.first : <E1RMPoint>[];
+    final List<FlSpot> spots2 = spotsByGroup.length == 1 ? spotsByGroup.first : <FlSpot>[];
+
+    final bool short2 = _trendTarget == TrendRange.d14 || _trendTarget == TrendRange.m1;
 // asym padding so first point is closer to Y axis but right edge has room
     final double leftPadX2  = short2 ? 0.10 : 0.20;
     final double rightPadX2 = short2 ? 0.20 : 0.15;
+
+    final adjustedMaxY2 = spotsByGroup.expand((e) => e).isEmpty
+        ? 100.0
+        : (maxY2 * 1.018).clamp(100.0, double.infinity) as double;
+
+// New multi-line dataset for the chart (use in your LineChart):
+    final List<LineChartBarData> lineBarsData2 = (() {
+      const palette = <Color>[
+        Colors.cyanAccent,
+        Colors.amberAccent,
+        Colors.pinkAccent,
+        Colors.lightGreenAccent,
+        Colors.orangeAccent,
+        Colors.blueAccent,
+        Colors.purpleAccent,
+        Colors.redAccent,
+      ];
+      final bars = <LineChartBarData>[];
+      for (int gi = 0; gi < spotsByGroup.length; gi++) {
+        final spots = spotsByGroup[gi];
+        if (spots.isEmpty) continue;
+        final color = palette[gi % palette.length];
+
+        bars.add(
+          LineChartBarData(
+            spots: spots,
+            isCurved: true,
+            color: color,
+            dotData: FlDotData(
+              show: _trendTarget == TrendRange.d14 || _trendTarget == TrendRange.m1,
+            ),
+            barWidth: (_trendTarget == TrendRange.m6 ||
+                _trendTarget == TrendRange.y1 ||
+                _trendTarget == TrendRange.y2) ? 2.0 : 1.0,
+            belowBarData: BarAreaData(
+              show: true,
+              color: color.withOpacity(0.10),
+            ),
+          ),
+        );
+      }
+      return bars;
+    })();
+
 
 
 // Filter to selected window & project to chart data
@@ -870,17 +1061,17 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      // ── Reps (left, compact)
+                      // ── Reps (left, accepts lists/ranges: "4,6-8,10")
                       SizedBox(
-                        width: 36,
+                        width: 110, // more room; TextField will also auto-scroll horizontally
                         height: 32,
                         child: TextField(
                           controller: _repTargetCtrl,
-                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          keyboardType: TextInputType.text, // allow commas/dashes
                           inputFormatters: [
-                            FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
+                            FilteringTextInputFormatter.allow(RegExp(r'[0-9,\-\s]*')), // digits, commas, dash, spaces
                           ],
-                          onChanged: (s) => setState(() => _repTarget = double.tryParse(s)),
+                          onChanged: (s) => setState(() { _onRepTargetChanged(s); }),
                           cursorColor: Colors.cyanAccent,
                           style: const TextStyle(
                             color: Colors.cyanAccent,
@@ -905,6 +1096,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                           ),
                         ),
                       ),
+
                       const SizedBox(width: 4),
 
                       // ── Title toggle (center)
@@ -925,7 +1117,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                               child: FittedBox(
                                 fit: BoxFit.scaleDown,
                                 child: Text(
-                                  _repTargetLabel(), // e.g. "5 Rep Target * 1 Month"
+                                  _multiRepLabel(),
                                   textAlign: TextAlign.center,
                                   style: const TextStyle(
                                     color: Colors.cyanAccent,
@@ -982,7 +1174,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
               child: LineChart(
                 LineChartData(
                   minX: -leftPadX2,
-                  maxX: spots2.isEmpty ? rightPadX2 : (spots2.length - 1 + rightPadX2),
+                  maxX: masterDates2.isEmpty ? rightPadX2 : (masterDates2.length - 1 + rightPadX2),
                   maxY: adjustedMaxY2,
 
                   gridData: FlGridData(
@@ -1038,36 +1230,29 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                     rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                   ),
 
-                  lineBarsData: [
-                    LineChartBarData(
-                      spots: spots2,
-                      isCurved: true,
-                      color: Colors.cyanAccent,
-                      dotData: FlDotData(
-                        show: _trendTarget == TrendRange.d14 || _trendTarget == TrendRange.m1,
-                      ),
-                      barWidth: (_trendTarget == TrendRange.m6 ||
-                          _trendTarget == TrendRange.y1 ||
-                          _trendTarget == TrendRange.y2) ? 2.0 : 1.0,
-                      belowBarData: BarAreaData(
-                        show: true,
-                        color: Colors.cyanAccent.withOpacity(0.1),
-                      ),
-                    ),
-                  ],
+                  lineBarsData: lineBarsData2,
 
                   lineTouchData: LineTouchData(
                     touchTooltipData: LineTouchTooltipData(
                       tooltipBgColor: Colors.grey[900]!,
                       getTooltipItems: (touchedSpots) {
-                        return touchedSpots.map((s) {
-                          final idx = s.x.toInt();
-                          final dateStr = (idx >= 0 && idx < filtered2.length)
-                              ? DateFormat('d MMM yyyy').format(filtered2[idx].date)
+                        return touchedSpots.map((spot) {
+                          final idx = spot.x.toInt();
+                          final dateStr = (idx >= 0 && idx < masterDates2.length)
+                              ? DateFormat('d MMM yyyy').format(masterDates2[idx])
                               : '';
-                          final e1rm = s.y.toStringAsFixed(1);
+                          final e1rm = spot.y.toStringAsFixed(1);
+
+                          // Which group line was touched?
+                          final gi = spot.barIndex;
+                          final groupLabel = (gi >= 0 && gi < _repGroupLabels.length)
+                              ? _repGroupLabels[gi]
+                              : '';
+
+                          // e.g. "E1RM: 182.5 kg (Reps 5–6)\n12 Mar 2025"
+                          final title = groupLabel.isEmpty ? 'E1RM: $e1rm kg' : 'E1RM: $e1rm kg ($groupLabel)';
                           return LineTooltipItem(
-                            'E1RM: $e1rm kg\n$dateStr',
+                            '$title\n$dateStr',
                             const TextStyle(color: Colors.white),
                           );
                         }).toList();
