@@ -657,6 +657,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       currentWeekIndex,
     };
     print('⏳ [BB2] Loading visible weeks: $weeksToLoad');
+    print('🧭 [BB2] currentWeekIndex=$currentWeekIndex alreadyLoaded=$loadedWeekIndices uid=${_cachedUid} blockId=${_selectedBlockId}');
+
 
     for (final weekIndex in weeksToLoad) {
       if (!loadedWeekIndices.contains(weekIndex)) {
@@ -1877,6 +1879,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
 
     final uid = _cachedUid; // lock to the selected athlete for this BB2 State
+    print('🧬 [UID CHECK] start: local=$uid field=$_cachedUid');
+
     if ((uid ?? '').isEmpty || _selectedBlockId == null) {
       print('❌ [LOAD_ABORT] uid or selectedBlockId missing');
       return;
@@ -1889,6 +1893,11 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     final weekDocRef = blocksCol.doc(_selectedBlockId)
         .collection('weeks')
         .doc('week_$weekIndex');
+    print('🧭 [PATH] uid=${_cachedUid} block=${_selectedBlockId} week=$weekIndex');
+    print('🧭 [PATH] weekDocRef=${weekDocRef.path}');
+    print('🧭 [PATH] blockDoc=${blocksCol.doc(_selectedBlockId).path}');
+    print('🧭 [PATH] daysCol=${weekDocRef.collection('days').path}');
+
 
     // 1) Pull stable pieces in parallel (cache-first for fast path)
     final step = Stopwatch()..start();
@@ -1898,17 +1907,22 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       weekDocRef.collection('days').get(const GetOptions(source: Source.cache)),
     ]);
 
+
+
     final serverFetch = Future.wait([
       weekDocRef.get(const GetOptions(source: Source.server)),
       blocksCol.doc(_selectedBlockId).get(const GetOptions(source: Source.server)),
       weekDocRef.collection('days').get(const GetOptions(source: Source.server)),
     ]);
 
+
+
     // Try cache first (fast UI), then reconcile with server
     var cacheResults = await cacheFetch;
     var weekSnap = cacheResults[0] as DocumentSnapshot<Map<String, dynamic>>;
     var parentBlockSnap = cacheResults[1] as DocumentSnapshot<Map<String, dynamic>>;
     var daySnaps = cacheResults[2] as QuerySnapshot<Map<String, dynamic>>;
+    print('✅ [CACHE OK] week.exists=${weekSnap.exists} block.exists=${parentBlockSnap.exists} days=${daySnaps.docs.length}');
 
     print('   ↳ cache fetch took ${step.elapsedMilliseconds}ms');
     step
@@ -1924,6 +1938,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       weekSnap = srv[0] as DocumentSnapshot<Map<String, dynamic>>;
       parentBlockSnap = srv[1] as DocumentSnapshot<Map<String, dynamic>>;
       daySnaps = srv[2] as QuerySnapshot<Map<String, dynamic>>;
+      print('✅ [SERVER OK] week.exists=${weekSnap.exists} block.exists=${parentBlockSnap.exists} days=${daySnaps.docs.length}');
+
       print('   ↳ server fetch took ${step.elapsedMilliseconds}ms (total: ${total.elapsedMilliseconds}ms)');
     } catch (e) {
       print('   ⚠️ server fetch failed (offline?): $e — using cache results');
@@ -2003,6 +2019,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       String _isoDay(DateTime d) =>
           '${DateTime(d.year, d.month, d.day).toIso8601String().split(".").first}.000';
 
+      print('🧬 [UID CHECK] prehydrate: local=$uid field=$_cachedUid');
+
       final workoutsCol = FirebaseFirestore.instance
           .collection('users')
           .doc(_cachedUid)
@@ -2020,8 +2038,16 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         final date = rangeStart.add(Duration(days: d));
         final key  = _ymd(date);
         dateKeys.add(key);
-        futures.add(workoutsCol.doc(key).get(const GetOptions(source: Source.cache)));
+        final _preHydDocRef = workoutsCol.doc(key);
+        futures.add(
+            _preHydDocRef
+                .get(const GetOptions(source: Source.cache))
+                .catchError((_) => _preHydDocRef.get(const GetOptions(source: Source.server)))
+        );
+
       }
+      print('▶️ [PREHYD] waiting ${futures.length} doc-id cache gets...');
+
       final docIdSnaps = await Future.wait(futures);
 
       // 2) Legacy auto-ID snapshots for the whole range (CACHE)
@@ -2231,6 +2257,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
     String _isoDay(DateTime d) =>
         '${DateTime(d.year, d.month, d.day).toIso8601String().split(".").first}.000';
+    print('🧬 [UID CHECK] wes-cache: local=$uid field=$_cachedUid');
 
     final workoutsCol = FirebaseFirestore.instance
         .collection('users')
@@ -2257,7 +2284,12 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           .collection('workouts')
           .doc(_ymd(date));
       wesDayOrder.add(dayIndex);
-      wesCacheFetches.add(docRef.get(const GetOptions(source: Source.cache)));
+      wesCacheFetches.add(
+          docRef
+              .get(const GetOptions(source: Source.cache))
+              .catchError((_) => docRef.get(const GetOptions(source: Source.server)))
+      );
+
       wesServerFetches.add(docRef.get(const GetOptions(source: Source.server)));
     }
 
