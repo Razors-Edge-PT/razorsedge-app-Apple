@@ -338,117 +338,117 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
 
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (context) => Dialog(
-        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 100),
-        child: GestureDetector(
-          onTap: () => FocusScope.of(context).unfocus(),
-          child: Container(
-
-          width: MediaQuery.of(context).size.width * 0.9,
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('${isNew ? "Add" : "Edit"} Weigh-in (${tod.toUpperCase()})',
-                    style: const TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 12),
-                const Text('Date:'),
-                const SizedBox(height: 6),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: TextButton.icon(
-                    onPressed: () async {
-                      final picked = await showDatePicker(
-                        context: context,
-                        initialDate: selectedDate,
-                        firstDate: DateTime(2000),
-                        lastDate: DateTime.now(),
-                      );
-                      if (picked != null) {
-                        setState(() {
-                          selectedDate = picked;
-                        });
-                      }
-                    },
-                    icon: const Icon(Icons.calendar_today, size: 18),
-                    label: Text(DateFormat('dd-MM-yyyy').format(selectedDate)),
-                  ),
+      builder: (context) => AlertDialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+        title: Text(
+          '${isNew ? "Add" : "Edit"} Weigh-in (${tod.toUpperCase()})',
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        content: SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(
+            16,
+            0,
+            16,
+            MediaQuery.of(context).viewInsets.bottom, // keep above keyboard
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 8),
+              const Text('Date:'),
+              const SizedBox(height: 6),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: selectedDate,
+                      firstDate: DateTime(2000),
+                      lastDate: DateTime.now(),
+                    );
+                    if (picked != null) {
+                      setState(() {
+                        selectedDate = picked;
+                      });
+                    }
+                  },
+                  icon: const Icon(Icons.calendar_today, size: 18),
+                  label: Text(DateFormat('dd-MM-yyyy').format(selectedDate)),
                 ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: weightController,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(labelText: 'Weight (kg)'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: weightController,
+                keyboardType: TextInputType.number,
+                scrollPadding: EdgeInsets.only(
+                  bottom: MediaQuery.of(context).viewInsets.bottom + 80,
                 ),
-                const SizedBox(height: 16),
-                const Text('Calculations:', style: TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 6),
-                _diffText('Δ from previous', diffFromPrevious),
-                _diffText('Δ from 3-day avg', diffFrom3DayAvg),
-                _diffText('Δ from 7-day avg', diffFrom7DayAvg),
-                const SizedBox(height: 20),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-                    if (!isNew) ...[
-                      const SizedBox(width: 8),
-                      TextButton(
-                        onPressed: () async {
-                          final confirmDelete = await showDialog<bool>(
-                            context: context,
-                            builder: (context) => AlertDialog(
-                              title: const Text('Delete Entry'),
-                              content: const Text('Are you sure you want to delete this weight entry?'),
-                              actions: [
-                                TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-                                ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
-                              ],
-                            ),
-                          );
-                          if (confirmDelete == true) {
-                            final user = FirebaseAuth.instance.currentUser;
-                            if (user != null) {
-                              await FirebaseFirestore.instance
-                                  .collection('users')
-                                  .doc(user.uid)
-                                  .collection('weights')
-                                  .doc(weightEntry['id'])
-                                  .delete();
-                              Navigator.pop(context);
-                              _fetchWeights();
-                            }
-                          }
-                        },
-                        child: const Text('Delete'),
-                      ),
-                    ],
-                    const SizedBox(width: 8),
-                    ElevatedButton(
-                      onPressed: () {
-                        final val = double.tryParse(weightController.text);
-                        print('💾 [DIALOG SAVE] parsed=$val isNew=$isNew tod=$tod date=$selectedDate');
-                        if (val != null && val > 0) {
-                          Navigator.pop(context, {
-                            'weight': val,
-                            'date': selectedDate,
-                            'tod': tod,
-                          });
-                        }
-                      },
-
-
-                      child: const Text('Save'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
+                decoration: const InputDecoration(labelText: 'Weight (kg)'),
+              ),
+              const SizedBox(height: 16),
+              const Text('Calculations:', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              _diffText('Δ from previous', diffFromPrevious),
+              _diffText('Δ from 3-day avg', diffFrom3DayAvg),
+              _diffText('Δ from 7-day avg', diffFrom7DayAvg),
+            ],
           ),
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          if (!isNew)
+            TextButton(
+              onPressed: () async {
+                final confirmDelete = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('Delete Entry'),
+                    content: const Text('Are you sure you want to delete this weight entry?'),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                      ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
+                    ],
+                  ),
+                );
+                if (confirmDelete == true) {
+                  final user = FirebaseAuth.instance.currentUser;
+                  if (user != null) {
+                    await FirebaseFirestore.instance
+                        .collection('users')
+                        .doc(user.uid)
+                        .collection('weights')
+                        .doc(weightEntry['id'])
+                        .delete();
+                    Navigator.pop(context);
+                    _fetchWeights();
+                  }
+                }
+              },
+              child: const Text('Delete'),
+            ),
+          ElevatedButton(
+            onPressed: () {
+              final val = double.tryParse(weightController.text);
+              print('💾 [DIALOG SAVE] parsed=$val isNew=$isNew tod=$tod date=$selectedDate');
+              if (val != null && val > 0) {
+                Navigator.pop(context, {
+                  'weight': val,
+                  'date': selectedDate,
+                  'tod': tod,
+                });
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
       ),
     );
+
 
     if (result != null && result['weight'] != null) {
       print('📝 [EDIT] isNew=$isNew weight=${result['weight']} date=${result['date']} tod=${result['tod']}');
@@ -480,6 +480,121 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
       }
     }
 
+
+  }
+
+  Future<void> _addWeightEntry({required DateTime date, required String tod}) async {
+    print('➡️ [_addWeightEntry] entered tod=$tod date=$date');
+    // Same dialog UI shape as _editWeightEntry, but "Add" flow
+    final TextEditingController weightController = TextEditingController(text: '');
+    DateTime selectedDate = date;
+
+    // For UI parity with edit: show the 3 calc rows, but they’ll be blank (nulls)
+    double? diffFromPrevious;
+    double? diffFrom3DayAvg;
+    double? diffFrom7DayAvg;
+
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (context) => AlertDialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+        title: Text(
+          'Add Weigh-in (${tod.toUpperCase()})',
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        content: SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(
+            16,
+            0,
+            16,
+            MediaQuery.of(context).viewInsets.bottom, // keep above keyboard
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 8),
+              const Text('Date:'),
+              const SizedBox(height: 6),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: selectedDate,
+                      firstDate: DateTime(2000),
+                      lastDate: DateTime.now(),
+                    );
+                    if (picked != null) {
+                      setState(() {
+                        selectedDate = picked;
+                      });
+                    }
+                  },
+                  icon: const Icon(Icons.calendar_today, size: 18),
+                  label: Text(DateFormat('dd-MM-yyyy').format(selectedDate)),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: weightController,
+                keyboardType: TextInputType.number,
+                scrollPadding: EdgeInsets.only(
+                  bottom: MediaQuery.of(context).viewInsets.bottom + 80,
+                ),
+                decoration: const InputDecoration(labelText: 'Weight (kg)'),
+              ),
+              const SizedBox(height: 16),
+              const Text('Calculations:', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              _diffText('Δ from previous', diffFromPrevious),
+              _diffText('Δ from 3-day avg', diffFrom3DayAvg),
+              _diffText('Δ from 7-day avg', diffFrom7DayAvg),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final val = double.tryParse(weightController.text);
+              if (val != null && val > 0) {
+                Navigator.pop(context, {
+                  'weight': val,
+                  'date': selectedDate,
+                  'tod': tod,
+                });
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+
+    print('🔍 [_addWeightEntry] result=${result == null ? "null" : "weight=${result['weight']} date=${result['date']} tod=${result['tod']}"}');
+
+
+
+    if (result != null && result['weight'] != null) {
+      final double w = (result['weight'] as num).toDouble();
+      final DateTime d = result['date'] as DateTime;
+      final String t = result['tod'] as String;
+
+      final before = _weights.length;
+      setState(() => _selectedDate = d);
+
+      print('➕ [_addWeightEntry] saving w=$w tod=$t date=${DateFormat('yyyy-MM-dd').format(d)} (count before=$before)');
+      await _saveWeight(w, 'kg', tod: t); // _saveWeight should await _fetchWeights()
+      print('✅ [_addWeightEntry] done. count $before -> ${_weights.length}');
+    } else {
+      print('⚠️ [_addWeightEntry] canceled or invalid weight');
+    }
 
   }
 
@@ -1055,15 +1170,10 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                                     if (am != null) {
                                       _editWeightEntry(am);
                                     } else {
-                                      // create a placeholder entry for this date, tod = am
-                                      final newItem = {
-                                        'date': date,
-                                        'unit': 'kg',
-                                        'tod': 'am',
-                                      };
-                                      _editWeightEntry(newItem);
+                                      _addWeightEntry(date: date, tod: 'am');
                                     }
                                   },
+
                                   child: Container(
                                     padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
                                     decoration: BoxDecoration(
@@ -1092,14 +1202,10 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                                     if (pm != null) {
                                       _editWeightEntry(pm);
                                     } else {
-                                      final newItem = {
-                                        'date': date,
-                                        'unit': 'kg',
-                                        'tod': 'pm',
-                                      };
-                                      _editWeightEntry(newItem);
+                                      _addWeightEntry(date: date, tod: 'pm');
                                     }
                                   },
+
                                   child: Container(
                                     padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
                                     decoration: BoxDecoration(
