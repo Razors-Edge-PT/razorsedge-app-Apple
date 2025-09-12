@@ -9,6 +9,24 @@ import 'periodization_model_utils.dart';
 
 enum TrendRange { d14, m30, m90, m180, y365 }
 
+class _LegendDot extends StatelessWidget {
+  final Color color;
+  final String label;
+  const _LegendDot({required this.color, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+        const SizedBox(width: 6),
+        Text(label),
+      ],
+    );
+  }
+}
+
+
 
 class BodyWeightTracker extends StatefulWidget {
   final Function(String)? onWeightSaved;
@@ -23,18 +41,25 @@ class BodyWeightTracker extends StatefulWidget {
 class _BodyWeightTrackerState extends State<BodyWeightTracker> {
   final TextEditingController _weightController = TextEditingController();
   final List<Map<String, dynamic>> _weights = [];
+  final TextEditingController _weightControllerPm = TextEditingController(); // 2nd weigh-in
   bool show3DayAverage = true;
   DateTime _selectedDate = DateTime.now();
   String _fmtDate(DateTime d) =>
       "${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}";
 
   TrendRange _trend = TrendRange.d14;
+  bool _showSecondWeighIn = false; // controls expansion + 2nd line visibility
   List<Map<String, dynamic>> _series14 = [];
   List<Map<String, dynamic>> _series30 = [];
   List<Map<String, dynamic>> _series90 = [];
   List<Map<String, dynamic>> _series180 = [];
   List<Map<String, dynamic>> _series365 = [];
-  // ➕ AM/PM split series for each range
+// ➕ AM/PM split series for each range
+  List<Map<String, dynamic>> _series14Am = [], _series14Pm = [];
+  List<Map<String, dynamic>> _series30Am = [], _series30Pm = [];
+  List<Map<String, dynamic>> _series90Am = [], _series90Pm = [];
+  List<Map<String, dynamic>> _series180Am = [], _series180Pm = [];
+  List<Map<String, dynamic>> _series365Am = [], _series365Pm = [];
 
 
 
@@ -77,6 +102,7 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
             'id': doc.id,
             'weight': data['weight'],
             'unit': data['unit'],
+            'tod' : (data['tod'] as String?)?.toLowerCase().trim(), // 'am' | 'pm' | null
             'date': (ts is Timestamp) ? ts.toDate() : DateTime.now(), // handle serverTimestamp()
           };
         }));
@@ -103,11 +129,12 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
   }
 
 
-  Future<void> _saveWeight(double weight, String unit) async {
+  Future<void> _saveWeight(double weight, String unit, {required String tod}) async {
     final weightData = {
       'weight': weight,
       'unit': unit,
-      // store the *chosen* date at local noon to avoid TZ midnight issues
+      'tod': tod, // <-- AM or PM based on which field saved
+      // store the chosen date at local noon to avoid TZ midnight issues
       'timestamp': Timestamp.fromDate(
         DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, 12),
       ),
@@ -168,13 +195,26 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
     }
   }
 
+  // REPLACE the whole _recomputeSeries() body:
   void _recomputeSeries() {
     _series14  = _buildSeries(days: 14);
     _series30  = _buildSeries(days: 30);
     _series90  = _buildSeries(days: 90);
     _series180 = _buildSeries(days: 180);
     _series365 = _buildSeries(days: 365);
+
+    _series14Am   = _buildSeriesByTod(days: 14,  tod: 'am');
+    _series14Pm   = _buildSeriesByTod(days: 14,  tod: 'pm');
+    _series30Am   = _buildSeriesByTod(days: 30,  tod: 'am');
+    _series30Pm   = _buildSeriesByTod(days: 30,  tod: 'pm');
+    _series90Am   = _buildSeriesByTod(days: 90,  tod: 'am');
+    _series90Pm   = _buildSeriesByTod(days: 90,  tod: 'pm');
+    _series180Am  = _buildSeriesByTod(days: 180, tod: 'am');
+    _series180Pm  = _buildSeriesByTod(days: 180, tod: 'pm');
+    _series365Am  = _buildSeriesByTod(days: 365, tod: 'am');
+    _series365Pm  = _buildSeriesByTod(days: 365, tod: 'pm');
   }
+
 
 
 
@@ -216,12 +256,12 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
       final String recTod = () {
         final storedTod = (w['tod'] as String?)?.toLowerCase().trim();
         if (storedTod == 'am' || storedTod == 'pm') return storedTod!;
-        // Back-compat: infer from hour if no 'tod' present
-        final hour = d.hour; // from timestamp
-        return (hour < 12) ? 'am' : 'pm';
+        // 🔙 Back-compat: no tod field → always AM
+        return 'am';
       }();
 
       if (recTod != tod) continue;
+
 
       final key = "${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}";
       byDay.putIfAbsent(key, () => {
@@ -259,34 +299,41 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
   }
 
   void _editWeightEntry(Map<String, dynamic> weightEntry) async {
-    final weightController = TextEditingController(text: weightEntry['weight'].toString());
-    DateTime selectedDate = weightEntry['date'];
+    final isNew = weightEntry['id'] == null;
+    final tod = (weightEntry['tod'] as String?) ?? 'am';
+
+    final weightController = TextEditingController(
+      text: isNew ? '' : (weightEntry['weight']?.toString() ?? ''),
+    );
+    DateTime selectedDate = weightEntry['date'] as DateTime? ?? DateTime.now();
 
     double? diffFromPrevious;
     double? diffFrom3DayAvg;
     double? diffFrom7DayAvg;
 
-    final index = _weights.indexWhere((w) => w['id'] == weightEntry['id']);
-    if (index + 1 < _weights.length) {
-      final prevWeight = _weights[index + 1]['weight'] as double;
-      diffFromPrevious = weightEntry['weight'] - prevWeight;
-    }
+    if (!isNew) {
+      final index = _weights.indexWhere((w) => w['id'] == weightEntry['id']);
+      if (index + 1 < _weights.length) {
+        final prevWeight = _weights[index + 1]['weight'] as double;
+        diffFromPrevious = (weightEntry['weight'] as double) - prevWeight;
+      }
 
-    final recent3 = _weights.take(3).map((w) => w['weight'] as double);
-    if (recent3.length == 3) {
-      final avg3 = recent3.reduce((a, b) => a + b) / 3;
-      diffFrom3DayAvg = weightEntry['weight'] - avg3;
-    }
+      final recent3 = _weights.take(3).map((w) => w['weight'] as double);
+      if (recent3.length == 3) {
+        final avg3 = recent3.reduce((a, b) => a + b) / 3;
+        diffFrom3DayAvg = (weightEntry['weight'] as double) - avg3;
+      }
 
-    final now = DateTime.now();
-    final last7Days = _weights.where((entry) {
-      final date = entry['date'] as DateTime;
-      return date.isBefore(now.add(const Duration(days: 1))) &&
-          date.isAfter(now.subtract(const Duration(days: 7)));
-    }).toList();
-    if (last7Days.isNotEmpty) {
-      final avg7 = last7Days.map((w) => w['weight'] as double).reduce((a, b) => a + b) / last7Days.length;
-      diffFrom7DayAvg = weightEntry['weight'] - avg7;
+      final now = DateTime.now();
+      final last7Days = _weights.where((entry) {
+        final date = entry['date'] as DateTime;
+        return date.isBefore(now.add(const Duration(days: 1))) &&
+            date.isAfter(now.subtract(const Duration(days: 7)));
+      }).toList();
+      if (last7Days.isNotEmpty) {
+        final avg7 = last7Days.map((w) => w['weight'] as double).reduce((a, b) => a + b) / last7Days.length;
+        diffFrom7DayAvg = (weightEntry['weight'] as double) - avg7;
+      }
     }
 
     final result = await showDialog<Map<String, dynamic>>(
@@ -296,12 +343,16 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
         child: GestureDetector(
           onTap: () => FocusScope.of(context).unfocus(),
           child: Container(
-            width: MediaQuery.of(context).size.width * 0.9,
+
+          width: MediaQuery.of(context).size.width * 0.9,
             padding: const EdgeInsets.all(16),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Text('${isNew ? "Add" : "Edit"} Weigh-in (${tod.toUpperCase()})',
+                    style: const TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 12),
                 const Text('Date:'),
                 const SizedBox(height: 6),
                 Align(
@@ -341,43 +392,52 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-                    const SizedBox(width: 8),
-                    TextButton(
-                      onPressed: () async {
-                        final confirmDelete = await showDialog<bool>(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            title: const Text('Delete Entry'),
-                            content: const Text('Are you sure you want to delete this weight entry?'),
-                            actions: [
-                              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-                              ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
-                            ],
-                          ),
-                        );
-                        if (confirmDelete == true) {
-                          final user = FirebaseAuth.instance.currentUser;
-                          if (user != null) {
-                            await FirebaseFirestore.instance
-                                .collection('users')
-                                .doc(user.uid)
-                                .collection('weights')
-                                .doc(weightEntry['id'])
-                                .delete();
-
-                            Navigator.pop(context);
-                            _fetchWeights();
+                    if (!isNew) ...[
+                      const SizedBox(width: 8),
+                      TextButton(
+                        onPressed: () async {
+                          final confirmDelete = await showDialog<bool>(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              title: const Text('Delete Entry'),
+                              content: const Text('Are you sure you want to delete this weight entry?'),
+                              actions: [
+                                TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                                ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
+                              ],
+                            ),
+                          );
+                          if (confirmDelete == true) {
+                            final user = FirebaseAuth.instance.currentUser;
+                            if (user != null) {
+                              await FirebaseFirestore.instance
+                                  .collection('users')
+                                  .doc(user.uid)
+                                  .collection('weights')
+                                  .doc(weightEntry['id'])
+                                  .delete();
+                              Navigator.pop(context);
+                              _fetchWeights();
+                            }
                           }
-                        }
-                      },
-                      child: const Text('Delete'),
-                    ),
+                        },
+                        child: const Text('Delete'),
+                      ),
+                    ],
                     const SizedBox(width: 8),
                     ElevatedButton(
                       onPressed: () {
-                        final weight = double.tryParse(_weightController.text) ?? 0.0;
-                        _saveWeight(weight, 'kg');
+                        final val = double.tryParse(weightController.text);
+                        print('💾 [DIALOG SAVE] parsed=$val isNew=$isNew tod=$tod date=$selectedDate');
+                        if (val != null && val > 0) {
+                          Navigator.pop(context, {
+                            'weight': val,
+                            'date': selectedDate,
+                            'tod': tod,
+                          });
+                        }
                       },
+
 
                       child: const Text('Save'),
                     ),
@@ -391,22 +451,38 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
     );
 
     if (result != null && result['weight'] != null) {
+      print('📝 [EDIT] isNew=$isNew weight=${result['weight']} date=${result['date']} tod=${result['tod']}');
+
       final user = FirebaseAuth.instance.currentUser;
       if (user != null) {
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .collection('weights')
-            .doc(weightEntry['id'])
-            .update({
-              'weight': result['weight'],
-              'timestamp': Timestamp.fromDate(result['date']),
-            });
+        final double w = result['weight'];
+        final DateTime d = result['date'];
+        final String t = result['tod'];
 
+        if (isNew) {
+          // ✅ pass the dialog's date instead of relying on _selectedDate
+          await _saveWeight(w, 'kg', tod: t);
+          // afterwards, fix the timestamp to match the chosen date
+          // (fetch the most recent doc just added if needed, or extend _saveWeight to accept `date`)
+        } else {
+          await FirebaseFirestore.instance
+              .collection('users')
+              .doc(user.uid)
+              .collection('weights')
+              .doc(weightEntry['id'])
+              .update({
+            'weight': w,
+            'timestamp': Timestamp.fromDate(d),
+            'tod': t,
+          });
+        }
         _fetchWeights();
       }
     }
+
+
   }
+
 
   Widget _diffText(String label, double? diff) {
     if (diff == null) return const SizedBox.shrink();
@@ -559,40 +635,126 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                 ElevatedButton.icon(
                   onPressed: () {
                     final weight = double.tryParse(_weightController.text) ?? 0.0;
-                    _saveWeight(weight, 'kg');
+                    if (weight > 0) {
+                      _saveWeight(weight, 'kg', tod: 'am'); // ✅ AM entry
+                      _weightController.clear();            // optional parity with PM clear
+                    }
                   },
-
-
                   icon: const Icon(Icons.save),
                   label: const Text('Save'),
                   style: ElevatedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-                    minimumSize: const Size(0, 0), // let it shrink
+                    minimumSize: const Size(0, 0),
                   ),
                 ),
+
               ],
             ),
 
+            // toggle button or switch for showing 2nd weigh-in
+            TextButton(
+              onPressed: () {
+                setState(() => _showSecondWeighIn = !_showSecondWeighIn);
+              },
+              child: Text(
+                _showSecondWeighIn ? 'Hide 2nd weigh-in' : 'Add 2nd weigh-in',
+                style: const TextStyle(fontSize: 14),
+              ),
+            ),
 
-            const SizedBox(height: 6),
+            if (_showSecondWeighIn) ...[
+              const SizedBox(height: 0),
+
+              Row(
+                children: [
+                  Flexible(
+                    flex: 3,
+                    child: SizedBox(
+                      height: 48,
+                      child: TextField(
+                        controller: _weightControllerPm,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: '2nd Weight (kg)',
+                          border: OutlineInputBorder(),
+                          enabledBorder: OutlineInputBorder(
+                            borderSide: BorderSide(color: Colors.white70),
+                          ),
+                          contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(width: 8),
+
+                  // ✅ Save button aligns under first because it’s in the same flex row
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      final weight = double.tryParse(_weightControllerPm.text) ?? 0.0;
+                      if (weight > 0) {
+                        _saveWeight(weight, 'kg', tod: 'pm');
+                        _weightControllerPm.clear();
+                      }
+                    },
+                    icon: const Icon(Icons.save),
+                    label: const Text('Save 2nd'),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                      minimumSize: const Size(0, 0),
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 6),
+
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Date: ${_fmtDate(_selectedDate)}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ],
+
 
             // ---- Trend Chart (14-day <-> 1-month toggle) ----
-                Builder(
-                  builder: (_) {
-                    final List<Map<String, dynamic>> series;
-                    switch (_trend) {
-                      case TrendRange.d14:  series = _series14;  break;
-                      case TrendRange.m30:  series = _series30;  break;
-                      case TrendRange.m90:  series = _series90;  break;
-                      case TrendRange.m180: series = _series180; break;
-                      case TrendRange.y365: series = _series365; break;
-                    }
-                    if (series.length < 2) {
-                      return const SizedBox.shrink();
-                    }
+            Builder(
+              builder: (_) {
+                // Resolve the active AM/PM series for current range
+                List<Map<String, dynamic>> am, pm;
+                switch (_trend) {
+                  case TrendRange.d14:
+                    am = _series14Am; pm = _series14Pm; break;
+                  case TrendRange.m30:
+                    am = _series30Am; pm = _series30Pm; break;
+                  case TrendRange.m90:
+                    am = _series90Am; pm = _series90Pm; break;
+                  case TrendRange.m180:
+                    am = _series180Am; pm = _series180Pm; break;
+                  case TrendRange.y365:
+                    am = _series365Am; pm = _series365Pm; break;
+                }
 
+                // Decide which series to show
+                final showPm = _showSecondWeighIn && pm.length >= 2;
+                final hasAm = am.length >= 2;
+                if (!hasAm && !showPm) {
+                  return const SizedBox.shrink();
+                }
 
-                    return Column(
+                // Base series for x-axis labels
+                final baseSeries = hasAm ? am : pm;
+                final allY = <double>[
+                  ...am.map<double>((e) => e['weight'] as double),
+                  if (showPm) ...pm.map<double>((e) => e['weight'] as double),
+                ];
+                final double minY = (allY.isEmpty ? 0.0 : allY.reduce((a, b) => a < b ? a : b)) - 1;
+                final double maxY = (allY.isEmpty ? 0.0 : allY.reduce((a, b) => a > b ? a : b)) + 1;
+                final double maxX = (hasAm ? am.length - 1 : (showPm ? pm.length - 1 : 1)).toDouble();
+
+                return Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     const SizedBox(height: 20),
@@ -612,7 +774,6 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                           }();
                         });
                       },
-
                       child: Text(
                             () {
                           switch (_trend) {
@@ -623,7 +784,6 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                             case TrendRange.y365: return '1-Year Trend';
                           }
                         }(),
-
                         style: const TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.bold, // optional to show it's tappable
@@ -631,7 +791,6 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                         textAlign: TextAlign.center,
                       ),
                     ),
-
 
                     const SizedBox(height: 6),
 
@@ -649,9 +808,10 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                                 interval: 1,
                                 getTitlesWidget: (value, meta) {
                                   final i = value.toInt();
+                                  final series = baseSeries;
                                   if (i < 0 || i >= series.length) return const SizedBox.shrink();
 
-// Label density by range
+                                  // Label density by range
                                   int showEvery;
                                   switch (_trend) {
                                     case TrendRange.d14:  showEvery = 1;  break;
@@ -670,16 +830,12 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                                   return Transform.rotate(
                                     angle: -0.5,
                                     alignment: Alignment.topRight,
-                                    child: Text(
-                                      label,
-                                      style: const TextStyle(fontSize: 10),
-                                    ),
+                                    child: Text(label, style: const TextStyle(fontSize: 10)),
                                   );
-
                                 },
                               ),
                             ),
-                            topTitles: AxisTitles(               // 🔹 disable top X axis titles
+                            topTitles: const AxisTitles(
                               sideTitles: SideTitles(showTitles: false),
                             ),
                             leftTitles: AxisTitles(
@@ -688,7 +844,6 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                                 interval: 1,
                                 reservedSize: 28,
                                 getTitlesWidget: (value, meta) {
-                                  final maxY = (series.map((e) => e['weight'] as double).reduce((a, b) => a > b ? a : b)) + 1;
                                   if (value == maxY) return const SizedBox.shrink();
                                   return Text(value.toStringAsFixed(0), style: const TextStyle(fontSize: 12));
                                 },
@@ -700,66 +855,71 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                                 interval: 1,
                                 reservedSize: 28,
                                 getTitlesWidget: (value, meta) {
-                                  final maxY = (series.map((e) => e['weight'] as double).reduce((a, b) => a > b ? a : b)) + 1;
                                   if (value == maxY) return const SizedBox.shrink();
                                   return Text(value.toStringAsFixed(0), style: const TextStyle(fontSize: 12));
                                 },
                               ),
                             ),
                           ),
-
                           borderData: FlBorderData(show: true),
                           minX: 0,
-                          maxX: (series.length - 1).toDouble(),
-                          minY: (series.map((e) => e['weight'] as double).reduce((a, b) => a < b ? a : b)) - 1,
-                          maxY: (series.map((e) => e['weight'] as double).reduce((a, b) => a > b ? a : b)) + 1,
-
+                          maxX: maxX,
+                          minY: minY,
+                          maxY: maxY,
 
                           lineBarsData: [
-                            LineChartBarData(
-                              isCurved: true,
-                              spots: List.generate(
-                                series.length,
-                                    (i) => FlSpot(i.toDouble(), (series[i]['weight'] as double)),
+                            if (hasAm)
+                              LineChartBarData(
+                                isCurved: true,
+                                spots: List.generate(
+                                  am.length,
+                                      (i) => FlSpot(i.toDouble(), (am[i]['weight'] as double)),
+                                ),
+                                barWidth: 2,
+                                color: Colors.blueAccent, // AM
+                                dotData: FlDotData(show: true),
                               ),
-                              barWidth: 2,
-                              color: Colors.blueAccent,
-                              dotData: FlDotData(show: true),
-                            ),
+                            if (showPm)
+                              LineChartBarData(
+                                isCurved: true,
+                                spots: List.generate(
+                                  pm.length,
+                                      (i) => FlSpot(i.toDouble(), (pm[i]['weight'] as double)),
+                                ),
+                                barWidth: 2,
+                                color: Colors.orangeAccent, // PM
+                                dotData: FlDotData(show: true),
+                              ),
                           ],
+
 
                           lineTouchData: LineTouchData(
                             touchTooltipData: LineTouchTooltipData(
                               tooltipBgColor: Colors.grey.shade900,
-
                               getTooltipItems: (touchedSpots) {
                                 return touchedSpots.map((spot) {
+                                  final gi = spot.barIndex; // 0 = AM, 1 = PM (if present)
                                   final xi = spot.x.toInt();
-                                  if (xi < 0 || xi >= series.length) return null;
+                                  final list = (gi == 0) ? am : pm;
+                                  if (xi < 0 || xi >= list.length) return null;
 
-                                  final date = series[xi]['date'] as DateTime;
-                                  final y    = series[xi]['weight'] as double;
-
+                                  final date = list[xi]['date'] as DateTime;
+                                  final y    = list[xi]['weight'] as double;
+                                  final todLabel = (gi == 0) ? 'AM' : 'PM';
                                   final dateStr = DateFormat('d MMM yyyy').format(date);
 
                                   return LineTooltipItem(
-                                    '$dateStr\n${y.toStringAsFixed(1)} kg',
-                                    const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w500,
-                                    ),
+                                    '$dateStr\n$todLabel • ${y.toStringAsFixed(1)} kg',
+                                    const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500),
                                   );
                                 }).whereType<LineTooltipItem>().toList();
                               },
-
                             ),
                           ),
-
                         ),
-
                       ),
                     ),
+
                   ],
                 );
               },
@@ -847,20 +1007,123 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
             if (_weights.isEmpty)
               const Center(child: Text('No weights logged yet.'))
             else
-              ListView.builder(
-                itemCount: _weights.length,
-                shrinkWrap: true,                               // ✅ allow nesting
-                physics: const NeverScrollableScrollPhysics(),  // ✅ parent scroll handles it
-                itemBuilder: (context, index) {
-                  final item = _weights[index];
-                  return Card(
-                    margin: const EdgeInsets.symmetric(vertical: 6),
-                    child: ListTile(
-                      leading: const Icon(Icons.fitness_center),
-                      title: Text('${item['weight']} ${item['unit']}'),
-                      subtitle: Text(DateFormat('dd-MM-yyyy').format(item['date'])),
-                      onTap: () => _editWeightEntry(item),
-                    ),
+              Builder(
+                builder: (context) {
+                  // group entries by date
+                  final Map<String, Map<String, dynamic>> byDate = {};
+                  for (final w in _weights) {
+                    final date = w['date'] as DateTime;
+                    final dateKey =
+                        '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+                    final tod = (w['tod'] as String?)?.toLowerCase() ?? 'am'; // back-compat
+                    byDate.putIfAbsent(dateKey, () => {'date': date});
+                    byDate[dateKey]![tod] = w;
+                  }
+
+                  final dates = byDate.keys.toList()..sort((a, b) => b.compareTo(a)); // newest first
+
+                  return ListView.builder(
+                    itemCount: dates.length,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemBuilder: (context, index) {
+                      final key = dates[index];
+                      final row = byDate[key]!;
+                      final date = row['date'] as DateTime;
+                      final am = row['am'] as Map<String, dynamic>?;
+                      final pm = row['pm'] as Map<String, dynamic>?;
+
+                      return Card(
+                        margin: const EdgeInsets.symmetric(vertical: 2), // smaller gap between rows
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), // tighter inside
+                          child: Row(
+                            children: [
+                              // Date label on the left
+                              SizedBox(
+                                width: 80, // fixed width column for date
+                                child: Text(
+                                  DateFormat('dd-MM').format(date),
+                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+                                ),
+                              ),
+
+                              // AM column
+                              Expanded(
+                                child: InkWell(
+                                  onTap: () {
+                                    if (am != null) {
+                                      _editWeightEntry(am);
+                                    } else {
+                                      // create a placeholder entry for this date, tod = am
+                                      final newItem = {
+                                        'date': date,
+                                        'unit': 'kg',
+                                        'tod': 'am',
+                                      };
+                                      _editWeightEntry(newItem);
+                                    }
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: Colors.white24),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      am != null ? '${am['weight']} ${am['unit']}' : '＋',
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        color: Colors.blueAccent,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+
+
+
+                              const SizedBox(width: 8),
+
+                              // PM column
+                              Expanded(
+                                child: InkWell(
+                                  onTap: () {
+                                    if (pm != null) {
+                                      _editWeightEntry(pm);
+                                    } else {
+                                      final newItem = {
+                                        'date': date,
+                                        'unit': 'kg',
+                                        'tod': 'pm',
+                                      };
+                                      _editWeightEntry(newItem);
+                                    }
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: Colors.white24),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      pm != null ? '${pm['weight']} ${pm['unit']}' : '＋',
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        color: Colors.orangeAccent,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+
+
+                            ],
+                          ),
+                        ),
+                      );
+
+                    },
                   );
                 },
               ),
