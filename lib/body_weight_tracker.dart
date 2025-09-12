@@ -47,7 +47,7 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
   String _fmtDate(DateTime d) =>
       "${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}";
 
-  TrendRange _trend = TrendRange.d14;
+  TrendRange _trend = TrendRange.y365;
   bool _showSecondWeighIn = false; // controls expansion + 2nd line visibility
   List<Map<String, dynamic>> _series14 = [];
   List<Map<String, dynamic>> _series30 = [];
@@ -991,7 +991,7 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                                       (i) => FlSpot(i.toDouble(), (am[i]['weight'] as double)),
                                 ),
                                 barWidth: 2,
-                                color: Colors.blueAccent, // AM
+                                color: Colors.lightBlueAccent, // AM
                                 dotData: FlDotData(show: true),
                               ),
                             if (showPm)
@@ -1002,7 +1002,7 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                                       (i) => FlSpot(i.toDouble(), (pm[i]['weight'] as double)),
                                 ),
                                 barWidth: 2,
-                                color: Colors.orangeAccent, // PM
+                                color: Colors.pinkAccent, // PM
                                 dotData: FlDotData(show: true),
                               ),
                           ],
@@ -1137,100 +1137,138 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
 
                   final dates = byDate.keys.toList()..sort((a, b) => b.compareTo(a)); // newest first
 
-                  return ListView.builder(
-                    itemCount: dates.length,
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemBuilder: (context, index) {
-                      final key = dates[index];
-                      final row = byDate[key]!;
-                      final date = row['date'] as DateTime;
-                      final am = row['am'] as Map<String, dynamic>?;
-                      final pm = row['pm'] as Map<String, dynamic>?;
-
-                      return Card(
-                        margin: const EdgeInsets.symmetric(vertical: 2), // smaller gap between rows
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), // tighter inside
-                          child: Row(
-                            children: [
-                              // Date label on the left
-                              SizedBox(
-                                width: 80, // fixed width column for date
-                                child: Text(
-                                  DateFormat('dd-MM').format(date),
-                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // ── Header row ─────────────────────────────────────────────────────────────
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(0, 4, 0, 4),
+                        child: Row(
+                          children: [
+                            const SizedBox(
+                              width: 80, // matches the date column width in your rows
+                              child: Text(
+                                'Date',
+                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                            const SizedBox(width: 0),
+                            Expanded(
+                              child: Text(
+                                'AM',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.lightBlueAccent, // ✅ match AM color
                                 ),
                               ),
-
-                              // AM column
-                              Expanded(
-                                child: InkWell(
-                                  onTap: () {
-                                    if (am != null) {
-                                      _editWeightEntry(am);
-                                    } else {
-                                      _addWeightEntry(date: date, tod: 'am');
-                                    }
-                                  },
-
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
-                                    decoration: BoxDecoration(
-                                      border: Border.all(color: Colors.white24),
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    child: Text(
-                                      am != null ? '${am['weight']} ${am['unit']}' : '＋',
-                                      style: const TextStyle(
-                                        fontSize: 13,
-                                        color: Colors.blueAccent,
-                                      ),
-                                    ),
-                                  ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'PM',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.pinkAccent, // ✅ match PM color
                                 ),
                               ),
-
-
-
-                              const SizedBox(width: 8),
-
-                              // PM column
-                              Expanded(
-                                child: InkWell(
-                                  onTap: () {
-                                    if (pm != null) {
-                                      _editWeightEntry(pm);
-                                    } else {
-                                      _addWeightEntry(date: date, tod: 'pm');
-                                    }
-                                  },
-
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
-                                    decoration: BoxDecoration(
-                                      border: Border.all(color: Colors.white24),
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    child: Text(
-                                      pm != null ? '${pm['weight']} ${pm['unit']}' : '＋',
-                                      style: const TextStyle(
-                                        fontSize: 13,
-                                        color: Colors.orangeAccent,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-
-
-                            ],
-                          ),
+                            ),
+                          ],
                         ),
-                      );
+                      ),
+                      const Divider(height: 1),
 
-                    },
+
+                      // ── Your list rows (unchanged, just moved under the header) ───────────────
+                      ListView.builder(
+                        itemCount: dates.length,
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemBuilder: (context, index) {
+                          final key = dates[index];
+                          final row = byDate[key]!;
+                          final date = row['date'] as DateTime;
+                          final am = row['am'] as Map<String, dynamic>?;
+                          final pm = row['pm'] as Map<String, dynamic>?;
+
+                          return Card(
+                            margin: const EdgeInsets.symmetric(vertical: 2),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              child: Row(
+                                children: [
+                                  // Date column (fixed width to align with header)
+                                  SizedBox(
+                                    width: 80,
+                                    child: Text(
+                                      DateFormat('dd-MM').format(date),
+                                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+                                    ),
+                                  ),
+
+                                  // AM cell
+                                  Expanded(
+                                    child: InkWell(
+                                      onTap: () {
+                                        if (am != null) {
+                                          _editWeightEntry(am);
+                                        } else {
+                                          _addWeightEntry(date: date, tod: 'am');
+                                        }
+                                      },
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
+                                        decoration: BoxDecoration(
+                                          border: Border.all(color: Colors.white24),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Text(
+                                          am != null ? '${am['weight']} ${am['unit']}' : '＋',
+                                          textAlign: TextAlign.center,
+                                          style: const TextStyle(fontSize: 13, color: Colors.lightBlueAccent,),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+
+                                  const SizedBox(width: 8),
+
+                                  // PM cell
+                                  Expanded(
+                                    child: InkWell(
+                                      onTap: () {
+                                        if (pm != null) {
+                                          _editWeightEntry(pm);
+                                        } else {
+                                          _addWeightEntry(date: date, tod: 'pm');
+                                        }
+                                      },
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
+                                        decoration: BoxDecoration(
+                                          border: Border.all(color: Colors.white24),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Text(
+                                          pm != null ? '${pm['weight']} ${pm['unit']}' : '＋',
+                                          textAlign: TextAlign.center,
+                                          style: const TextStyle(fontSize: 13, color: Colors.pinkAccent),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
                   );
+
                 },
               ),
 
