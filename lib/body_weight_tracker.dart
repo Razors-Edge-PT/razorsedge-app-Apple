@@ -22,11 +22,6 @@ class BodyWeightTracker extends StatefulWidget {
 
 class _BodyWeightTrackerState extends State<BodyWeightTracker> {
   final TextEditingController _weightController = TextEditingController();
-  // ➕ PM entry UI state
-  final TextEditingController _pmWeightController = TextEditingController();
-  DateTime _pmSelectedDate = DateTime.now();
-  bool _showPmEntry = false;
-
   final List<Map<String, dynamic>> _weights = [];
   bool show3DayAverage = true;
   DateTime _selectedDate = DateTime.now();
@@ -40,16 +35,7 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
   List<Map<String, dynamic>> _series180 = [];
   List<Map<String, dynamic>> _series365 = [];
   // ➕ AM/PM split series for each range
-  List<Map<String, dynamic>> _series14Am = [];
-  List<Map<String, dynamic>> _series14Pm = [];
-  List<Map<String, dynamic>> _series30Am = [];
-  List<Map<String, dynamic>> _series30Pm = [];
-  List<Map<String, dynamic>> _series90Am = [];
-  List<Map<String, dynamic>> _series90Pm = [];
-  List<Map<String, dynamic>> _series180Am = [];
-  List<Map<String, dynamic>> _series180Pm = [];
-  List<Map<String, dynamic>> _series365Am = [];
-  List<Map<String, dynamic>> _series365Pm = [];
+
 
 
 // Per-range “did we trim outliers?” flag (for the small note under the chart)
@@ -145,56 +131,6 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
     }
   }
 
-  Future<void> _saveWeightWithTod({
-    required double weight,
-    required String unit,
-    required String tod, // "am" | "pm"
-    required DateTime selectedDate,
-  }) async {
-    // Capture the *current* time-of-day to preserve exact time the user logs,
-    // but attach it to the *selected date* to avoid TZ/midnight issues.
-    final now = DateTime.now();
-    final ts = DateTime(
-      selectedDate.year,
-      selectedDate.month,
-      selectedDate.day,
-      now.hour,
-      now.minute,
-      now.second,
-      now.millisecond,
-      now.microsecond,
-    );
-
-    final weightData = {
-      'weight': weight,
-      'unit': unit,
-      'timestamp': Timestamp.fromDate(ts),
-      'tod': tod, // explicit AM/PM for clarity
-    };
-
-    try {
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(userId)
-          .collection('weights')
-          .add(weightData);
-
-      if (tod == 'am') {
-        _weightController.clear();
-      } else {
-        _pmWeightController.clear();
-      }
-      FocusScope.of(context).unfocus();
-      if (widget.onWeightSaved != null) {
-        widget.onWeightSaved!('${weight.toString()} $unit');
-      }
-      await _fetchWeights();
-    } catch (e) {
-      debugPrint('❌ _saveWeightWithTod failed: $e');
-    }
-  }
-
-
   Future<void> _deleteAllWeights() async {
     try {
       final colRef = FirebaseFirestore.instance
@@ -233,25 +169,13 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
   }
 
   void _recomputeSeries() {
-    // Existing unified series (keep as-is if you want)
     _series14  = _buildSeries(days: 14);
     _series30  = _buildSeries(days: 30);
     _series90  = _buildSeries(days: 90);
     _series180 = _buildSeries(days: 180);
     _series365 = _buildSeries(days: 365);
-
-    // ➕ AM/PM split series
-    _series14Am   = _buildSeriesByTod(days: 14,  tod: 'am');
-    _series14Pm   = _buildSeriesByTod(days: 14,  tod: 'pm');
-    _series30Am   = _buildSeriesByTod(days: 30,  tod: 'am');
-    _series30Pm   = _buildSeriesByTod(days: 30,  tod: 'pm');
-    _series90Am   = _buildSeriesByTod(days: 90,  tod: 'am');
-    _series90Pm   = _buildSeriesByTod(days: 90,  tod: 'pm');
-    _series180Am  = _buildSeriesByTod(days: 180, tod: 'am');
-    _series180Pm  = _buildSeriesByTod(days: 180, tod: 'pm');
-    _series365Am  = _buildSeriesByTod(days: 365, tod: 'am');
-    _series365Pm  = _buildSeriesByTod(days: 365, tod: 'pm');
   }
+
 
 
 
@@ -450,10 +374,11 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                     ),
                     const SizedBox(width: 8),
                     ElevatedButton(
-                      onPressed: () => Navigator.pop(context, {
-                        'weight': double.tryParse(weightController.text),
-                        'date': selectedDate,
-                      }),
+                      onPressed: () {
+                        final weight = double.tryParse(_weightController.text) ?? 0.0;
+                        _saveWeight(weight, 'kg');
+                      },
+
                       child: const Text('Save'),
                     ),
                   ],
@@ -634,13 +559,9 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                 ElevatedButton.icon(
                   onPressed: () {
                     final weight = double.tryParse(_weightController.text) ?? 0.0;
-                    _saveWeightWithTod(
-                      weight: weight,
-                      unit: 'kg',
-                      tod: 'am',
-                      selectedDate: _selectedDate,
-                    );
+                    _saveWeight(weight, 'kg');
                   },
+
 
                   icon: const Icon(Icons.save),
                   label: const Text('Save'),
@@ -651,158 +572,27 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                 ),
               ],
             ),
-            // ➕ PM weigh-in (collapsed by default)
-            const SizedBox(height: 8),
-            InkWell(
-              onTap: () {
-                setState(() {
-                  _showPmEntry = !_showPmEntry;
-                  if (_showPmEntry) {
-                    // Default PM date to match the currently selected AM date
-                    _pmSelectedDate = _selectedDate;
-                  }
-                });
-              },
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(_showPmEntry ? Icons.expand_less : Icons.expand_more, size: 18),
-                  const SizedBox(width: 6),
-                  Text(
-                    _showPmEntry ? 'Hide PM weigh-in' : 'Add PM weigh-in',
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-                  ),
-                ],
-              ),
-            ),
 
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 180),
-              child: !_showPmEntry
-                  ? const SizedBox.shrink()
-                  : Padding(
-                key: const ValueKey('pm_row'),
-                padding: const EdgeInsets.only(top: 8.0),
-                child: Row(
-                  children: [
-                    // PM Weight field
-                    Flexible(
-                      flex: 3,
-                      child: SizedBox(
-                        height: 48,
-                        child: TextField(
-                          controller: _pmWeightController,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            labelText: 'PM Weight (kg)',
-                            border: OutlineInputBorder(),
-                            enabledBorder: OutlineInputBorder(
-                              borderSide: BorderSide(color: Colors.white70),
-                            ),
-                            contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-                          ),
-                        ),
-                      ),
-                    ),
-
-                    const SizedBox(width: 8),
-
-                    // PM Date picker (tap to change)
-                    Flexible(
-                      flex: 3,
-                      child: InkWell(
-                        onTap: () async {
-                          final picked = await showDatePicker(
-                            context: context,
-                            initialDate: _pmSelectedDate,
-                            firstDate: DateTime(2010),
-                            lastDate: DateTime.now().add(const Duration(days: 365)),
-                          );
-                          if (picked != null) {
-                            setState(() => _pmSelectedDate = picked);
-                          }
-                        },
-                        child: InputDecorator(
-                          decoration: InputDecoration(
-                            border: OutlineInputBorder(
-                              borderSide: BorderSide(color: Theme.of(context).colorScheme.primary),
-                            ),
-                            enabledBorder: const OutlineInputBorder(
-                              borderSide: BorderSide(color: Colors.white70),
-                            ),
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 12),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(Icons.calendar_today,
-                                  size: 18, color: Theme.of(context).colorScheme.primary),
-                              const SizedBox(width: 4),
-                              Text(
-                                _fmtDate(_pmSelectedDate),
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  color: Theme.of(context).colorScheme.primary,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-
-                    const SizedBox(width: 8),
-
-                    // PM Save
-                    ElevatedButton.icon(
-                      onPressed: () {
-                        final weight = double.tryParse(_pmWeightController.text) ?? 0.0;
-                        _saveWeightWithTod(
-                          weight: weight,
-                          unit: 'kg',
-                          tod: 'pm',
-                          selectedDate: _pmSelectedDate,
-                        );
-                      },
-                      icon: const Icon(Icons.save),
-                      label: const Text('Save'),
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-                        minimumSize: const Size(0, 0),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
 
             const SizedBox(height: 6),
 
             // ---- Trend Chart (14-day <-> 1-month toggle) ----
-            Builder(
-              builder: (_) {
-                // Choose AM/PM series for the active range
-                List<Map<String, dynamic>> am, pm;
-                switch (_trend) {
-                  case TrendRange.d14:
-                    am = _series14Am; pm = _series14Pm; break;
-                  case TrendRange.m30:
-                    am = _series30Am; pm = _series30Pm; break;
-                  case TrendRange.m90:
-                    am = _series90Am; pm = _series90Pm; break;
-                  case TrendRange.m180:
-                    am = _series180Am; pm = _series180Pm; break;
-                  case TrendRange.y365:
-                    am = _series365Am; pm = _series365Pm; break;
-                }
+                Builder(
+                  builder: (_) {
+                    final List<Map<String, dynamic>> series;
+                    switch (_trend) {
+                      case TrendRange.d14:  series = _series14;  break;
+                      case TrendRange.m30:  series = _series30;  break;
+                      case TrendRange.m90:  series = _series90;  break;
+                      case TrendRange.m180: series = _series180; break;
+                      case TrendRange.y365: series = _series365; break;
+                    }
+                    if (series.length < 2) {
+                      return const SizedBox.shrink();
+                    }
 
-                // Use whichever series has more points for X-axis labels
-                final seriesForLabels = (am.length >= pm.length) ? am : pm;
 
-                if ((am.length + pm.length) < 2) {
-                  return const SizedBox.shrink();
-                }
-
-                return Column(
+                    return Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     const SizedBox(height: 20),
@@ -842,20 +632,7 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                       ),
                     ),
 
-                    const SizedBox(height: 10),
-                    // Minimal legend
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Container(width: 12, height: 12, color: Colors.blueAccent),
-                        const SizedBox(width: 6),
-                        const Text('AM', style: TextStyle(fontSize: 12)),
-                        const SizedBox(width: 16),
-                        Container(width: 12, height: 12, color: Colors.tealAccent),
-                        const SizedBox(width: 6),
-                        const Text('PM', style: TextStyle(fontSize: 12)),
-                      ],
-                    ),
+
                     const SizedBox(height: 6),
 
 
@@ -872,8 +649,9 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                                 interval: 1,
                                 getTitlesWidget: (value, meta) {
                                   final i = value.toInt();
-                                  if (i < 0 || i >= seriesForLabels.length) return const SizedBox.shrink();
+                                  if (i < 0 || i >= series.length) return const SizedBox.shrink();
 
+// Label density by range
                                   int showEvery;
                                   switch (_trend) {
                                     case TrendRange.d14:  showEvery = 1;  break;
@@ -882,12 +660,11 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                                     case TrendRange.m180: showEvery = 14; break;
                                     case TrendRange.y365: showEvery = 30; break;
                                   }
-                                  if (i % showEvery != 0 && i != seriesForLabels.length - 1) {
+                                  if (i % showEvery != 0 && i != series.length - 1) {
                                     return const SizedBox.shrink();
                                   }
 
-
-                                  final date = seriesForLabels[i]['date'] as DateTime;
+                                  final date = series[i]['date'] as DateTime;
                                   final label = DateFormat('d MMM').format(date);
 
                                   return Transform.rotate(
@@ -898,6 +675,7 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                                       style: const TextStyle(fontSize: 10),
                                     ),
                                   );
+
                                 },
                               ),
                             ),
@@ -910,11 +688,8 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                                 interval: 1,
                                 reservedSize: 28,
                                 getTitlesWidget: (value, meta) {
-                                  final all = [...am, ...pm];
-                                  if (all.isEmpty) return const SizedBox.shrink();
-
-                                  final maxY = all.map((e) => e['weight'] as double).reduce((a, b) => a > b ? a : b) + 1;
-                                  if (value == maxY) return const SizedBox.shrink(); // ❌ hide top label
+                                  final maxY = (series.map((e) => e['weight'] as double).reduce((a, b) => a > b ? a : b)) + 1;
+                                  if (value == maxY) return const SizedBox.shrink();
                                   return Text(value.toStringAsFixed(0), style: const TextStyle(fontSize: 12));
                                 },
                               ),
@@ -925,82 +700,59 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                                 interval: 1,
                                 reservedSize: 28,
                                 getTitlesWidget: (value, meta) {
-                                  final all = [...am, ...pm];
-                                  if (all.isEmpty) return const SizedBox.shrink();
-
-                                  final maxY = all.map((e) => e['weight'] as double).reduce((a, b) => a > b ? a : b) + 1;
-                                  if (value == maxY) return const SizedBox.shrink(); // ❌ hide top label
+                                  final maxY = (series.map((e) => e['weight'] as double).reduce((a, b) => a > b ? a : b)) + 1;
+                                  if (value == maxY) return const SizedBox.shrink();
                                   return Text(value.toStringAsFixed(0), style: const TextStyle(fontSize: 12));
                                 },
                               ),
                             ),
-
                           ),
 
                           borderData: FlBorderData(show: true),
                           minX: 0,
-                          maxX: (seriesForLabels.length - 1).toDouble(),
-                          minY: (() {
-                            final all = [...am, ...pm];
-                            if (all.isEmpty) return 0.0;
-                            final minVal = all.map((e) => (e['weight'] as double)).reduce((a, b) => a < b ? a : b);
-                            return minVal - 1;
-                          })(),
-                          maxY: (() {
-                            final all = [...am, ...pm];
-                            if (all.isEmpty) return 0.0;
-                            final maxVal = all.map((e) => (e['weight'] as double)).reduce((a, b) => a > b ? a : b);
-                            return maxVal + 1;
-                          })(),
+                          maxX: (series.length - 1).toDouble(),
+                          minY: (series.map((e) => e['weight'] as double).reduce((a, b) => a < b ? a : b)) - 1,
+                          maxY: (series.map((e) => e['weight'] as double).reduce((a, b) => a > b ? a : b)) + 1,
+
 
                           lineBarsData: [
-                            // AM line
                             LineChartBarData(
                               isCurved: true,
                               spots: List.generate(
-                                am.length,
-                                    (i) => FlSpot(i.toDouble(), (am[i]['weight'] as double)),
+                                series.length,
+                                    (i) => FlSpot(i.toDouble(), (series[i]['weight'] as double)),
                               ),
                               barWidth: 2,
                               color: Colors.blueAccent,
                               dotData: FlDotData(show: true),
                             ),
-
-                            // PM line
-                            LineChartBarData(
-                              isCurved: true,
-                              spots: List.generate(
-                                pm.length,
-                                    (i) => FlSpot(i.toDouble(), (pm[i]['weight'] as double)),
-                              ),
-                              barWidth: 2,
-                              color: Colors.tealAccent,
-                              dotData: FlDotData(show: true),
-                            ),
                           ],
+
                           lineTouchData: LineTouchData(
                             touchTooltipData: LineTouchTooltipData(
                               tooltipBgColor: Colors.grey.shade900,
+
                               getTooltipItems: (touchedSpots) {
                                 return touchedSpots.map((spot) {
-                                  final gi = spot.barIndex;   // 0 = AM, 1 = PM
                                   final xi = spot.x.toInt();
+                                  if (xi < 0 || xi >= series.length) return null;
 
-                                  final list = (gi == 0) ? am : pm;
-                                  if (xi < 0 || xi >= list.length) return null;
+                                  final date = series[xi]['date'] as DateTime;
+                                  final y    = series[xi]['weight'] as double;
 
-                                  final date = list[xi]['date'] as DateTime;
-                                  final y = list[xi]['weight'] as double;
-
-                                  final todLabel = (gi == 0) ? 'AM' : 'PM';
                                   final dateStr = DateFormat('d MMM yyyy').format(date);
 
                                   return LineTooltipItem(
-                                    '$dateStr\n$todLabel • ${y.toStringAsFixed(1)} kg',
-                                    const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500),
+                                    '$dateStr\n${y.toStringAsFixed(1)} kg',
+                                    const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                    ),
                                   );
                                 }).whereType<LineTooltipItem>().toList();
                               },
+
                             ),
                           ),
 
