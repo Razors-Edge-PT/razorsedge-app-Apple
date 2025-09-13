@@ -1303,12 +1303,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   }
 
   String? getRepTargetForExerciseWES(String exerciseName, int rowIndex) {
-    print('🚨 [WES] ENTERED getRepTargetForExerciseWES → $exerciseName, row $rowIndex');
-    print('🗓️ [WES] _blockStartDate = $_blockStartDate');
-    print('📅 [WES] _selectedDate = $_selectedDate');
 
     if (_blockStartDate == null || _selectedDate == null) {
-      print('❌ [WES] Block start or selected date is null');
       return null;
     }
 
@@ -2225,8 +2221,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           '🔁 [WES] Using BB2-entered RIR for "$exerciseName" Set 1: $bb2Rir');
       return bb2Rir;
     }
-    print('🧭 [WES RIR] exercise="$exerciseName" '
-        'blockStartDate=$blockStartDate _selectedDate=$_selectedDate');
+
 
     final exerciseId =
         PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
@@ -2670,9 +2665,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           WidgetsBinding.instance.addPostFrameCallback((_) {
             final uidForWarm = userId;
             if (uidForWarm.isNotEmpty && _selectedBlockId != null && _selectedBlockId!.isNotEmpty) {
-              WarmupService.instance.warmWES(uidForWarm, activeBlockId: _selectedBlockId);
+              WarmupService.instance.warmWES(
+                uidForWarm,
+                activeBlockId: _selectedBlockId,
+                selectedDate: _selectedDate, // ✅ speeds up _loadExistingWorkoutIfAny
+              );
             }
           });
+
 
 
           await _loadInitialData();
@@ -2818,7 +2818,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       final isTracked = PeriodizationModelUtils.isVelocityTracked(name); // ✅ declare it here
       _showVelocityByExercise[name] = isTracked;
 
-      print('📈 Velocity Check → $name → $isTracked'); // ✅ now it exists
     }
   }
 
@@ -2926,58 +2925,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     }
   }
 
-
-  Future<void> _loadExercisesFromBB2ForDay() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null || _selectedBlockId == null || _selectedDate == null) return;
-    if (user == null) {
-      return;
-    }
-    if (_selectedBlockId == null) {
-      return;
-    }
-    if (_selectedDate == null) {
-      return;
-    }
-
-    final dateKey = DateFormat('yyyy-MM-dd').format(_selectedDate);
-    print('📅 [WES] Loading BB2 exercises for $dateKey (block: $_selectedBlockId)');
-    final doc = await FirebaseFirestore.instance
-        .collection('planned_blocks')
-        .doc(userId)
-        .collection('blocks')
-        .doc(_selectedBlockId)
-        .collection('block_data')
-        .doc(dateKey)
-        .get();
-
-    if (!doc.exists) {
-      print('🟡 [WES] No BB2 plan found for $dateKey in block $_selectedBlockId');
-      return;
-    }
-
-    final data = doc.data();
-    final List<dynamic> rows = data?['rows'] ?? [];
-
-    // Optional: clear old list first
-    _selectedExercisesWithCircuits.clear();
-
-    for (final row in rows) {
-      final name = row['name'] ?? '';
-      final circuit = row['circuitIndex'] ?? 0;
-
-      if (name.trim().isEmpty) continue;
-
-      _selectedExercisesWithCircuits.add({
-        'name': name.trim(),
-        'circuitIndex': circuit,
-      });
-    }
-
-    print('✅ [WES] Loaded ${_selectedExercisesWithCircuits.length} exercises from BB2 for $dateKey');
-
-    setState(() {}); // 🧠 Trigger UI update
-  }
 
   Future<void> _loadInitialData() async {
     print('🚀 [WES Init] Starting _loadInitialData');
@@ -3087,6 +3034,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   }
 
   Future<void> _loadExistingWorkoutIfAny() async {
+    final _tLoadExisting = Stopwatch()..start();
+    print('⏱️ [WES] _loadExistingWorkoutIfAny started');
+    try {
     final uid = UserContext.of(context, listen: false).currentUid ?? FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
 
@@ -3100,138 +3050,217 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     print('   └─ primary docId = $newDocId');
 
     // 1) Primary: new-style doc keyed by date string
-    // --- BEGIN UNION LOOKUP (new-style preferred; include legacy-only) ---
+// --- BEGIN UNION LOOKUP (new-style preferred; include legacy-only) ---
+// Helpers kept local so names don't leak
+      List<Map<String, dynamic>> _exListFromDoc(DocumentSnapshot<Map<String, dynamic>>? d) {
+        if (d == null || !d.exists) return const [];
+        final data = d.data();
+        if (data == null) return const [];
+        final raw = (data['exercises'] as List?) ?? const [];
+        return raw.map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map)).toList();
+      }
+      List<Map<String, dynamic>> _wesPlannedFromDoc(DocumentSnapshot<Map<String, dynamic>>? d) {
+        if (d == null || !d.exists) return const [];
+        final data = d.data();
+        if (data == null) return const [];
+        final raw = (data['wesPlannedExercises'] as List?) ?? const [];
+        return raw.map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map)).toList();
+      }
 
-// Server-first reads so cross-device saves show up
-    DocumentSnapshot<Map<String, dynamic>>? newDoc;
-    try {
-      newDoc = await workoutsCol.doc(newDocId).get(const GetOptions(source: Source.server));
-    } catch (_) {
-      newDoc = await workoutsCol.doc(newDocId).get();
-    }
+// Variables the rest of the function expects
+      List exList = const [];
+      List<Map<String, dynamic>> wesPlannedList = const [];
 
-// ----- Legacy lookups: try string equals, string range (ISO), and timestamp range -----
-    final isoLocal = DateTime(startOfDay.year, startOfDay.month, startOfDay.day).toIso8601String();    // …T00:00:00.000
-    final isoUtc   = DateTime.utc(startOfDay.year, startOfDay.month, startOfDay.day).toIso8601String(); // …T00:00:00.000Z
-    final dateOnly = DateFormat('yyyy-MM-dd').format(startOfDay); // 2025-08-19
-    final nextDateOnly = DateFormat('yyyy-MM-dd').format(nextDay);
+      bool _usedFastPath = false;
 
-// For string *equals* (covers old midnight saves, with and without Z, and date-only)
-    Future<QuerySnapshot<Map<String, dynamic>>> _eq(String value) async {
+// FAST PATH: cache-first new-style → render immediately if present; reconcile legacy in background
+      DocumentSnapshot<Map<String, dynamic>>? _newDocCache;
       try {
-        return await workoutsCol.where('date', isEqualTo: value)
-            .get(const GetOptions(source: Source.server));
+        _newDocCache = await workoutsCol.doc(newDocId).get(const GetOptions(source: Source.cache));
       } catch (_) {
-        return await workoutsCol.where('date', isEqualTo: value).get();
+        _newDocCache = null;
       }
-    }
-    final legacyStrLocal = await _eq(isoLocal);
-    final legacyStrUtc   = await _eq(isoUtc);
-    final legacyStrDate  = await _eq(dateOnly);
 
-// NEW: For string *range* (catches ISO strings with time-of-day, e.g. 2025-08-14T09:00:29.295539)
-    QuerySnapshot<Map<String, dynamic>> legacyStrRange;
-    try {
-      legacyStrRange = await workoutsCol
-          .where('date', isGreaterThanOrEqualTo: '${dateOnly}T00:00:00') // lower bound (inclusive)
-          .where('date', isLessThan:        '${nextDateOnly}T00:00:00')  // upper bound (exclusive)
-          .get(const GetOptions(source: Source.server));
-    } catch (_) {
-      legacyStrRange = await workoutsCol
-          .where('date', isGreaterThanOrEqualTo: '${dateOnly}T00:00:00')
-          .where('date', isLessThan:        '${nextDateOnly}T00:00:00')
-          .get();
-    }
+      if (_newDocCache != null && _newDocCache.exists) {
+        final _newExListCache = _exListFromDoc(_newDocCache);
+        final _wesPlannedCache = _wesPlannedFromDoc(_newDocCache);
 
-// Timestamp day-range (only hits docs where `date` is a Timestamp)
-    QuerySnapshot<Map<String, dynamic>> legacyTsSnap;
-    try {
-      legacyTsSnap = await workoutsCol
-          .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
-          .where('date', isLessThan: Timestamp.fromDate(nextDay))
-          .get(const GetOptions(source: Source.server));
-    } catch (_) {
-      legacyTsSnap = await workoutsCol
-          .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
-          .where('date', isLessThan: Timestamp.fromDate(nextDay))
-          .get();
-    }
+        if (_newExListCache.isNotEmpty || _wesPlannedCache.isNotEmpty) {
+          exList = _newExListCache;
+          wesPlannedList = _wesPlannedCache;
+          _usedFastPath = true;
 
-// De-dup doc hits by id across all legacy queries
-    final Map<String, DocumentSnapshot<Map<String, dynamic>>> _legacyDocsById = {};
-    for (final d in [
-      ...legacyStrLocal.docs,
-      ...legacyStrUtc.docs,
-      ...legacyStrDate.docs,
-      ...legacyStrRange.docs,  // << add the string-range hits
-      ...legacyTsSnap.docs,
-    ]) {
-      _legacyDocsById[d.id] = d;
-    }
+          print('⚡ [WES LoadExisting] Fast-path (cache) new-style: '
+              'ex=${_newExListCache.length}, wesPlanned=${_wesPlannedCache.length}');
 
-// Extract exercises from a doc
-    List<Map<String, dynamic>> _exListFromDoc(DocumentSnapshot<Map<String, dynamic>>? d) {
-      if (d == null || !d.exists) return const [];
-      final data = d.data();
-      if (data == null) return const [];
-      final raw = (data['exercises'] as List?) ?? const [];
-      return raw.map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map)).toList();
-    }
-    List<Map<String, dynamic>> _wesPlannedFromDoc(DocumentSnapshot<Map<String, dynamic>>? d) {
-      if (d == null || !d.exists) return const [];
-      final data = d.data();
-      if (data == null) return const [];
-      final raw = (data['wesPlannedExercises'] as List?) ?? const [];
-      return raw.map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map)).toList();
-    }
+          // Background reconcile (server): pull legacy-only rows forward into new-style
+          // ignore: unawaited_futures
+          (() async {
+            try {
+              final newDocServer = await workoutsCol.doc(newDocId).get(const GetOptions(source: Source.server));
 
+              // recompute date strings here to avoid scope issues
+              final String _dateOnly     = DateFormat('yyyy-MM-dd').format(startOfDay);
+              final String _nextDateOnly = DateFormat('yyyy-MM-dd').format(nextDay);
+              final String _isoLocal     = startOfDay.toIso8601String();
+              final String _isoUtc       = DateTime.utc(startOfDay.year, startOfDay.month, startOfDay.day).toIso8601String();
 
-// Gather lists
-    final List<Map<String, dynamic>> newExList = _exListFromDoc(newDoc);
-    final List<Map<String, dynamic>> legacyExList = [
-      for (final d in _legacyDocsById.values) ..._exListFromDoc(d),
-    ];
+              Future<QuerySnapshot<Map<String, dynamic>>> _eqServer(String v) =>
+                  workoutsCol.where('date', isEqualTo: v).get(const GetOptions(source: Source.server));
 
-    print('   ℹ️ legacy candidates: '
-        'eqLocal=${legacyStrLocal.docs.length}, eqUtcZ=${legacyStrUtc.docs.length}, '
-        'eqDateOnly=${legacyStrDate.docs.length}, strRange=${legacyStrRange.docs.length}, '
-        'tsRange=${legacyTsSnap.docs.length}, uniqueDocs=${_legacyDocsById.length}, '
-        'legacyExList=${legacyExList.length}');
+              final results = await Future.wait([
+                _eqServer(_isoLocal),
+                _eqServer(_isoUtc),
+                _eqServer(_dateOnly),
+                workoutsCol
+                    .where('date', isGreaterThanOrEqualTo: '${_dateOnly}T00:00:00')
+                    .where('date', isLessThan:        '${_nextDateOnly}T00:00:00')
+                    .get(const GetOptions(source: Source.server)),
+                workoutsCol
+                    .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+                    .where('date', isLessThan: Timestamp.fromDate(nextDay))
+                    .get(const GetOptions(source: Source.server)),
+              ]);
 
-// Build union keyed by (name|circuitIndex). Prefer NEW if both contain same exercise.
-    String _key(Map<String, dynamic> e) =>
-        '${(e['name'] ?? '').toString().trim()}|${(e['circuitIndex'] ?? 0) as int}';
+              final Map<String, DocumentSnapshot<Map<String, dynamic>>> legacyById = {};
+              for (final snap in results) {
+                for (final d in snap.docs) {
+                  legacyById[d.id] = d;
+                }
+              }
 
+              final List<Map<String, dynamic>> legacyEx = [
+                for (final d in legacyById.values) ..._exListFromDoc(d),
+              ];
 
-    final Map<String, Map<String, dynamic>> newByKey = {
-      for (final e in newExList) _key(e): e,
-    };
+              final List<Map<String, dynamic>> newExServer = _exListFromDoc(newDocServer);
+              String _key(Map<String, dynamic> e) => '${(e['name'] ?? '').toString().trim()}|${(e['circuitIndex'] ?? 0) as int}';
+              final newKeys = { for (final e in newExServer) _key(e) };
 
-// Start with all NEW
-    final List<Map<String, dynamic>> combined = [...newExList];
+              final List<Map<String, dynamic>> legacyOnly = [
+                for (final e in legacyEx) if (!newKeys.contains(_key(e))) e
+              ];
 
-// Add LEGACY-ONLY exercises (skip if same exercise exists in NEW)
-    for (final e in legacyExList) {
-      final k = _key(e);
-      if (!newByKey.containsKey(k)) {
-        combined.add(e);
+              if (legacyOnly.isNotEmpty) {
+                final existing = Map<String, dynamic>.from(newDocServer.data() ?? {});
+                final existingRows = List<Map<String, dynamic>>.from(
+                  (existing['exercises'] as List?)?.map((e) => Map<String, dynamic>.from(e as Map)) ?? const [],
+                );
+                existingRows.addAll(legacyOnly);
+                existing['exercises'] = existingRows;
+
+                await workoutsCol.doc(newDocId).set(existing, SetOptions(merge: true));
+                if (mounted) setState(() {});
+                print('🧩 [WES Reconcile] Merged ${legacyOnly.length} legacy-only rows → new-style');
+              }
+            } catch (_) {
+              // best-effort
+            }
+          })();
+        }
       }
-    }
 
+      if (!_usedFastPath) {
+        // SLOW PATH: your existing server-first union logic (unchanged)
+        // Server-first reads so cross-device saves show up
+        DocumentSnapshot<Map<String, dynamic>>? newDoc;
+        try {
+          newDoc = await workoutsCol.doc(newDocId).get(const GetOptions(source: Source.server));
+        } catch (_) {
+          newDoc = await workoutsCol.doc(newDocId).get();
+        }
 
-// This replaces your earlier `exList` assignment:
-    final List exList = combined;
-    // NEW: pull WES-planned placeholders from new-style doc
-    final List<Map<String, dynamic>> wesPlannedList = _wesPlannedFromDoc(newDoc);
-    print('   ℹ️ wesPlannedExercises count: ${wesPlannedList.length}');
+        // Legacy lookups: string equals, string range (ISO), and timestamp range
+        final isoLocal = DateTime(startOfDay.year, startOfDay.month, startOfDay.day).toIso8601String();    // …T00:00:00.000
+        final isoUtc   = DateTime.utc(startOfDay.year, startOfDay.month, startOfDay.day).toIso8601String(); // …T00:00:00.000Z
+        final dateOnly = DateFormat('yyyy-MM-dd').format(startOfDay); // 2025-08-19
+        final nextDateOnly = DateFormat('yyyy-MM-dd').format(nextDay);
 
-    print('   → wesPlanned: ${wesPlannedList.map((p)=>"${(p['name']??'').toString().trim()}|${(p['circuitIndex']??0)}").toList()}');
+        Future<QuerySnapshot<Map<String, dynamic>>> _eq(String value) async {
+          try {
+            return await workoutsCol.where('date', isEqualTo: value)
+                .get(const GetOptions(source: Source.server));
+          } catch (_) {
+            return await workoutsCol.where('date', isEqualTo: value).get();
+          }
+        }
+        final legacyStrLocal = await _eq(isoLocal);
+        final legacyStrUtc   = await _eq(isoUtc);
+        final legacyStrDate  = await _eq(dateOnly);
 
+        QuerySnapshot<Map<String, dynamic>> legacyStrRange;
+        try {
+          legacyStrRange = await workoutsCol
+              .where('date', isGreaterThanOrEqualTo: '${dateOnly}T00:00:00') // lower bound (inclusive)
+              .where('date', isLessThan:        '${nextDateOnly}T00:00:00')  // upper bound (exclusive)
+              .get(const GetOptions(source: Source.server));
+        } catch (_) {
+          legacyStrRange = await workoutsCol
+              .where('date', isGreaterThanOrEqualTo: '${dateOnly}T00:00:00')
+              .where('date', isLessThan:        '${nextDateOnly}T00:00:00')
+              .get();
+        }
 
+        QuerySnapshot<Map<String, dynamic>> legacyTsSnap;
+        try {
+          legacyTsSnap = await workoutsCol
+              .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+              .where('date', isLessThan: Timestamp.fromDate(nextDay))
+              .get(const GetOptions(source: Source.server));
+        } catch (_) {
+          legacyTsSnap = await workoutsCol
+              .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+              .where('date', isLessThan: Timestamp.fromDate(nextDay))
+              .get();
+        }
+
+        final Map<String, DocumentSnapshot<Map<String, dynamic>>> _legacyDocsById = {};
+        for (final d in [
+          ...legacyStrLocal.docs,
+          ...legacyStrUtc.docs,
+          ...legacyStrDate.docs,
+          ...legacyStrRange.docs,
+          ...legacyTsSnap.docs,
+        ]) {
+          _legacyDocsById[d.id] = d;
+        }
+
+        final List<Map<String, dynamic>> newExList = _exListFromDoc(newDoc);
+        final List<Map<String, dynamic>> legacyExList = [
+          for (final d in _legacyDocsById.values) ..._exListFromDoc(d),
+        ];
+
+        print('   ℹ️ legacy candidates: '
+            'eqLocal=${legacyStrLocal.docs.length}, eqUtcZ=${legacyStrUtc.docs.length}, '
+            'eqDateOnly=${legacyStrDate.docs.length}, strRange=${legacyStrRange.docs.length}, '
+            'tsRange=${legacyTsSnap.docs.length}, uniqueDocs=${_legacyDocsById.length}, '
+            'legacyExList=${legacyExList.length}');
+
+        String _key(Map<String, dynamic> e) =>
+            '${(e['name'] ?? '').toString().trim()}|${(e['circuitIndex'] ?? 0) as int}';
+
+        final Map<String, Map<String, dynamic>> newByKey = {
+          for (final e in newExList) _key(e): e,
+        };
+
+        final List<Map<String, dynamic>> combined = [...newExList];
+        for (final e in legacyExList) {
+          final k = _key(e);
+          if (!newByKey.containsKey(k)) {
+            combined.add(e);
+          }
+        }
+
+        exList = combined;
+        wesPlannedList = _wesPlannedFromDoc(newDoc);
+        print('   ℹ️ wesPlannedExercises count: ${wesPlannedList.length}');
+        print('   → wesPlanned: ${wesPlannedList.map((p)=>"${(p['name']??'').toString().trim()}|${(p['circuitIndex']??0)}").toList()}');
+      }
 // --- END UNION LOOKUP ---
 
 
-    // Mark saved keys from Firestore (for coloring/collapse)
+
+      // Mark saved keys from Firestore (for coloring/collapse)
     for (final e in exList) {
       if (e is! Map) continue;
       final name = (e['name'] as String?)?.trim() ?? 'Unnamed';
@@ -3494,8 +3523,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     if (exList.isEmpty && plannedAdded == 0) {
       print('   ❌ no workout items (completed or WES-planned) for this date');
     }
-
+    } finally {
+      _tLoadExisting.stop();
+      print('⏱️ [WES] _loadExistingWorkoutIfAny took ${_tLoadExisting.elapsedMilliseconds}ms');
+    }
   }
+
 
   Future<void> loadExercisesFromFirestoreForWES() async {
     print('➡️ [WES] loadExercisesFromFirestoreForWES START');
@@ -3818,8 +3851,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   int? _getApplicableWeekIndex(String exerciseId) {
     final model =
         PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
-    print('🧮 [_getApplicableWeekIndex] start for exerciseId=$exerciseId '
-        'blockStartDate=$blockStartDate _selectedDate=$_selectedDate');
 
     if (model == PeriodizationModelType.linearClassic ||
         model == PeriodizationModelType.dailyUndulatingWeek ||
@@ -3937,36 +3968,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         _lifecycleSaveInFlight = false;
       }
     }
-  }
-
-
-
-  void _loadWorkout(Workout workout) {
-    _workoutNameController.text = workout.name;
-    _selectedDate = workout.date;
-
-    _selectedExercisesWithCircuits.clear();
-    _workoutSets.clear();
-
-    for (var exercise in workout.exercises) {
-      _selectedExercisesWithCircuits.add({
-        'name': exercise.name,
-        'circuitIndex':
-            exercise.circuitIndex ?? 0, // ✅ fallback to 0 if missing
-      });
-
-      _workoutSets.add(
-        exercise.sets
-            .map((set) => SetDetails(
-                  reps: set.reps,
-                  weight: set.weight,
-                  rir: set.rir,
-                ))
-            .toList(),
-      );
-    }
-
-   // _initializeControllers();
   }
 
   void _loadTemplate(Template template) {
@@ -4224,12 +4225,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
   //Values persisting block: start
 
-  String get _draftKey {
-    final dateKey = DateFormat('yyyy-MM-dd').format(_selectedDate);
-    return 'wes_draft_$dateKey';
-  }
-
-  //101here
   Future<void> _persistDraftLocally() async {
     if (!mounted) {
       print('🚫 [WES] Skipped draft save — widget is unmounted.');
@@ -4320,16 +4315,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       print('❌ Failed to load WES draft: $e');
     }
   }
-
-
-  Future<void> _clearDraft() async {
-    final prefs = await SharedPreferences.getInstance();
-    final key = _getDraftKey(); // 👈 use helper
-    await prefs.remove(key);
-    print('🧹 [WES] Cleared draft for key: $key');
-  }
-
-
 
   void _showExercisePickerDialog() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -5850,6 +5835,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
 
   Future<void> _mergeNewBB2ExercisesIntoDraft() async {
+    final _tMergeBB2 = Stopwatch()..start();
+    print('⏱️ [WES] _mergeNewBB2ExercisesIntoDraft started');
+    try {
     print('[WES] Attempting to merge BB2 exercises into draft for $_selectedDate');
 
     final uid = UserContext.of(context, listen: false).currentUid;
@@ -6127,6 +6115,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       print('[WES] Merged ${newOnes.length} exercise(s) into draft');
       await _saveWorkoutDraftToCache();
     }
+    } finally {
+      _tMergeBB2.stop();
+      print('⏱️ [WES] _mergeNewBB2ExercisesIntoDraft took ${_tMergeBB2.elapsedMilliseconds}ms');
+    }
+
   }
 
   void _scheduleMissedButtonAfterPaint() {

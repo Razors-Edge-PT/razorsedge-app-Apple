@@ -1096,10 +1096,6 @@ class PeriodizationModelUtils {
   }
 
   static List<double> getIncrementsForExercise(String exerciseNameOrId) {
-    print('🔧 [getIncrementsForExercise] START for key="$exerciseNameOrId"');
-    final byName = _exerciseSettings[exerciseNameOrId]?['increments'];
-    print('🔧 [getIncrementsForExercise] START for key="$exerciseNameOrId"');
-
     dynamic incRaw = _exerciseSettings[exerciseNameOrId]?['increments'];
     print('🔧 [getIncrementsForExercise] byNameOrId=$incRaw');
 
@@ -1110,7 +1106,6 @@ class PeriodizationModelUtils {
     }
 
     if (incRaw == null) {
-      print('❌ [PMU] No increments found for $exerciseNameOrId by name or ID');
       return List.generate(100, (i) => 20 + i * 2.5); // fallback
     }
 
