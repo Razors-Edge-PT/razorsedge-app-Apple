@@ -476,43 +476,64 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       );
     }).toList();
 
-    // --- NEW: cap upper bound by previous set's display weight (typed wins; else suggested)
-    final prevDisplayWeight = (_weightControllers[exIdx][setIdx - 1].text.trim().isNotEmpty)
-        ? (double.tryParse(_weightControllers[exIdx][setIdx - 1].text.trim()) ?? suggestedWeightForSet(exIdx, setIdx - 1))
-        : suggestedWeightForSet(exIdx, setIdx - 1);
+    // --- CAP: never exceed previous set's effective display weight
+    double? prevTypedDisplay;
+    final prevTxt = _weightControllers[exIdx][setIdx - 1].text.trim();
+    if (prevTxt.isNotEmpty) {
+      final v = double.tryParse(prevTxt);
+      if (v != null && v > 0) prevTypedDisplay = v;
+    }
 
-// Filter out any candidates heavier than previous set's display weight
+    double? prevHintMaxDisplay;
+// Only synthesize previous hints if previous is ≥ Set 2 (0-based: setIdx-1 >= 1)
+    if (setIdx - 1 >= 1) {
+      final prevHint = await _synthesizeHintsForSet(exIdx, setIdx - 1);
+      if (prevHint.weightRangeDisplay.isNotEmpty) {
+        prevHintMaxDisplay = prevHint.weightRangeDisplay.last;
+      }
+    }
+
+// Always have a fallback
+    final prevSuggestedDisplay = suggestedWeightForSet(exIdx, setIdx - 1);
+
+// Cap = MIN of all available candidates
+    final capCandidates = <double>[
+      if (prevTypedDisplay != null) prevTypedDisplay!,
+      if (prevHintMaxDisplay != null) prevHintMaxDisplay!,
+      prevSuggestedDisplay,
+    ];
+    final prevDisplayCap = capCandidates.reduce((a, b) => a < b ? a : b);
+
+    print('🛑 [cap] setIdx=$setIdx prevTyped=$prevTypedDisplay '
+        'prevHintMax=$prevHintMaxDisplay prevSuggested=$prevSuggestedDisplay '
+        '→ cap=$prevDisplayCap');
+
+// Apply cap to candidates
     weightCandidatesDisplay = weightCandidatesDisplay
-        .where((wd) => wd <= prevDisplayWeight + 1e-9) // numeric fuzz
+        .where((wd) => wd <= prevDisplayCap + 1e-9)
         .toList()
       ..sort();
 
-// If we removed everything, keep the nearest valid <= prev as a single option
+// If everything got filtered out, keep nearest valid ≤ cap; else clamp to cap
     if (weightCandidatesDisplay.isEmpty) {
-      // Find the best (≤ prev) from all increments in band; if none ≤ prev, clamp to prev
-      final allInBand = PeriodizationModelUtils.getIncrementsForExercise(name)
+      final allInBandDisplay = PeriodizationModelUtils
+          .getIncrementsForExercise(name)
+          .where((wAbs) => wAbs >= bandLo && wAbs <= bandHi)
           .map((wAbs) => isBw
           ? PeriodizationModelUtils.toDisplayAddedWeight(
           uid: uid, absoluteKg: wAbs, exerciseName: name, asOfDate: _selectedDate)
           : wAbs)
-          .where((wd) => (isBw
-          ? PeriodizationModelUtils.toAbsoluteWeight(
-          uid: uid, displayAddedKg: wd, exerciseName: name, asOfDate: _selectedDate)
-          : wd) >= bandLo &&
-          (isBw
-              ? PeriodizationModelUtils.toAbsoluteWeight(
-              uid: uid, displayAddedKg: wd, exerciseName: name, asOfDate: _selectedDate)
-              : wd) <= bandHi)
           .toList()
         ..sort();
 
-      // choose the nearest to prevDisplayWeight, but not above it; if none, clamp to prev
-      double pick = prevDisplayWeight;
-      for (final wd in allInBand.reversed) {
-        if (wd <= prevDisplayWeight + 1e-9) { pick = wd; break; }
+      double pick = prevDisplayCap;
+      for (final wd in allInBandDisplay.reversed) {
+        if (wd <= prevDisplayCap + 1e-9) { pick = wd; break; }
       }
       weightCandidatesDisplay = [pick];
     }
+
+
 
 
     // Reps range: mid ±1 within [1, …], may shrink later if tolerance requires
@@ -612,13 +633,56 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       weightMidAbsForE, repsMidFinal.toDouble(), rirCurrent,
     );
 
+    // --- FINAL CAP ENFORCEMENT (never exceed previous set cap) ---
+    final double cap = prevDisplayCap; // use the cap you computed earlier
+
+
+// 1) Clamp range to ≤ cap
+    filteredWeightsDisplay = filteredWeightsDisplay
+        .where((wd) => wd <= cap + 1e-9)
+        .toList()
+      ..sort();
+
+// 2) Ensure at least one value remains
+    if (filteredWeightsDisplay.isEmpty) {
+      filteredWeightsDisplay = [cap];
+    }
+
+// 3) Clamp mid pick to the largest value ≤ cap (list is sorted ascending)
+    double weightMidDisplayCapped = filteredWeightsDisplay.first;
+    for (final wd in filteredWeightsDisplay) {
+      if (wd <= cap + 1e-9) weightMidDisplayCapped = wd;
+    }
+
+// 4) Recompute mid E1RM from the *final* mid pick
+    final weightMidAbsForE_final = isBw
+        ? PeriodizationModelUtils.toAbsoluteWeight(
+      uid: uid,
+      displayAddedKg: weightMidDisplayCapped,
+      exerciseName: name,
+      asOfDate: _selectedDate,
+    )
+        : weightMidDisplayCapped;
+
+    final e1rmMidFinal = PeriodizationModelUtils.calculateE1RM(
+      weightMidAbsForE_final,
+      repsMidFinal.toDouble(),
+      rirCurrent,
+    );
+
+// (optional) debug
+    print('✅ [final-cap] setIdx=$setIdx cap=$cap midDisplay=$weightMidDisplayCapped '
+        'reps=$repsMidFinal e1rmMid=$e1rmMidFinal');
+
+// 5) Return capped values
     return (
     weightRangeDisplay: filteredWeightsDisplay,
     repsRange: filteredReps,
-    weightMidDisplay: weightMidDisplay,
+    weightMidDisplay: weightMidDisplayCapped,
     repsMid: repsMidFinal,
-    e1rmMid: e1rmMid,
+    e1rmMid: e1rmMidFinal,
     );
+
   }
 
   // Formatters for hint text (range or single)
