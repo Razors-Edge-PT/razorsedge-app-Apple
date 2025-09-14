@@ -271,18 +271,34 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
   // Per-group per-set drop (kg) for setIndex ≥ 2, before RIR gating
   double _rawDropFor(String group, int setIndex) {
-    if (setIndex <= 1) return 0.0;
+    // 0 = Set 1 → no drop
+    if (setIndex == 0) return 0.0;
+
     switch (group) {
-      case 'A': return 5.5;
+      case 'A':
+      // Bench/Squat/Deadlift/Chin-up: −5.5 kg every set ≥2
+        return 5.5;
+
       case 'B':
-        if (setIndex == 2) return 1.5;
-        if (setIndex == 3) return 4.3;
-        return 1.5;
-      case 'C': return 1.0;
-      case 'D': return 0.3;
-      default:  return 1.0;
+      // Uni DB Shoulder Press / Barbell OHP:
+      // Set 2 (idx=1): −1.5, Set 3 (idx=2): −4.3, Set 4+ (idx>=3): −1.5
+        if (setIndex == 1) return 1.5;   // Set 2
+        if (setIndex == 2) return 4.3;   // Set 3
+        return 1.5;                      // Set 4+
+
+      case 'C':
+      // Other push/pull/squat/hinge: −1.0 each set ≥2
+        return 1.0;
+
+      case 'D':
+      // Arms/iso/core: −0.3 each set ≥2
+        return 0.3;
+
+      default:
+        return 1.0;
     }
   }
+
 
   // Apply RIR gating to drop (use prev set's RIR: typed if present else hint)
   double _gatedDrop({
@@ -344,22 +360,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   }
 
   double _typedOrHintRIR({required int exIdx, required int setIdx}) {
-    final typedText = _rirControllers[exIdx][setIdx].text.trim();
-    if (typedText.isNotEmpty) {
-      final v = double.tryParse(typedText);
+    // setIdx is 0-based; planner getter expects 1-based
+    final txt = _rirControllers[exIdx][setIdx].text.trim();
+    if (txt.isNotEmpty) {
+      final v = double.tryParse(txt);
       if (v != null) return v;
     }
-    // hint RIR for that set
-    if (setIdx == 0) return set1RIR(exIdx);
-    if (setIdx == 1) return set2RIR(exIdx);
-    if (setIdx == 2) return set3RIR(exIdx);
-    if (setIdx == 3) return set4RIR(exIdx);
-    if (setIdx == 4) return set5RIR(exIdx);
-    if (setIdx == 5) return set6RIR(exIdx);
-    if (setIdx == 6) return set7RIR(exIdx);
-    if (setIdx == 7) return set8RIR(exIdx);
-    return 1.5;
+    // fallback to the same hint RIR the UI shows for that set
+    return getRirFromPlanOrInput(exIdx, setIdx + 1);
   }
+
 
   // Compute the actual E1RM for a given set (typed wins, else hint)
   double _actualE1RMForSet(int exIdx, int setIdx) {
@@ -371,11 +381,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
   // Compute target E1RM for setIdx (≥2), cumulative from prior set actual/target with RIR gating
   Future<double> _targetE1RMForSet(int exIdx, int setIdx) async {
-    if (setIdx <= 1) {
-      // set 1 uses existing logic elsewhere
-      return _actualE1RMForSet(exIdx, 0);
+    if (setIdx == 0) {
+      final base = _actualE1RMForSet(exIdx, 0);
+      print('🧪 [_targetE1RMForSet] setIdx=$setIdx (Set1) '
+          '→ baseE1RM=$base (no drop applied)');
+      return base;
     }
-
     final name  = (_selectedExercisesWithCircuits[exIdx]['name'] as String?)?.trim() ?? '';
     final group = await _resolveGroupForExercise(name);
 
@@ -393,6 +404,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final dropGated  = _gatedDrop(baseDrop: dropRaw, prevSetRIR: prevRIR);
 
     final target = (baseE1RM - dropGated).clamp(1.0, 9999.0);
+    print('🧪 [_targetE1RMForSet] setIdx=$setIdx '
+        'prevAnyTyped=$prevAnyTyped baseE1RM=$baseE1RM '
+        'prevRIR=$prevRIR dropRaw=$dropRaw dropGated=$dropGated '
+        '→ target=$target');
+
     return target;
   }
 
@@ -459,6 +475,45 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         asOfDate: _selectedDate,
       );
     }).toList();
+
+    // --- NEW: cap upper bound by previous set's display weight (typed wins; else suggested)
+    final prevDisplayWeight = (_weightControllers[exIdx][setIdx - 1].text.trim().isNotEmpty)
+        ? (double.tryParse(_weightControllers[exIdx][setIdx - 1].text.trim()) ?? suggestedWeightForSet(exIdx, setIdx - 1))
+        : suggestedWeightForSet(exIdx, setIdx - 1);
+
+// Filter out any candidates heavier than previous set's display weight
+    weightCandidatesDisplay = weightCandidatesDisplay
+        .where((wd) => wd <= prevDisplayWeight + 1e-9) // numeric fuzz
+        .toList()
+      ..sort();
+
+// If we removed everything, keep the nearest valid <= prev as a single option
+    if (weightCandidatesDisplay.isEmpty) {
+      // Find the best (≤ prev) from all increments in band; if none ≤ prev, clamp to prev
+      final allInBand = PeriodizationModelUtils.getIncrementsForExercise(name)
+          .map((wAbs) => isBw
+          ? PeriodizationModelUtils.toDisplayAddedWeight(
+          uid: uid, absoluteKg: wAbs, exerciseName: name, asOfDate: _selectedDate)
+          : wAbs)
+          .where((wd) => (isBw
+          ? PeriodizationModelUtils.toAbsoluteWeight(
+          uid: uid, displayAddedKg: wd, exerciseName: name, asOfDate: _selectedDate)
+          : wd) >= bandLo &&
+          (isBw
+              ? PeriodizationModelUtils.toAbsoluteWeight(
+              uid: uid, displayAddedKg: wd, exerciseName: name, asOfDate: _selectedDate)
+              : wd) <= bandHi)
+          .toList()
+        ..sort();
+
+      // choose the nearest to prevDisplayWeight, but not above it; if none, clamp to prev
+      double pick = prevDisplayWeight;
+      for (final wd in allInBand.reversed) {
+        if (wd <= prevDisplayWeight + 1e-9) { pick = wd; break; }
+      }
+      weightCandidatesDisplay = [pick];
+    }
+
 
     // Reps range: mid ±1 within [1, …], may shrink later if tolerance requires
     final List<int> repsRange = {
@@ -2745,22 +2800,540 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
 
   double set3SuggestedReps(int exerciseIndex) {
-    String exerciseName =
-        _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
+    final i = exerciseIndex;
 
-    double set3E1RM = getSet3E1RM(exerciseIndex);
-    double? set2Reps =
-        double.tryParse(_repsControllers[exerciseIndex][1].text) ??
-            set2SuggestedReps(exerciseIndex);
+    // ---- basics
+    final exerciseName = (_selectedExercisesWithCircuits[i]['name'] as String?)?.trim() ?? '';
+    final category     = (_selectedExercisesWithCircuits[i]['category'] as String?)?.trim().toLowerCase() ?? '';
+    final isBw         = PeriodizationModelUtils.isBodyweightExercise(name: exerciseName);
+    final uid          = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '';
 
-    return PeriodizationModelUtils.getSuggestedSet3RepsByModel(
-      exerciseName: exerciseName,
-      set3E1RM: set3E1RM,
-      set2Reps: set2Reps,
-      weightText: _weightControllers[exerciseIndex][2].text,
-      rirText: _rirControllers[exerciseIndex][2].text,
+    // ---- tiny helpers (local, same mapping as set3SuggestedWeight)
+    String _groupFor(String name, String cat) {
+      final n = name.trim().toLowerCase();
+      const groupA = {
+        'chin-up',
+        'bench press, barbell',
+        'bench press, narrow grip',
+        'bench press, larsen press',
+        'bench press, long pause',
+        'back squat, barbell',
+        'back squat, low bar',
+        'back squat, paused squat',
+        'back squat, pin squat',
+        'deadlift, conventional',
+        'deadlift, deficit',
+        'deadlift, sumo',
+        'deadlift, sumo, deficit',
+        'romanian deadlift',
+      };
+      if (groupA.contains(n)) return 'A';
+
+      const groupB = {
+        'overhead dumbbell press, unilateral',
+        'overhead barbell press',
+      };
+      if (groupB.contains(n)) return 'B';
+
+      const groupC = {
+        'horizontal press',
+        'horizontal pull',
+        'vertical press',
+        'vertical pull',
+        'squat pattern',
+        'hip hinge',
+      };
+      const groupD = {
+        'lateral raise',
+        'arm extension',
+        'arm curl',
+        'leg extension',
+        'leg curl',
+        'hip abduction/adduction',
+        'calf raise',
+        'core',
+      };
+      if (groupC.contains(cat)) return 'C';
+      if (groupD.contains(cat)) return 'D';
+      return 'C';
+    }
+
+    double _rawDropFor(String group) {
+      switch (group) {
+        case 'A': return 5.5; // same per-set drop as S2 for Group A
+        case 'B': return 4.3; // special S3 drop for Group B
+        case 'C': return 1.0;
+        case 'D': return 0.3;
+        default:  return 1.0;
+      }
+    }
+
+    double _gatedDrop(double drop, double prevRir) {
+      if (prevRir > 2.0) return 0.0;
+      if (prevRir >= 1.8 && prevRir <= 2.0) return drop * 0.8;
+      return drop;
+    }
+
+    double _toAbsFromDisplay(double displayKg) {
+      if (!isBw) return displayKg;
+      return PeriodizationModelUtils.toAbsoluteWeight(
+        uid: uid,
+        displayAddedKg: displayKg,
+        exerciseName: exerciseName,
+        asOfDate: _selectedDate,
+      );
+    }
+
+    // ---- 0) If reps already typed for Set 3, just return it
+    final typedReps3 = _repsControllers[i][2].text.trim();
+    if (typedReps3.isNotEmpty) {
+      final r = double.tryParse(typedReps3);
+      if (r != null && r > 0) return r;
+    }
+
+    // ---- 1) Compute Set 2 actual (typed wins; else hint)
+    final set2WeightDisplay = (_weightControllers[i][1].text.trim().isNotEmpty)
+        ? (double.tryParse(_weightControllers[i][1].text.trim()) ?? set2SuggestedWeight(i))
+        : set2SuggestedWeight(i);
+    final set2WeightAbs = _toAbsFromDisplay(set2WeightDisplay);
+
+    final set2Reps = (_repsControllers[i][1].text.trim().isNotEmpty)
+        ? (int.tryParse(_repsControllers[i][1].text.trim()) ?? set2SuggestedReps(i).toInt())
+        : set2SuggestedReps(i).toInt();
+
+    final set2Rir  = (_rirControllers[i][1].text.trim().isNotEmpty)
+        ? (double.tryParse(_rirControllers[i][1].text.trim()) ?? set2RIR(i))
+        : set2RIR(i);
+
+    final set2E1RMActual = PeriodizationModelUtils.calculateE1RM(
+      set2WeightAbs, set2Reps.toDouble(), set2Rir,
     );
+
+    // ---- 2) Target E1RM for Set 3 (cumulative from Set 2 actual, with RIR gating)
+    final group   = _groupFor(exerciseName, category);
+    final rawDrop = _rawDropFor(group);
+    final drop    = _gatedDrop(rawDrop, set2Rir);
+    final targetE1RM = (set2E1RMActual - drop).clamp(1.0, 9999.0);
+
+    // ---- 3) Collapse if weight typed for Set 3 → compute single reps to hit target
+    final typedW3 = _weightControllers[i][2].text.trim();
+    final rirSet3 = (_rirControllers[i][2].text.trim().isNotEmpty)
+        ? (double.tryParse(_rirControllers[i][2].text.trim()) ?? set3RIR(i))
+        : set3RIR(i);
+
+    if (typedW3.isNotEmpty) {
+      final displayW = double.tryParse(typedW3);
+      if (displayW != null && displayW > 0) {
+        final weightAbs = _toAbsFromDisplay(displayW);
+
+        // baseAbs from Set 2 actual, to match your guard in reverseCalculateReps
+        final baseAbs = set2WeightAbs;
+
+        final reps = PeriodizationModelUtils.reverseCalculateReps(
+          targetE1RM: targetE1RM,
+          weight: weightAbs,
+          baseWeight: baseAbs,
+          rir: rirSet3,
+          minReps: 1.0,
+        );
+        return reps.clamp(1.0, 45.0);
+      }
+    }
+
+    // ---- 4) Neither typed → suggest "mid" reps: prev (Set 2) reps - 1 (clamped)
+    final midReps = (set2Reps - 1).clamp(1, 45);
+    return midReps.toDouble();
   }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+// Generic, synchronous suggestions for ANY set index (0-based: 0=Set1).
+// Weight returns display kg for BW (added weight), absolute kg otherwise.
+// Reps returns a double (your code expects double).
+// ─────────────────────────────────────────────────────────────────────────────
+
+  double suggestedWeightForSet(int exIdx, int setIdx) {
+    // Set 1 and Set 2 keep your existing functions
+    if (setIdx == 0) return set1SuggestedWeight(exIdx);
+
+
+    // From Set 3 onward: same behavior as your new Set 3 (chained off previous set)
+    final exerciseName = (_selectedExercisesWithCircuits[exIdx]['name'] as String?)?.trim() ?? '';
+    final category     = (_selectedExercisesWithCircuits[exIdx]['category'] as String?)?.trim().toLowerCase() ?? '';
+    final isBw         = PeriodizationModelUtils.isBodyweightExercise(name: exerciseName);
+    final uid          = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '';
+
+    String _groupFor(String name, String cat) {
+      final n = name.trim().toLowerCase();
+      const groupA = {
+        'chin-up',
+        'bench press, barbell',
+        'bench press, narrow grip',
+        'bench press, larsen press',
+        'bench press, long pause',
+        'back squat, barbell',
+        'back squat, low bar',
+        'back squat, paused squat',
+        'back squat, pin squat',
+        'deadlift, conventional',
+        'deadlift, deficit',
+        'deadlift, sumo',
+        'deadlift, sumo, deficit',
+        'romanian deadlift',
+      };
+      if (groupA.contains(n)) return 'A';
+
+      const groupB = {
+        'overhead dumbbell press, unilateral',
+        'overhead barbell press',
+      };
+      if (groupB.contains(n)) return 'B';
+
+      const groupC = {
+        'horizontal press',
+        'horizontal pull',
+        'vertical press',
+        'vertical pull',
+        'squat pattern',
+        'hip hinge',
+      };
+      const groupD = {
+        'lateral raise',
+        'arm extension',
+        'arm curl',
+        'leg extension',
+        'leg curl',
+        'hip abduction/adduction',
+        'calf raise',
+        'core',
+      };
+      if (groupC.contains(cat)) return 'C';
+      if (groupD.contains(cat)) return 'D';
+      return 'C';
+    }
+
+    // Raw per-set drop by group (setIdx is 0-based; Set 2→setIdx=1, Set 3→2, etc.)
+    double _rawDropFor(String group, int idx) {
+      // Only applies for setIdx >= 2 here
+      switch (group) {
+        case 'A':
+          return 5.5; // every set 2+ is −5.5 kg
+        case 'B':
+          if (idx == 1) return 1.5;   // Set 2
+          if (idx == 2) return 4.3;   // Set 3
+          return 1.5;                 // Set 4+
+        case 'C':
+          return 1.0;
+        case 'D':
+          return 0.3;
+        default:
+          return 1.0;
+      }
+    }
+
+    double _gatedDrop(double drop, double prevRir) {
+      if (prevRir > 2.0) return 0.0;
+      if (prevRir >= 1.8 && prevRir <= 2.0) return drop * 0.8;
+      return drop;
+    }
+
+    double _toAbsFromDisplay(double displayKg) {
+      if (!isBw) return displayKg;
+      return PeriodizationModelUtils.toAbsoluteWeight(
+        uid: uid,
+        displayAddedKg: displayKg,
+        exerciseName: exerciseName,
+        asOfDate: _selectedDate,
+      );
+    }
+    double _toDisplayFromAbs(double absKg) {
+      if (!isBw) return absKg;
+      return PeriodizationModelUtils.toDisplayAddedWeight(
+        uid: uid,
+        absoluteKg: absKg,
+        exerciseName: exerciseName,
+        asOfDate: _selectedDate,
+      );
+    }
+
+    // If user already typed weight for this set, that wins
+    final typedW = _weightControllers[exIdx][setIdx].text.trim();
+    if (typedW.isNotEmpty) {
+      final v = double.tryParse(typedW);
+      if (v != null) return v;
+    }
+
+    // Previous set actual (typed wins; else our own suggestion)
+    final prevIdx = setIdx - 1;
+
+    final prevWDisplay = (_weightControllers[exIdx][prevIdx].text.trim().isNotEmpty)
+        ? (double.tryParse(_weightControllers[exIdx][prevIdx].text.trim()) ?? suggestedWeightForSet(exIdx, prevIdx))
+        : suggestedWeightForSet(exIdx, prevIdx);
+    final prevWAbs = _toAbsFromDisplay(prevWDisplay);
+
+    final prevReps = (_repsControllers[exIdx][prevIdx].text.trim().isNotEmpty)
+        ? (int.tryParse(_repsControllers[exIdx][prevIdx].text.trim()) ?? suggestedRepsForSet(exIdx, prevIdx).toInt())
+        : suggestedRepsForSet(exIdx, prevIdx).toInt();
+
+    // RIR for previous set (typed if present; else plan)
+    double _rirFor(int setZeroBased) {
+      final t = _rirControllers[exIdx][setZeroBased].text.trim();
+      if (t.isNotEmpty) {
+        final p = double.tryParse(t);
+        if (p != null) return p;
+      }
+      // getRirFromPlanOrInput expects 1-based set number
+      return getRirFromPlanOrInput(exIdx, setZeroBased + 1);
+    }
+    final prevRir = _rirFor(prevIdx);
+
+    // Previous set actual E1RM
+    final prevE1RM = PeriodizationModelUtils.calculateE1RM(
+      prevWAbs, prevReps.toDouble(), prevRir,
+    );
+
+    // Target drop for this set (group + gating on previous set RIR)
+    final group   = _groupFor(exerciseName, category);
+    final rawDrop = _rawDropFor(group, setIdx);
+    final drop    = _gatedDrop(rawDrop, prevRir);
+    final targetE1RM = (prevE1RM - drop).clamp(1.0, 9999.0);
+
+    // Collapse rules:
+    // If reps typed for *this* set → compute single weight
+    final typedRepsText = _repsControllers[exIdx][setIdx].text.trim();
+    final thisRir = _rirFor(setIdx);
+
+    if (typedRepsText.isNotEmpty) {
+      final repsI = int.tryParse(typedRepsText) ?? suggestedRepsForSet(exIdx, setIdx).toInt();
+      final wAbs = PeriodizationModelUtils.reverseCalculateWeight(
+        targetE1RM: targetE1RM,
+        reps: repsI,
+        rir: thisRir,
+      );
+      if (isBw) {
+        final displayGuess = _toDisplayFromAbs(wAbs);
+        final roundedDisplay = PeriodizationModelUtils.roundToNearestValidIncrement(
+          targetWeight: displayGuess,
+          exerciseName: exerciseName,
+        );
+        return roundedDisplay;
+      } else {
+        final roundedAbs = PeriodizationModelUtils.roundToNearestValidIncrement(
+          targetWeight: wAbs,
+          exerciseName: exerciseName,
+        );
+        return roundedAbs;
+      }
+    }
+
+    // Neither typed → use mid solution: prevReps - 1 (≥1)
+    final midRep = (prevReps - 1).clamp(1, 45);
+    final midAbs = PeriodizationModelUtils.reverseCalculateWeight(
+      targetE1RM: targetE1RM,
+      reps: midRep,
+      rir: thisRir,
+    );
+    if (isBw) {
+      final displayGuess = _toDisplayFromAbs(midAbs);
+      final roundedDisplay = PeriodizationModelUtils.roundToNearestValidIncrement(
+        targetWeight: displayGuess,
+        exerciseName: exerciseName,
+      );
+      return roundedDisplay;
+    } else {
+      final roundedAbs = PeriodizationModelUtils.roundToNearestValidIncrement(
+        targetWeight: midAbs,
+        exerciseName: exerciseName,
+      );
+      return roundedAbs;
+    }
+  }
+
+  double suggestedRepsForSet(int exIdx, int setIdx) {
+    // Set 1 and Set 2 keep your existing functions
+    if (setIdx == 0) return set1SuggestedReps(exIdx);
+
+    // From Set 3 onward: same behavior as your new Set 3 (chained off previous set)
+    final exerciseName = (_selectedExercisesWithCircuits[exIdx]['name'] as String?)?.trim() ?? '';
+    final category     = (_selectedExercisesWithCircuits[exIdx]['category'] as String?)?.trim().toLowerCase() ?? '';
+    final isBw         = PeriodizationModelUtils.isBodyweightExercise(name: exerciseName);
+    final uid          = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '';
+
+    String _groupFor(String name, String cat) {
+      final n = name.trim().toLowerCase();
+      const groupA = {
+        'chin-up',
+        'bench press, barbell',
+        'bench press, narrow grip',
+        'bench press, larsen press',
+        'bench press, long pause',
+        'back squat, barbell',
+        'back squat, low bar',
+        'back squat, paused squat',
+        'back squat, pin squat',
+        'deadlift, conventional',
+        'deadlift, deficit',
+        'deadlift, sumo',
+        'deadlift, sumo, deficit',
+        'romanian deadlift',
+      };
+      if (groupA.contains(n)) return 'A';
+
+      const groupB = {
+        'overhead dumbbell press, unilateral',
+        'overhead barbell press',
+      };
+      if (groupB.contains(n)) return 'B';
+
+      const groupC = {
+        'horizontal press',
+        'horizontal pull',
+        'vertical press',
+        'vertical pull',
+        'squat pattern',
+        'hip hinge',
+      };
+      const groupD = {
+        'lateral raise',
+        'arm extension',
+        'arm curl',
+        'leg extension',
+        'leg curl',
+        'hip abduction/adduction',
+        'calf raise',
+        'core',
+      };
+      if (groupC.contains(cat)) return 'C';
+      if (groupD.contains(cat)) return 'D';
+      return 'C';
+    }
+
+    double _rawDropFor(String group, int idx) {
+      switch (group) {
+        case 'A':
+          return 5.5;
+        case 'B':
+          if (idx == 1) return 1.5;  // S2
+          if (idx == 2) return 4.3;  // S3
+          return 1.5;                // S4+
+        case 'C':
+          return 1.0;
+        case 'D':
+          return 0.3;
+        default:
+          return 1.0;
+      }
+    }
+
+    double _gatedDrop(double drop, double prevRir) {
+      if (prevRir > 2.0) return 0.0;
+      if (prevRir >= 1.8 && prevRir <= 2.0) return drop * 0.8;
+      return drop;
+    }
+
+    double _toAbsFromDisplay(double displayKg) {
+      if (!isBw) return displayKg;
+      return PeriodizationModelUtils.toAbsoluteWeight(
+        uid: uid,
+        displayAddedKg: displayKg,
+        exerciseName: exerciseName,
+        asOfDate: _selectedDate,
+      );
+    }
+
+    // If reps typed for this set, that wins
+    final typedReps = _repsControllers[exIdx][setIdx].text.trim();
+    if (typedReps.isNotEmpty) {
+      final v = double.tryParse(typedReps);
+      if (v != null && v > 0) return v;
+    }
+
+    // Previous set actual
+    final prevIdx = setIdx - 1;
+
+    final prevWDisplay = (_weightControllers[exIdx][prevIdx].text.trim().isNotEmpty)
+        ? (double.tryParse(_weightControllers[exIdx][prevIdx].text.trim()) ?? suggestedWeightForSet(exIdx, prevIdx))
+        : suggestedWeightForSet(exIdx, prevIdx);
+    final prevWAbs = _toAbsFromDisplay(prevWDisplay);
+
+    final prevReps = (_repsControllers[exIdx][prevIdx].text.trim().isNotEmpty)
+        ? (int.tryParse(_repsControllers[exIdx][prevIdx].text.trim()) ?? suggestedRepsForSet(exIdx, prevIdx).toInt())
+        : suggestedRepsForSet(exIdx, prevIdx).toInt();
+
+    double _rirFor(int setZeroBased) {
+      final t = _rirControllers[exIdx][setZeroBased].text.trim();
+      if (t.isNotEmpty) {
+        final p = double.tryParse(t);
+        if (p != null) return p;
+      }
+      return getRirFromPlanOrInput(exIdx, setZeroBased + 1);
+    }
+    final prevRir = _rirFor(prevIdx);
+
+    final prevE1RM = PeriodizationModelUtils.calculateE1RM(
+      prevWAbs, prevReps.toDouble(), prevRir,
+    );
+
+    final group   = _groupFor(exerciseName, category);
+    final rawDrop = _rawDropFor(group, setIdx);
+    final drop    = _gatedDrop(rawDrop, prevRir);
+    final targetE1RM = (prevE1RM - drop).clamp(1.0, 9999.0);
+
+    // Collapse if weight typed for this set → single reps (consistent with hint)
+    final typedW = _weightControllers[exIdx][setIdx].text.trim();
+    if (typedW.isNotEmpty) {
+      final wDisp = double.tryParse(typedW);
+      if (wDisp != null && wDisp > 0) {
+        final wAbs    = _toAbsFromDisplay(wDisp);
+        final thisRir = _typedOrHintRIR(exIdx: exIdx, setIdx: setIdx);
+
+        // same tolerance as _synthesizeHintsForSet
+        final tolKg = (group == 'D') ? 0.3 : 0.7;
+
+        // allowed reps window = prevReps ± 1 (clamped)
+        final candidates = <int>{
+          (prevReps - 1).clamp(1, 45),
+          prevReps.clamp(1, 45),
+          (prevReps + 1).clamp(1, 45),
+        }.toList()
+          ..sort();
+
+        // evaluate error vs target for each candidate
+        double bestErr = double.infinity;
+        int    bestRep = candidates.first;
+
+        for (final r in candidates) {
+          final e = PeriodizationModelUtils.calculateE1RM(wAbs, r.toDouble(), thisRir);
+          final err = (e - targetE1RM).abs();
+
+          // prefer any within tolerance, else minimize error; ties → lower reps
+          final withinTolBest = (bestErr <= tolKg + 1e-6);
+          final withinTolCur  = (err     <= tolKg + 1e-6);
+
+          final take =
+          // if current is within tol and best isn't → take current
+          (withinTolCur && !withinTolBest)
+              // if both within tol → take smaller error; tie → lower reps
+              || (withinTolCur && withinTolBest && (err < bestErr - 1e-9 || ( (err - bestErr).abs() <= 1e-9 && r < bestRep )))
+              // if neither within tol → minimize error; tie → lower reps
+              || (!withinTolCur && !withinTolBest && (err < bestErr - 1e-9 || ( (err - bestErr).abs() <= 1e-9 && r < bestRep )));
+
+          if (take) {
+            bestErr = err;
+            bestRep = r;
+          }
+        }
+
+        return bestRep.toDouble();
+      }
+    }
+
+
+    // Neither typed → mid reps (prevReps - 1)
+    final midReps = (prevReps - 1).clamp(1, 45);
+    return midReps.toDouble();
+  }
+
+
 
   Map<String, dynamic>? getPlannedRirSetValuesWES({
     required String exerciseName,
@@ -3312,23 +3885,187 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
 
   double set3SuggestedWeight(int exerciseIndex) {
-    final exerciseName =
-        _selectedExercisesWithCircuits[exerciseIndex]['name'] ?? '';
-    final set3E1RM = getSet3E1RM(exerciseIndex);
+    final i = exerciseIndex;
 
-    final repsText = _repsControllers[exerciseIndex][2].text;
-    final rirText = _rirControllers[exerciseIndex][2].text;
+    // ---- basics
+    final exerciseName = (_selectedExercisesWithCircuits[i]['name'] as String?)?.trim() ?? '';
+    final category     = (_selectedExercisesWithCircuits[i]['category'] as String?)?.trim().toLowerCase() ?? '';
+    final isBw         = PeriodizationModelUtils.isBodyweightExercise(name: exerciseName);
+    final uid          = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '';
 
-    final reps = double.tryParse(repsText) ?? set3SuggestedReps(exerciseIndex);
-    final rir = double.tryParse(rirText) ?? set3RIR(exerciseIndex);
+    // ---- tiny helpers (local)
+    String _groupFor(String name, String cat) {
+      final n = name.trim().toLowerCase();
+      const groupA = {
+        'chin-up',
+        'bench press, barbell',
+        'bench press, narrow grip',
+        'bench press, larsen press',
+        'bench press, long pause',
+        'back squat, barbell',
+        'back squat, low bar',
+        'back squat, paused squat',
+        'back squat, pin squat',
+        'deadlift, conventional',
+        'deadlift, deficit',
+        'deadlift, sumo',
+        'deadlift, sumo, deficit',
+        'romanian deadlift',
+      };
+      if (groupA.contains(n)) return 'A';
 
-    return PeriodizationModelUtils.getSuggestedSet3WeightByModel(
-      exerciseName: exerciseName,
-      set3E1RM: set3E1RM,
-      reps: reps,
-      rir: rir,
+      const groupB = {
+        'overhead dumbbell press, unilateral',
+        'overhead barbell press',
+      };
+      if (groupB.contains(n)) return 'B';
+
+      const groupC = {
+        'horizontal press',
+        'horizontal pull',
+        'vertical press',
+        'vertical pull',
+        'squat pattern',
+        'hip hinge',
+      };
+      const groupD = {
+        'lateral raise',
+        'arm extension',
+        'arm curl',
+        'leg extension',
+        'leg curl',
+        'hip abduction/adduction',
+        'calf raise',
+        'core',
+      };
+      if (groupC.contains(cat)) return 'C';
+      if (groupD.contains(cat)) return 'D';
+      return 'C';
+    }
+
+    double _rawDropFor(String group) {
+      switch (group) {
+        case 'A': return 5.5;  // same per-set drop as Set 2
+        case 'B': return 4.3;  // Group B has 4.3 kg for Set 3
+        case 'C': return 1.0;
+        case 'D': return 0.3;
+        default:  return 1.0;
+      }
+    }
+
+    double _gatedDrop(double drop, double prevRir) {
+      if (prevRir > 2.0) return 0.0;
+      if (prevRir >= 1.8 && prevRir <= 2.0) return drop * 0.8;
+      return drop;
+    }
+
+    double _toAbsFromDisplay(double displayKg) {
+      if (!isBw) return displayKg;
+      return PeriodizationModelUtils.toAbsoluteWeight(
+        uid: uid,
+        displayAddedKg: displayKg,
+        exerciseName: exerciseName,
+        asOfDate: _selectedDate,
+      );
+    }
+    double _toDisplayFromAbs(double absoluteKg) {
+      if (!isBw) return absoluteKg;
+      return PeriodizationModelUtils.toDisplayAddedWeight(
+        uid: uid,
+        absoluteKg: absoluteKg,
+        exerciseName: exerciseName,
+        asOfDate: _selectedDate,
+      );
+    }
+
+    // ---- 0) if user already typed weight for set 3, just return it
+    final typedW3 = _weightControllers[i][2].text.trim();
+    if (typedW3.isNotEmpty) {
+      final w = double.tryParse(typedW3);
+      if (w != null) return w;
+    }
+
+    // ---- 1) compute Set 2 actual (typed wins; else hint)
+    final set2WeightDisplay = (_weightControllers[i][1].text.trim().isNotEmpty)
+        ? (double.tryParse(_weightControllers[i][1].text.trim()) ?? set2SuggestedWeight(i))
+        : set2SuggestedWeight(i);
+    final set2WeightAbs = _toAbsFromDisplay(set2WeightDisplay);
+
+    final set2Reps = (_repsControllers[i][1].text.trim().isNotEmpty)
+        ? (int.tryParse(_repsControllers[i][1].text.trim()) ?? set2SuggestedReps(i).toInt())
+        : set2SuggestedReps(i).toInt();
+
+    final set2Rir  = (_rirControllers[i][1].text.trim().isNotEmpty)
+        ? (double.tryParse(_rirControllers[i][1].text.trim()) ?? set2RIR(i))
+        : set2RIR(i);
+
+    final set2E1RMActual = PeriodizationModelUtils.calculateE1RM(
+      set2WeightAbs, set2Reps.toDouble(), set2Rir,
     );
+
+    // ---- 2) target E1RM for Set 3 (cumulative from Set 2 actual, with RIR gating)
+    final group   = _groupFor(exerciseName, category);
+    final rawDrop = _rawDropFor(group);
+    final drop    = _gatedDrop(rawDrop, set2Rir);
+    final targetE1RM = (set2E1RMActual - drop).clamp(1.0, 9999.0);
+
+    // ---- 3) collapse rules for Set 3
+    final typedReps3Text = _repsControllers[i][2].text.trim();
+    final rirSet3 = (_rirControllers[i][2].text.trim().isNotEmpty)
+        ? (double.tryParse(_rirControllers[i][2].text.trim()) ?? set3RIR(i))
+        : set3RIR(i);
+
+    // If reps typed → compute a single weight to hit target E1RM (rounded to increments)
+    if (typedReps3Text.isNotEmpty) {
+      final reps3 = int.tryParse(typedReps3Text) ?? set3SuggestedReps(i).toInt();
+      double wAbs = PeriodizationModelUtils.reverseCalculateWeight(
+        targetE1RM: targetE1RM,
+        reps: reps3,
+        rir: rirSet3,
+      );
+
+      if (isBw) {
+        final displayGuess = _toDisplayFromAbs(wAbs);
+        final roundedDisplay = PeriodizationModelUtils.roundToNearestValidIncrement(
+          targetWeight: displayGuess,
+          exerciseName: exerciseName,
+        );
+        return roundedDisplay;
+      } else {
+        final roundedAbs = PeriodizationModelUtils.roundToNearestValidIncrement(
+          targetWeight: wAbs,
+          exerciseName: exerciseName,
+        );
+        return roundedAbs;
+      }
+    }
+
+    // Neither weight nor reps typed → return the "mid" weight:
+    // mid-rep = (prev (Set 2) reps - 1), clamped to ≥1
+    final midRep = (set2Reps - 1).clamp(1, 45);
+
+    double wAbsMid = PeriodizationModelUtils.reverseCalculateWeight(
+      targetE1RM: targetE1RM,
+      reps: midRep,
+      rir: rirSet3,
+    );
+
+    if (isBw) {
+      final displayGuess = _toDisplayFromAbs(wAbsMid);
+      final roundedDisplay = PeriodizationModelUtils.roundToNearestValidIncrement(
+        targetWeight: displayGuess,
+        exerciseName: exerciseName,
+      );
+      return roundedDisplay;
+    } else {
+      final roundedAbs = PeriodizationModelUtils.roundToNearestValidIncrement(
+        targetWeight: wAbsMid,
+        exerciseName: exerciseName,
+      );
+      return roundedAbs;
+    }
   }
+
 
   double e1rmDisplayForCell(int exIdx, int setIdx) {
     final name = (_selectedExercisesWithCircuits[exIdx]['name'] as String?)?.trim() ?? '';
@@ -3340,14 +4077,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final rirText    = _rirControllers[exIdx][setIdx].text;
 
     final double weight = double.tryParse(weightText) ??
-        (setIdx == 0 ? (_isInitialized ? set1SuggestedWeight(exIdx) : 20.0)
-            : setIdx == 1 ? (_isInitialized ? set2SuggestedWeight(exIdx) : 20.0)
-            : (_isInitialized ? set3SuggestedWeight(exIdx) : 20.0));
+        (_isInitialized ? suggestedWeightForSet(exIdx, setIdx) : 20.0);
 
     final int reps = int.tryParse(repsText) ??
-        (setIdx == 0 ? (_isInitialized ? set1SuggestedReps(exIdx).toInt() : 15)
-            : setIdx == 1 ? (_isInitialized ? set2SuggestedReps(exIdx).toInt() : 10)
-            : (_isInitialized ? set3SuggestedReps(exIdx).toInt() : 10));
+        (_isInitialized ? suggestedRepsForSet(exIdx, setIdx).toInt() : (setIdx == 0 ? 15 : 10));
+
 
     final double rir = double.tryParse(rirText) ??
         (setIdx == 0 ? (_isInitialized ? set1RIR(exIdx) : 0.5)
@@ -8055,7 +8789,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               const SizedBox(
-                                width: 68,
+                                width: 76,
                                 child: Padding(
                                   padding: EdgeInsets.only(left: 3),
                                   child: Text('Weight', style: _headerStyle),
@@ -8106,7 +8840,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                             children: [
                               // Weight
                               SizedBox(
-                                width: 68,
+                                width: 76,
                                 child: (j == 0)
                                     ? TextField(
                                   controller: _weightControllers[i][j],
