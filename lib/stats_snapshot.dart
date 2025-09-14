@@ -121,15 +121,19 @@ Future<void> updateStatsFromWorkout({
 
   await db.runTransaction((tx) async {
     final snap = await tx.get(docRef);
-    var current = StatsSnapshot.fromMap(snap.data());
+    final snapData = (snap.data() as Map<String, dynamic>?) ?? const {};
+    var current = StatsSnapshot.fromMap(snapData);
 
-    // Parse this workout → candidates
+    // Existing: parse this workout → candidates
     final exercises = (workout['exercises'] is List)
         ? List<Map<String, dynamic>>.from(workout['exercises'] as List)
         : const <Map<String, dynamic>>[];
 
     final singleCandidates = <String, List<double>>{ for (final k in LiftKeys.all) k: <double>[] };
     final e1rmCandidates   = <String, List<double>>{ for (final k in LiftKeys.all) k: <double>[] };
+
+    // NEW: track per-workout best detail (weight+reps+e1rm) for each lift
+    final bestDetailInThisWorkout = <String, Map<String, dynamic>>{};
 
     for (final ex in exercises) {
       final name = canonical((ex['name'] as String? ?? '').trim());
@@ -147,13 +151,26 @@ Future<void> updateStatsFromWorkout({
         if (w <= 0 || reps <= 0) continue;
 
         if (reps == 1) singleCandidates[name]!.add(w);
-        e1rmCandidates[name]!.add(_e1rm(w, reps));
+
+        final e1 = _e1rm(w, reps);          // compute once
+        e1rmCandidates[name]!.add(e1);
+
+        // 👇 NEW: remember the best e1rm detail for this lift in THIS workout
+        final prev = bestDetailInThisWorkout[name];
+        final prevE1 = (prev?['e1rm'] as num?)?.toDouble() ?? 0.0;
+        if (prev == null || e1 > prevE1) {
+          bestDetailInThisWorkout[name] = {
+            'weight': w,
+            'reps': reps,
+            'e1rm': e1,
+          };
+        }
       }
     }
 
-    // Merge candidates into top3 lists
+    // Existing: merge candidates into top3 lists
     final top3Singles = Map<String, List<double>>.from(current.top3SinglesKg);
-    final top3E1 = Map<String, List<double>>.from(current.top3E1rmKg);
+    final top3E1      = Map<String, List<double>>.from(current.top3E1rmKg);
 
     for (final k in LiftKeys.all) {
       top3Singles[k] = _mergeTop3(top3Singles[k] ?? <double>[], singleCandidates[k] ?? const []);
@@ -167,8 +184,19 @@ Future<void> updateStatsFromWorkout({
     final threeLift = squatBest + benchBest + deadBest;
     final benchOnly = benchBest;
 
-    // Optional: RE / Goodlift points — compute if you have cached BW+gender
-    // For now we keep existing if present; you can recompute elsewhere on BW/gender changes.
+    // NEW: merge bestE1rmDetail into existing snapshot value (keep higher e1rm)
+    final existingDetail = Map<String, dynamic>.from(snapData['bestE1rmDetail'] ?? {});
+    final mergedDetail   = Map<String, dynamic>.from(existingDetail);
+    bestDetailInThisWorkout.forEach((lift, cand) {
+      final prev = existingDetail[lift];
+      final prevE1 = (prev?['e1rm'] as num?)?.toDouble() ?? 0.0;
+      final newE1  = (cand['e1rm'] as num?)?.toDouble() ?? 0.0;
+      if (prev == null || newE1 > prevE1) {
+        mergedDetail[lift] = cand;
+      }
+    });
+
+    // Optional: keep current points; (re)compute elsewhere if BW/gender changed
     final updated = StatsSnapshot(
       top3SinglesKg: top3Singles,
       top3E1rmKg: top3E1,
@@ -178,9 +206,15 @@ Future<void> updateStatsFromWorkout({
       goodliftPoints: current.goodliftPoints,
     );
 
-    tx.set(docRef, updated.toMap(), SetOptions(merge: true));
+    // Write snapshot + new detail (merge)
+    tx.set(docRef, {
+      ...updated.toMap(),
+      'bestE1rmDetail': mergedDetail,                 // NEW
+      'updatedAt': FieldValue.serverTimestamp(),      // nice to have
+    }, SetOptions(merge: true));
   });
 }
+
 
 /// Recompute points after the user changes gender/BW (self only).
 Future<void> recomputePointsFromStoredBests({
@@ -226,7 +260,7 @@ Future<void> recomputePointsFromStoredBests({
 Future<void> backfillStatsForUser(String uid) async {
   final db = FirebaseFirestore.instance;
   final workoutsCol = db.collection('users').doc(uid).collection('workouts');
-  final bestE1rmDetail = <String, Map<String, dynamic>>{};
+  final bestE1rmDetail = <String, Map<String, dynamic>>{}; // 👈 NEW
 
   // You can page if needed; single read is fine to start
   QuerySnapshot<Map<String, dynamic>> snaps;
@@ -251,17 +285,33 @@ Future<void> backfillStatsForUser(String uid) async {
     for (final ex in exercises) {
       final name = canonical((ex['name'] as String? ?? '').trim());
       if (!LiftKeys.all.contains(name)) continue;
+
       final sets = (ex['sets'] is List)
           ? List<Map<String, dynamic>>.from(ex['sets'] as List)
           : const <Map<String, dynamic>>[];
+
       for (final s in sets) {
         final w = _toD(s['weight'] as num?);
         final reps = (s['reps'] is num)
             ? (s['reps'] as num).toInt()
             : int.tryParse('${s['reps'] ?? 0}') ?? 0;
         if (w <= 0 || reps <= 0) continue;
+
         if (reps == 1) singleCand[name]!.add(w);
-        e1rmCand[name]!.add(_e1rm(w, reps));
+
+        final e1 = _e1rm(w, reps);          // 👈 compute once
+        e1rmCand[name]!.add(e1);
+
+        // 👇 NEW: remember best e1rm detail (weight + reps + e1rm) for this lift
+        final prev = bestE1rmDetail[name];
+        final prevE1 = (prev?['e1rm'] as num?)?.toDouble() ?? 0.0;
+        if (prev == null || e1 > prevE1) {
+          bestE1rmDetail[name] = {
+            'weight': w,
+            'reps': reps,
+            'e1rm': e1,
+          };
+        }
       }
     }
 
@@ -288,9 +338,14 @@ Future<void> backfillStatsForUser(String uid) async {
     benchOnlyKg: benchOnly,
   );
 
-  await db.collection('users_public').doc(uid).set(out.toMap(), SetOptions(merge: true));
+  await db.collection('users_public').doc(uid).set({
+    ...out.toMap(),
+    'bestE1rmDetail': bestE1rmDetail, // 👈 NEW
+  }, SetOptions(merge: true));
+
   debugPrint('✅ Backfilled stats for $uid');
 }
+
 
 Future<void> backfillAllUsers() async {
   final db = FirebaseFirestore.instance;

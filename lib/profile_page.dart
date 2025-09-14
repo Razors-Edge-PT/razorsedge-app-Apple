@@ -916,12 +916,44 @@ class _ProfilePageState extends State<ProfilePage> {
       // header label source for friend view (users_public likely has username/emailLower)
       _currentUsername = (data['username'] ?? _currentUsername ?? '').toString();
 
+      // 👇 Drive the “weight × reps  ~ e1RM” rows from bestE1rmDetail
+      final detail = Map<String, dynamic>.from(data['bestE1rmDetail'] ?? {});
+      BestLift? _mk(String name) {
+        final d = detail[name];
+        if (d is Map) {
+          return BestLift(
+            exerciseName: name,
+            weight: (d['weight'] as num?)?.toDouble() ?? 0,
+            reps:   (d['reps']   as num?)?.toInt()    ?? 0,
+            e1rm:   (d['e1rm']   as num?)?.toDouble() ?? 0,
+          );
+        }
+        return null;
+      }
+
+      final Map<String, BestLift> filled = {};
+      void put(String name) {
+        final x = _mk(name);
+        if (x != null) filled[name] = x; // only add if present
+      }
+
+      put('Back Squat, Barbell');
+      put('Bench Press, Barbell');
+      put('Deadlift, Conventional');
+      put('Chin-Up');
+      put('Overhead Dumbbell Press, Unilateral');
+
+      _bestLifts.clear();
+      _bestLifts.addAll(filled);
+
+
       // Do NOT touch editable self-only fields in friend view (bio, etc.)
       _bioController.text = '';
     }
 
     if (mounted) setState(() => isLoading = false);
   }
+
 
 
 

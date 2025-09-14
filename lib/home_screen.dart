@@ -58,6 +58,7 @@ class _HomeScreenState extends State<HomeScreen> {
     print("🏠 Home loaded for ${userContext.actingAsUid} "
         "(actor: ${userContext.actorUid}, coach: ${userContext.isCoach})");
 
+
     print('[Warmup] started for $actingUid');
     // Kick off WES cache warmup (does not block UI, has cooldown)
     unawaited(WarmupService.instance.warmWES(actingUid ?? ''));
