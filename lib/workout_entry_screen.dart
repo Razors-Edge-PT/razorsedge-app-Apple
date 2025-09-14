@@ -2955,13 +2955,25 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       }
     }
 
-    // Neither typed → use mid solution: prevReps - 1 (≥1)
-    final midRep = (prevReps - 1).clamp(1, 45);
+    // Neither typed → use math-centered mid:
+// center reps that hit target at a stable anchor (previous ABS weight)
+    final int midRep = PeriodizationModelUtils
+        .reverseCalculateReps(
+      targetE1RM: targetE1RM,
+      weight: prevWAbs,      // anchor at previous set ABS weight
+      baseWeight: prevWAbs,
+      rir: thisRir,
+      minReps: null,
+    )
+        .clamp(1.0, 45.0)
+        .round();
+
     final midAbs = PeriodizationModelUtils.reverseCalculateWeight(
       targetE1RM: targetE1RM,
       reps: midRep,
       rir: thisRir,
     );
+
     if (isBw) {
       final displayGuess = _toDisplayFromAbs(midAbs);
       final roundedDisplay = PeriodizationModelUtils.roundToNearestValidIncrement(
@@ -3108,6 +3120,17 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final drop    = _gatedDrop(rawDrop, prevRir);
     final targetE1RM = (prevE1RM - drop).clamp(1.0, 9999.0);
 
+    // --- math-based center reps for this set (anchor at previous ABS weight) ---
+    final double rirCurrent = _typedOrHintRIR(exIdx: exIdx, setIdx: setIdx);
+    final double repsNeededD = PeriodizationModelUtils.reverseCalculateReps(
+      targetE1RM: targetE1RM,
+      weight: prevWAbs,      // anchor at previous set ABS weight
+      baseWeight: prevWAbs,
+      rir: rirCurrent,
+      minReps: null,
+    ).clamp(1.0, 45.0);
+    final int repsCenter = repsNeededD.round().clamp(1, 45);
+
     // Collapse if weight typed for this set → single reps (consistent with hint)
     final typedW = _weightControllers[exIdx][setIdx].text.trim();
     if (typedW.isNotEmpty) {
@@ -3119,13 +3142,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         // same tolerance as _synthesizeHintsForSet
         final tolKg = (group == 'D') ? 0.3 : 0.7;
 
-        // allowed reps window = prevReps ± 1 (clamped)
+        // allowed reps window = repsCenter ± 1 (clamped)
         final candidates = <int>{
-          (prevReps - 1).clamp(1, 45),
-          prevReps.clamp(1, 45),
-          (prevReps + 1).clamp(1, 45),
-        }.toList()
-          ..sort();
+          (repsCenter - 1).clamp(1, 45),
+          repsCenter,
+          (repsCenter + 1).clamp(1, 45),
+        }.toList()..sort();
+
 
         // evaluate error vs target for each candidate
         double bestErr = double.infinity;
@@ -3156,11 +3179,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         return bestRep.toDouble();
       }
     }
+    // Neither typed → use math-centered reps
+    return repsCenter.toDouble();
 
-
-    // Neither typed → mid reps (prevReps - 1)
-    final midReps = (prevReps - 1).clamp(1, 45);
-    return midReps.toDouble();
   }
 
 
