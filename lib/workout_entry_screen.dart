@@ -431,8 +431,27 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final rirCurrent = _typedOrHintRIR(exIdx: exIdx, setIdx: setIdx);
 
     // Choose mid reps: favor prev reps - 1 (typed else hint), else best to target
+    // --- NEW CENTER: solve reps that hit target at a stable anchor weight ---
     final prevReps   = _typedOrHintReps(exIdx: exIdx, setIdx: setIdx - 1);
-    int repsMid      = (prevReps - 1).clamp(1, 45);
+    final prevWAbs   = _typedOrHintWeightAbs(exIdx: exIdx, setIdx: setIdx - 1);
+    final prevRir    = _typedOrHintRIR(exIdx: exIdx, setIdx: setIdx - 1);
+
+// if previous RIR was > 2 (i.e. drop likely gated to ~0), anchor on previous ABS weight
+// otherwise we’ll still solve a mid weight below, but the anchor gives a better center
+    final double anchorAbs = prevWAbs;
+
+// reps that would keep E1RM at targetE1RM using the anchorAbs at current set RIR
+    final double repsNeeded = PeriodizationModelUtils.reverseCalculateReps(
+      targetE1RM: targetE1RM,
+      weight: anchorAbs,
+      baseWeight: anchorAbs, // guard path: no min clamp here
+      rir: rirCurrent,
+      minReps: null,
+    );
+
+// center on the math, not on (prevReps - 1)
+    int repsMid = repsNeeded.clamp(1.0, 45.0).round();
+
 
     // Compute unrounded weight that hits target at repsMid
     double weightMidAbs = PeriodizationModelUtils.reverseCalculateWeight(
@@ -761,7 +780,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final uid  = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '';
     final rir  = _typedOrHintRIR(exIdx: exIdx, setIdx: setIdx); // current set RIR
 
-    // If WEIGHT is typed (and reps empty) → collapse REPS to a single integer
+    // If WEIGHT is typed (and reps empty) → compute allowed reps via the same candidate+tolerance logic
     if (weightText.isNotEmpty && repsText.isEmpty) {
       final wDisp = double.tryParse(weightText);
       if (wDisp != null && wDisp > 0) {
@@ -771,20 +790,59 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
             uid: uid, displayAddedKg: wDisp, exerciseName: name, asOfDate: _selectedDate)
             : wDisp;
 
-        // baseWeight from Set 1 actual (for your internal guard logic)
-        final baseAbs = _typedOrHintWeightAbs(exIdx: exIdx, setIdx: 0);
+        // same tolerance you use elsewhere
+        final group   = await _resolveGroupForExercise(name);
+        final tolKg   = (group == 'D') ? 0.3 : 0.7;
 
-        final repsD  = PeriodizationModelUtils.reverseCalculateReps(
+        // center candidates around the same math-based center we use in _synthesizeHintsForSet
+        final prevWAbs   = _typedOrHintWeightAbs(exIdx: exIdx, setIdx: setIdx - 1);
+        final rirCurrent = _typedOrHintRIR(exIdx: exIdx, setIdx: setIdx);
+        final repsNeeded = PeriodizationModelUtils.reverseCalculateReps(
           targetE1RM: target,
-          weight: wAbs,
-          baseWeight: baseAbs,
-          rir: rir,
-          minReps: 1.0,
-        );
-        final repsI = repsD.clamp(1.0, 45.0).round();
-        return repsI.toString();
+          weight: prevWAbs,           // anchor at previous ABS weight
+          baseWeight: prevWAbs,
+          rir: rirCurrent,
+          minReps: null,
+        ).clamp(1.0, 45.0);
+
+        final int center = repsNeeded.round().clamp(1, 45);
+        final candidates = <int>{
+          (center - 1).clamp(1, 45),
+          center,
+          (center + 1).clamp(1, 45),
+        }.toList()..sort();
+
+        // collect all candidates within tolerance for the typed weight
+        final withinTol = <int>[];
+        double bestErr = double.infinity;
+        int bestRep = candidates.first;
+
+        for (final r in candidates) {
+          final e = PeriodizationModelUtils.calculateE1RM(wAbs, r.toDouble(), rirCurrent);
+          final err = (e - target).abs();
+
+          if (err <= tolKg + 1e-6) withinTol.add(r);
+
+          final take =
+              (err < bestErr - 1e-9) || ((err - bestErr).abs() <= 1e-9 && r < bestRep);
+          if (take) { bestErr = err; bestRep = r; }
+        }
+
+        // your requested behavior:
+        // - if multiple reps satisfy tolerance at this weight → show a RANGE "a–b"
+        // - if exactly one satisfies → show that single rep
+        // - if none satisfy → show the best (closest) rep
+        if (withinTol.length >= 2) {
+          withinTol.sort();
+          return '${withinTol.first}–${withinTol.last}';
+        } else if (withinTol.length == 1) {
+          return withinTol.first.toString();
+        } else {
+          return bestRep.toString();
+        }
       }
     }
+
 
     // If REPS is typed (and weight empty) → we let the weight hint collapse, not the reps hint
     if (repsText.isNotEmpty && weightText.isEmpty) {
