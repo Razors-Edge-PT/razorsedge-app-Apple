@@ -620,6 +620,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           : roundedMid;
       filteredWeightsDisplay = [wd];
     }
+    // Collapse degenerate ranges (e.g., 32.50–32.50) to a single value
+    // Collapse degenerate ranges (e.g., 32.50–32.50) to a single value
+    if (filteredWeightsDisplay.length >= 2) {
+      final first = filteredWeightsDisplay.first;
+      final last  = filteredWeightsDisplay.last;
+      if ((last - first).abs() <= 1e-6) {
+        filteredWeightsDisplay = [first];
+      }
+    }
 
     // Choose mid scenario from filtered sets:
     // Prefer repsMid if still present; else nearest to repsMid; weight choose nearest to weightMidAbs
@@ -666,6 +675,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 // 2) Ensure at least one value remains
     if (filteredWeightsDisplay.isEmpty) {
       filteredWeightsDisplay = [cap];
+    }
+
+    // 2b) Collapse degenerate range *after* cap as well
+    if (filteredWeightsDisplay.length >= 2) {
+      final first = filteredWeightsDisplay.first;
+      final last  = filteredWeightsDisplay.last;
+      if ((last - first).abs() <= 1e-6) {
+        filteredWeightsDisplay = [first];
+      }
     }
 
 // 3) Clamp mid pick to the largest value ≤ cap (list is sorted ascending)
@@ -761,9 +779,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final h = await _synthesizeHintsForSet(exIdx, setIdx);
     if (h.weightRangeDisplay.isEmpty) return '';
     if (h.weightRangeDisplay.length == 1) return formatWeight(h.weightRangeDisplay.first);
+
     final first = formatWeight(h.weightRangeDisplay.first);
     final last  = formatWeight(h.weightRangeDisplay.last);
-    return '$first–$last';
+    return (first == last) ? first : '$first–$last';
+
   }
 
   Future<String> _repsHintText(int exIdx, int setIdx) async {
@@ -1815,10 +1835,26 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 //... Bodyweight exercises block ends
 
 
-  String formatWeight(double w) =>
-      (w % 1 == 0) ? w.toStringAsFixed(0) : // whole number → "62"
-      (w * 10 % 1 == 0) ? w.toStringAsFixed(1) : // one decimal clean → "62.5"
-      w.toStringAsFixed(2); // otherwise show two decimals
+  String formatWeight(double v) {
+    // Round to 2 decimals for display decisions
+    final s2 = v.toStringAsFixed(2);   // e.g., "32.50", "37.75", "40.00"
+
+    // Keep two decimals for quarter plates
+    if (s2.endsWith('25') || s2.endsWith('75')) return s2;
+
+    // If second decimal is 0 → show one decimal
+    if (s2.endsWith('0')) {
+      final s1 = v.toStringAsFixed(1); // e.g., "32.5", "40.0"
+      if (s1.endsWith('.0')) {
+        return s1.substring(0, s1.length - 2); // "40.0" → "40"
+      }
+      return s1; // "32.5"
+    }
+
+    // Otherwise keep two
+    return s2;
+  }
+
 
 
   double getSet2E1RM(int exerciseIndex) {
@@ -3183,7 +3219,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     return repsCenter.toDouble();
 
   }
-
 
 
   Map<String, dynamic>? getPlannedRirSetValuesWES({
