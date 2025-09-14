@@ -17,6 +17,7 @@ import 'core_exercises.dart';
 import 'profile_page.dart';
 import 'warmup_service.dart';
 import 'dart:async';
+import'stats_snapshot.dart';
 
 
 class HomeScreen extends StatefulWidget {
@@ -45,8 +46,6 @@ class _HomeScreenState extends State<HomeScreen> {
   final ImagePicker _picker = ImagePicker();
   String? _actingAsEmail;
   String? _lastWarmUid;
-
-
 
   HomeSection _currentSection = HomeSection.calendar;
 

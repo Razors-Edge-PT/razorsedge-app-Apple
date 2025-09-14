@@ -140,13 +140,19 @@ class BestLift {
 
 
 class ProfilePage extends StatefulWidget {
-  const ProfilePage({super.key});
+  final String? viewedUid;   // whose profile to show; null => self
+  final bool readOnly;       // lock editing UI
+
+  const ProfilePage({
+    super.key,
+    this.viewedUid,
+    this.readOnly = false,
+  });
 
   @override
   State<ProfilePage> createState() => _ProfilePageState();
-
-
 }
+
 
 class _StatChip extends StatelessWidget {
   final String label;
@@ -237,6 +243,17 @@ class _ProfilePageState extends State<ProfilePage> {
   BodyWeightUnit _bwUnit = BodyWeightUnit.kg;
   double _kgToLbs(double kg) => kg * 2.20462;
   double _lbsToKg(double lbs) => lbs / 2.20462;
+
+  //view only bits, for friends
+
+  String? _targetUid;           // resolved in initState
+  bool _readOnlyView = false;   // resolved in initState
+
+  bool get _isSelf {
+    final self = UserContext.of(context, listen: false).actorUid;
+    return (_targetUid != null && _targetUid == self);
+  }
+// view only bits ends
 
 
   //Video bits
@@ -621,6 +638,52 @@ class _ProfilePageState extends State<ProfilePage> {
   //Video bits end
 
 
+  Future<void> _loadSnapshotIfReadOnly() async {
+    if (!widget.readOnly) return;
+
+    final uid = widget.viewedUid ??
+        UserContext.of(context, listen: false).currentUid;
+    if (uid == null) return;
+
+    final snap = await FirebaseFirestore.instance
+        .collection('users_public')
+        .doc(uid)
+        .get();
+    final m = snap.data() ?? {};
+
+    // helpers
+    List<double> _arrOfNums(dynamic v) =>
+        (v is List) ? v.map((e) => (e as num).toDouble()).toList() : <double>[];
+    double _best(List<double> a) => a.isEmpty ? 0 : a.reduce((a1, a2) => a1 > a2 ? a1 : a2);
+
+    // read top3 singles → best singles map for the 5 lifts
+    final top3Singles = Map<String, dynamic>.from(m['top3SinglesKg'] ?? {});
+    final squatBest = _best(_arrOfNums(top3Singles['Back Squat, Barbell']));
+    final benchBest = _best(_arrOfNums(top3Singles['Bench Press, Barbell']));
+    final deadBest  = _best(_arrOfNums(top3Singles['Deadlift, Conventional']));
+    final chinBest  = _best(_arrOfNums(top3Singles['Chin-Up']));
+    final ohpBest   = _best(_arrOfNums(top3Singles['Overhead Dumbbell Press, Unilateral']));
+
+    setState(() {
+      // your UI already uses these
+      _bestSinglesFive = {
+        'Back Squat, Barbell': squatBest,
+        'Bench Press, Barbell': benchBest,
+        'Deadlift, Conventional': deadBest,
+        'Chin-Up': chinBest,
+        'Overhead Dumbbell Press, Unilateral': ohpBest,
+      };
+
+      _bestThreeLiftTotal = (m['threeLiftTotalKg'] as num?)?.toDouble();
+      _bestBenchOnly      = (m['benchOnlyKg'] as num?)?.toDouble();
+
+      // points are optional
+      _rePoints       = (m['rePoints'] as num?)?.toDouble();
+      _goodliftPoints = (m['goodliftPoints'] as num?)?.toDouble();
+
+      isLoading = false; // stop spinner when friend snapshot is loaded
+    });
+  }
 
 
 
@@ -628,26 +691,42 @@ class _ProfilePageState extends State<ProfilePage> {
   @override
   void initState() {
     super.initState();
+
+    final uc = UserContext.of(context, listen: false);
+    final selfUid = uc.actorUid;
+    _targetUid = widget.viewedUid ?? selfUid;
+    _readOnlyView = widget.readOnly || (_targetUid != selfUid);
+
+    // loads from 'users' (self) or 'users_public' (friend) based on _readOnlyView
     _loadProfileData();
 
-    _loadLocalProfileImage().then((_) {
-      final uc = context.read<UserContext>();
-      if (uc.isActingAsSelf && _localProfilePath != null && File(_localProfilePath!).existsSync()) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) uc.setLocalPhotoPath(_localProfilePath); // just local path, no Firestore
-        });
-      }
-    });
-    _loadPhotoURL();
-    _refreshBestLiftsAndPoints(); // NEW
-    _loadCurrentUsername();
-    _loadCompSingles();
-    _loadLiftVideosFromLocal(); // local-only for now
-    _loadProfilePrefs();
-    _loadBodyWeightForSelectedUser();
-    _loadHeightForSelectedUser(); // this alone is fine
-    _loadGender(); // <<— load gender last is fine
+    if (!_readOnlyView) {
+      // ==== SELF: keep all your original loaders + the compute ====
+      _loadLocalProfileImage().then((_) {
+        final uc = context.read<UserContext>();
+        if (uc.isActingAsSelf &&
+            _localProfilePath != null &&
+            File(_localProfilePath!).existsSync()) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) uc.setLocalPhotoPath(_localProfilePath);
+          });
+        }
+      });
+      _loadPhotoURL();
+      _refreshBestLiftsAndPoints();   // ✅ self ONLY
+      _loadCurrentUsername();
+      _loadCompSingles();
+      _loadLiftVideosFromLocal();
+      _loadProfilePrefs();
+      _loadBodyWeightForSelectedUser();
+      _loadHeightForSelectedUser();
+      _loadGender();
+    } else {
+      // ==== FRIEND (read-only): do nothing else here ====
+      // NO _refreshBestLiftsAndPoints() here
+    }
   }
+
 
   @override
   void dispose() {
@@ -787,21 +866,64 @@ class _ProfilePageState extends State<ProfilePage> {
 
 
   Future<void> _loadProfileData() async {
-    final uid = UserContext.of(context, listen: false).currentUid;
+    final uid = _targetUid;
     if (uid == null) return;
 
-    final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
-    if (doc.exists) {
-      final data = doc.data() ?? {};
-      _bioController.text = data['bio'] ?? '';
-      squat = (data['bestSquat'] ?? 0).toDouble();
-      bench = (data['bestBench'] ?? 0).toDouble();
-      deadlift = (data['bestDeadlift'] ?? 0).toDouble();
-      chinUp = (data['bestChinUp'] ?? 0).toDouble();
+    // self => private profile; friend => public projection
+    final bool isSelf = !_readOnlyView;
+    final String col = isSelf ? 'users' : 'users_public';
+
+    final doc = await FirebaseFirestore.instance.collection(col).doc(uid).get();
+    final data = doc.data() ?? {};
+
+    if (isSelf) {
+      // --- SELF VIEW: your existing editable fields ---
+      _bioController.text = (data['bio'] ?? '').toString();
+      squat           = (data['bestSquat'] ?? 0).toDouble();
+      bench           = (data['bestBench'] ?? 0).toDouble();
+      deadlift        = (data['bestDeadlift'] ?? 0).toDouble();
+      chinUp          = (data['bestChinUp'] ?? 0).toDouble();
       unilateralPress = (data['bestUnilateralPress'] ?? 0).toDouble();
+      _currentUsername = (data['username'] ?? _currentUsername ?? '').toString();
+    } else {
+      // --- FRIEND VIEW: read snapshot aggregates from users_public ---
+      List<double> _arr(dynamic v) =>
+          (v is List) ? v.whereType<num>().map((n) => n.toDouble()).toList() : <double>[];
+      double _best(List<double> a) => a.isEmpty ? 0 : a.reduce((a, b) => a > b ? a : b);
+
+      final top3Singles = Map<String, dynamic>.from(data['top3SinglesKg'] ?? {});
+      final squatBest = _best(_arr(top3Singles['Back Squat, Barbell']));
+      final benchBest = _best(_arr(top3Singles['Bench Press, Barbell']));
+      final deadBest  = _best(_arr(top3Singles['Deadlift, Conventional']));
+      final chinBest  = _best(_arr(top3Singles['Chin-Up']));
+      final ohpBest   = _best(_arr(top3Singles['Overhead Dumbbell Press, Unilateral']));
+
+      _bestSinglesFive = {
+        'Back Squat, Barbell': squatBest,
+        'Bench Press, Barbell': benchBest,
+        'Deadlift, Conventional': deadBest,
+        'Chin-Up': chinBest,
+        'Overhead Dumbbell Press, Unilateral': ohpBest,
+      };
+
+      _bestThreeLiftTotal = (data['threeLiftTotalKg'] as num?)?.toDouble();
+      _bestBenchOnly      = (data['benchOnlyKg']      as num?)?.toDouble();
+
+      // optional points (may be null)
+      _rePoints       = (data['rePoints']       as num?)?.toDouble();
+      _goodliftPoints = (data['goodliftPoints'] as num?)?.toDouble();
+
+      // header label source for friend view (users_public likely has username/emailLower)
+      _currentUsername = (data['username'] ?? _currentUsername ?? '').toString();
+
+      // Do NOT touch editable self-only fields in friend view (bio, etc.)
+      _bioController.text = '';
     }
-    setState(() => isLoading = false);
+
+    if (mounted) setState(() => isLoading = false);
   }
+
+
 
   Future<void> _saveProfileData() async {
     final uid = UserContext.of(context, listen: false).currentUid;
@@ -2121,10 +2243,13 @@ class _ProfilePageState extends State<ProfilePage> {
 
     return WillPopScope(
       onWillPop: () async {
-        await _saveCompSingles();
-        await _saveProfileData();
-        return true; // allow navigation
+        if (!_readOnlyView && _isSelf) {
+          await _saveCompSingles();
+          await _saveProfileData();
+        }
+        return true;
       },
+
       child: Scaffold(
         appBar: AppBar(
           backgroundColor: Colors.blueGrey,
@@ -2132,104 +2257,96 @@ class _ProfilePageState extends State<ProfilePage> {
           leading: IconButton(
             icon: const Icon(Icons.arrow_back),
             onPressed: () async {
-              await _saveCompSingles();
-              await _saveProfileData(); // ✅ save on custom back
+              // ✅ Only save if this is *your own* editable profile
+              if (!_readOnlyView && _targetUid == UserContext.of(context, listen: false).actorUid) {
+                await _saveCompSingles();
+                await _saveProfileData();
+              }
               if (context.mounted) Navigator.pop(context);
             },
           ),
           actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 8.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SizedBox(
-                  width: 180,
-                  child: Builder(
-                    builder: (context) {
-                      final actingUid = Provider.of<UserContext>(context, listen: true).actingAsUid;
-                      if (actingUid == null) {
-                        return const Text('Unknown',
+            Padding(
+              padding: const EdgeInsets.only(right: 8.0),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 180,
+                    child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                      stream: FirebaseFirestore.instance
+                          .collection(_readOnlyView ? 'users_public' : 'users')
+                          .doc(_targetUid)
+                          .snapshots(),
+                      builder: (context, snap) {
+                        final data = snap.data?.data();
+                        String? pick(dynamic v) {
+                          final s = (v ?? '').toString().trim();
+                          return s.isEmpty ? null : s;
+                        }
+
+                        final label = pick(data?['username']) ??
+                            pick(data?['displayName']) ??
+                            pick(data?['email']) ??
+                            'Unknown';
+
+                        return Text(
+                          label,
                           maxLines: 1,
-                          style: TextStyle(
-                            color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18,
-                            overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.rajdhani(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 18,
                           ),
                         );
-                      }
-
-                      return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                        stream: FirebaseFirestore.instance.collection('users').doc(actingUid).snapshots(),
-                        builder: (context, snap) {
-                          final data = snap.data?.data();
-                          String? pick(dynamic v) {
-                            final s = (v ?? '').toString().trim();
-                            return s.isEmpty ? null : s;
-                          }
-                          final label = pick(data?['username']) ??
-                              pick(data?['displayName']) ??
-                              pick(data?['email']) ??
-                              'Unknown';
-
-                          return Text(
-                            label,
-                            maxLines: 1,
-                            //style: GoogleFonts.rajdhani(
-                            style: GoogleFonts.rajdhani(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 18,
-                            ),
-                          );
-                        },
-                      );
-                    },
-                  ),
-                )
-
-              ],
+                      },
+                    ),
+                  )
+                ],
+              ),
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(9.0),
-            child: SizedBox(
-              height: kToolbarHeight,
-              child: Center(
-                child: GestureDetector(
-                  onTap: () async {
-                    final confirm = await showDialog<bool>(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        title: const Text('Change Profile Picture?'),
-                        content: const Text('Do you want to change your profile picture?'),
-                        actions: [
-                          TextButton(
-                              onPressed: () => Navigator.pop(ctx, false),
-                              child: const Text('Cancel')),
-                          TextButton(
-                              onPressed: () => Navigator.pop(ctx, true),
-                              child: const Text('Yes')),
-                        ],
-                      ),
-                    );
-                    if (confirm == true) _pickAndUploadProfileImage();
-                  },
-                  child: CircleAvatar(
-                    radius: 18,
-                    backgroundColor: Colors.grey.shade300,
-                    backgroundImage: avatarImage,
-                    child: avatarImage == null ? const Icon(Icons.person, size: 18) : null,
+            Padding(
+              padding: const EdgeInsets.all(9.0),
+              child: SizedBox(
+                height: kToolbarHeight,
+                child: Center(
+                  child: GestureDetector(
+                    onTap: () async {
+                      if (_readOnlyView) return; // 👈 block edits in friend view
+                      final confirm = await showDialog<bool>(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          title: const Text('Change Profile Picture?'),
+                          content: const Text('Do you want to change your profile picture?'),
+                          actions: [
+                            TextButton(
+                                onPressed: () => Navigator.pop(ctx, false),
+                                child: const Text('Cancel')),
+                            TextButton(
+                                onPressed: () => Navigator.pop(ctx, true),
+                                child: const Text('Yes')),
+                          ],
+                        ),
+                      );
+                      if (confirm == true) _pickAndUploadProfileImage();
+                    },
+                    child: CircleAvatar(
+                      radius: 18,
+                      backgroundColor: Colors.grey.shade300,
+                      backgroundImage: avatarImage,
+                      child: avatarImage == null ? const Icon(Icons.person, size: 18) : null,
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-          const SizedBox(width: 12),
-        ],
-      ),
+            const SizedBox(width: 12),
+          ],
+        ),
 
-      body: isLoading
+
+        body: isLoading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
         padding: const EdgeInsets.all(12),
@@ -2247,6 +2364,7 @@ class _ProfilePageState extends State<ProfilePage> {
                     // Profile Picture
                     GestureDetector(
                       onTap: () async {
+                        if (_readOnlyView || !_isSelf) return; // 👈 block in friend view
                         final confirm = await showDialog<bool>(
                           context: context,
                           builder: (ctx) => AlertDialog(
@@ -2286,6 +2404,7 @@ class _ProfilePageState extends State<ProfilePage> {
                     // Username display + edit
                     InkWell(
                       onTap: () async {
+                        if (_readOnlyView || !_isSelf) return; // 👈 block edits in friend view
                         final newName = await showDialog<String>(
                           context: context,
                           builder: (ctx) {
@@ -2553,11 +2672,13 @@ class _ProfilePageState extends State<ProfilePage> {
 
 
             const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: _saveProfileData,
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey),
-              child: const Text('Save Profile'),
-            ),
+            if (!_readOnlyView && _isSelf)
+              ElevatedButton(
+                onPressed: _saveProfileData,
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey),
+                child: const Text('Save Profile'),
+              ),
+
 
             const SizedBox(height: 12),
 

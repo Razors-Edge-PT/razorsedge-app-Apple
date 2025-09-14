@@ -4,6 +4,15 @@ import 'package:provider/provider.dart';
 import 'user_context.dart';
 import 'coach_home_screen.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'profile_page.dart';
+
+// Local model
+class UserHit {
+  final String uid;
+  final String username;
+  final String emailLower;
+  UserHit(this.uid, this.username, this.emailLower);
+}
 
 class ApproveRequestsScreen extends StatelessWidget {
   const ApproveRequestsScreen({super.key});
@@ -67,6 +76,52 @@ class ApproveRequestsScreen extends StatelessWidget {
         .delete();
   }
 
+  Future<void> _addGymBuddyByUid(
+      BuildContext context, {
+        required String athleteUid,
+        required String username,
+        required String emailLower,
+      }) async {
+    try {
+      final actorUid = UserContext.of(context, listen: false).actorUid;
+
+      if (athleteUid == actorUid) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("You can't add yourself.")),
+        );
+        return;
+      }
+
+      await FirebaseFirestore.instance
+          .collection('buddyAssignments')
+          .doc(actorUid)
+          .set({
+        'athletes': {
+          athleteUid: {
+            'displayName': username,    // placeholder until you add full name
+            'email': emailLower,        // kept for reference; not shown in UI
+            'addedAt': FieldValue.serverTimestamp(),
+          }
+        }
+      }, SetOptions(merge: true));
+
+      debugPrint('🤝 [addGymBuddyByUid] $athleteUid ($username) added for $actorUid');
+
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Added $username')),
+      );
+    } catch (e) {
+      debugPrint('❌ addGymBuddyByUid error: $e');
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to add gym buddy')),
+      );
+    }
+  }
+
+
   Future<void> _addGymBuddyByEmail(BuildContext context, String email) async {
     final trimmed = email.trim().toLowerCase();
     if (trimmed.isEmpty) return;
@@ -127,6 +182,192 @@ class ApproveRequestsScreen extends StatelessWidget {
         const SnackBar(content: Text('Failed to add gym buddy')),
       );
     }
+  }
+
+  Future<void> _showAddGymBroPicker(BuildContext context) async {
+    final controller = TextEditingController();
+    String query = '';
+    String? lastError;
+
+    // Two prefix queries (usernameLower + emailLower), merged & de-duped
+    Future<List<UserHit>> _runSearch(String q) async {
+      final db = FirebaseFirestore.instance;
+      final ql = q.trim().toLowerCase();
+      if (ql.isEmpty) return [];
+
+      try {
+        final nameQ = await db
+            .collection('users_public')   // 👈 changed
+            .orderBy('usernameLower')
+            .startAt([ql])
+            .endAt(['$ql\uf8ff'])
+            .limit(20)
+            .get();
+
+        final emailQ = await db
+            .collection('users_public')   // 👈 changed
+            .orderBy('emailLower')
+            .startAt([ql])
+            .endAt(['$ql\uf8ff'])
+            .limit(20)
+            .get();
+        debugPrint('🔎 Search "$ql": usernameLower=${nameQ.size}, emailLower=${emailQ.size}');
+
+        final byUid = <String, UserHit>{};
+
+        for (final d in nameQ.docs) {
+          final m = d.data();
+          byUid[d.id] = UserHit(
+            d.id,
+            (m['username'] ?? '').toString(),
+            (m['emailLower'] ?? '').toString(),
+          );
+        }
+        for (final d in emailQ.docs) {
+          final m = d.data();
+          byUid[d.id] = UserHit(
+            d.id,
+            (m['username'] ?? '').toString(),
+            (m['emailLower'] ?? '').toString(),
+          );
+        }
+
+        final list = byUid.values.toList()
+          ..sort((a, b) => a.username.toLowerCase().compareTo(b.username.toLowerCase()));
+
+        lastError = null;
+        return list;
+      } catch (e) {
+        debugPrint('❌ [AddGymBroPicker] search error: $e');
+        lastError = e.toString();
+        return [];
+      }
+
+    }
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) {
+        List<UserHit> results = const [];
+        bool loading = false;
+
+        Future<void> _refresh(String text, void Function(void Function()) setState) async {
+          setState(() => loading = true);
+          final r = await _runSearch(text);
+          if (!ctx.mounted) return;
+          setState(() {
+            results = r;
+            loading = false;
+          });
+        }
+
+        return StatefulBuilder(
+          builder: (ctx, setState) {
+            return AlertDialog(
+              title: const Text('Add Gymbro (type username or email)'),
+              content: SizedBox(
+                width: 420,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: controller,
+                      autofocus: true,
+                      decoration: const InputDecoration(
+                        hintText: 'smallerthanu@email.com',
+                        hintStyle: TextStyle(color: Colors.grey),
+                      ),
+
+                      onChanged: (t) {
+                        query = t;
+                        _refresh(t, setState);
+                      },
+                      onSubmitted: (t) async {
+                        if (t.trim().contains('@')) {
+                          Navigator.pop(ctx);
+                          await _addGymBuddyByEmail(context, t.trim());
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    if (loading)
+                      const Align(
+                        alignment: Alignment.centerLeft,
+                        child: SizedBox(
+                          height: 18,
+                          width: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    else if ((results.isEmpty) && (query.trim().isNotEmpty))
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          lastError == null
+                              ? 'No matches. Tip: enter the full email to add directly.'
+                              : 'Search error: $lastError',
+                          style: const TextStyle(fontSize: 12, color: Colors.white70),
+                        ),
+                      )
+                    else
+                      Flexible(
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: results.length,
+                          separatorBuilder: (_, __) => const Divider(height: 1),
+                          itemBuilder: (_, i) {
+                            final u = results[i];
+                            return ListTile(
+                              dense: true,
+                              leading: const Icon(Icons.person_outline, color: Colors.cyanAccent),
+                              title: Text(
+                                u.username.isNotEmpty ? u.username : '(no username)',
+                                style: const TextStyle(fontSize: 14),
+                              ),
+                              onTap: () async {
+                                Navigator.pop(ctx);
+                                await _addGymBuddyByUid(
+                                  context,
+                                  athleteUid: u.uid,
+                                  username: u.username.isNotEmpty ? u.username : '(no username)',
+                                  emailLower: u.emailLower,
+                                );
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Close'),
+                ),
+                TextButton(
+                  onPressed: () async {
+                    final t = controller.text.trim();
+                    if (t.isEmpty) return;
+                    Navigator.pop(ctx);
+                    if (t.contains('@')) {
+                      await _addGymBuddyByEmail(context, t);
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                            content: Text('Please tap a user result (or enter full email).')),
+                      );
+                    }
+                  },
+                  child: const Text('Add'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   Future<void> _removeBuddy(BuildContext context, String athleteUid) async {
@@ -242,6 +483,17 @@ class ApproveRequestsScreen extends StatelessWidget {
                             const TextStyle(fontSize: 16, color: Colors.white),
                           ),
                         ),
+
+                        onTap: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => ProfilePage(
+                                viewedUid: athleteUid,
+                                readOnly: true,
+                              ),
+                            ),
+                          );
+                        },
                         trailing: Padding(
                           padding: const EdgeInsets.only(right: 0),
                           child: IconButton(
@@ -334,34 +586,13 @@ class ApproveRequestsScreen extends StatelessWidget {
             actions: [
               // Coach path: add by email (will fail if rules block coach from writing 'athletes')
               IconButton(
-                tooltip: 'Add Gymbro by email',
+                tooltip: 'Add Gymbro (username or email)',
                 icon: const Icon(Icons.person_add_alt),
                 onPressed: () async {
-                  final controller = TextEditingController();
-                  final email = await showDialog<String>(
-                    context: context,
-                    builder: (ctx) => AlertDialog(
-                      title: const Text('Add Gymbro by email'),
-                      content: TextField(
-                        controller: controller,
-                        decoration: const InputDecoration(
-                          hintText: 'smallerthanu@email.com',
-                          hintStyle: TextStyle(color: Colors.grey), // 👈 sets hint text color
-                        ),
-                        autofocus: true,
-                        keyboardType: TextInputType.emailAddress,
-                      ),
-                      actions: [
-                        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-                        TextButton(onPressed: () => Navigator.pop(ctx, controller.text), child: const Text('Add')),
-                      ],
-                    ),
-                  );
-                  if (email != null && email.trim().isNotEmpty) {
-                    await _addGymBuddyByEmail(context, email);
-                  }
+                  await _showAddGymBroPicker(context);
                 },
               ),
+
             ]
         ),
 

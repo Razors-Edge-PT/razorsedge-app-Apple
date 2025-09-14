@@ -21,6 +21,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'warmup_service.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'stats_snapshot.dart';
 
 Future<void> deleteAllUserWorkouts() async {
   final user = FirebaseAuth.instance.currentUser;
@@ -5430,6 +5431,18 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
       await docRef.set(payload, SetOptions(merge: false));
       print('✅ [WES upsert] Firestore write complete.');
+
+      // 🔁 Keep public profile stats fresh (only if there are completed sets)
+      final hasExercises = ((payload['exercises'] as List?)?.isNotEmpty ?? false);
+      if (hasExercises) {
+        try {
+          await updateStatsFromWorkout(uid: uid, workout: payload);
+          print('🏷️ [WES upsert] Stats snapshot updated.');
+        } catch (e) {
+          print('⚠️ [WES upsert] Stats snapshot update failed: $e');
+        }
+      }
+
 
       _lastSavedHash = currentHash;
       _pendingChanges = false;
