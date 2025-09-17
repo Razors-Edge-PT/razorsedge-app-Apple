@@ -11,7 +11,7 @@ import 'Camp_BB2.dart';
 import 'templates.dart';
 import 'exercises.dart';
 import 'body_weight_tracker.dart';
-
+import 'user_settings.dart';
 
 
 
@@ -167,8 +167,17 @@ class AppDrawer extends StatelessWidget {
           // ⚙️ Utilities section
           const DrawerSectionHeader(title: "Utilities"),
           _drawerTile(context, Icons.admin_panel_settings_outlined, 'Settings', () {
-            // Placeholder for future user profile/settings
+            final userContext = context.read<UserContext>();
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                  value: userContext,
+                  child: const UserSettingsScreen(),
+                ),
+              ),
+            );
           }),
+
           _drawerTile(context, Icons.logout, 'Logout', () async {
             await FirebaseAuth.instance.signOut();
             Navigator.pushReplacementNamed(context, '/login');

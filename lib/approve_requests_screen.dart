@@ -197,7 +197,7 @@ class ApproveRequestsScreen extends StatelessWidget {
 
       try {
         final nameQ = await db
-            .collection('users_public')   // 👈 changed
+            .collection('users_public')
             .orderBy('usernameLower')
             .startAt([ql])
             .endAt(['$ql\uf8ff'])
@@ -205,13 +205,25 @@ class ApproveRequestsScreen extends StatelessWidget {
             .get();
 
         final emailQ = await db
-            .collection('users_public')   // 👈 changed
+            .collection('users_public')
             .orderBy('emailLower')
             .startAt([ql])
             .endAt(['$ql\uf8ff'])
             .limit(20)
             .get();
-        debugPrint('🔎 Search "$ql": usernameLower=${nameQ.size}, emailLower=${emailQ.size}');
+
+        final fullNameQ = await db
+            .collection('users_public')
+            .orderBy('fullNameLower')
+            .startAt([ql])
+            .endAt(['$ql\uf8ff'])
+            .limit(20)
+            .get();
+
+        debugPrint(
+          '🔎 Search "$ql": usernameLower=${nameQ.size}, emailLower=${emailQ.size}, fullNameLower=${fullNameQ.size}',
+        );
+
 
         final byUid = <String, UserHit>{};
 
@@ -231,6 +243,15 @@ class ApproveRequestsScreen extends StatelessWidget {
             (m['emailLower'] ?? '').toString(),
           );
         }
+        for (final d in fullNameQ.docs) {
+          final m = d.data();
+          byUid[d.id] = UserHit(
+            d.id,
+            (m['username'] ?? '').toString(),
+            (m['emailLower'] ?? '').toString(),
+          );
+        }
+
 
         final list = byUid.values.toList()
           ..sort((a, b) => a.username.toLowerCase().compareTo(b.username.toLowerCase()));
@@ -312,32 +333,35 @@ class ApproveRequestsScreen extends StatelessWidget {
                       )
                     else
                       Flexible(
-                        child: ListView.separated(
+                        child: ListView.builder(
                           shrinkWrap: true,
                           itemCount: results.length,
-                          separatorBuilder: (_, __) => const Divider(height: 1),
                           itemBuilder: (_, i) {
                             final u = results[i];
-                            return ListTile(
-                              dense: true,
-                              leading: const Icon(Icons.person_outline, color: Colors.cyanAccent),
-                              title: Text(
-                                u.username.isNotEmpty ? u.username : '(no username)',
-                                style: const TextStyle(fontSize: 14),
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 4), // small natural space
+                              child: ListTile(
+                                dense: true,
+                                leading: const Icon(Icons.person_outline, size: 18, color: Colors.cyanAccent),
+                                title: Text(
+                                  u.username.isNotEmpty ? u.username : '(no username)',
+                                  style: const TextStyle(fontSize: 14),
+                                ),
+                                onTap: () async {
+                                  Navigator.pop(ctx);
+                                  await _addGymBuddyByUid(
+                                    context,
+                                    athleteUid: u.uid,
+                                    username: u.username.isNotEmpty ? u.username : '(no username)',
+                                    emailLower: u.emailLower,
+                                  );
+                                },
                               ),
-                              onTap: () async {
-                                Navigator.pop(ctx);
-                                await _addGymBuddyByUid(
-                                  context,
-                                  athleteUid: u.uid,
-                                  username: u.username.isNotEmpty ? u.username : '(no username)',
-                                  emailLower: u.emailLower,
-                                );
-                              },
                             );
                           },
                         ),
                       ),
+
                   ],
                 ),
               ),
@@ -407,6 +431,34 @@ class ApproveRequestsScreen extends StatelessWidget {
         final data = snap.data?.data() ?? const {};
         final athletes = Map<String, dynamic>.from(data['athletes'] ?? {});
         final entries = athletes.entries.toList();
+        // ↓ Batch load users_public for all buddy UIDs (chunks of 10)
+        Future<Map<String, Map<String, dynamic>>> _getPublicProfiles(Set<String> uids) async {
+          final result = <String, Map<String, dynamic>>{};
+          if (uids.isEmpty) return result;
+
+          const chunk = 10;
+          final ids = uids.toList();
+          for (var i = 0; i < ids.length; i += chunk) {
+            final slice = ids.sublist(i, (i + chunk).clamp(0, ids.length));
+            final qs = await FirebaseFirestore.instance
+                .collection('users_public')
+                .where(FieldPath.documentId, whereIn: slice)
+                .get();
+
+            for (final d in qs.docs) {
+              result[d.id] = d.data();
+            }
+            // Ensure all requested ids have an entry so we can safely fallback
+            for (final id in slice) {
+              result.putIfAbsent(id, () => const {});
+            }
+          }
+          return result;
+        }
+
+// All buddy UIDs we’ll resolve to public profiles
+        final buddyUids = entries.map((e) => e.key.toString()).toSet();
+
 
         return Card(
           margin: const EdgeInsets.symmetric(horizontal: 3, vertical: 8),
@@ -451,93 +503,100 @@ class ApproveRequestsScreen extends StatelessWidget {
                     ),
                   )
                 else
-                  ListView.separated(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: entries.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
-                    itemBuilder: (context, i) {
-                      final athleteUid = entries[i].key;
-                      final v =
-                      Map<String, dynamic>.from(entries[i].value ?? {});
-                      final email = (v['email'] ?? '').toString();
+                  FutureBuilder<Map<String, Map<String, dynamic>>>(
+                    future: _getPublicProfiles(buddyUids),
+                    builder: (context, pubSnap) {
+                      final publicByUid = pubSnap.data ?? const <String, Map<String, dynamic>>{};
 
-                      return ListTile(
-                        dense: true,
-                        visualDensity:
-                        const VisualDensity(horizontal: 0, vertical: 2),
-                        contentPadding:
-                        const EdgeInsets.symmetric(horizontal: 12),
-                        minVerticalPadding: 1,
-                        horizontalTitleGap: 8,
-                        leading: const Icon(Icons.person_outline,
-                            size: 18, color: Colors.cyanAccent),
-                        minLeadingWidth: 20,
-                        subtitle: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Text(
-                            email,
-                            maxLines: 1,
-                            overflow: TextOverflow.visible,
-                            style:
-                            const TextStyle(fontSize: 16, color: Colors.white),
-                          ),
-                        ),
+                      return ListView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: entries.length,
+                        itemBuilder: (context, i) {
+                          final athleteUid = entries[i].key;
+                          final v = Map<String, dynamic>.from(entries[i].value ?? {});
+                          final email = (v['email'] ?? '').toString();
 
-                        onTap: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => ProfilePage(
-                                viewedUid: athleteUid,
-                                readOnly: true,
+                          // Pull public profile (username/fullName) with sensible fallbacks
+                          final public = publicByUid[athleteUid] ?? const {};
+                          final username = (public['username'] ?? '').toString().trim().isNotEmpty
+                              ? public['username'].toString().trim()
+                              : (email.isNotEmpty ? email : athleteUid);
+                          final fullName = (public['fullName'] ?? '').toString().trim();
+
+                          // Placeholder for RE points (wire up later in users_public)
+                          const rePointsStr = 'RE Pts: —';
+
+                          return ListTile(
+                            dense: true,
+                            visualDensity: const VisualDensity(horizontal: 0, vertical: -3),
+                            minVerticalPadding: 0,
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
+                            leading: const Icon(Icons.person_outline, size: 18, color: Colors.cyanAccent),
+                            minLeadingWidth: 20,
+
+                            // Line 1: username (fallback → email → uid)
+                            title: Text(
+                              username,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                            ),
+
+                            // Line 2: full name • RE Points (placeholder)
+                            subtitle: Text(
+                              rePointsStr,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 12, color: Colors.white70),
+                            ),
+
+
+                            onTap: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => ProfilePage(
+                                    viewedUid: athleteUid,
+                                    readOnly: true,
+                                  ),
+                                ),
+                              );
+                            },
+
+                            trailing: Padding(
+                              padding: const EdgeInsets.only(right: 0),
+                              child: IconButton(
+                                tooltip: 'Remove',
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                                iconSize: 16,
+                                icon: const Icon(Icons.remove_circle_outline, color: Colors.white70),
+                                onPressed: () async {
+                                  final confirm = await showDialog<bool>(
+                                    context: context,
+                                    builder: (ctx) => AlertDialog(
+                                      title: const Text('Remove Gym Buddy'),
+                                      content: Text(
+                                        'Are you sure you want to remove ${email.isNotEmpty ? email : athleteUid} from your gym buddies?',
+                                      ),
+                                      actions: [
+                                        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                                        TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Remove', style: TextStyle(color: Colors.red))),
+                                      ],
+                                    ),
+                                  );
+                                  if (confirm == true) {
+                                    await _removeBuddy(context, athleteUid);
+                                  }
+                                },
                               ),
                             ),
                           );
                         },
-                        trailing: Padding(
-                          padding: const EdgeInsets.only(right: 0),
-                          child: IconButton(
-                            tooltip: 'Remove',
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(
-                                minWidth: 28, minHeight: 28),
-                            iconSize: 16,
-                            icon: const Icon(
-                              Icons.remove_circle_outline,
-                              color: Colors.orangeAccent,
-                            ),
-                            onPressed: () async {
-                              final confirm = await showDialog<bool>(
-                                context: context,
-                                builder: (ctx) => AlertDialog(
-                                  title: const Text('Remove Gym Buddy'),
-                                  content: Text(
-                                    'Are you sure you want to remove ${email.isNotEmpty ? email : athleteUid} from your gym buddies?',
-                                  ),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () =>
-                                          Navigator.pop(ctx, false),
-                                      child: const Text('Cancel'),
-                                    ),
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(ctx, true),
-                                      child: const Text('Remove',
-                                          style:
-                                          TextStyle(color: Colors.red)),
-                                    ),
-                                  ],
-                                ),
-                              );
-                              if (confirm == true) {
-                                await _removeBuddy(context, athleteUid);
-                              }
-                            },
-                          ),
-                        ),
                       );
                     },
                   ),
+
               ],
             ),
           ),
@@ -581,20 +640,21 @@ class ApproveRequestsScreen extends StatelessWidget {
     final athleteUid = userContext.actorUid;
 
     return Scaffold(
-        appBar: AppBar(
-            title: const Text("Wow u so popular"),
-            actions: [
-              // Coach path: add by email (will fail if rules block coach from writing 'athletes')
-              IconButton(
-                tooltip: 'Add Gymbro (username or email)',
-                icon: const Icon(Icons.person_add_alt),
-                onPressed: () async {
-                  await _showAddGymBroPicker(context);
-                },
-              ),
+      appBar: AppBar(
 
-            ]
-        ),
+          title: const Text("Wow u so popular"),
+          actions: [
+            // Coach path: add by email (will fail if rules block coach from writing 'athletes')
+            IconButton(
+              tooltip: 'Add Gymbro (username or email)',
+              icon: const Icon(Icons.person_add_alt),
+              onPressed: () async {
+                await _showAddGymBroPicker(context);
+              },
+            ),
+
+          ]
+      ),
 
       body: Builder(
         builder: (context) {
@@ -684,25 +744,26 @@ class ApproveRequestsScreen extends StatelessWidget {
                         final createdAt = data['createdAt']?.toDate();
                         final coachEmail = (data['coachEmail'] ?? '').toString();
 
-                        return Card(
-                        color: Colors.blueGrey.shade900,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                        child: ListTile(
+                        return ListTile(
+                          dense: true,
+                          visualDensity: const VisualDensity(horizontal: 0, vertical: -3),
+                          minVerticalPadding: 0,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+
                           leading: const Icon(
                             Icons.mail_outline,
                             color: Colors.cyanAccent,
                           ),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+
                           title: Text(
                             coachEmail.isNotEmpty ? coachEmail : 'Coach UID: $coachUid',
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 14,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
+
                           subtitle: Text(
                             createdAt != null
                                 ? 'Requested on: ${createdAt.toString().substring(0, 10)}'
@@ -712,52 +773,53 @@ class ApproveRequestsScreen extends StatelessWidget {
                               fontSize: 12,
                             ),
                           ),
+
                           trailing: Wrap(
                             spacing: 8,
                             children: [
                               IconButton(
                                 icon: const Icon(Icons.check, color: Colors.green),
                                 onPressed: () async {
-                                    final uc = UserContext.of(context, listen: false);
-                                    if (!uc.isActingAsSelf) {
-                                      if (!context.mounted) return;
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(
-                                          content: Text(
-                                            'Switch back to your own account to approve requests.',
-                                          ),
-                                        ),
-                                      );
-                                      debugPrint(
-                                        '⛔ [approve] Blocked: actingAs=${uc.actingAsUid}, auth=${FirebaseAuth.instance.currentUser?.uid}',
-                                      );
-                                      return;
-                                    }
-                                    await _approve(doc.id, coachUid, uc.actorUid);
+                                  final uc = UserContext.of(context, listen: false);
+                                  if (!uc.isActingAsSelf) {
                                     if (!context.mounted) return;
                                     ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
+                                      const SnackBar(
                                         content: Text(
-                                          'Approved ${coachEmail.isNotEmpty ? coachEmail : 'coach'}',
+                                          'Switch back to your own account to approve requests.',
                                         ),
                                       ),
                                     );
-                                  },
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.clear, color: Colors.red),
-                                  onPressed: () async {
-                                    await _reject(doc.id);
-                                    if (!context.mounted) return;
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text('Rejected access for $coachUid')),
+                                    debugPrint(
+                                      '⛔ [approve] Blocked: actingAs=${uc.actingAsUid}, auth=${FirebaseAuth.instance.currentUser?.uid}',
                                     );
-                                  },
-                                ),
-                              ],
-                            ),
+                                    return;
+                                  }
+                                  await _approve(doc.id, coachUid, uc.actorUid);
+                                  if (!context.mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Approved ${coachEmail.isNotEmpty ? coachEmail : 'coach'}',
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.clear, color: Colors.red),
+                                onPressed: () async {
+                                  await _reject(doc.id);
+                                  if (!context.mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('Rejected access for $coachUid')),
+                                  );
+                                },
+                              ),
+                            ],
                           ),
                         );
+
                       },
                     );
                   },

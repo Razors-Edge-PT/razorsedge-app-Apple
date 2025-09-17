@@ -1592,14 +1592,6 @@ class _ProfilePageState extends State<ProfilePage> {
     return null;
   }
 
-  Future<double?> _computeREPoints(String uid, Map<String, BestLift> best) async {
-    // Your brand metric. Example idea:
-    // final s = best['Back Squat, Barbell']?.e1rm ?? 0;
-    // final b = best['Bench Press, Barbell']?.e1rm ?? 0;
-    // final d = best['Deadlift, Conventional']?.e1rm ?? 0;
-    // return (s + b + d);
-    return null;
-  }
 
   /// Compute RE points from the best-in-training E1RMs.
   /// Expects `_bestLifts` to be keyed by the workout exercise names that match
@@ -2494,8 +2486,6 @@ class _ProfilePageState extends State<ProfilePage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       _StatChip(label: 'RE Points', value: _rePoints),
-                      const SizedBox(height: 8),
-                      _StatChip(label: 'GL Points', value: _goodliftPoints),
                       const SizedBox(height: 8),
                       _StatChip(
                         label: 'Best Comp Total Kgs',
