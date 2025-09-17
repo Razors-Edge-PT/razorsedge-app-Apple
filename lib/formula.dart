@@ -1,6 +1,88 @@
 // lib/core/re_formula.dart
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:async';
+import 'package:flutter/foundation.dart'; // for debugPrint
+
+
 
 enum Gender { male, female }
+
+class RePointsResult {
+  final double total;
+  final Map<String, double> byLift;
+  const RePointsResult({required this.total, required this.byLift});
+}
+
+class Formula {
+  static Future<RePointsResult> computeRePointsPerLift({
+    required String uid,
+    required Map<String, Map<String, dynamic>> bestE1rmDetail,
+    required Gender gender,
+  }) async {
+    final db = FirebaseFirestore.instance;
+    final Map<String, double> byLift = {};
+    double total = 0.0;
+
+    for (final entry in bestE1rmDetail.entries) {
+      final lift = entry.key;
+      final detail = entry.value;
+      final e1rm = (detail['e1rm'] as num?)?.toDouble() ?? 0.0;
+      final ts = detail['date'];
+      debugPrint('🔎 [REPoints] lift=$lift e1rm=$e1rm ts=$ts');
+
+      if (e1rm <= 0 || ts == null) {
+        byLift[lift] = 0.0;
+        continue;
+      }
+
+      // Find most recent weigh-in at/before this lift
+      final bwSnap = await db
+          .collection('users')
+          .doc(uid)
+          .collection('weights')
+          .where('timestamp', isLessThanOrEqualTo: ts)
+          .orderBy('timestamp', descending: true)
+          .limit(1)
+          .get();
+      debugPrint('📂 [REPoints] lift=$lift bwDocs=${bwSnap.docs.length}');
+
+      if (bwSnap.docs.isEmpty) {
+        byLift[lift] = 0.0;
+        continue;
+      }
+
+      final bw = (bwSnap.docs.first.data()['weight'] as num?)?.toDouble() ?? 0.0;
+      debugPrint('⚖️ [REPoints] lift=$lift ts=$ts bw=$bw');
+
+      if (bw <= 0) {
+        byLift[lift] = 0.0;
+        continue;
+      }
+
+      final pts = _calcRePoints(e1rm: e1rm, bwKg: bw, gender: gender);
+      final ptsRounded = double.parse(pts.toStringAsFixed(4));
+      debugPrint('🏋️ [REPoints] lift=$lift e1rm=$e1rm bw=$bw → pts=$ptsRounded');
+
+      byLift[lift] = ptsRounded;
+      total += ptsRounded;
+    }
+
+    return RePointsResult(
+      total: double.parse(total.toStringAsFixed(4)),
+      byLift: byLift,
+    );
+  }
+
+  static double _calcRePoints({
+    required double e1rm,
+    required double bwKg,
+    required Gender gender,
+  }) {
+    // 👇 use your existing coefficient math here
+    return e1rm / bwKg * 100.0; // placeholder
+  }
+}
+
 
 /// Default weighting factors (tuned so each lift contributes fairly).
 class ReWeights {

@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart'; // for debugPrint
+import 'formula.dart' as formula;
 
 
 // ----- Canonical lift keys (match your UI & formula keys)
@@ -12,6 +13,39 @@ class LiftKeys {
 
   static const all = <String>[squat, bench, dead, chin, ohpUni];
 }
+
+Timestamp _normalizeToTimestamp(dynamic raw) {
+  if (raw == null) return Timestamp.now();
+
+  if (raw is Timestamp) return raw;
+
+  if (raw is DateTime) return Timestamp.fromDate(raw);
+
+  if (raw is String) {
+    try {
+      final dt = DateTime.tryParse(raw);
+      if (dt != null) return Timestamp.fromDate(dt);
+    } catch (_) {}
+  }
+
+  if (raw is int) {
+    try {
+      return Timestamp.fromMillisecondsSinceEpoch(raw);
+    } catch (_) {}
+  }
+
+  if (raw is Map<String, dynamic>) {
+    final secs = raw['_seconds'];
+    final nanos = raw['_nanoseconds'] ?? 0;
+    if (secs is int) {
+      return Timestamp(secs, nanos is int ? nanos : 0);
+    }
+  }
+
+  return Timestamp.now();
+}
+
+
 
 // If your workout might store "Deadlift" etc.
 String canonical(String name) {
@@ -116,9 +150,10 @@ Future<void> updateStatsFromWorkout({
   required String uid,
   required Map<String, dynamic> workout,
 }) async {
+  debugPrint('▶️ [updateStatsFromWorkout] called for uid=$uid, workoutId=${workout['id'] ?? 'unknown'}');
+
   final db = FirebaseFirestore.instance;
   final docRef = db.collection('users_public').doc(uid);
-
   await db.runTransaction((tx) async {
     final snap = await tx.get(docRef);
     final snapData = (snap.data() as Map<String, dynamic>?) ?? const {};
@@ -129,10 +164,14 @@ Future<void> updateStatsFromWorkout({
         ? List<Map<String, dynamic>>.from(workout['exercises'] as List)
         : const <Map<String, dynamic>>[];
 
-    final singleCandidates = <String, List<double>>{ for (final k in LiftKeys.all) k: <double>[] };
-    final e1rmCandidates   = <String, List<double>>{ for (final k in LiftKeys.all) k: <double>[] };
+    final singleCandidates = <String, List<double>>{
+      for (final k in LiftKeys.all) k: <double>[]
+    };
+    final e1rmCandidates = <String, List<double>>{
+      for (final k in LiftKeys.all) k: <double>[]
+    };
 
-    // NEW: track per-workout best detail (weight+reps+e1rm) for each lift
+    // Track per-workout best detail
     final bestDetailInThisWorkout = <String, Map<String, dynamic>>{};
 
     for (final ex in exercises) {
@@ -152,10 +191,9 @@ Future<void> updateStatsFromWorkout({
 
         if (reps == 1) singleCandidates[name]!.add(w);
 
-        final e1 = _e1rm(w, reps);          // compute once
+        final e1 = _e1rm(w, reps);
         e1rmCandidates[name]!.add(e1);
 
-        // 👇 NEW: remember the best e1rm detail for this lift in THIS workout
         final prev = bestDetailInThisWorkout[name];
         final prevE1 = (prev?['e1rm'] as num?)?.toDouble() ?? 0.0;
         if (prev == null || e1 > prevE1) {
@@ -168,52 +206,140 @@ Future<void> updateStatsFromWorkout({
       }
     }
 
-    // Existing: merge candidates into top3 lists
+    // Merge candidates into top3 lists
     final top3Singles = Map<String, List<double>>.from(current.top3SinglesKg);
-    final top3E1      = Map<String, List<double>>.from(current.top3E1rmKg);
+    final top3E1 = Map<String, List<double>>.from(current.top3E1rmKg);
 
     for (final k in LiftKeys.all) {
-      top3Singles[k] = _mergeTop3(top3Singles[k] ?? <double>[], singleCandidates[k] ?? const []);
-      top3E1[k]      = _mergeTop3(top3E1[k] ?? <double>[],      e1rmCandidates[k]   ?? const []);
+      top3Singles[k] =
+          _mergeTop3(top3Singles[k] ?? <double>[], singleCandidates[k] ?? const []);
+      top3E1[k] =
+          _mergeTop3(top3E1[k] ?? <double>[], e1rmCandidates[k] ?? const []);
     }
 
     // Derive best singles and totals
     final squatBest = _bestFromTop3(top3Singles[LiftKeys.squat] ?? const []);
     final benchBest = _bestFromTop3(top3Singles[LiftKeys.bench] ?? const []);
-    final deadBest  = _bestFromTop3(top3Singles[LiftKeys.dead]  ?? const []);
+    final deadBest = _bestFromTop3(top3Singles[LiftKeys.dead] ?? const []);
     final threeLift = squatBest + benchBest + deadBest;
     final benchOnly = benchBest;
 
-    // NEW: merge bestE1rmDetail into existing snapshot value (keep higher e1rm)
+    // --- Merge bestE1rmDetail (and stamp a robust Timestamp date from workout['date'])
+    Timestamp _normTS(dynamic raw) {
+      if (raw == null) return Timestamp.now();
+      if (raw is Timestamp) return raw;
+      if (raw is DateTime) return Timestamp.fromDate(raw);
+      if (raw is String) {
+        try {
+          final dt = DateTime.tryParse(raw);
+          if (dt != null) return Timestamp.fromDate(dt);
+        } catch (_) {}
+      }
+      if (raw is int) {
+        try {
+          return Timestamp.fromMillisecondsSinceEpoch(raw);
+        } catch (_) {}
+      }
+      if (raw is Map<String, dynamic>) {
+        final secs = raw['_seconds'];
+        final nanos = raw['_nanoseconds'] ?? 0;
+        if (secs is int) return Timestamp(secs, (nanos is int) ? nanos : 0);
+      }
+      return Timestamp.now();
+    }
+
     final existingDetail = Map<String, dynamic>.from(snapData['bestE1rmDetail'] ?? {});
     final mergedDetail   = Map<String, dynamic>.from(existingDetail);
+
+// Normalize incoming workout date (string, ts, etc.) → Timestamp
+    final tsWorkout = _normTS(workout['date']);
+    debugPrint('📅 [updateStatsFromWorkout] workout.date raw=${workout['date']} '
+        'type=${workout['date']?.runtimeType} → ts=$tsWorkout');
+
+// One-time cleanup: ensure any existing stored dates are Timestamps too
+    mergedDetail.updateAll((lift, m) {
+      final map = Map<String, dynamic>.from(m ?? {});
+      map['date'] = _normTS(map['date'] ?? tsWorkout);
+      return map;
+    });
+
+// Merge the best-in-this-workout and stamp normalized date
     bestDetailInThisWorkout.forEach((lift, cand) {
-      final prev = existingDetail[lift];
+      final prev   = existingDetail[lift];
       final prevE1 = (prev?['e1rm'] as num?)?.toDouble() ?? 0.0;
       final newE1  = (cand['e1rm'] as num?)?.toDouble() ?? 0.0;
       if (prev == null || newE1 > prevE1) {
-        mergedDetail[lift] = cand;
+        mergedDetail[lift] = {
+          ...cand,
+          'date': tsWorkout, // always a Firestore Timestamp now
+        };
+        debugPrint('📝 [updateStatsFromWorkout] set bestE1rmDetail[$lift] '
+            'e1rm=$newE1 date=$tsWorkout');
       }
     });
 
-    // Optional: keep current points; (re)compute elsewhere if BW/gender changed
+// ── RE Points: reuse single source of truth
+// Read user profile from /users/{uid}
+    final userRef  = FirebaseFirestore.instance.collection('users').doc(uid);
+    final userSnap = await tx.get(userRef);
+    final userData = (userSnap.data() as Map<String, dynamic>?) ?? const {};
+
+// Sex from users/{uid}.sex
+    final sexCode = (userData['sex'] as String?) ?? 'M';
+    final gender = (sexCode == 'F')
+        ? formula.Gender.female
+        : formula.Gender.male; // 'M' and 'N' → male
+
+
+// Persist bestE1rmDetail with date if not already there
+    bestDetailInThisWorkout.forEach((lift, cand) {
+      final prev = existingDetail[lift];
+      final prevE1 = (prev?['e1rm'] as num?)?.toDouble() ?? 0.0;
+      final newE1 = (cand['e1rm'] as num?)?.toDouble() ?? 0.0;
+      if (prev == null || newE1 > prevE1) {
+        final rawDate = workout['date'];
+        final ts = _normalizeToTimestamp(rawDate);
+        debugPrint('📅 [updateStatsFromWorkout] lift=$lift rawDate=$rawDate type=${rawDate?.runtimeType} normalized=$ts');
+        mergedDetail[lift] = {
+          ...cand,
+          'date': ts,
+        };
+      }
+    });
+
+
+// Compute per-lift + total
+    final rePointsResult = await formula.Formula.computeRePointsPerLift(
+      uid: uid,
+      bestE1rmDetail: mergedDetail.map((k, v) => MapEntry(k, Map<String, dynamic>.from(v))),
+      gender: gender,
+    );
+
+// Build updated snapshot
     final updated = StatsSnapshot(
       top3SinglesKg: top3Singles,
       top3E1rmKg: top3E1,
       bestThreeLiftTotalKg: threeLift,
       benchOnlyKg: benchOnly,
-      rePoints: current.rePoints,
+      rePoints: rePointsResult.total,
       goodliftPoints: current.goodliftPoints,
     );
 
-    // Write snapshot + new detail (merge)
+// Write snapshot + detail + per-lift points
     tx.set(docRef, {
       ...updated.toMap(),
-      'bestE1rmDetail': mergedDetail,                 // NEW
-      'updatedAt': FieldValue.serverTimestamp(),      // nice to have
+      'rePoints': rePointsResult.total,
+      'rePointsByLift': rePointsResult.byLift,
+      'bestE1rmDetail': mergedDetail,
+      'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+
+    debugPrint('🧮 [updateStatsFromWorkout] RE Points total=${rePointsResult.total} byLift=${rePointsResult.byLift}');
+
   });
 }
+
+
 
 
 /// Recompute points after the user changes gender/BW (self only).
