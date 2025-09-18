@@ -5,13 +5,21 @@ import 'package:flutter/foundation.dart'; // for debugPrint
 
 
 
+
 enum Gender { male, female }
 
 class RePointsResult {
   final double total;
   final Map<String, double> byLift;
-  const RePointsResult({required this.total, required this.byLift});
+  final Map<String, Map<String, dynamic>>? auditByLift; // optional: e.g. {'bwKgAtDate': 92.5}
+
+  RePointsResult({
+    required this.total,
+    required this.byLift,
+    this.auditByLift,
+  });
 }
+
 
 class Formula {
   static Future<RePointsResult> computeRePointsPerLift({
@@ -21,6 +29,7 @@ class Formula {
   }) async {
     final db = FirebaseFirestore.instance;
     final Map<String, double> byLift = {};
+    final Map<String, Map<String, dynamic>> audit = {}; // 👈 collect per-lift audit
     double total = 0.0;
 
     for (final entry in bestE1rmDetail.entries) {
@@ -32,6 +41,9 @@ class Formula {
 
       if (e1rm <= 0 || ts == null) {
         byLift[lift] = 0.0;
+        // audit: explicitly note missing BW
+        detail['bwKgAtDate'] = null;
+        audit[lift] = {'bwKgAtDate': null};
         continue;
       }
 
@@ -48,6 +60,8 @@ class Formula {
 
       if (bwSnap.docs.isEmpty) {
         byLift[lift] = 0.0;
+        detail['bwKgAtDate'] = null;
+        audit[lift] = {'bwKgAtDate': null};
         continue;
       }
 
@@ -55,11 +69,19 @@ class Formula {
       debugPrint('⚖️ [REPoints] lift=$lift ts=$ts bw=$bw');
 
       if (bw <= 0) {
+        detail['bwKgAtDate'] = null;
         byLift[lift] = 0.0;
+        audit[lift] = {'bwKgAtDate': null};
         continue;
       }
 
-      final pts = _calcRePoints(e1rm: e1rm, bwKg: bw, gender: gender);
+      // ✅ audit: record the BW actually used for this lift's scoring
+      detail['bwKgAtDate'] = bw;
+      audit[lift] = {'bwKgAtDate': bw};
+
+      // Correct RE points using coefficient + per-lift factor
+      final pts = _calcRePoints(lift: lift, e1rm: e1rm, bwKg: bw, gender: gender);
+
       final ptsRounded = double.parse(pts.toStringAsFixed(4));
       debugPrint('🏋️ [REPoints] lift=$lift e1rm=$e1rm bw=$bw → pts=$ptsRounded');
 
@@ -70,17 +92,39 @@ class Formula {
     return RePointsResult(
       total: double.parse(total.toStringAsFixed(4)),
       byLift: byLift,
+      auditByLift: audit, // 👈 hand back bwKgAtDate per lift
     );
   }
 
+
+  static double _weightFactorForLift(String lift) {
+    // Match your canonical keys (same strings you use elsewhere)
+    const keys = ReExerciseKeys.defaults;
+    if (lift == keys.bench)     return ReWeights.defaults.bench;      // 1.0
+    if (lift == keys.squat)     return ReWeights.defaults.squat;      // 0.8
+    if (lift == keys.deadlift)  return ReWeights.defaults.deadlift;   // 0.74
+    if (lift == keys.chinUp)    return ReWeights.defaults.chinUp;     // 1.0
+    if (lift == keys.dbShoulder)return ReWeights.defaults.dbShoulder; // 3.0
+    // Unknown lift: no weighting (treat as 1.0)
+    return 1.0;
+  }
+
   static double _calcRePoints({
+    required String lift,
     required double e1rm,
     required double bwKg,
     required Gender gender,
   }) {
-    // 👇 use your existing coefficient math here
-    return e1rm / bwKg * 100.0; // placeholder
+    final coeff  = reCoefficient(gender: gender, bodyweightKg: bwKg);
+    final factor = _weightFactorForLift(lift);
+    final pts    = e1rm * factor * coeff;
+
+    // helpful trace (remove later if noisy)
+    debugPrint('🧪[REPoints] lift=$lift e1rm=$e1rm bw=$bwKg coeff=$coeff factor=$factor → rawPts=$pts');
+
+    return pts;
   }
+
 }
 
 

@@ -249,7 +249,7 @@ class _ProfilePageState extends State<ProfilePage> {
   double _lbsToKg(double lbs) => lbs / 2.20462;
 
   //view only bits, for friends
-
+  VoidCallback? _ucListener;
   String? _targetUid;           // resolved in initState
   bool _readOnlyView = false;   // resolved in initState
 
@@ -259,7 +259,7 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _publicSub;
-
+  String? _subscribedUid; // for debugging
 // view only bits ends
 
 
@@ -693,58 +693,138 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   void _subscribeUsersPublic() {
-    final uid = UserContext.of(context, listen: false).currentUid
-        ?? FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) return;
+    final uid = _selectedUidFromContext();
+    if (uid == null) {
+      debugPrint('📡 [Profile] _subscribeUsersPublic: no selected UID');
+      return;
+    }
 
-    final docRef = FirebaseFirestore.instance.collection('users_public').doc(uid);
+    // Always (re)target the selected athlete
     _publicSub?.cancel();
+    _subscribedUid = uid;
+
+    debugPrint('📡 [Profile] subscribing to users_public/$uid');
+    final docRef = FirebaseFirestore.instance.collection('users_public').doc(uid);
+
     _publicSub = docRef.snapshots().listen((snap) {
       final m = snap.data();
       if (m == null) return;
 
-      final rePts    = (m['rePoints'] as num?)?.toDouble();
-      final byLift   = Map<String, dynamic>.from(m['rePointsByLift'] ?? const {});
-      // 🔄 Update your in-memory fields so the UI reflects server values.
-      if (mounted) {
-        setState(() {
-          _rePoints = rePts;  // your existing state field used by _StatChip
-          // Optionally store per-lift if you have a place for it:
-          // _rePointsByLift = byLift.map((k,v) => MapEntry(k, (v as num).toDouble()));
-        });
-      }
+      final rePts  = (m['rePoints'] as num?)?.toDouble();
+      final byLift = Map<String, dynamic>.from(m['rePointsByLift'] ?? const {});
+
+      debugPrint('📡 [Profile] users_public/$uid '
+          'update source=${m['rePointsSource']} total=$rePts '
+          'byLift=$byLift computedAt=${m['rePointsComputedAt']}');
+
+      if (!mounted) return;
+      setState(() {
+        _rePoints = rePts; // chip reads this
+        // If you also keep per-lift locally, map them here.
+        // _rePointsByLift = byLift.map((k, v) => MapEntry(k, (v as num).toDouble()));
+      });
     });
   }
 
+
+
+
+
   Future<void> _kickRecompute12m() async {
-    final uid = UserContext.of(context, listen: false).currentUid
-        ?? FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) return;
+    final uid = _selectedUidFromContext();
+    if (uid == null) {
+      debugPrint('⏱️ [Profile] _kickRecompute12m: no selected UID');
+      return;
+    }
+
+    final loggedInUid = FirebaseAuth.instance.currentUser?.uid;
+    final isSelf = (loggedInUid != null && uid == loggedInUid);
+    debugPrint('⏱️ [Profile] recompute12m for uid=$uid isSelf=$isSelf');
 
     try {
-      debugPrint('⏱️ [Profile] launching recomputeRePointsLast12Months for uid=$uid...');
       await stats.recomputeRePointsLast12Months(uid);
-      debugPrint('✅ [Profile] recomputeRePointsLast12Months finished.');
+      debugPrint('✅ [Profile] recompute12m finished for uid=$uid');
     } catch (e) {
-      debugPrint('❌ [Profile] recomputeRePointsLast12Months failed: $e');
+      debugPrint('❌ [Profile] recompute12m failed for uid=$uid: $e');
     }
   }
+
+
+
+  String? _selectedUidFromContext() {
+    // Prefer an already-computed target if you keep one:
+    if (_targetUid != null && _targetUid!.isNotEmpty) return _targetUid;
+
+    // If the page was navigated with a viewedUid:
+    if (widget.viewedUid != null && widget.viewedUid!.isNotEmpty) return widget.viewedUid;
+
+    // Fallbacks: try your UserContext, then the logged-in user
+    final uc = UserContext.of(context, listen: false);
+    final ctxUid = uc.currentUid ?? uc.actorUid;
+    if (ctxUid != null && ctxUid.isNotEmpty) return ctxUid;
+
+    return FirebaseAuth.instance.currentUser?.uid;
+  }
+
+
+
+  void _resolveSelectedUidAndWireUp() {
+    final loggedInUid = FirebaseAuth.instance.currentUser?.uid;
+
+    // Prefer route args when navigating to a friend's profile, else a context store, else self
+    final args = ModalRoute.of(context)?.settings.arguments;
+    String? routeUid;
+    if (args is Map && args['uid'] is String) {
+      routeUid = args['uid'] as String?;
+    }
+    String? ctxUid;
+    try {
+      ctxUid = UserContext.of(context, listen: false).currentUid;
+    } catch (_) {
+      ctxUid = null;
+    }
+    final selectedUid = routeUid ?? ctxUid ?? loggedInUid;
+    if (selectedUid == null) return;
+
+    final isSelf = (loggedInUid != null && selectedUid == loggedInUid);
+
+    debugPrint('👤 [Profile] selectedUid=$selectedUid '
+        'loggedInUid=$loggedInUid routeUid=$routeUid ctxUid=$ctxUid '
+        'routeArgsType=${args?.runtimeType} isSelf=$isSelf');
+
+    _subscribeUsersPublic();
+    _kickRecompute12m();
+
+  }
+
 
 
   @override
   void initState() {
     super.initState();
-    _subscribeUsersPublic();     // listen for live updates to rePoints
-    _kickRecompute12m();         // fire-and-forget background recompute
+
     final uc = UserContext.of(context, listen: false);
-    final selfUid = uc.actorUid;
-    _targetUid = widget.viewedUid ?? selfUid;
-    _readOnlyView = widget.readOnly || (_targetUid != selfUid);
+    print('👤 [Profile.init] actorUid=${uc.actorUid} currentUid(actingAs)=${uc.currentUid}');
+
+    final selectedUid = uc.currentUid; // 👈 actingAsUid (selected athlete)
+    final selfUid     = uc.actorUid;   // 👈 logged-in user
+    _targetUid        = widget.viewedUid ?? selectedUid;
+    _readOnlyView     = widget.readOnly || (_targetUid != selfUid);
+    print('🎯 [Profile.init] widget.viewedUid=${widget.viewedUid}, selectedUid=$selectedUid selfUid=$selfUid → _targetUid=$_targetUid, _readOnlyView=$_readOnlyView');
 
     // loads from 'users' (self) or 'users_public' (friend) based on _readOnlyView
     _loadProfileData();
+    print('📥 [Profile.init] _loadProfileData() kicked for uid=$_targetUid (readOnlyView=$_readOnlyView)');
+
+    // Subscribe to selected user's public stats and (if self) kick recompute
+    _subscribeUsersPublic();   // now uses _targetUid
+    print('📡 [Profile.init] _subscribeUsersPublic() wired for uid=$_targetUid');
+
+    _kickRecompute12m();       // now checks !_readOnlyView
 
     if (!_readOnlyView) {
+      print('🛠️ [Profile.init] SELF mode loaders starting for uid=$_targetUid');
+
       // ==== SELF: keep all your original loaders + the compute ====
       _loadLocalProfileImage().then((_) {
         final uc = context.read<UserContext>();
@@ -766,10 +846,19 @@ class _ProfilePageState extends State<ProfilePage> {
       _loadHeightForSelectedUser();
       _loadGender();
     } else {
-      // ==== FRIEND (read-only): do nothing else here ====
+    print('🔒 [Profile.init] FRIEND (read-only) mode for uid=$_targetUid');
+    // ==== FRIEND (read-only): do nothing else here ====
+
+    // ==== FRIEND (read-only): do nothing else here ====
       // NO _refreshBestLiftsAndPoints() here
     }
+
+    // ❌ Remove this to avoid double-wiring unless you truly need dynamic re-resolution
+    // WidgetsBinding.instance.addPostFrameCallback((_) {
+    //   _resolveSelectedUidAndWireUp();
+    // });
   }
+
 
 
   @override
@@ -871,41 +960,73 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _loadGender() async {
-    final uid = UserContext.of(context, listen: false).currentUid;
-    if (uid == null) return;
+    // ✅ Use the SELECTED athlete first; fall back to actor/logged-in.
+    final selectedUid =
+        _targetUid ??
+            UserContext.of(context, listen: false).actorUid ??
+            FirebaseAuth.instance.currentUser?.uid;
 
-    // Server-first to avoid stale cache; fallback to cache if offline
+    if (selectedUid == null) return;
+
+    debugPrint('⚙️ [Profile] _loadGender for selectedUid=$selectedUid (readOnlyView=$_readOnlyView)');
+
+    // Try users/{uid} server-first, fallback to cache
     DocumentSnapshot<Map<String, dynamic>> snap;
     try {
       snap = await FirebaseFirestore.instance
-          .collection('users').doc(uid)
+          .collection('users')
+          .doc(selectedUid)
           .get(const GetOptions(source: Source.server));
     } catch (_) {
       snap = await FirebaseFirestore.instance
-          .collection('users').doc(uid)
+          .collection('users')
+          .doc(selectedUid)
           .get(const GetOptions(source: Source.cache));
     }
+    Map<String, dynamic> data = snap.data() ?? {};
 
-    String? raw;
-    // Try nested path
-    try { raw = snap.get('profile.gender') as String?; } catch (_) {}
-
-    // Fallback: literal flat key named "profile.gender"
-    if (raw == null) {
-      final data = snap.data();
-      if (data != null && data.containsKey('profile.gender')) {
-        final v = data['profile.gender'];
-        if (v is String) raw = v;
-      }
+    // Prefer 'sex' ('M'|'F'|'N'); fallback to profile.gender ('male'|'female')
+    String? sex = data['sex'] as String?;
+    String? profileGender;
+    try { profileGender = snap.get('profile.gender') as String?; } catch (_) {}
+    if (profileGender == null && data.containsKey('profile.gender') && data['profile.gender'] is String) {
+      profileGender = data['profile.gender'] as String;
     }
 
+    // If nothing in users/{uid}, try users_public/{uid} as a last resort
+    if (sex == null && profileGender == null) {
+      try {
+        final pubSnap = await FirebaseFirestore.instance
+            .collection('users_public')
+            .doc(selectedUid)
+            .get(const GetOptions(source: Source.server));
+        final pub = pubSnap.data() ?? {};
+        sex = pub['sex'] as String?;
+        if (profileGender == null && pub.containsKey('profile.gender') && pub['profile.gender'] is String) {
+          profileGender = pub['profile.gender'] as String;
+        }
+      } catch (_) {/* ignore */}
+    }
+
+    // Map to formula.Gender — default male; 'N' also → male (per your rule)
+    final formula.Gender resolvedGender =
+    (sex == 'F' || (sex == null && (profileGender?.toLowerCase() == 'female')))
+        ? formula.Gender.female
+        : formula.Gender.male;
+
+    if (!mounted) return;
     setState(() {
-      _gender = (raw != null && raw.toLowerCase() == 'female')
-          ? formula.Gender.female
-          : formula.Gender.male; // default
-      _rePoints = _computeREPointsFromBest(_bestLifts); // refresh calc
+      _gender = resolvedGender;
+
+      // ✅ keep the overwrite: recompute RE Points from _bestLifts for the SELECTED user
+      // (Your _bestLifts already holds the selected athlete’s lifts in friend view,
+      //  and self lifts in self view.)
+      _rePoints = _computeREPointsFromBest(_bestLifts);
     });
+
+    debugPrint('👤 [Profile] gender resolved for $selectedUid → $_gender; RE recomputed from selected user’s best lifts.');
   }
+
 
 
 
@@ -2349,7 +2470,11 @@ class _ProfilePageState extends State<ProfilePage> {
                           .doc(_targetUid)
                           .snapshots(),
                       builder: (context, snap) {
+                        print('🧷 [AppBar.title] stream col=${_readOnlyView ? 'users_public' : 'users'} doc=$_targetUid hasData=${snap.hasData} err=${snap.error}');
+
                         final data = snap.data?.data();
+                        print('🧷 [AppBar.title] data keys=${data?.keys.toList()} username=${data?['username']} displayName=${data?['displayName']} email=${data?['email']}');
+
                         String? pick(dynamic v) {
                           final s = (v ?? '').toString().trim();
                           return s.isEmpty ? null : s;
@@ -2359,6 +2484,8 @@ class _ProfilePageState extends State<ProfilePage> {
                             pick(data?['displayName']) ??
                             pick(data?['email']) ??
                             'Unknown';
+                        print('🏷️ [AppBar.title] resolved label="$label"');
+
 
                         return Text(
                           label,

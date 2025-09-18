@@ -497,9 +497,15 @@ Future<void> backfillAllUsers() async {
 /// - Uses **per-lift bodyweight** at/<= that date to compute points (via Formula.computeRePointsPerLift).
 /// - Writes `rePointsByLift` and `rePoints` to users_public.
 /// - Uses **current** users/{uid}.sex ('M'|'F'|'N' with 'N' → male).
+// stats_snapshot.dart
+
+
 Future<void> recomputeRePointsLast12Months(String uid) async {
+  debugPrint('⏱️ [recompute12m] start uid=$uid');
+
   final db = FirebaseFirestore.instance;
 
+  // --- Helpers ---
   Timestamp _normTS(dynamic raw) {
     if (raw == null) return Timestamp.now();
     if (raw is Timestamp) return raw;
@@ -509,7 +515,8 @@ Future<void> recomputeRePointsLast12Months(String uid) async {
       if (dt != null) return Timestamp.fromDate(dt);
     }
     if (raw is int) {
-      return Timestamp.fromMillisecondsSinceEpoch(raw);
+      // support millis
+      try { return Timestamp.fromMillisecondsSinceEpoch(raw); } catch (_) {}
     }
     if (raw is Map<String, dynamic>) {
       final secs = raw['_seconds'];
@@ -521,38 +528,47 @@ Future<void> recomputeRePointsLast12Months(String uid) async {
 
   double _toD(num? v) => (v ?? 0).toDouble();
 
-  // Window: rolling 365 days
-  final nowTs = Timestamp.now();
-  final now = nowTs.toDate();
-  final since = DateTime(now.year, now.month, now.day).subtract(const Duration(days: 365));
-  final sinceTs = Timestamp.fromDate(since);
-
-  // Pull up to 2000 workouts; filter client-side by normalized date.
-  QuerySnapshot<Map<String, dynamic>> snaps;
-  try {
-    // Some docs may store 'date' as a string; we can't rely on Firestore range queries.
-    snaps = await db.collection('users').doc(uid).collection('workouts')
-        .orderBy('lastEditedAt', descending: true) // best-effort ordering
-        .limit(2000)
-        .get();
-  } catch (_) {
-    snaps = await db.collection('users').doc(uid).collection('workouts')
-        .limit(2000)
-        .get();
+  double _e1rm(double weight, int reps) {
+    // same calc as elsewhere (Epley fallback)
+    return weight * (1 + reps / 30.0);
   }
 
-  // Build best E1RM + date per lift within window
-  final bestE1rmDetailWindow = <String, Map<String, dynamic>>{};
-  for (final doc in snaps.docs) {
-    final w = doc.data();
-    final wTs = _normTS(w['date']);
-    if (wTs.compareTo(sinceTs) < 0) {
-      // older than window → skip
-      continue;
-    }
+  // --- 12-month cutoff (rolling 365 days) ---
+  final now = DateTime.now();
+  final cutoff = now.subtract(const Duration(days: 365));
 
-    final exercises = (w['exercises'] is List)
-        ? List<Map<String, dynamic>>.from(w['exercises'] as List)
+  // --- Pull sex once (current sex applies to all lifts) ---
+  final userSnap = await db.collection('users').doc(uid).get();
+  final user = userSnap.data() ?? const {};
+  final sexCode = (user['sex'] as String?) ?? 'M';
+  final gender = (sexCode == 'F') ? formula.Gender.female : formula.Gender.male;
+
+  // --- Scan workouts (robust to 'date' type differences) ---
+  final workoutsCol = db.collection('users').doc(uid).collection('workouts');
+
+  // We’ll read a reasonable batch and filter by date locally (types vary)
+  QuerySnapshot<Map<String, dynamic>> ws;
+  try {
+    ws = await workoutsCol.orderBy('date', descending: true).limit(2000).get();
+  } catch (_) {
+    // If 'date' not orderable (mixed types), fall back to lastEditedAt or raw
+    try {
+      ws = await workoutsCol.orderBy('lastEditedAt', descending: true).limit(2000).get();
+    } catch (_) {
+      ws = await workoutsCol.limit(2000).get();
+    }
+  }
+
+  // Build best E1RM per lift within window, and remember the lift date
+  final bestE1rmDetailWindow = <String, Map<String, dynamic>>{};
+  for (final d in ws.docs) {
+    final m = d.data();
+    final ts = _normTS(m['date']);
+    final dt = ts.toDate();
+    if (dt.isBefore(cutoff)) continue; // outside 12 months
+
+    final exercises = (m['exercises'] is List)
+        ? List<Map<String, dynamic>>.from(m['exercises'] as List)
         : const <Map<String, dynamic>>[];
 
     for (final ex in exercises) {
@@ -564,55 +580,61 @@ Future<void> recomputeRePointsLast12Months(String uid) async {
           : const <Map<String, dynamic>>[];
 
       for (final s in sets) {
-        final wkg  = _toD(s['weight'] as num?);
+        final w    = _toD(s['weight'] as num?);
         final reps = (s['reps'] is num)
             ? (s['reps'] as num).toInt()
             : int.tryParse('${s['reps'] ?? 0}') ?? 0;
-        if (wkg <= 0 || reps <= 0) continue;
+        if (w <= 0 || reps <= 0) continue;
 
-        final e1 = _e1rm(wkg, reps); // ignore RIR as requested
+        final e1 = _e1rm(w, reps);
+
+
         final prev = bestE1rmDetailWindow[name];
         final prevE1 = (prev?['e1rm'] as num?)?.toDouble() ?? 0.0;
         if (prev == null || e1 > prevE1) {
+
           bestE1rmDetailWindow[name] = {
-            'weight': wkg,
+            'weight': w,
             'reps': reps,
             'e1rm': e1,
-            'date': wTs, // normalized Timestamp
+            'date': ts, // normalized Timestamp of that workout
+            // 👇 OPTIONAL AUDIT (will be overwritten later once BW is resolved)
+             'bwKgAtDate': null,
           };
         }
+
       }
     }
   }
 
-  // Resolve current sex -> gender
-  final userSnap = await db.collection('users').doc(uid).get();
-  final userData = userSnap.data() ?? const {};
-  final sexCode  = (userData['sex'] as String?) ?? 'M';
-  final gender   = (sexCode == 'F')
-      ? formula.Gender.female
-      : formula.Gender.male; // 'M' or 'N' => male
-
-  // Compute per-lift + total using per-lift BW at/<= lift date
+  // --- Compute per-lift points using per-lift BW at/<= lift date ---
   final result = await formula.Formula.computeRePointsPerLift(
     uid: uid,
     bestE1rmDetail: bestE1rmDetailWindow,
     gender: gender,
   );
 
+  // Round per spec: Firestore rounded to 4 decimals; display can round to 2
+  double _r4(double v) => double.parse(v.toStringAsFixed(4));
+  final roundedByLift = {
+    for (final e in result.byLift.entries) e.key: _r4((e.value as num).toDouble())
+  };
+  final roundedTotal = _r4((result.total as num).toDouble());
 
-  // Persist only RE fields (don’t clobber top3* from WES incremental)
+  // --- Persist ONLY RE fields + bestE1rmDetail (12m window) ---
   await db.collection('users_public').doc(uid).set({
-    'rePointsByLift': result.byLift,         // rounded to 4 dp inside compute
-    'rePoints': result.total,                // rounded to 4 dp
-    'rePointsWindowMonths': 12,
-    'rePointsComputedAt': FieldValue.serverTimestamp(),
+    'rePoints': roundedTotal,
+    'rePointsByLift': roundedByLift,
     'rePointsSource': 'recompute12m',
+    'rePointsComputedAt': FieldValue.serverTimestamp(),
+    'bestE1rmDetail': bestE1rmDetailWindow, // ← now rebuilt by the 12m pass
     'updatedAt': FieldValue.serverTimestamp(),
   }, SetOptions(merge: true));
 
-  debugPrint('✅ [recompute12m] uid=$uid total=${result.total} byLift=${result.byLift}');
+  debugPrint('✅ [recompute12m] uid=$uid total=$roundedTotal byLift=$roundedByLift '
+      '(beste1rmDetail updated)');
 }
+
 
 
 

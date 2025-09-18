@@ -877,6 +877,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 child: GestureDetector(
                                   onTap: () {
                                     final userContext = UserContext.of(context, listen: false);
+                                    print('🧭 [NAV→Profile] actorUid=${userContext.actorUid} currentUid(actingAs)=${userContext.currentUid}');
 
                                     Navigator.push(
                                       context,
@@ -884,6 +885,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                         builder: (_) => ChangeNotifierProvider<UserContext>.value(
                                           value: userContext,
                                           child: const ProfilePage(), // 👈 Navigate to your ProfilePage
+
                                         ),
                                       ),
                                     );
