@@ -524,8 +524,11 @@ class ApproveRequestsScreen extends StatelessWidget {
                               : (email.isNotEmpty ? email : athleteUid);
                           final fullName = (public['fullName'] ?? '').toString().trim();
 
-                          // Placeholder for RE points (wire up later in users_public)
-                          const rePointsStr = 'RE Pts: —';
+                          final rePointsVal = public['rePoints'];
+                          final rePointsStr = (rePointsVal is num && rePointsVal > 0)
+                              ? 'RE Pts: ${rePointsVal.toStringAsFixed(0)}'
+                              : 'RE Pts: —';
+
 
                           return ListTile(
                             dense: true,

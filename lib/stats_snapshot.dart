@@ -491,5 +491,129 @@ Future<void> backfillAllUsers() async {
   debugPrint('🏁 Backfill complete: $ok succeeded, $fail failed, total=${qs.size}');
 }
 
+/// Recompute RE Points over the **last 12 months (rolling 365 days)**.
+/// - Scans workouts (client-side filter; your 'date' is ISO or mixed types).
+/// - Finds the **best E1RM + date per lift** within that window.
+/// - Uses **per-lift bodyweight** at/<= that date to compute points (via Formula.computeRePointsPerLift).
+/// - Writes `rePointsByLift` and `rePoints` to users_public.
+/// - Uses **current** users/{uid}.sex ('M'|'F'|'N' with 'N' → male).
+Future<void> recomputeRePointsLast12Months(String uid) async {
+  final db = FirebaseFirestore.instance;
+
+  Timestamp _normTS(dynamic raw) {
+    if (raw == null) return Timestamp.now();
+    if (raw is Timestamp) return raw;
+    if (raw is DateTime) return Timestamp.fromDate(raw);
+    if (raw is String) {
+      final dt = DateTime.tryParse(raw);
+      if (dt != null) return Timestamp.fromDate(dt);
+    }
+    if (raw is int) {
+      return Timestamp.fromMillisecondsSinceEpoch(raw);
+    }
+    if (raw is Map<String, dynamic>) {
+      final secs = raw['_seconds'];
+      final nanos = raw['_nanoseconds'] ?? 0;
+      if (secs is int) return Timestamp(secs, (nanos is int) ? nanos : 0);
+    }
+    return Timestamp.now();
+  }
+
+  double _toD(num? v) => (v ?? 0).toDouble();
+
+  // Window: rolling 365 days
+  final nowTs = Timestamp.now();
+  final now = nowTs.toDate();
+  final since = DateTime(now.year, now.month, now.day).subtract(const Duration(days: 365));
+  final sinceTs = Timestamp.fromDate(since);
+
+  // Pull up to 2000 workouts; filter client-side by normalized date.
+  QuerySnapshot<Map<String, dynamic>> snaps;
+  try {
+    // Some docs may store 'date' as a string; we can't rely on Firestore range queries.
+    snaps = await db.collection('users').doc(uid).collection('workouts')
+        .orderBy('lastEditedAt', descending: true) // best-effort ordering
+        .limit(2000)
+        .get();
+  } catch (_) {
+    snaps = await db.collection('users').doc(uid).collection('workouts')
+        .limit(2000)
+        .get();
+  }
+
+  // Build best E1RM + date per lift within window
+  final bestE1rmDetailWindow = <String, Map<String, dynamic>>{};
+  for (final doc in snaps.docs) {
+    final w = doc.data();
+    final wTs = _normTS(w['date']);
+    if (wTs.compareTo(sinceTs) < 0) {
+      // older than window → skip
+      continue;
+    }
+
+    final exercises = (w['exercises'] is List)
+        ? List<Map<String, dynamic>>.from(w['exercises'] as List)
+        : const <Map<String, dynamic>>[];
+
+    for (final ex in exercises) {
+      final name = canonical((ex['name'] as String? ?? '').trim());
+      if (!LiftKeys.all.contains(name)) continue;
+
+      final sets = (ex['sets'] is List)
+          ? List<Map<String, dynamic>>.from(ex['sets'] as List)
+          : const <Map<String, dynamic>>[];
+
+      for (final s in sets) {
+        final wkg  = _toD(s['weight'] as num?);
+        final reps = (s['reps'] is num)
+            ? (s['reps'] as num).toInt()
+            : int.tryParse('${s['reps'] ?? 0}') ?? 0;
+        if (wkg <= 0 || reps <= 0) continue;
+
+        final e1 = _e1rm(wkg, reps); // ignore RIR as requested
+        final prev = bestE1rmDetailWindow[name];
+        final prevE1 = (prev?['e1rm'] as num?)?.toDouble() ?? 0.0;
+        if (prev == null || e1 > prevE1) {
+          bestE1rmDetailWindow[name] = {
+            'weight': wkg,
+            'reps': reps,
+            'e1rm': e1,
+            'date': wTs, // normalized Timestamp
+          };
+        }
+      }
+    }
+  }
+
+  // Resolve current sex -> gender
+  final userSnap = await db.collection('users').doc(uid).get();
+  final userData = userSnap.data() ?? const {};
+  final sexCode  = (userData['sex'] as String?) ?? 'M';
+  final gender   = (sexCode == 'F')
+      ? formula.Gender.female
+      : formula.Gender.male; // 'M' or 'N' => male
+
+  // Compute per-lift + total using per-lift BW at/<= lift date
+  final result = await formula.Formula.computeRePointsPerLift(
+    uid: uid,
+    bestE1rmDetail: bestE1rmDetailWindow,
+    gender: gender,
+  );
+
+
+  // Persist only RE fields (don’t clobber top3* from WES incremental)
+  await db.collection('users_public').doc(uid).set({
+    'rePointsByLift': result.byLift,         // rounded to 4 dp inside compute
+    'rePoints': result.total,                // rounded to 4 dp
+    'rePointsWindowMonths': 12,
+    'rePointsComputedAt': FieldValue.serverTimestamp(),
+    'rePointsSource': 'recompute12m',
+    'updatedAt': FieldValue.serverTimestamp(),
+  }, SetOptions(merge: true));
+
+  debugPrint('✅ [recompute12m] uid=$uid total=${result.total} byLift=${result.byLift}');
+}
+
+
 
 

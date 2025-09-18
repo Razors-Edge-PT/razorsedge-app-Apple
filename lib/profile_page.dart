@@ -18,6 +18,9 @@ import 'package:video_player/video_player.dart';
 import 'dart:typed_data';
 import 'package:video_thumbnail/video_thumbnail.dart';
 import 'formula.dart' as formula;
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:async';
+import 'stats_snapshot.dart' as stats; // where recomputeRePointsLast12Months lives
 
 
 
@@ -151,6 +154,7 @@ class ProfilePage extends StatefulWidget {
 
   @override
   State<ProfilePage> createState() => _ProfilePageState();
+
 }
 
 
@@ -253,6 +257,9 @@ class _ProfilePageState extends State<ProfilePage> {
     final self = UserContext.of(context, listen: false).actorUid;
     return (_targetUid != null && _targetUid == self);
   }
+
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _publicSub;
+
 // view only bits ends
 
 
@@ -685,13 +692,50 @@ class _ProfilePageState extends State<ProfilePage> {
     });
   }
 
+  void _subscribeUsersPublic() {
+    final uid = UserContext.of(context, listen: false).currentUid
+        ?? FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
 
+    final docRef = FirebaseFirestore.instance.collection('users_public').doc(uid);
+    _publicSub?.cancel();
+    _publicSub = docRef.snapshots().listen((snap) {
+      final m = snap.data();
+      if (m == null) return;
+
+      final rePts    = (m['rePoints'] as num?)?.toDouble();
+      final byLift   = Map<String, dynamic>.from(m['rePointsByLift'] ?? const {});
+      // 🔄 Update your in-memory fields so the UI reflects server values.
+      if (mounted) {
+        setState(() {
+          _rePoints = rePts;  // your existing state field used by _StatChip
+          // Optionally store per-lift if you have a place for it:
+          // _rePointsByLift = byLift.map((k,v) => MapEntry(k, (v as num).toDouble()));
+        });
+      }
+    });
+  }
+
+  Future<void> _kickRecompute12m() async {
+    final uid = UserContext.of(context, listen: false).currentUid
+        ?? FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+
+    try {
+      debugPrint('⏱️ [Profile] launching recomputeRePointsLast12Months for uid=$uid...');
+      await stats.recomputeRePointsLast12Months(uid);
+      debugPrint('✅ [Profile] recomputeRePointsLast12Months finished.');
+    } catch (e) {
+      debugPrint('❌ [Profile] recomputeRePointsLast12Months failed: $e');
+    }
+  }
 
 
   @override
   void initState() {
     super.initState();
-
+    _subscribeUsersPublic();     // listen for live updates to rePoints
+    _kickRecompute12m();         // fire-and-forget background recompute
     final uc = UserContext.of(context, listen: false);
     final selfUid = uc.actorUid;
     _targetUid = widget.viewedUid ?? selfUid;
@@ -737,6 +781,7 @@ class _ProfilePageState extends State<ProfilePage> {
     _compDlCtrl.dispose();
     _heightCtrl.dispose();
     _bioController.dispose();
+    _publicSub?.cancel();
 
     _saveLiftVideosToLocal(); // persist on page exit
 
