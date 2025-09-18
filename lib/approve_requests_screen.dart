@@ -508,26 +508,55 @@ class ApproveRequestsScreen extends StatelessWidget {
                     builder: (context, pubSnap) {
                       final publicByUid = pubSnap.data ?? const <String, Map<String, dynamic>>{};
 
+                      // Build a sortable list combining entries + public profiles
+                      final sorted = entries.map((e) {
+                        final uid = e.key;
+                        final v = Map<String, dynamic>.from(e.value ?? {});
+                        final email = (v['email'] ?? '').toString();
+
+                        final public = publicByUid[uid] ?? const {};
+                        final rp = public['rePoints'];
+                        final rePoints = (rp is num) ? rp.toDouble() : 0.0; // default 0 if missing
+
+                        return {
+                          'uid': uid,
+                          'email': email,
+                          'public': public,
+                          'rePoints': rePoints,
+                        };
+                      }).toList()
+                      // Sort: RE points desc; tie-break by username asc for stability
+                        ..sort((a, b) {
+                          final ar = (a['rePoints'] as double);
+                          final br = (b['rePoints'] as double);
+                          if (br.compareTo(ar) != 0) return br.compareTo(ar);
+
+                          final au = ((a['public'] as Map)['username'] ?? '').toString();
+                          final bu = ((b['public'] as Map)['username'] ?? '').toString();
+                          return au.toLowerCase().compareTo(bu.toLowerCase());
+                        });
+
                       return ListView.builder(
                         shrinkWrap: true,
                         physics: const NeverScrollableScrollPhysics(),
-                        itemCount: entries.length,
+                        itemCount: sorted.length,
                         itemBuilder: (context, i) {
-                          final athleteUid = entries[i].key;
-                          final v = Map<String, dynamic>.from(entries[i].value ?? {});
-                          final email = (v['email'] ?? '').toString();
+                          final item       = sorted[i];
+                          final athleteUid = item['uid'] as String;
+                          final email      = (item['email'] ?? '').toString();
+                          final public     = item['public'] as Map<String, dynamic>;
+                          final rePoints   = (item['rePoints'] as double);
 
-                          // Pull public profile (username/fullName) with sensible fallbacks
-                          final public = publicByUid[athleteUid] ?? const {};
+// Pull public profile (username/fullName) with sensible fallbacks
                           final username = (public['username'] ?? '').toString().trim().isNotEmpty
                               ? public['username'].toString().trim()
                               : (email.isNotEmpty ? email : athleteUid);
                           final fullName = (public['fullName'] ?? '').toString().trim();
 
-                          final rePointsVal = public['rePoints'];
-                          final rePointsStr = (rePointsVal is num && rePointsVal > 0)
-                              ? 'RE Pts: ${rePointsVal.toStringAsFixed(0)}'
+                          final rePointsStr = (rePoints > 0)
+                              ? 'RE Pts: ${rePoints.toStringAsFixed(0)}'
                               : 'RE Pts: —';
+
 
 
                           return ListTile(
