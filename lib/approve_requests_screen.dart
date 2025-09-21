@@ -196,62 +196,63 @@ class ApproveRequestsScreen extends StatelessWidget {
       if (ql.isEmpty) return [];
 
       try {
-        final nameQ = await db
-            .collection('users_public')
-            .orderBy('usernameLower')
-            .startAt([ql])
-            .endAt(['$ql\uf8ff'])
-            .limit(20)
-            .get();
+        final futures = <Future<QuerySnapshot>>[];
 
-        final emailQ = await db
-            .collection('users_public')
-            .orderBy('emailLower')
-            .startAt([ql])
-            .endAt(['$ql\uf8ff'])
-            .limit(20)
-            .get();
-
-        final fullNameQ = await db
-            .collection('users_public')
-            .orderBy('fullNameLower')
-            .startAt([ql])
-            .endAt(['$ql\uf8ff'])
-            .limit(20)
-            .get();
-
-        debugPrint(
-          '🔎 Search "$ql": usernameLower=${nameQ.size}, emailLower=${emailQ.size}, fullNameLower=${fullNameQ.size}',
+        // prefix search on usernameLower / emailLower / fullNameLower
+        futures.add(
+          db.collection('users_public')
+              .orderBy('usernameLower')
+              .startAt([ql]).endAt(['$ql\uf8ff']).limit(20).get(),
+        );
+        futures.add(
+          db.collection('users_public')
+              .orderBy('emailLower')
+              .startAt([ql]).endAt(['$ql\uf8ff']).limit(20).get(),
+        );
+        futures.add(
+          db.collection('users_public')
+              .orderBy('fullNameLower')
+              .startAt([ql]).endAt(['$ql\uf8ff']).limit(20).get(),
         );
 
+        // exact email match if it looks like an email
+        final isEmail = q.contains('@');
+        if (isEmail) {
+          futures.add(
+            db.collection('users_public')
+                .where('emailLower', isEqualTo: ql)
+                .limit(5)
+                .get(),
+          );
+        }
+
+        final snaps = await Future.wait(futures);
 
         final byUid = <String, UserHit>{};
 
-        for (final d in nameQ.docs) {
-          final m = d.data();
-          byUid[d.id] = UserHit(
-            d.id,
-            (m['username'] ?? '').toString(),
-            (m['emailLower'] ?? '').toString(),
-          );
-        }
-        for (final d in emailQ.docs) {
-          final m = d.data();
-          byUid[d.id] = UserHit(
-            d.id,
-            (m['username'] ?? '').toString(),
-            (m['emailLower'] ?? '').toString(),
-          );
-        }
-        for (final d in fullNameQ.docs) {
-          final m = d.data();
-          byUid[d.id] = UserHit(
-            d.id,
-            (m['username'] ?? '').toString(),
-            (m['emailLower'] ?? '').toString(),
-          );
+        for (final snap in snaps) {
+          for (final d in snap.docs) {
+            final m = d.data() as Map<String, dynamic>;
+            byUid[d.id] = UserHit(
+              d.id,
+              (m['username'] ?? '').toString(),
+              (m['emailLower'] ?? '').toString(),
+            );
+          }
         }
 
+        // also allow direct UID hit (if they pasted a UID)
+        if (!byUid.containsKey(ql)) {
+          final direct = await db.collection('users_public').doc(ql).get();
+          if (direct.exists) {
+            final m = direct.data() as Map<String, dynamic>;
+            byUid[direct.id] = UserHit(
+              direct.id,
+              (m['username'] ?? '').toString(),
+              (m['emailLower'] ?? '').toString(),
+            );
+          }
+        }
 
         final list = byUid.values.toList()
           ..sort((a, b) => a.username.toLowerCase().compareTo(b.username.toLowerCase()));
@@ -263,8 +264,8 @@ class ApproveRequestsScreen extends StatelessWidget {
         lastError = e.toString();
         return [];
       }
-
     }
+
 
     await showDialog<void>(
       context: context,
@@ -347,6 +348,9 @@ class ApproveRequestsScreen extends StatelessWidget {
                                   u.username.isNotEmpty ? u.username : '(no username)',
                                   style: const TextStyle(fontSize: 14),
                                 ),
+                                subtitle: u.emailLower.isNotEmpty
+                                    ? Text(u.emailLower, style: const TextStyle(fontSize: 12, color: Colors.white70))
+                                    : null,
                                 onTap: () async {
                                   Navigator.pop(ctx);
                                   await _addGymBuddyByUid(

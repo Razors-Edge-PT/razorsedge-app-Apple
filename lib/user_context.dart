@@ -17,13 +17,13 @@ class UserContext extends ChangeNotifier {
   bool get isActingAsSelf => actingAsUid == actorUid;
 
   bool get isSuperAdmin => [
-    'Mxj2NXankQdVv4Xrj2sZzBBm4W92', // Richard
+    'yoVAqScwLMQLAgNHh8v9IK49fBw2', // Richard
   ].contains(actorUid);
 
   // ✅ Admin override (kept from your version)
   bool get isAdmin => [
-    'Mxj2NXankQdVv4Xrj2sZzBBm4W92', // Richard
-    'B3dWiljf4ISavFufZ0xN6o9LsD93', // Campbell
+    'yoVAqScwLMQLAgNHh8v9IK49fBw2', // Richard
+    'wuiMe7phxYQh0MM39bfnhgv20yS2', // Campbell
     'SMTEVGPH1MXgOgbcBbJFU1HjU8G3', // Adam W
     // 'Rp6gFj16KMgsmOtC9tZGlUDCNRr1', // Courtney
   ].contains(actorUid);

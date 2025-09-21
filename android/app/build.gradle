@@ -12,7 +12,7 @@ def flutterVersionName = project.hasProperty('flutter.versionName') ? project.ge
 
 
 android {
-    namespace = "com.razorsedge.pt" // ✅ This matches your applicationId
+    namespace = "com.goodlift.razorsedge" // ✅ This matches your applicationId
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -26,7 +26,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.razorsedge.pt" // ✅ Make sure this matches Firebase setup
+        applicationId = "com.goodlift.razorsedge" // ✅ Make sure this matches Firebase setup
         minSdk = 30
         targetSdk = 35
         versionCode = flutterVersionCode.toInteger()
@@ -50,5 +50,5 @@ dependencies {
     implementation 'com.google.firebase:firebase-firestore'
 }
 
-project.ext.googleServicesJsonFile = file("2google-services.json")
+project.ext.googleServicesJsonFile = file("google-services.json")
 // ✅ Do NOT include classpath or apply plugin here anymore:

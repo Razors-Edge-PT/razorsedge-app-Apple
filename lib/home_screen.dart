@@ -18,6 +18,7 @@ import 'profile_page.dart';
 import 'warmup_service.dart';
 import 'dart:async';
 import'stats_snapshot.dart';
+import 'directMessages.dart';
 
 
 class HomeScreen extends StatefulWidget {
@@ -604,7 +605,66 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
 
 
-              const SizedBox(width: 12),
+              const SizedBox(width: 3),
+
+              // 📩 Direct Messages icon with unread badge
+              StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('conversations')
+                    .where('participants.${FirebaseAuth.instance.currentUser!.uid}', isEqualTo: true)
+                    .snapshots(),
+                builder: (context, snapshot) {
+                  int unreadCount = 0;
+                  if (snapshot.hasData) {
+                    for (var doc in snapshot.data!.docs) {
+                      final data = doc.data() as Map<String, dynamic>;
+                      final state = data['participantState']?[FirebaseAuth.instance.currentUser!.uid];
+                      final count = (state != null && state['unreadCount'] is int)
+                          ? state['unreadCount'] as int
+                          : 0;
+                      unreadCount += count;
+                    }
+                  }
+
+                  return Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.message_outlined, size: 26, color: Colors.cyanAccent),
+                        onPressed: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const DirectMessages(),
+                            ),
+                          );
+                        },
+                      ),
+                      if (unreadCount > 0)
+                        Positioned(
+                          right: 6,
+                          top: 6,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.redAccent,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              unreadCount.toString(),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
+
+              const SizedBox(width: 3),
 
               // App logo
               Image.asset(

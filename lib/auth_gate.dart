@@ -13,7 +13,7 @@ import 'package:provider/provider.dart';
 
     // ✅ TEMP: whitelist your UID as a coach
     const devCoachUids = {
-      'Mxj2NXankQdVv4Xrj2sZzBBm4W92', // <— you
+      'yoVAqScwLMQLAgNHh8v9IK49fBw2', // <— you
       // Add more here if needed
     };
 

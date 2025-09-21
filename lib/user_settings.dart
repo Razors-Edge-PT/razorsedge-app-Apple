@@ -396,7 +396,7 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                       items: const [
                         DropdownMenuItem(value: 'M', child: Text('Male')),
                         DropdownMenuItem(value: 'F', child: Text('Female')),
-                        DropdownMenuItem(value: 'N', child: Text('Prefer not to say')),
+                        DropdownMenuItem(value: 'N', child: Text('Robot')),
                       ],
                       onChanged: (v) => setState(() => _sex = v),
                       decoration: InputDecoration(
