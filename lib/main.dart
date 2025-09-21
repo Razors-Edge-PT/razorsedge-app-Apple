@@ -24,7 +24,7 @@ import 'package:provider/provider.dart';
 import 'user_context.dart';
 import 'coach_home_screen.dart';
 import 'package:google_fonts/google_fonts.dart';
-
+import 'package:firebase_app_check/firebase_app_check.dart';
 
 class AppRoot extends StatelessWidget {
   const AppRoot({super.key});
@@ -80,8 +80,17 @@ void main() async {
     await Firebase.initializeApp();
   }
 
+  // 👇 App Check: Play Integrity in release, Debug provider in dev
+  await FirebaseAppCheck.instance.activate(
+    androidProvider: kReleaseMode
+        ? AndroidProvider.playIntegrity
+        : AndroidProvider.debug,
+    appleProvider: AppleProvider.deviceCheck, // harmless on Android
+  );
+
   runApp(const AppRoot());
 }
+
 
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key});

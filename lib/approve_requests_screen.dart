@@ -11,8 +11,11 @@ class UserHit {
   final String uid;
   final String username;
   final String emailLower;
-  UserHit(this.uid, this.username, this.emailLower);
+  final String? photoURL;               // ← nullable
+  UserHit(this.uid, this.username, this.emailLower, [this.photoURL]); // ← 4th param in []
 }
+
+
 
 class ApproveRequestsScreen extends StatelessWidget {
   const ApproveRequestsScreen({super.key});
@@ -237,7 +240,10 @@ class ApproveRequestsScreen extends StatelessWidget {
               d.id,
               (m['username'] ?? '').toString(),
               (m['emailLower'] ?? '').toString(),
+              (m['photoURL'] as String?),
             );
+
+
           }
         }
 
@@ -250,7 +256,10 @@ class ApproveRequestsScreen extends StatelessWidget {
               direct.id,
               (m['username'] ?? '').toString(),
               (m['emailLower'] ?? '').toString(),
+              (m['photoURL'] as String?),
             );
+
+
           }
         }
 
@@ -343,7 +352,14 @@ class ApproveRequestsScreen extends StatelessWidget {
                               padding: const EdgeInsets.symmetric(vertical: 4), // small natural space
                               child: ListTile(
                                 dense: true,
-                                leading: const Icon(Icons.person_outline, size: 18, color: Colors.cyanAccent),
+                                leading: (u.photoURL != null && u.photoURL!.isNotEmpty)
+                                    ? CircleAvatar(
+                                  radius: 12,
+                                  backgroundImage: NetworkImage(u.photoURL!),
+                                )
+                                    : const Icon(Icons.person_outline, size: 18, color: Colors.cyanAccent),
+
+
                                 title: Text(
                                   u.username.isNotEmpty ? u.username : '(no username)',
                                   style: const TextStyle(fontSize: 14),

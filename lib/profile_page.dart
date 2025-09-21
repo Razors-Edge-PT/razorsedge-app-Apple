@@ -1,29 +1,37 @@
-import 'dart:io';
+// Dart SDK
+import 'dart:async';          // for unawaited, Futures
+import 'dart:convert';        // if you use jsonEncode/Decode for prefs
+import 'dart:io';             // File, Platform
+import 'dart:typed_data';     // Uint8List
+
+// Flutter
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';          // if you use SystemChrome/Clipboard/etc.
+import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
+
+// Firebase
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:provider/provider.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+
+// Media / cache
+import 'package:image_picker/image_picker.dart';
+import 'package:video_player/video_player.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+
+// Local storage / utils
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart'; // only if used
+
+// Project-local
 import 'user_context.dart';
 import 'periodization_model_utils.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:firebase_storage/firebase_storage.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:google_fonts/google_fonts.dart';
-import 'package:flutter/services.dart';
-import 'dart:io';
-import 'dart:convert';
-import 'package:file_picker/file_picker.dart';
-import 'package:video_player/video_player.dart';
-import 'dart:typed_data';
-import 'package:video_thumbnail/video_thumbnail.dart';
 import 'formula.dart' as formula;
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'dart:async';
-import 'stats_snapshot.dart' as stats; // where recomputeRePointsLast12Months lives
-import 'dart:io'; // if not already present
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
+import 'stats_snapshot.dart' as stats;
+
+
 
 
 enum _CompMode { threeLift, benchOnly }
@@ -74,12 +82,21 @@ class LiftVideo {
 
 
 class _InAppVideoPlayer extends StatefulWidget {
-  final String videoPath;
-  const _InAppVideoPlayer({required this.videoPath});
+  final String source;
+  final bool isNetwork;
+
+  const _InAppVideoPlayer.file({required String path})
+      : source = path,
+        isNetwork = false;
+
+  const _InAppVideoPlayer.networkUrl({required String url})
+      : source = url,
+        isNetwork = true;
 
   @override
   State<_InAppVideoPlayer> createState() => _InAppVideoPlayerState();
 }
+
 
 class _InAppVideoPlayerState extends State<_InAppVideoPlayer> {
   late VideoPlayerController _controller;
@@ -88,11 +105,15 @@ class _InAppVideoPlayerState extends State<_InAppVideoPlayer> {
   @override
   void initState() {
     super.initState();
-    _controller = VideoPlayerController.file(File(widget.videoPath))
-      ..initialize().then((_) {
-        setState(() => _ready = true);
-        _controller.play();
-      });
+    _controller = widget.isNetwork
+        ? VideoPlayerController.networkUrl(Uri.parse(widget.source))
+        : VideoPlayerController.file(File(widget.source));
+
+    _controller.initialize().then((_) {
+      setState(() => _ready = true);
+      _controller.play();
+    });
+
   }
 
   @override
@@ -263,6 +284,18 @@ class _ProfilePageState extends State<ProfilePage> {
     final self = UserContext.of(context, listen: false).actorUid;
     return (_targetUid != null && _targetUid == self);
   }
+  /// Coaches acting-as the selected athlete should be able to upload.
+  /// Friends (readOnly route) should not.
+  bool get _canUploadForOwner {
+    final uc = UserContext.of(context, listen: false);
+    final owner = _targetUid;
+    if (owner == null) return false;
+    // If you're actively viewing an athlete because currentUid==owner,
+    // treat it as "acting-as" and allow uploads.
+    final actingAs = uc.currentUid ?? uc.actingAsUid;
+    return actingAs != null && actingAs == owner;
+  }
+
 
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _publicSub;
   String? _subscribedUid; // for debugging
@@ -275,6 +308,8 @@ class _ProfilePageState extends State<ProfilePage> {
   //Video bits
   // Toggleable later; default to local.
   VideoStorageMode _videoMode = VideoStorageMode.firestore;
+  static const _kProfilePhotoPrefsKeyPrefix = 'profile_local_path_'; // per user
+
 // One entry per liftId.
   final Map<String, LiftVideo> _liftVideos = {};
 // SharedPreferences key
@@ -305,24 +340,23 @@ class _ProfilePageState extends State<ProfilePage> {
     required String liftId,
     required String localVideoPath,
   }) async {
-    final uid = FirebaseAuth.instance.currentUser!.uid;
-    final folder = _folderForLift(liftId);
+    // Always upload under the selected profile owner (athlete being viewed)
+    final ownerUid = _ownerUid; // resolved target/self upstream
+    final basePath = 'users/$ownerUid/liftVideos';
 
-    // Use liftId as the stable key so each tile holds exactly one video
-    final base = liftId;
-
+    // ===== Video (MP4 assumed) =====
     final videoRef = FirebaseStorage.instance
         .ref()
-        .child('videos/${_ownerUid}/$liftId.mp4');
+        .child('$basePath/$liftId.mp4');
 
-    // Content type: assume MP4 from gallery; adjust if you support others.
-    final videoTask = await videoRef.putFile(
+    await videoRef.putFile(
       File(localVideoPath),
       SettableMetadata(contentType: 'video/mp4'),
     );
     final videoUrl = await videoRef.getDownloadURL();
 
-    // Create/upload a thumbnail (JPEG)
+    // ===== Thumbnail (JPEG) =====
+    String thumbUrl = '';
     final thumbBytes = await VideoThumbnail.thumbnailData(
       video: localVideoPath,
       imageFormat: ImageFormat.JPEG,
@@ -330,11 +364,11 @@ class _ProfilePageState extends State<ProfilePage> {
       quality: 70,
     );
 
-    String thumbUrl = '';
     if (thumbBytes != null) {
       final thumbRef = FirebaseStorage.instance
           .ref()
-          .child('$folder/$uid/${base}_thumb.jpg');
+          .child('$basePath/${liftId}_thumb.jpg');
+
       await thumbRef.putData(
         thumbBytes,
         SettableMetadata(contentType: 'image/jpeg'),
@@ -347,9 +381,6 @@ class _ProfilePageState extends State<ProfilePage> {
       'thumbUrl': thumbUrl,
     };
   }
-
-
-
 
 
 
@@ -456,17 +487,43 @@ class _ProfilePageState extends State<ProfilePage> {
     required String liftName,
   }) {
     final entry = _liftVideos[liftId];
-    final hasVideo = (entry?.hasLocal ?? false);
+    final hasVideo = (entry != null) && (entry.hasLocal || entry.hasRemote);
     final path = entry?.localPath;
+    final remoteUrl = entry?.remoteUrl;
+
 
     return GestureDetector(
       onTap: () {
-        if (!hasVideo || path == null || !File(path).existsSync()) {
+        if (!hasVideo) {
+          if (!_canUploadForOwner) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('No video uploaded yet.')),
+            );
+            return;
+          }
           _pickVideoForLift(liftId);
           return;
         }
-        _playVideo(context, path);
+        // Prefer remote playback if present
+        if (remoteUrl != null && remoteUrl.isNotEmpty) {
+          _playVideoRemote(context, remoteUrl);
+          return;
+        }
+        if (path != null && File(path).existsSync()) {
+          _playVideo(context, path);
+          return;
+        }
+        // Fallback: if something’s off, offer re-upload (owner/coach-only)
+        if (_canUploadForOwner) {
+          _pickVideoForLift(liftId);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Unable to play this video.')),
+          );
+        }
       },
+
+
       onLongPress: () async {
         if (!hasVideo || path == null || !File(path).existsSync()) return;
         await _startInlinePlay(liftId, path);
@@ -483,9 +540,14 @@ class _ProfilePageState extends State<ProfilePage> {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              // ---- BACKGROUND (Video thumb if present) ----
+              // ---- BACKGROUND (prefer in-memory thumb for instant render) ----
               if (hasVideo)
-                (_liftVideos[liftId]?.thumbUrl != null && _liftVideos[liftId]!.thumbUrl!.isNotEmpty)
+                (_thumbCache[liftId] != null)
+                    ? Image.memory(
+                  _thumbCache[liftId]!,
+                  fit: BoxFit.cover,
+                )
+                    : (_liftVideos[liftId]?.thumbUrl != null && _liftVideos[liftId]!.thumbUrl!.isNotEmpty)
                     ? Image.network(
                   _liftVideos[liftId]!.thumbUrl!,
                   fit: BoxFit.cover,
@@ -496,6 +558,7 @@ class _ProfilePageState extends State<ProfilePage> {
                   errorBuilder: (_, __, ___) => const Center(child: Icon(Icons.videocam)),
                 )
                     : const Center(child: Icon(Icons.videocam)),
+
 
 
               // ---- INLINE PLAYER (press & hold) ----
@@ -598,26 +661,6 @@ class _ProfilePageState extends State<ProfilePage> {
     return tooltip != null ? Tooltip(message: tooltip, child: btn) : btn;
   }
 
-
-  Future<Uint8List?> _getThumbFor(String liftId, String videoPath) async {
-    // Use cache first
-    if (_thumbCache.containsKey(liftId)) return _thumbCache[liftId];
-
-    try {
-      final bytes = await VideoThumbnail.thumbnailData(
-        video: videoPath,
-        imageFormat: ImageFormat.PNG,
-        maxWidth: 300, // keeps memory reasonable; grid is small
-        quality: 70,
-      );
-      _thumbCache[liftId] = bytes;
-      return bytes;
-    } catch (_) {
-      _thumbCache[liftId] = null;
-      return null;
-    }
-  }
-
   Future<void> _startInlinePlay(String liftId, String videoPath) async {
     // Stop any other tile first
     if (_inlinePlayingLiftId != null && _inlinePlayingLiftId != liftId) {
@@ -664,6 +707,8 @@ class _ProfilePageState extends State<ProfilePage> {
         .collection('liftVideos')
         .get();
 
+    print('🎬 [_loadLiftVideosFromLocal] ownerUid=$ownerUid docs=${query.docs.length}');
+
     _liftVideos.clear();
     for (final doc in query.docs) {
       _liftVideos[doc.id] = LiftVideo.fromJson(doc.data());
@@ -673,6 +718,7 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
 
+
   Future<void> _saveLiftVideosToLocal() async {
     final prefs = await SharedPreferences.getInstance();
     final map = _liftVideos.map((k, v) => MapEntry(k, v.toJson()));
@@ -680,74 +726,97 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _pickVideoForLift(String liftId) async {
-    if (!_isSelf) return; // friends/coaches can’t upload
+    if (!_canUploadForOwner) return; // only owner or coach acting-as owner
+
     // Pick from gallery
-    final XFile? picked = await _imagePicker.pickVideo(
-      source: ImageSource.gallery,
-    );
+    final XFile? picked = await _imagePicker.pickVideo(source: ImageSource.gallery);
     if (picked == null) return; // user canceled
 
     final path = picked.path;
-    final ownerUid = _targetUid; // 👈 ensures videos stored per selected user
-    if (ownerUid == null) return;
 
-    if (_videoMode == VideoStorageMode.firestore) {
-      try {
-        // Upload video + thumbnail together
-        final urls = await _uploadVideoAndThumb(
-          liftId: liftId,
-          localVideoPath: path,
-        );
-
-        final videoUrl = urls['videoUrl'];
-        final thumbUrl = urls['thumbUrl'];
-
-        setState(() {
-          _liftVideos[liftId] = LiftVideo(
-            liftId: liftId,
-            localPath: null,       // Firestore mode = no local copy
-            remoteUrl: videoUrl,   // ✅ main video URL
-            updatedAt: DateTime.now(),
-          );
-          if (thumbUrl != null && thumbUrl.isNotEmpty) {
-            _thumbCache[liftId] = null; // clear cache, will reload via Image.network
-          }
-        });
-
-        // Save metadata to Firestore
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(ownerUid)
-            .collection('liftVideos')
-            .doc(liftId)
-            .set(_liftVideos[liftId]!.toJson());
-
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Video uploaded to Cloud Storage')),
-        );
-      } catch (e) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Upload failed: $e')),
-        );
-      }
+    // Low-cost: reject big files client-side (keeps network + Storage lean).
+    final file = File(path);
+    final size = await file.length(); // bytes
+    const maxBytes = 100 * 1024 * 1024; // must match Storage rules
+    if (size > maxBytes) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Video too large (max 100 MB). Please trim or compress.')),
+      );
       return;
     }
 
+    final ownerUid = _targetUid; // store under selected athlete
+    if (ownerUid == null) return;
 
+    // ✅ 1) Generate a thumbnail immediately so the tile updates right away.
+    final thumbBytes = await VideoThumbnail.thumbnailData(
+      video: path,
+      imageFormat: ImageFormat.JPEG,
+      maxWidth: 400,
+      quality: 70,
+    );
 
-    // === Local mode (unchanged) ===
+    // ✅ 2) Optimistically update UI now (instant thumb + local playback).
     setState(() {
       _liftVideos[liftId] = LiftVideo(
         liftId: liftId,
-        localPath: path,
+        localPath: path,      // instant playback while upload happens
         remoteUrl: null,
+        thumbUrl: null,       // will be filled after upload
         updatedAt: DateTime.now(),
       );
+      _thumbCache[liftId] = thumbBytes; // show immediately
     });
-    await _saveLiftVideosToLocal();
+
+    // ✅ 3) Upload in the background and time it.
+    final sw = Stopwatch()..start();
+    debugPrint('⏱️ [VideoUpload] start liftId=$liftId, size=${size}B');
+
+    unawaited(_uploadVideoAndThumb(liftId: liftId, localVideoPath: path).then((urls) async {
+      final videoUrl = urls['videoUrl'];
+      final thumbUrl = urls['thumbUrl'];
+
+      // Update local model with remote URLs (keep localPath for snappy replays)
+      if (mounted) {
+        setState(() {
+          _liftVideos[liftId] = LiftVideo(
+            liftId: liftId,
+            localPath: _liftVideos[liftId]?.localPath,
+            remoteUrl: videoUrl,
+            thumbUrl: thumbUrl,
+            updatedAt: DateTime.now(),
+          );
+          // keep _thumbCache[liftId] as-is so UI stays instant;
+          // if you want to force CDN thumb next render, set _thumbCache[liftId] = null;
+        });
+      }
+
+      // Persist metadata
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(ownerUid)
+          .collection('liftVideos')
+          .doc(liftId)
+          .set(_liftVideos[liftId]!.toJson());
+
+      sw.stop();
+      debugPrint('✅ [VideoUpload] done liftId=$liftId in ${sw.elapsedMilliseconds} ms');
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Video uploaded')),
+      );
+    }).catchError((e) async {
+      sw.stop();
+      debugPrint('❌ [VideoUpload] failed liftId=$liftId after ${sw.elapsedMilliseconds} ms: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Upload failed: $e')),
+      );
+    }));
   }
+
 
 
   void _removeVideoForLift(String liftId) {
@@ -760,10 +829,28 @@ class _ProfilePageState extends State<ProfilePage> {
   void _playVideo(BuildContext context, String path) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => _InAppVideoPlayer(videoPath: path),
+        builder: (_) => _InAppVideoPlayer.file(path: path),
       ),
     );
   }
+
+  void _playVideoRemote(BuildContext context, String url) async {
+    try {
+      final file = await DefaultCacheManager().getSingleFile(url);
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => _InAppVideoPlayer.file(path: file.path)),
+      );
+      return;
+    } catch (_) {
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => _InAppVideoPlayer.networkUrl(url: url)),
+      );
+    }
+  }
+
+
   //Video bits end
 
 
@@ -889,38 +976,6 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
 
-
-  void _resolveSelectedUidAndWireUp() {
-    final loggedInUid = FirebaseAuth.instance.currentUser?.uid;
-
-    // Prefer route args when navigating to a friend's profile, else a context store, else self
-    final args = ModalRoute.of(context)?.settings.arguments;
-    String? routeUid;
-    if (args is Map && args['uid'] is String) {
-      routeUid = args['uid'] as String?;
-    }
-    String? ctxUid;
-    try {
-      ctxUid = UserContext.of(context, listen: false).currentUid;
-    } catch (_) {
-      ctxUid = null;
-    }
-    final selectedUid = routeUid ?? ctxUid ?? loggedInUid;
-    if (selectedUid == null) return;
-
-    final isSelf = (loggedInUid != null && selectedUid == loggedInUid);
-
-    debugPrint('👤 [Profile] selectedUid=$selectedUid '
-        'loggedInUid=$loggedInUid routeUid=$routeUid ctxUid=$ctxUid '
-        'routeArgsType=${args?.runtimeType} isSelf=$isSelf');
-
-    _subscribeUsersPublic();
-    _kickRecompute12m();
-
-  }
-
-
-
   @override
   void initState() {
     super.initState();
@@ -928,50 +983,62 @@ class _ProfilePageState extends State<ProfilePage> {
     final uc = UserContext.of(context, listen: false);
     print('👤 [Profile.init] actorUid=${uc.actorUid} currentUid(actingAs)=${uc.currentUid}');
 
-    final selectedUid = uc.currentUid; // 👈 actingAsUid (selected athlete)
+    final selectedUid = uc.currentUid; // 👈 acting-as athlete (if any)
     final selfUid     = uc.actorUid;   // 👈 logged-in user
     _targetUid        = widget.viewedUid ?? selectedUid;
     _readOnlyView     = widget.readOnly || (_targetUid != selfUid);
     print('🎯 [Profile.init] widget.viewedUid=${widget.viewedUid}, selectedUid=$selectedUid selfUid=$selfUid → _targetUid=$_targetUid, _readOnlyView=$_readOnlyView');
 
-    // loads from 'users' (self) or 'users_public' (friend) based on _readOnlyView
+    // 🔄 Reset any stale avatar state from previous user before loading fresh data
+    _localProfileImage = null;
+    _localProfilePath  = null;
+    photoURL           = null;
+
+    // Load per-user local avatar (works for self OR friend)
+    unawaited(_loadLocalProfileImage());
+
+    // Load profile document (users for self, users_public for friend)
     _loadProfileData();
     print('📥 [Profile.init] _loadProfileData() kicked for uid=$_targetUid (readOnlyView=$_readOnlyView)');
 
+    // Always load lift videos for the viewed profile (self/coach-acting-as/friend)
+    _loadLiftVideosFromLocal();
+    print('🎞️ [Profile.init] _loadLiftVideosFromLocal() kicked for uid=$_targetUid');
+
     // Subscribe to selected user's public stats and (if self) kick recompute
-    _subscribeUsersPublic();   // now uses _targetUid
+    _subscribeUsersPublic();   // uses _targetUid
     print('📡 [Profile.init] _subscribeUsersPublic() wired for uid=$_targetUid');
 
-    _kickRecompute12m();       // now checks !_readOnlyView
+    _kickRecompute12m();       // checks !_readOnlyView internally
 
     if (!_readOnlyView) {
       print('🛠️ [Profile.init] SELF mode loaders starting for uid=$_targetUid');
 
-      // ==== SELF: keep all your original loaders + the compute ====
-      _loadLocalProfileImage().then((_) {
-        final uc = context.read<UserContext>();
-        if (uc.isActingAsSelf &&
-            _localProfilePath != null &&
-            File(_localProfilePath!).existsSync()) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) uc.setLocalPhotoPath(_localProfilePath);
-          });
-        }
-      });
+      // ==== SELF: keep original loaders + compute ====
       _loadPhotoURL();
       _refreshBestLiftsAndPoints();   // ✅ self ONLY
       _loadCurrentUsername();
       _loadCompSingles();
-      _loadLiftVideosFromLocal();
       _loadProfilePrefs();
       _loadBodyWeightForSelectedUser();
       _loadHeightForSelectedUser();
       _loadGender();
+
+      // Optionally reflect local photo into UserContext for app bar, if present
+      _loadLocalProfileImage().then((_) {
+        final uc2 = context.read<UserContext>();
+        if (_localProfilePath != null && File(_localProfilePath!).existsSync()) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) uc2.setLocalPhotoPath(_localProfilePath);
+          });
+        }
+      });
     } else {
-    print('🔒 [Profile.init] FRIEND (read-only) mode for uid=$_targetUid');
-    // ==== FRIEND (read-only): do nothing else here ====
+      print('🔒 [Profile.init] FRIEND (read-only) mode for uid=$_targetUid');
+      // ==== FRIEND (read-only): nothing extra ====
     }
   }
+
 
 
 
@@ -994,35 +1061,6 @@ class _ProfilePageState extends State<ProfilePage> {
     }
     _inlineControllers.clear();
     super.dispose();
-  }
-
-
-  Widget _chipButton({
-    required String label,
-    required IconData icon,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(999),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.primaryContainer,
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, size: 16),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   Future<void> _loadCurrentUsername() async {
@@ -1165,6 +1203,8 @@ class _ProfilePageState extends State<ProfilePage> {
       chinUp          = (data['bestChinUp'] ?? 0).toDouble();
       unilateralPress = (data['bestUnilateralPress'] ?? 0).toDouble();
       _currentUsername = (data['username'] ?? _currentUsername ?? '').toString();
+      photoURL = (data['photoURL'] ?? photoURL ?? '').toString();
+
     } else {
       // --- FRIEND VIEW: read snapshot aggregates from users_public ---
       List<double> _arr(dynamic v) =>
@@ -1195,6 +1235,8 @@ class _ProfilePageState extends State<ProfilePage> {
 
       // header label source for friend view (users_public likely has username/emailLower)
       _currentUsername = (data['username'] ?? _currentUsername ?? '').toString();
+      photoURL = (data['photoURL'] ?? photoURL ?? '').toString();
+
 
       // 👇 Drive the “weight × reps  ~ e1RM” rows from bestE1rmDetail
       final detail = Map<String, dynamic>.from(data['bestE1rmDetail'] ?? {});
@@ -1266,10 +1308,7 @@ class _ProfilePageState extends State<ProfilePage> {
         .doc(uid)
         .set(payload, SetOptions(merge: true));
 
-    // (Optional) temporary compatibility write for any old readers:
-    // await FirebaseFirestore.instance.collection('users').doc(uid)
-    //   .set({'profile.gender': (_gender == formula.Gender.female) ? 'female' : 'male'},
-    //        SetOptions(merge: true));
+
   }
 
 
@@ -1293,47 +1332,94 @@ class _ProfilePageState extends State<ProfilePage> {
     final picked = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
     if (picked == null) return;
 
+    final ownerUid = _targetUid ?? FirebaseAuth.instance.currentUser!.uid;
     final tempFile = File(picked.path);
     final appDir = await getApplicationDocumentsDirectory();
-    final destPath = '${appDir.path}/profile.jpg';
+    final destPath = '${appDir.path}/profile_$ownerUid.jpg'; // 👈 per-user filename
 
-    // Overwrite the old file (delete first to be explicit)
+    // Overwrite any previous file for THIS user
     try { await File(destPath).delete(); } catch (_) {}
     await tempFile.copy(destPath);
 
-    // ⚠️ Evict old cached image for this path
-    final provider = FileImage(File(destPath));
-    await provider.evict();
+    // Evict any old cache entries for this destPath
+    await FileImage(File(destPath)).evict();
 
+    // Persist per-user local path
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('profile_local_path', destPath);
+    await prefs.setString('$_kProfilePhotoPrefsKeyPrefix$ownerUid', destPath);
 
+    // Update UI immediately with the local image
     if (!mounted) return;
     setState(() {
       _localProfilePath = destPath;
       _localProfileImage = File(destPath);
     });
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Profile photo updated (local only)')),
-    );
-    // ✅ sync into UserContext so app bar shows same image
+    // If this is self, sync UserContext so the AppBar/avatar can update
     final uc = context.read<UserContext>();
-    if (uc.isActingAsSelf) {
+    if (uc.actorUid == ownerUid) {
       uc.setLocalPhotoPath(destPath);
     }
+
+    // 🔄 Background upload to Storage
+    final ref = FirebaseStorage.instance.ref('users/$ownerUid/profile/profile.jpg');
+    final sw = Stopwatch()..start();
+    debugPrint('⏱️ [ProfilePhoto] start uid=$ownerUid, size=${await File(destPath).length()}B');
+    unawaited(ref.putFile(File(destPath), SettableMetadata(contentType: 'image/jpeg')).then((_) async {
+      final url = await ref.getDownloadURL();
+
+      // Evict any old cached network image (in case URL stayed same—which it usually doesn't)
+      await NetworkImage(url).evict();
+
+      // Write to users + users_public so friends see it
+      await FirebaseFirestore.instance.collection('users').doc(ownerUid)
+          .set({'photoURL': url, 'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+      await FirebaseFirestore.instance.collection('users_public').doc(ownerUid)
+          .set({'photoURL': url}, SetOptions(merge: true));
+
+      if (mounted) {
+        setState(() {
+          photoURL = url; // so friend/self view can use NetworkImage if needed
+        });
+      }
+
+      sw.stop();
+      debugPrint('✅ [ProfilePhoto] done uid=$ownerUid in ${sw.elapsedMilliseconds} ms');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Profile photo uploaded')));
+    }).catchError((e) {
+      sw.stop();
+      debugPrint('❌ [ProfilePhoto] failed after ${sw.elapsedMilliseconds} ms: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Photo upload failed: $e')));
+    }));
   }
 
+
+
   Future<void> _loadLocalProfileImage() async {
+    final ownerUid = _targetUid; // the page’s subject (self/selected/friend)
+    if (ownerUid == null) return;
+
     final prefs = await SharedPreferences.getInstance();
-    final path = prefs.getString('profile_local_path');
+    final path = prefs.getString('$_kProfilePhotoPrefsKeyPrefix$ownerUid');
+
     if (path != null && path.isNotEmpty && File(path).existsSync()) {
+      if (!mounted) return;
       setState(() {
         _localProfilePath = path;
         _localProfileImage = File(path);
       });
+    } else {
+      // Ensure we don't carry over a previous user's local image in memory
+      if (!mounted) return;
+      setState(() {
+        _localProfilePath = null;
+        _localProfileImage = null;
+      });
     }
   }
+
 
   Future<void> _loadCompSingles() async {
     final uid = Provider.of<UserContext>(context, listen: false).actingAsUid;
@@ -2536,14 +2622,16 @@ class _ProfilePageState extends State<ProfilePage> {
 
   @override
   Widget build(BuildContext context) {
-    final userEmail = FirebaseAuth.instance.currentUser?.email ?? '';
 
     final ImageProvider? avatarImage =
-    _localProfileImage != null
+    (_localProfileImage != null)
         ? FileImage(_localProfileImage!)
         : (_localProfilePath != null && File(_localProfilePath!).existsSync())
         ? FileImage(File(_localProfilePath!))
+        : (photoURL != null && photoURL!.isNotEmpty)
+        ? NetworkImage(photoURL!)
         : null;
+
 
     return WillPopScope(
       onWillPop: () async {
@@ -3003,33 +3091,6 @@ class _ProfilePageState extends State<ProfilePage> {
 
       ),
     ),
-    );
-  }
-
-
-
-  Widget _buildLiftRow(String label, double value, Function(double) onChanged) {
-    final controller = TextEditingController(text: value.toString());
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        children: [
-          Expanded(child: Text(label, style: const TextStyle(fontSize: 16))),
-          SizedBox(
-            width: 80,
-            child: TextField(
-              controller: controller,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              onChanged: (val) => onChanged(double.tryParse(val) ?? 0),
-              decoration: InputDecoration(
-                filled: true,
-                fillColor: Colors.blueGrey,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
-              ),
-            ),
-          ),
-        ],
-      ),
     );
   }
 }
