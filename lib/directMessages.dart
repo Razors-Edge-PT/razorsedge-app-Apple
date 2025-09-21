@@ -181,8 +181,12 @@ class DirectMessages extends StatelessWidget {
                     subtitle: Text(
                       lastMsg,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: Colors.white70),
+                      style: TextStyle(
+                        color: unreadCount > 0 ? Colors.white : Colors.white70, // 👈 bold white if unread
+                        fontWeight: unreadCount > 0 ? FontWeight.bold : FontWeight.normal,
+                      ),
                     ),
+
                     trailing: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
@@ -245,6 +249,15 @@ class ConversationPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final uid = FirebaseAuth.instance.currentUser!.uid;
+
+    // 👇 Mark as read as soon as page opens
+    FirebaseFirestore.instance
+        .collection('conversations')
+        .doc(convId)
+        .update({
+      'participantState.$uid.unreadCount': 0,
+      'participantState.$uid.lastReadAt': FieldValue.serverTimestamp(),
+    });
 
     return Scaffold(
       appBar: AppBar(
