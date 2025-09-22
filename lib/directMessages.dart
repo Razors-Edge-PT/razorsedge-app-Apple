@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:math';
+import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 
 /// Deterministic conversation id for a pair of users.
@@ -237,6 +238,7 @@ class DirectMessages extends StatelessWidget {
   }
 }
 
+
 class ConversationPage extends StatefulWidget {
   final String convId;
   final String otherUid;
@@ -252,135 +254,261 @@ class ConversationPage extends StatefulWidget {
 }
 
 class _ConversationPageState extends State<ConversationPage> {
-  // clientId -> send startedAt
   final Map<String, DateTime> _pendingLatencyMarks = {};
+  final Set<String> _localEchoPrinted = {};
 
-  void _markSendStart(String clientId, DateTime startedAt) {
-    _pendingLatencyMarks[clientId] = startedAt;
-  }
+  // Scrolling infra
+  final ItemScrollController _itemScrollController = ItemScrollController();
+  final ItemPositionsListener _itemPositionsListener = ItemPositionsListener.create();
 
-  @override
-  Widget build(BuildContext context) {
+  bool _didInitialJump = false;
+  String? _lastLatestMsgId; // for "auto-scroll on my new message"
+  Timestamp? _initialLastReadAt;   // from my participantState at page open
+  bool _gotInitialLastReadAt = false;
+
+  // mark-as-read when near bottom
+  Future<void> _markAsRead() async {
     final uid = FirebaseAuth.instance.currentUser!.uid;
-
-    // 👇 Mark as read as soon as page opens
-    FirebaseFirestore.instance
+    await FirebaseFirestore.instance
         .collection('conversations')
         .doc(widget.convId)
         .update({
       'participantState.$uid.unreadCount': 0,
       'participantState.$uid.lastReadAt': FieldValue.serverTimestamp(),
     });
+  }
+
+  // Helper: jump to index safely
+  void _jumpToIndex(int index, {double alignment = 0.1}) {
+    if (!_itemScrollController.isAttached) return;
+    _itemScrollController.jumpTo(index: index, alignment: alignment);
+  }
+
+  // Helper: animate to bottom
+  void _scrollToBottom({bool animated = true}) {
+    if (!_itemScrollController.isAttached) return;
+    if (animated) {
+      _itemScrollController.scrollTo(
+        index: _lastItemIndex,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
+    } else {
+      _itemScrollController.jumpTo(index: _lastItemIndex, alignment: 1.0);
+    }
+  }
+
+  int _lastItemIndex = 0;
+
+  // You already pass this from the composer
+  void _markSendStart(String clientId, DateTime startedAt) {
+    _pendingLatencyMarks[clientId] = startedAt;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+
+    // Listen for bottom reach (you already have this if you followed earlier steps)
+    _itemPositionsListener.itemPositions.addListener(() {
+      final positions = _itemPositionsListener.itemPositions.value;
+      if (positions.isEmpty) return;
+
+      final lastVisible = positions.where((p) => p.index == _lastItemIndex).toList();
+      if (lastVisible.isNotEmpty) {
+        final p = lastVisible.first;
+        final visiblePortion = (p.itemTrailingEdge - p.itemLeadingEdge).clamp(0.0, 1.0);
+        final isMostlyVisible = p.itemTrailingEdge >= 0.95 && visiblePortion >= 0.95;
+        if (isMostlyVisible) {
+          _markAsRead();
+        }
+      }
+    });
+
+    // 👇 One-time fetch of my lastReadAt from the conversation doc
+    final uid = FirebaseAuth.instance.currentUser!.uid;
+    FirebaseFirestore.instance
+        .collection('conversations')
+        .doc(widget.convId)
+        .get()
+        .then((snap) {
+      final data = snap.data() as Map<String, dynamic>? ?? {};
+      final myState = (data['participantState'] ?? {})[uid] as Map<String, dynamic>? ?? {};
+      _initialLastReadAt = myState['lastReadAt'] as Timestamp?;
+      if (mounted) setState(() => _gotInitialLastReadAt = true);
+    }).catchError((_) {
+      if (mounted) setState(() => _gotInitialLastReadAt = true);
+    });
+  }
+
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = FirebaseAuth.instance.currentUser!.uid;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text("Chat"),
         backgroundColor: Colors.blueGrey.shade900,
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('conversations')
-                  .doc(widget.convId)
-                  .collection('messages')
-                  .snapshots(includeMetadataChanges: true), // 👈 no orderBy here
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
+        body: Column(
+          children: [
+            Expanded(
+              child: StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('conversations')
+                    .doc(widget.convId)
+                    .collection('messages')
+                    .snapshots(includeMetadataChanges: true),
+                builder: (context, snapshot) {
+                  if (!_gotInitialLastReadAt || snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
 
-                // Sort client-side by server sentAt, then fallback to localSentAt
-                final msgs = (snapshot.data?.docs ?? []).toList()
-                  ..sort((a, b) {
-                    int ts(QueryDocumentSnapshot q) {
-                      final m = q.data() as Map<String, dynamic>;
-                      final server = (m['sentAt'] as Timestamp?)?.millisecondsSinceEpoch;
-                      final local  = (m['localSentAt'] as int?) ?? 0;
-                      return server ?? local;
-                    }
-                    return ts(a).compareTo(ts(b));
-                  });
+                  // Sort by server sentAt then fallback localSentAt
+                  final msgs = (snapshot.data?.docs ?? []).toList()
+                    ..sort((a, b) {
+                      int ts(QueryDocumentSnapshot q) {
+                        final m = q.data() as Map<String, dynamic>;
+                        final server = (m['sentAt'] as Timestamp?)?.millisecondsSinceEpoch;
+                        final local  = (m['localSentAt'] as int?) ?? 0;
+                        return server ?? local;
+                      }
+                      return ts(a).compareTo(ts(b));
+                    });
 
-                return ListView.builder(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  itemCount: msgs.length,
-                  itemBuilder: (context, i) {
-                    final qDoc = msgs[i];
-                    final raw  = qDoc.data();
-                    if (raw is! Map<String, dynamic>) return const SizedBox.shrink();
-                    final data = raw as Map<String, dynamic>;
+                  _lastItemIndex = msgs.isEmpty ? 0 : msgs.length - 1;
 
-                    final fromSelf = (data['senderId']?.toString() ?? '') == uid;
-
-                    // ⚡ Latency prints
-                    final clientId = (data['clientId'] ?? '').toString();
-                    if (clientId.isNotEmpty && _pendingLatencyMarks.containsKey(clientId)) {
-                      final started = _pendingLatencyMarks[clientId]!;
-                      final now = DateTime.now();
-                      if (qDoc.metadata.hasPendingWrites) {
-                        final localMs = now.difference(started).inMilliseconds;
-                        // ignore: avoid_print
-                        print('⚡ [DM] local-echo: ${localMs} ms (clientId=$clientId)');
-                      } else {
-                        final serverMs = now.difference(started).inMilliseconds;
-                        _pendingLatencyMarks.remove(clientId);
-                        // ignore: avoid_print
-                        print('✅ [DM] server-ack: ${serverMs} ms (clientId=$clientId)');
+                  // Compute "first unread" index based on the cached _initialLastReadAt
+                  int firstUnreadIndex = -1;
+                  if (msgs.isNotEmpty) {
+                    for (var i = 0; i < msgs.length; i++) {
+                      final m = msgs[i].data() as Map<String, dynamic>;
+                      final sentAt = (m['sentAt'] as Timestamp?);
+                      final unread = (_initialLastReadAt == null)
+                          ? (sentAt != null) // if we’ve never read, consider server-timestamped items unread
+                          : (sentAt != null && sentAt.toDate().isAfter(_initialLastReadAt!.toDate()));
+                      if (unread) {
+                        firstUnreadIndex = i;
+                        break;
                       }
                     }
+                  }
 
-                    final type = (data['type'] ?? 'text') as String;
+                  // One-time initial jump: to first unread, else bottom
+                  if (!_didInitialJump && msgs.isNotEmpty) {
+                    _didInitialJump = true;
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (firstUnreadIndex != -1) {
+                        _jumpToIndex(firstUnreadIndex, alignment: 0.1);
+                      } else {
+                        _jumpToIndex(_lastItemIndex, alignment: 1.0);
+                      }
+                    });
+                  }
 
-                    return Align(
-                      alignment: fromSelf ? Alignment.centerRight : Alignment.centerLeft,
-                      child: Container(
-                        margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: fromSelf ? Colors.cyanAccent.shade700 : Colors.blueGrey.shade700,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: (type == 'image' && (data['imageUrl'] ?? '').toString().isNotEmpty)
-                            ? ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: Image.network(
-                            data['imageUrl'],
-                            fit: BoxFit.cover,
+                  // Auto-scroll if a brand-new last message from ME appears
+                  if (msgs.isNotEmpty) {
+                    final last = msgs.last;
+                    final lastData = last.data() as Map<String, dynamic>;
+                    final lastFromSelf = (lastData['senderId']?.toString() ?? '') ==
+                        FirebaseAuth.instance.currentUser!.uid;
+                    if (lastFromSelf) {
+                      final latestId = last.id;
+                      if (latestId != _lastLatestMsgId) {
+                        _lastLatestMsgId = latestId;
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          _scrollToBottom(animated: true);
+                        });
+                      }
+                    }
+                  }
+
+                  return ScrollablePositionedList.builder(
+                    itemScrollController: _itemScrollController,
+                    itemPositionsListener: _itemPositionsListener,
+                    padding: const EdgeInsets.only(bottom: 8),
+                    itemCount: msgs.length,
+                    itemBuilder: (context, i) {
+                      final qDoc = msgs[i];
+                      final raw  = qDoc.data();
+                      if (raw is! Map<String, dynamic>) return const SizedBox.shrink();
+                      final data = raw;
+
+                      final uid = FirebaseAuth.instance.currentUser!.uid;
+                      final fromSelf = (data['senderId']?.toString() ?? '') == uid;
+
+                      // Latency prints (local-echo + server-ack)
+                      final clientId = (data['clientId'] ?? '').toString();
+                      if (clientId.isNotEmpty && _pendingLatencyMarks.containsKey(clientId)) {
+                        final started = _pendingLatencyMarks[clientId]!;
+                        final now = DateTime.now();
+
+                        if (!_localEchoPrinted.contains(clientId)) {
+                          final localMs = now.difference(started).inMilliseconds;
+                          _localEchoPrinted.add(clientId);
+                          // ignore: avoid_print
+                          print('⚡ [DM] local-echo: ${localMs} ms (clientId=$clientId)');
+                        }
+
+                        if (!qDoc.metadata.hasPendingWrites) {
+                          final serverMs = now.difference(started).inMilliseconds;
+                          _pendingLatencyMarks.remove(clientId);
+                          _localEchoPrinted.remove(clientId);
+                          // ignore: avoid_print
+                          print('✅ [DM] server-ack: ${serverMs} ms (clientId=$clientId)');
+                        }
+                      }
+
+                      final type = (data['type'] ?? 'text') as String;
+
+                      return Align(
+                        alignment: fromSelf ? Alignment.centerRight : Alignment.centerLeft,
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: fromSelf ? Colors.cyanAccent.shade700 : Colors.blueGrey.shade700,
+                            borderRadius: BorderRadius.circular(12),
                           ),
-                        )
-                            : Text(
-                          (data['text'] ?? '').toString(),
-                          style: const TextStyle(color: Colors.white),
+                          child: (type == 'image' && (data['imageUrl'] ?? '').toString().isNotEmpty)
+                              ? ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.network(
+                              data['imageUrl'],
+                              fit: BoxFit.cover,
+                            ),
+                          )
+                              : Text(
+                            (data['text'] ?? '').toString(),
+                            style: const TextStyle(color: Colors.white),
+                          ),
                         ),
-                      ),
-                    );
-                  },
-                );
-
-              },
-            ),
-          ),
-
-          // Safe composer
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              child: _MessageComposer(
-                convId: widget.convId,
-                otherUid: widget.otherUid,
-                onClientSend: _markSendStart, // 👈 hook for latency timing
+                      );
+                    },
+                  );
+                },
               ),
-
             ),
-          ),
-        ],
-      ),
+
+            // Composer (unchanged)
+            SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                child: _MessageComposer(
+                  convId: widget.convId,
+                  otherUid: widget.otherUid,
+                  onClientSend: _markSendStart,
+                ),
+              ),
+            ),
+          ],
+        )
     );
   }
 }
+
 
 
 class _MessageComposer extends StatefulWidget {
