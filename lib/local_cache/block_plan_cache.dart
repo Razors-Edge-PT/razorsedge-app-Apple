@@ -80,8 +80,8 @@ class BlockPlanCache {
     });
   }
   // ──────────────────────────────────────────────────────────────
-  // WESInitSnapshot cache helpers (for _loadInitialData super-cache)
-  // ──────────────────────────────────────────────────────────────
+// WESInitSnapshot cache helpers (for _loadInitialData super-cache)
+// ──────────────────────────────────────────────────────────────
 
   /// Try to get an init snapshot for a given date.
   static Future<WESInitSnapshot?> getInitSnapshot({
@@ -90,21 +90,41 @@ class BlockPlanCache {
     required String dateYmd,
   }) async {
     final isar = await IsarDb.instance;
+    // Note: no `.and()` in Isar v3; also call `.build().findFirst()`
     return await isar.wESInitSnapshots
         .filter()
         .uidEqualTo(uid)
-        .and()
         .blockIdEqualTo(blockId)
-        .and()
         .dateYmdEqualTo(dateYmd)
+        .build()
         .findFirst();
   }
 
   /// Upsert an init snapshot after Firestore loads finish.
-  static Future<void> putInitSnapshot(WESInitSnapshot snap) async {
+  static Future<void> putInitSnapshot({
+    required String uid,
+    required String blockId,
+    required String dateYmd,
+    required List<Map<String, dynamic>> plannedExercises,
+    required List<Map<String, dynamic>> previousWorkout,
+    required List<Map<String, dynamic>> topSetHistory,
+    DateTime? updatedAt,
+  }) async {
     final isar = await IsarDb.instance;
+
+    final snap = WESInitSnapshot()
+      ..uid = uid
+      ..blockId = blockId
+      ..dateYmd = dateYmd
+      ..plannedExercisesJson = jsonEncode(plannedExercises)
+      ..previousWorkoutJson  = jsonEncode(previousWorkout)
+      ..topSetHistoryJson    = jsonEncode(topSetHistory)
+      ..updatedAt = updatedAt
+      ..cachedAt = DateTime.now();
+
     await isar.writeTxn(() => isar.wESInitSnapshots.put(snap));
   }
+
 
 
 }

@@ -3792,11 +3792,49 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           await _loadExistingWorkoutIfAny();   // <- puts the WES-planned rows back
           if (mounted) setState(() {});        // <- repaint
 
+          // === BEGIN: SAVE WESInitSnapshot TO ISAR ===
+          try {
+            final uid = _cachedUid ?? UserContext.of(context, listen: false).currentUid;
+            final bid = _selectedBlockId ?? _activeBlockId;
+            final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+
+            if (uid != null && bid != null) {
+              final planned = _selectedExercisesWithCircuits
+                  .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e))
+                  .toList();
+
+              // If you have these, supply them; otherwise use empty lists
+              final previous = const <Map<String, dynamic>>[];
+              final topSets  = const <Map<String, dynamic>>[];
+
+              await BlockPlanCache.putInitSnapshot(
+                uid: uid,
+                blockId: bid,
+                dateYmd: ymd,
+                plannedExercises: planned,
+                previousWorkout: previous,
+                topSetHistory: topSets,
+                updatedAt: DateTime.now(),
+              );
+
+              print('🟩 [WES Init] Snapshot PUT to Isar for $ymd (uid=$uid, block=$bid) '
+                  'planned=${planned.length}');
+            } else {
+              print('🟨 [WES Init] Skip snapshot PUT (uid or blockId missing)');
+            }
+          } catch (e) {
+            print('🟥 [WES Init] Snapshot PUT failed: $e');
+          }
+// === END: SAVE WESInitSnapshot TO ISAR ===
+
+
           _scheduleMissedButtonAfterPaint(); // compute in background; show button when ready
           _catchupShineCtl = AnimationController(
             vsync: this,
             duration: const Duration(milliseconds: 1200),
           );
+
+
           _catchupShineAnim = CurvedAnimation(
             parent: _catchupShineCtl,
             curve: Curves.easeInOut,
@@ -3999,34 +4037,33 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   Future<void> _paintFromSnapshotIfAny() async {
     try {
       final uid = _cachedUid ?? UserContext.of(context, listen: false).currentUid;
-      final bid = _selectedBlockId ?? _activeBlockId; // use whatever is available
+      final bid = _selectedBlockId ?? _activeBlockId; // whatever we have earliest
       final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
 
       WESInitSnapshot? snap;
 
-      // If you implemented this helper, keep it:
-      // snap = (uid != null && bid != null)
-      //     ? await BlockPlanCache.getInitSnapshot(uid: uid, blockId: bid, dateYmd: ymd)
-      //     : null;
-
-      // Otherwise, do the lookup directly in Isar:
-      if (uid != null && bid != null && snap == null) {
+      // Primary: exact key (uid+block+date) if we have block id already
+      if (uid != null && bid != null) {
         final isar = await IsarDb.instance;
         snap = await isar.wESInitSnapshots
             .filter()
             .uidEqualTo(uid)
             .dateYmdEqualTo(ymd)
-            .findFirst(); // ✅ no .build()
+            .build()          // Isar 3.1: turn QB into Query
+            .findFirst();     // run query
+        print('🔎 [WES Boot] Snapshot lookup (uid=$uid, block=$bid, ymd=$ymd) → ${snap == null ? 'MISS' : 'HIT'}');
       }
 
-      // Fallback: if blockId isn’t known yet on first boot, try “any block for this uid+date”
+      // Fallback: if blockId isn’t known yet, try any snapshot for uid+date
       if (snap == null && uid != null) {
         final isar = await IsarDb.instance;
         snap = await isar.wESInitSnapshots
             .filter()
             .uidEqualTo(uid)
             .dateYmdEqualTo(ymd)
-            .findFirst(); // ✅ no .build()
+            .build()
+            .findFirst();
+        print('🔎 [WES Boot] Fallback snapshot lookup (uid=$uid, any block, ymd=$ymd) → ${snap == null ? 'MISS' : 'HIT'}');
       }
 
       if (snap == null) {
@@ -4034,12 +4071,21 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         return;
       }
 
+      // We found one—log payload size just for sanity
+      print('✅ [WES Boot] Snapshot FOUND for $ymd (uid=$uid, block=$bid). '
+          'plannedJson=${snap.plannedExercisesJson.length} chars');
+
+      // Decode just enough to render rows immediately
       final planned = snap.plannedExercisesJson.isNotEmpty
           ? (jsonDecode(snap.plannedExercisesJson) as List)
           : const [];
 
-      if (planned.isEmpty) return;
+      if (planned.isEmpty) {
+        print('⚪ [WES Boot] Snapshot had no planned rows to paint');
+        return;
+      }
 
+      // Paint minimal structure so UI appears instantly
       setState(() {
         _selectedExercisesWithCircuits.clear();
         _workoutSets.clear();
@@ -4064,16 +4110,21 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
         }
 
-        // Critical: don’t show a blocking spinner just because _loadInitialData is running.
+        // Make sure the UI won’t show a blocking spinner just because other
+        // async work is continuing in the background.
         _isLoadingData = false;
         _isInitialized = true;
       });
 
-      print('⚡ [WES Boot] Snapshot painted ${planned.length} rows for $ymd');
+      // Keep controllers wired
+      _attachDirtyListeners();
+
+      print('⚡ [WES Boot] Snapshot PAINTED ${planned.length} row(s) for $ymd (instant-visible)');
     } catch (e) {
       print('⚠️ [WES Boot] Snapshot hydrate failed: $e');
     }
   }
+
 
 
   Future<void> _loadInitialData() async {
@@ -4280,7 +4331,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       if (uid != null && bid != null) {
         final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
 
-        // (1) Planned list: keep it compact (name + circuitIndex)
+        // (1) Planned list: compact (name + circuitIndex)
         final plannedCompact = _selectedExercisesWithCircuits.map((e) {
           final name = (e['name'] ?? '').toString().trim();
           final ci   = (e['circuitIndex'] ?? 0) as int;
@@ -4288,21 +4339,18 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         }).toList();
 
         // (2) Previous workout overlay (compact rows)
-        // We serialize only what’s needed to quickly re-hydrate fields.
         final List<Map<String, dynamic>> previousOverlay = [];
         for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
           final exName = (_selectedExercisesWithCircuits[i]['name'] ?? '').toString().trim();
           final ci     = (_selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0) as int;
           if (i >= _workoutSets.length) continue;
-          final sets = _workoutSets[i]
-              .map((s) => {
+          final sets = _workoutSets[i].map((s) => {
             if (s.reps != null) 'reps': s.reps,
             if (s.weight != null) 'weight': s.weight,
             if (s.rir != null) 'rir': s.rir,
             if (s.velocity != null) 'velocity': s.velocity,
             if ((s.notes ?? '').toString().isNotEmpty) 'notes': s.notes,
-          })
-              .toList();
+          }).toList();
           previousOverlay.add({
             'name': exName,
             'circuitIndex': ci,
@@ -4310,29 +4358,34 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           });
         }
 
-        // (3) Top-set history (best-effort; if you have a cache accessor, use it)
+        // (3) Top-set history (best-effort)
         Map<String, dynamic> topSetHistory = const {};
         try {
-          // If your PMU exposes an in-memory cache, prefer that.
-          // Otherwise, leave as empty and fill later once you wire it.
+          // If you have a real source, populate it here.
           // topSetHistory = PeriodizationModelUtils.fullTopSetHistoryCache ?? const {};
         } catch (_) {}
+        final List<Map<String, dynamic>> topSetHistoryList = [topSetHistory];
 
-        final snap = WESInitSnapshot()
-          ..uid = uid
-          ..blockId = bid
-          ..dateYmd = ymd
-          ..plannedExercisesJson = jsonEncode(plannedCompact)
-          ..previousWorkoutJson  = jsonEncode(previousOverlay)
-          ..topSetHistoryJson    = jsonEncode(topSetHistory)
-          ..updatedAt = DateTime.now();
+        // ✅ Save snapshot via the helper with named params
+        await BlockPlanCache.putInitSnapshot(
+          uid: uid,
+          blockId: bid,
+          dateYmd: ymd,
+          plannedExercises: plannedCompact,
+          previousWorkout: previousOverlay,
+          topSetHistory: topSetHistoryList,
+          updatedAt: DateTime.now(),
+        );
 
-        await BlockPlanCache.putInitSnapshot(snap);
-        print('💾 [WES Init] WESInitSnapshot saved for $ymd (${plannedCompact.length} planned)');
+        print('💾 [WES Init] WESInitSnapshot saved for $ymd '
+            '(planned=${plannedCompact.length}, prev=${previousOverlay.length})');
+      } else {
+        print('🟨 [WES Init] Skip snapshot PUT (uid or blockId missing)');
       }
     } catch (e) {
-      print('⚠️ [WES Init] WESInitSnapshot save failed: $e');
+      print('🟥 [WES Init] WESInitSnapshot save failed: $e');
     }
+
 
 
     print('✅ [WES Init] _loadInitialData complete');
