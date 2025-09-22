@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:math';
+
 
 /// Deterministic conversation id for a pair of users.
 /// Ensures both users always open the same thread, no query needed.
@@ -53,17 +55,18 @@ class BuddyPickerPage extends StatelessWidget {
                   backgroundImage: AssetImage('assets/InApp/Placeholder_profilepic.png'),
                 ),
                 title: Text(displayName, style: const TextStyle(fontWeight: FontWeight.bold)),
-                onTap: () async {
-                  final convId = convIdFor(uid, buddyUid);
-                  final convRef =
-                  FirebaseFirestore.instance.collection('conversations').doc(convId);
+                  onTap: () async {
+                    final convId  = convIdFor(uid, buddyUid);
+                    final convRef = FirebaseFirestore.instance.collection('conversations').doc(convId);
 
-                  // Bootstrap the conversation if it doesn't exist yet (no indexes needed)
-                  await FirebaseFirestore.instance.runTransaction((tx) async {
-                    final snap = await tx.get(convRef);
+                    // ⚡ Bootstrap/touch conversation without a transaction (snappier local echo)
                     final now = FieldValue.serverTimestamp();
-                    if (!snap.exists) {
-                      tx.set(convRef, {
+                    try {
+                      // If it exists, just touch updatedAt (won't overwrite lastMessage/participantState)
+                      await convRef.update({'updatedAt': now});
+                    } catch (_) {
+                      // If missing, create with the same initial shape you had before
+                      await convRef.set({
                         'participants': {uid: true, buddyUid: true},
                         'createdAt': now,
                         'updatedAt': now,
@@ -72,22 +75,20 @@ class BuddyPickerPage extends StatelessWidget {
                           uid: {'unreadCount': 0},
                           buddyUid: {'unreadCount': 0},
                         },
-                      });
-                    } else {
-                      tx.update(convRef, {'updatedAt': now});
+                      }, SetOptions(merge: false));
                     }
-                  });
 
-                  if (!context.mounted) return;
-                  Navigator.of(context).pushReplacement(
-                    MaterialPageRoute(
-                      builder: (_) => ConversationPage(
-                        convId: convId,
-                        otherUid: buddyUid,
+                    if (!context.mounted) return;
+                    Navigator.of(context).pushReplacement(
+                      MaterialPageRoute(
+                        builder: (_) => ConversationPage(
+                          convId: convId,
+                          otherUid: buddyUid,
+                        ),
                       ),
-                    ),
-                  );
-                },
+                    );
+                  }
+
               );
             }).toList(),
           );
@@ -236,7 +237,7 @@ class DirectMessages extends StatelessWidget {
   }
 }
 
-class ConversationPage extends StatelessWidget {
+class ConversationPage extends StatefulWidget {
   final String convId;
   final String otherUid;
 
@@ -247,13 +248,25 @@ class ConversationPage extends StatelessWidget {
   });
 
   @override
+  State<ConversationPage> createState() => _ConversationPageState();
+}
+
+class _ConversationPageState extends State<ConversationPage> {
+  // clientId -> send startedAt
+  final Map<String, DateTime> _pendingLatencyMarks = {};
+
+  void _markSendStart(String clientId, DateTime startedAt) {
+    _pendingLatencyMarks[clientId] = startedAt;
+  }
+
+  @override
   Widget build(BuildContext context) {
     final uid = FirebaseAuth.instance.currentUser!.uid;
 
     // 👇 Mark as read as soon as page opens
     FirebaseFirestore.instance
         .collection('conversations')
-        .doc(convId)
+        .doc(widget.convId)
         .update({
       'participantState.$uid.unreadCount': 0,
       'participantState.$uid.lastReadAt': FieldValue.serverTimestamp(),
@@ -270,36 +283,74 @@ class ConversationPage extends StatelessWidget {
             child: StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance
                   .collection('conversations')
-                  .doc(convId)
+                  .doc(widget.convId)
                   .collection('messages')
-                  .orderBy('sentAt', descending: false)
-                  .snapshots(),
+                  .snapshots(includeMetadataChanges: true), // 👈 no orderBy here
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 }
-                final msgs = snapshot.data?.docs ?? [];
+
+                // Sort client-side by server sentAt, then fallback to localSentAt
+                final msgs = (snapshot.data?.docs ?? []).toList()
+                  ..sort((a, b) {
+                    int ts(QueryDocumentSnapshot q) {
+                      final m = q.data() as Map<String, dynamic>;
+                      final server = (m['sentAt'] as Timestamp?)?.millisecondsSinceEpoch;
+                      final local  = (m['localSentAt'] as int?) ?? 0;
+                      return server ?? local;
+                    }
+                    return ts(a).compareTo(ts(b));
+                  });
+
                 return ListView.builder(
                   padding: const EdgeInsets.only(bottom: 8),
                   itemCount: msgs.length,
                   itemBuilder: (context, i) {
-                    final data = msgs[i].data() as Map<String, dynamic>;
-                    final fromSelf = data['senderId'] == uid;
+                    final qDoc = msgs[i];
+                    final raw  = qDoc.data();
+                    if (raw is! Map<String, dynamic>) return const SizedBox.shrink();
+                    final data = raw as Map<String, dynamic>;
+
+                    final fromSelf = (data['senderId']?.toString() ?? '') == uid;
+
+                    // ⚡ Latency prints
+                    final clientId = (data['clientId'] ?? '').toString();
+                    if (clientId.isNotEmpty && _pendingLatencyMarks.containsKey(clientId)) {
+                      final started = _pendingLatencyMarks[clientId]!;
+                      final now = DateTime.now();
+                      if (qDoc.metadata.hasPendingWrites) {
+                        final localMs = now.difference(started).inMilliseconds;
+                        // ignore: avoid_print
+                        print('⚡ [DM] local-echo: ${localMs} ms (clientId=$clientId)');
+                      } else {
+                        final serverMs = now.difference(started).inMilliseconds;
+                        _pendingLatencyMarks.remove(clientId);
+                        // ignore: avoid_print
+                        print('✅ [DM] server-ack: ${serverMs} ms (clientId=$clientId)');
+                      }
+                    }
+
+                    final type = (data['type'] ?? 'text') as String;
 
                     return Align(
-                      alignment:
-                      fromSelf ? Alignment.centerRight : Alignment.centerLeft,
+                      alignment: fromSelf ? Alignment.centerRight : Alignment.centerLeft,
                       child: Container(
-                        margin:
-                        const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                        margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: fromSelf
-                              ? Colors.cyanAccent.shade700
-                              : Colors.blueGrey.shade700,
+                          color: fromSelf ? Colors.cyanAccent.shade700 : Colors.blueGrey.shade700,
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: Text(
+                        child: (type == 'image' && (data['imageUrl'] ?? '').toString().isNotEmpty)
+                            ? ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.network(
+                            data['imageUrl'],
+                            fit: BoxFit.cover,
+                          ),
+                        )
+                            : Text(
                           (data['text'] ?? '').toString(),
                           style: const TextStyle(color: Colors.white),
                         ),
@@ -307,6 +358,7 @@ class ConversationPage extends StatelessWidget {
                     );
                   },
                 );
+
               },
             ),
           ),
@@ -317,9 +369,11 @@ class ConversationPage extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
               child: _MessageComposer(
-                convId: convId,
-                otherUid: otherUid,
+                convId: widget.convId,
+                otherUid: widget.otherUid,
+                onClientSend: _markSendStart, // 👈 hook for latency timing
               ),
+
             ),
           ),
         ],
@@ -328,15 +382,19 @@ class ConversationPage extends StatelessWidget {
   }
 }
 
+
 class _MessageComposer extends StatefulWidget {
   final String convId;
   final String otherUid;
+  final void Function(String clientId, DateTime startedAt)? onClientSend;
 
   const _MessageComposer({
     super.key,
     required this.convId,
     required this.otherUid,
+    this.onClientSend,
   });
+
 
   @override
   State<_MessageComposer> createState() => _MessageComposerState();
@@ -345,41 +403,61 @@ class _MessageComposer extends StatefulWidget {
 class _MessageComposerState extends State<_MessageComposer> {
   final _controller = TextEditingController();
 
+  bool _sending = false;                 // 👈 prevents double-sends
+  static const int _maxChars = 2000;     // 👈 matches Firestore rule cap
+
   Future<void> _sendMessage() async {
-    final text = _controller.text.trim();
+    if (_sending) return;
+
+    // Trim + enforce rule-aligned cap (2000 code points)
+    var text = _controller.text.trim();
     if (text.isEmpty) return;
+    if (text.runes.length > _maxChars) {
+      final runes = text.runes.toList().sublist(0, _maxChars);
+      text = String.fromCharCodes(runes);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Message truncated to 2000 characters.')),
+        );
+      }
+    }
+
     _controller.clear();
+    setState(() => _sending = true);
 
-    final uid = FirebaseAuth.instance.currentUser!.uid;
-    final otherUid = widget.otherUid;
+    try {
+      final uid      = FirebaseAuth.instance.currentUser!.uid;
+      final otherUid = widget.otherUid;
+      final convRef  = FirebaseFirestore.instance.collection('conversations').doc(widget.convId);
+      final msgRef   = convRef.collection('messages').doc();
 
-    final convRef =
-    FirebaseFirestore.instance.collection('conversations').doc(widget.convId);
-    final msgRef = convRef.collection('messages').doc();
+      // Generate a clientId and mark start for latency
+      final rnd = Random().nextInt(1 << 32);
+      final clientId = '${DateTime.now().microsecondsSinceEpoch}_$rnd';
+      widget.onClientSend?.call(clientId, DateTime.now());
 
-    await FirebaseFirestore.instance.runTransaction((tx) async {
-      final convSnap = await tx.get(convRef);
-      final now = FieldValue.serverTimestamp();
-
-      // Write message
-      tx.set(msgRef, {
+      // 1) Message write (no transaction) → instant local echo
+      await msgRef.set({
         'senderId': uid,
-        'text': text,
-        'sentAt': now,
         'type': 'text',
+        'text': text,
+        'clientId': clientId,
+        'localSentAt': DateTime.now().millisecondsSinceEpoch, // client-side sort
+        'sentAt': FieldValue.serverTimestamp(),               // server time later
       });
 
-      if (convSnap.exists) {
-        tx.update(convRef, {
-          'lastMessage': {'text': text, 'senderId': uid, 'sentAt': now},
-          'updatedAt': now,
-          'participantState.$uid.unreadCount': 0,
-          'participantState.$otherUid.unreadCount': FieldValue.increment(1),
-        });
-      } else {
-        // Bootstrap if someone deep-linked without BuddyPicker
-        tx.set(convRef, {
-          'participants': {uid: true, otherUid: true},
+      // 2) Best-effort conversation state update
+      final now = FieldValue.serverTimestamp();
+      await convRef.update({
+        'lastMessage': {'text': text, 'senderId': uid, 'sentAt': now},
+        'updatedAt': now,
+        'participantState.$uid.unreadCount': 0,
+        'participantState.$uid.lastReadAt': now,
+        'participantState.$otherUid.unreadCount': FieldValue.increment(1),
+      }).catchError((_) async {
+        // Bootstrap if convo missing (e.g., deep link)
+        await convRef.set({
+          'participants': {uid: true, otherUid: true},  // immutable per rules
           'createdAt': now,
           'updatedAt': now,
           'lastMessage': {'text': text, 'senderId': uid, 'sentAt': now},
@@ -387,10 +465,20 @@ class _MessageComposerState extends State<_MessageComposer> {
             uid: {'lastReadAt': now, 'unreadCount': 0},
             otherUid: {'lastReadAt': null, 'unreadCount': 1},
           },
-        });
+        }, SetOptions(merge: true));
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Send failed: $e')),
+        );
       }
-    });
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
   }
+
+
 
   @override
   Widget build(BuildContext context) {
