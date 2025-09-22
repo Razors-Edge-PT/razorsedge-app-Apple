@@ -19,6 +19,9 @@ import 'warmup_service.dart';
 import 'dart:async';
 import'stats_snapshot.dart';
 import 'directMessages.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:path_provider/path_provider.dart';
+
 
 
 class HomeScreen extends StatefulWidget {
@@ -43,8 +46,13 @@ class _HomeScreenState extends State<HomeScreen> {
   DateTime _focusedDay = DateTime.now();
   DateTime? _selectedDay;
   Set<DateTime> _trainingDays = {};
-  File? _profileImage;
+
+  //Profile image
+  bool _avatarPersistInProgress = false;
+  String? _avatarLastUrlSaved;
   final ImagePicker _picker = ImagePicker();
+
+
   String? _actingAsEmail;
   String? _lastWarmUid;
 
@@ -90,6 +98,42 @@ class _HomeScreenState extends State<HomeScreen> {
         'isCoach=${userContext.isCoach} '
         'isAdmin=${userContext.isAdmin} '
     );
+  }
+
+  Future<void> _persistAvatarLocalIfNeeded(BuildContext context, {
+    required String uid,
+    required String photoURL,
+  }) async {
+    if (_avatarPersistInProgress) return;
+    final uc = context.read<UserContext>();
+
+    // Already have a good local file? done.
+    if (uc.localPhotoPath != null) {
+      final f = File(uc.localPhotoPath!);
+      if (f.existsSync() && await f.length() > 0) return;
+    }
+
+    // Avoid refetching the same URL repeatedly
+    if (_avatarLastUrlSaved == photoURL) return;
+
+    _avatarPersistInProgress = true;
+    try {
+      // Download (or hit cache) and persist a copy to app docs
+      final file = await DefaultCacheManager().getSingleFile(photoURL);
+      if (!file.existsSync()) return;
+
+      final dir = await getApplicationDocumentsDirectory();
+      final dest = File('${dir.path}/avatar_$uid.jpg');
+      try { if (dest.existsSync()) await dest.delete(); } catch (_) {}
+      await file.copy(dest.path);
+
+      _avatarLastUrlSaved = photoURL;
+      uc.setLocalPhotoPath(dest.path); // 🔔 notifies listeners → AppBar swaps to FileImage
+    } catch (_) {
+      // ignore; fallback stays as NetworkImage
+    } finally {
+      _avatarPersistInProgress = false;
+    }
   }
 
   Future<void> _ensureAtLeastOneBlockExists() async {
@@ -472,18 +516,6 @@ class _HomeScreenState extends State<HomeScreen> {
         .toList();
   }
 
-  Future<void> _pickProfileImage() async {
-    print("📸 Picker tapped");
-    final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
-    if (pickedFile != null) {
-      setState(() {
-        _profileImage = File(pickedFile.path);
-      });
-      print("✅ Image picked: ${pickedFile.path}");
-    } else {
-      print("❌ No image selected");
-    }
-  }
 
   Widget _buildFeatureCard(IconData icon, String label, String route) {
     return GestureDetector(
@@ -576,31 +608,95 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: Builder(
                       builder: (context) {
                         final uc = context.watch<UserContext>();
-                        ImageProvider? avatar;
+                        final actingUid = uc.actingAsUid ?? uc.actorUid;
 
-                        if (uc.isActingAsSelf && uc.localPhotoPath != null) {
+                        // 1) Prefer local file if present (fast path)
+                        ImageProvider? localAvatar;
+                        if (uc.localPhotoPath != null) {
                           final f = File(uc.localPhotoPath!);
-                          if (f.existsSync()) avatar = FileImage(f);
+                          if (f.existsSync()) localAvatar = FileImage(f);
                         }
 
-                        return CircleAvatar(
-                          radius: 18,
-                          backgroundColor: Colors.grey.shade300,
-                          backgroundImage: avatar,
-                          child: avatar == null
-                              ? ClipOval(
-                            child: Image.asset(
-                              'assets/InApp/Placeholder_profilepic.png',
-                              fit: BoxFit.cover,
-                              width: 36,
-                              height: 36,
+                        // 2) If we DO have a local file, render it and skip the stream entirely
+                        if (localAvatar != null) {
+                          return CircleAvatar(
+                            radius: 18,
+                            backgroundColor: Colors.grey.shade300,
+                            backgroundImage: localAvatar,
+                          );
+                        }
+
+                        // 3) Otherwise, live-listen to users_public/{actingUid} for photoURL
+                        if (actingUid == null) {
+                          // Fallback if somehow no uid yet
+                          return CircleAvatar(
+                            radius: 18,
+                            backgroundColor: Colors.grey.shade300,
+                            child: ClipOval(
+                              child: Image.asset(
+                                'assets/InApp/Placeholder_profilepic.png',
+                                fit: BoxFit.cover,
+                                width: 36,
+                                height: 36,
+                              ),
                             ),
-                          )
-                              : null,
+                          );
+                        }
+
+                        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                          stream: FirebaseFirestore.instance
+                              .collection('users_public')
+                              .doc(actingUid)
+                              .snapshots(),
+                          builder: (context, snap) {
+                            final uc = context.watch<UserContext>();
+                            final uid = actingUid;
+
+                            // Extract photoURL from users_public
+                            String? photoURL;
+                            if (snap.hasData && snap.data!.data() != null) {
+                              final m = snap.data!.data()!;
+                              final v = m['photoURL'];
+                              if (v is String && v.isNotEmpty) photoURL = v;
+                            }
+
+                            // If we don't already have a good local file, persist one in the background.
+                            if (uid != null &&
+                                (uc.localPhotoPath == null || !(File(uc.localPhotoPath!).existsSync())) &&
+                                photoURL != null) {
+                              _persistAvatarLocalIfNeeded(context, uid: uid, photoURL: photoURL!);
+                            }
+
+                            // Prefer local file instantly; fallback to network; else placeholder.
+                            ImageProvider? provider;
+                            if (uc.localPhotoPath != null) {
+                              final f = File(uc.localPhotoPath!);
+                              if (f.existsSync()) provider = FileImage(f);
+                            }
+                            provider ??= (photoURL != null ? NetworkImage(photoURL!) : null);
+
+                            return CircleAvatar(
+                              radius: 18,
+                              backgroundColor: Colors.grey.shade300,
+                              backgroundImage: provider,
+                              child: provider == null
+                                  ? ClipOval(
+                                child: Image.asset(
+                                  'assets/InApp/Placeholder_profilepic.png',
+                                  fit: BoxFit.cover,
+                                  width: 36,
+                                  height: 36,
+                                ),
+                              )
+                                  : null,
+                            );
+                          },
                         );
+
                       },
                     ),
                   ),
+
                 ),
               ),
 

@@ -340,23 +340,23 @@ class _ProfilePageState extends State<ProfilePage> {
     required String liftId,
     required String localVideoPath,
   }) async {
-    // Always upload under the selected profile owner (athlete being viewed)
-    final ownerUid = _ownerUid; // resolved target/self upstream
-    final basePath = 'users/$ownerUid/liftVideos';
+    final ownerUid = _targetUid ?? FirebaseAuth.instance.currentUser!.uid;
 
-    // ===== Video (MP4 assumed) =====
-    final videoRef = FirebaseStorage.instance
-        .ref()
-        .child('$basePath/$liftId.mp4');
+    // Unified paths:
+    //   users/{uid}/liftVideos/{liftId}.mp4
+    //   users/{uid}/liftVideos/{liftId}_thumb.jpg
+    final baseRef  = FirebaseStorage.instance.ref().child('users/$ownerUid/liftVideos');
+    final videoRef = baseRef.child('$liftId.mp4');
+    final thumbRef = baseRef.child('${liftId}_thumb.jpg');
 
+    // Upload video (assume mp4 from gallery)
     await videoRef.putFile(
       File(localVideoPath),
       SettableMetadata(contentType: 'video/mp4'),
     );
     final videoUrl = await videoRef.getDownloadURL();
 
-    // ===== Thumbnail (JPEG) =====
-    String thumbUrl = '';
+    // Generate and upload thumbnail
     final thumbBytes = await VideoThumbnail.thumbnailData(
       video: localVideoPath,
       imageFormat: ImageFormat.JPEG,
@@ -364,11 +364,8 @@ class _ProfilePageState extends State<ProfilePage> {
       quality: 70,
     );
 
+    String thumbUrl = '';
     if (thumbBytes != null) {
-      final thumbRef = FirebaseStorage.instance
-          .ref()
-          .child('$basePath/${liftId}_thumb.jpg');
-
       await thumbRef.putData(
         thumbBytes,
         SettableMetadata(contentType: 'image/jpeg'),
@@ -381,6 +378,7 @@ class _ProfilePageState extends State<ProfilePage> {
       'thumbUrl': thumbUrl,
     };
   }
+
 
 
 
@@ -698,24 +696,36 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _loadLiftVideosFromLocal() async {
-    final ownerUid = _targetUid; // 👈 use targetUid so friend/coach view works
+    final ownerUid = _targetUid; // 👈 friend/coach/self-safe
     if (ownerUid == null) return;
 
-    final query = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(ownerUid)
-        .collection('liftVideos')
-        .get();
+    try {
+      final query = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(ownerUid)
+          .collection('liftVideos')
+          .get();
 
-    print('🎬 [_loadLiftVideosFromLocal] ownerUid=$ownerUid docs=${query.docs.length}');
+      print('🎬 [_loadLiftVideosFromLocal] ownerUid=$ownerUid docs=${query.docs.length}');
 
-    _liftVideos.clear();
-    for (final doc in query.docs) {
-      _liftVideos[doc.id] = LiftVideo.fromJson(doc.data());
+      _liftVideos.clear();
+      for (final doc in query.docs) {
+        final data = doc.data();
+        // Optional: debug to confirm we actually have remoteUrl/thumbUrl
+        // print('   • ${doc.id}: remoteUrl=${data['remoteUrl']} thumbUrl=${data['thumbUrl']}');
+        _liftVideos[doc.id] = LiftVideo.fromJson(data);
+      }
+
+      if (mounted) setState(() {});
+    } catch (e) {
+      print('❌ [_loadLiftVideosFromLocal] ownerUid=$ownerUid error=$e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not load videos')),
+      );
     }
-
-    if (mounted) setState(() {});
   }
+
 
 
 
@@ -774,25 +784,24 @@ class _ProfilePageState extends State<ProfilePage> {
     debugPrint('⏱️ [VideoUpload] start liftId=$liftId, size=${size}B');
 
     unawaited(_uploadVideoAndThumb(liftId: liftId, localVideoPath: path).then((urls) async {
-      final videoUrl = urls['videoUrl'];
-      final thumbUrl = urls['thumbUrl'];
+      final videoUrl = urls['videoUrl'] ?? '';
+      final thumbUrl = urls['thumbUrl'] ?? '';
 
       // Update local model with remote URLs (keep localPath for snappy replays)
       if (mounted) {
         setState(() {
           _liftVideos[liftId] = LiftVideo(
             liftId: liftId,
-            localPath: _liftVideos[liftId]?.localPath,
+            localPath: _liftVideos[liftId]?.localPath, // keep local for instant play
             remoteUrl: videoUrl,
-            thumbUrl: thumbUrl,
+            thumbUrl: thumbUrl,                        // ✅ ensure thumbUrl is saved
             updatedAt: DateTime.now(),
           );
-          // keep _thumbCache[liftId] as-is so UI stays instant;
-          // if you want to force CDN thumb next render, set _thumbCache[liftId] = null;
+          _thumbCache[liftId] = null;                 // ✅ prefer CDN thumb next build
         });
       }
 
-      // Persist metadata
+      // Persist metadata so friends can read it
       await FirebaseFirestore.instance
           .collection('users')
           .doc(ownerUid)
@@ -801,7 +810,8 @@ class _ProfilePageState extends State<ProfilePage> {
           .set(_liftVideos[liftId]!.toJson());
 
       sw.stop();
-      debugPrint('✅ [VideoUpload] done liftId=$liftId in ${sw.elapsedMilliseconds} ms');
+      debugPrint('✅ [VideoUpload] done liftId=$liftId in ${sw.elapsedMilliseconds} ms '
+          '(hasThumb=${thumbUrl.isNotEmpty})');
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -815,6 +825,7 @@ class _ProfilePageState extends State<ProfilePage> {
         SnackBar(content: Text('Upload failed: $e')),
       );
     }));
+
   }
 
 
