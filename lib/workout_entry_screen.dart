@@ -26,6 +26,8 @@ import 'local_cache/block_plan_cache.dart';   // from a file inside lib/
 import 'local_cache/workout_day_cache.dart';
 import 'local_cache/isar_block_plan.dart';
 import 'local_cache/isar_wes_init.dart';
+import 'local_cache/isar_db.dart';
+import 'package:isar/isar.dart';
 
 
 Future<void> deleteAllUserWorkouts() async {
@@ -3674,6 +3676,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     super.initState();
 
     print('🚀 [WES] initState started');
+    // ⚡ Try instant paint from cached snapshot (non-blocking, best-effort)
+    unawaited(_paintFromSnapshotIfAny());
     _wesOpenTotal = Stopwatch()..start();
 
     _cachedUid = UserContext.of(context, listen: false).currentUid;
@@ -3988,6 +3992,86 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       }
     } else {
       print('[WES Init] Day doc already exists → no action needed');
+    }
+  }
+
+  // Anchor A: add inside _WorkoutPageState
+  Future<void> _paintFromSnapshotIfAny() async {
+    try {
+      final uid = _cachedUid ?? UserContext.of(context, listen: false).currentUid;
+      final bid = _selectedBlockId ?? _activeBlockId; // use whatever is available
+      final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+
+      WESInitSnapshot? snap;
+
+      // If you implemented this helper, keep it:
+      // snap = (uid != null && bid != null)
+      //     ? await BlockPlanCache.getInitSnapshot(uid: uid, blockId: bid, dateYmd: ymd)
+      //     : null;
+
+      // Otherwise, do the lookup directly in Isar:
+      if (uid != null && bid != null && snap == null) {
+        final isar = await IsarDb.instance;
+        snap = await isar.wESInitSnapshots
+            .filter()
+            .uidEqualTo(uid)
+            .dateYmdEqualTo(ymd)
+            .findFirst(); // ✅ no .build()
+      }
+
+      // Fallback: if blockId isn’t known yet on first boot, try “any block for this uid+date”
+      if (snap == null && uid != null) {
+        final isar = await IsarDb.instance;
+        snap = await isar.wESInitSnapshots
+            .filter()
+            .uidEqualTo(uid)
+            .dateYmdEqualTo(ymd)
+            .findFirst(); // ✅ no .build()
+      }
+
+      if (snap == null) {
+        print('⚪ [WES Boot] No snapshot found for $ymd (uid=$uid, block=$bid)');
+        return;
+      }
+
+      final planned = snap.plannedExercisesJson.isNotEmpty
+          ? (jsonDecode(snap.plannedExercisesJson) as List)
+          : const [];
+
+      if (planned.isEmpty) return;
+
+      setState(() {
+        _selectedExercisesWithCircuits.clear();
+        _workoutSets.clear();
+        _repsControllers.clear();
+        _weightControllers.clear();
+        _rirControllers.clear();
+        _velocityControllers.clear();
+        _notesControllers.clear();
+
+        for (final raw in planned) {
+          final m = Map<String, dynamic>.from(raw as Map);
+          final name = (m['name'] ?? '').toString().trim();
+          final ci   = (m['circuitIndex'] ?? 0) as int;
+          if (name.isEmpty) continue;
+
+          _selectedExercisesWithCircuits.add({'name': name, 'circuitIndex': ci});
+          _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
+          _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+          _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+          _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+          _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+          _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+        }
+
+        // Critical: don’t show a blocking spinner just because _loadInitialData is running.
+        _isLoadingData = false;
+        _isInitialized = true;
+      });
+
+      print('⚡ [WES Boot] Snapshot painted ${planned.length} rows for $ymd');
+    } catch (e) {
+      print('⚠️ [WES Boot] Snapshot hydrate failed: $e');
     }
   }
 
@@ -4329,6 +4413,52 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       List<Map<String, dynamic>> wesPlannedList = const [];
 
       bool _usedFastPath = false;
+      // ⚡ FAST PATH: WESInitSnapshot → immediate overlay of previous sets if present
+      try {
+        final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+        final snap = await BlockPlanCache.getInitSnapshot(
+          uid: uid!,
+          blockId: _selectedBlockId ?? (_activeBlockId ?? ''),
+          dateYmd: ymd,
+        );
+
+        if (snap != null) {
+          // planned rows (name + ci) for placeholders
+          final planned = snap.plannedExercisesJson.isNotEmpty
+              ? (jsonDecode(snap.plannedExercisesJson) as List)
+              : const [];
+
+          // previous overlay: sets for those rows
+          final prev = snap.previousWorkoutJson.isNotEmpty
+              ? (jsonDecode(snap.previousWorkoutJson) as List)
+              : const [];
+
+          if (planned.isNotEmpty || prev.isNotEmpty) {
+            // Build exList from the overlay snapshot (so the rest of the code can reuse it)
+            exList = prev.map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map)).toList();
+            wesPlannedList = planned.map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map)).toList();
+            _usedFastPath = true;
+
+            print('⚡ [WES LoadExisting] Snapshot fast-path: prev=${exList.length}, planned=${wesPlannedList.length}');
+
+            // Minimal UI tick now: we’ll reuse the normal overlay logic below.
+            // (We still run server union in the background for reconciliation.)
+            // ignore: unawaited_futures
+            (() async {
+              try {
+                // Trigger the legacy/server union path in the background to reconcile
+                // Just re-call this function slowly in the background? No—better to run the
+                // server fetchers directly here, but to keep the change small, we let the
+                // normal flow continue below since we haven’t returned.
+              } catch (_) {}
+            })();
+          }
+        }
+      } catch (e) {
+        print('⚠️ [WES LoadExisting] Snapshot fast-path failed: $e');
+      }
+
+
 
       // FAST PATH: cache-first new-style → render immediately if present; reconcile legacy in background
       DocumentSnapshot<Map<String, dynamic>>? _newDocCache;
