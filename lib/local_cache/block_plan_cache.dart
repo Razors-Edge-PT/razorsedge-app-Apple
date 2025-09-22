@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'package:isar/isar.dart';
 import 'isar_db.dart';
 import 'isar_block_plan.dart';
+import 'isar_wes_init.dart'; // ⬅️ new file you’ll create for WESInitSnapshot
+
 
 class BlockPlanCache {
   /// Instant read for a single day (returns null if not in cache).
@@ -77,4 +79,32 @@ class BlockPlanCache {
       }
     });
   }
+  // ──────────────────────────────────────────────────────────────
+  // WESInitSnapshot cache helpers (for _loadInitialData super-cache)
+  // ──────────────────────────────────────────────────────────────
+
+  /// Try to get an init snapshot for a given date.
+  static Future<WESInitSnapshot?> getInitSnapshot({
+    required String uid,
+    required String blockId,
+    required String dateYmd,
+  }) async {
+    final isar = await IsarDb.instance;
+    return await isar.wESInitSnapshots
+        .filter()
+        .uidEqualTo(uid)
+        .and()
+        .blockIdEqualTo(blockId)
+        .and()
+        .dateYmdEqualTo(dateYmd)
+        .findFirst();
+  }
+
+  /// Upsert an init snapshot after Firestore loads finish.
+  static Future<void> putInitSnapshot(WESInitSnapshot snap) async {
+    final isar = await IsarDb.instance;
+    await isar.writeTxn(() => isar.wESInitSnapshots.put(snap));
+  }
+
+
 }

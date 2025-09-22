@@ -23,6 +23,9 @@ import 'warmup_service.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'stats_snapshot.dart';
 import 'local_cache/block_plan_cache.dart';   // from a file inside lib/
+import 'local_cache/workout_day_cache.dart';
+import 'local_cache/isar_block_plan.dart';
+import 'local_cache/isar_wes_init.dart';
 
 
 Future<void> deleteAllUserWorkouts() async {
@@ -3990,25 +3993,24 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
 
   Future<void> _loadInitialData() async {
+    final _tInit = Stopwatch()..start();   // ⏱️ start total timer
+    print('⏱️ [WES] _loadInitialData started');
     print('🚀 [WES Init] Starting _loadInitialData');
     final _loadInitialDataTimer = Stopwatch()..start();
 
+    // 0) Fast path for prefilled (unchanged)
     if (widget.prefilledExercisesWithCircuits?.isNotEmpty ?? false) {
       setState(() {
-        _selectedExercisesWithCircuits.clear();
+        _selectedExercisesWithCircuits
+          ..clear()
+          ..addAll(widget.prefilledExercisesWithCircuits!.map((e) => Map<String, dynamic>.from(e)));
+        // init controllers
         _workoutSets.clear();
         _repsControllers.clear();
         _weightControllers.clear();
         _rirControllers.clear();
-        _resolvedBB2Values.clear();
-        _blockStartDate = widget.initialDate;
-        _blockEndDate = widget.initialDate;
-
-        _selectedExercisesWithCircuits.addAll(
-          widget.prefilledExercisesWithCircuits!
-              .map((e) => Map<String, dynamic>.from(e)),
-        );
-
+        _velocityControllers.clear();
+        _notesControllers.clear();
         for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
           _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
           _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
@@ -4017,35 +4019,136 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
           _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
         }
-
+        _blockStartDate = widget.initialDate;
+        _blockEndDate = widget.initialDate;
         _isLoadingData = false;
+        _isInitialized = true;
       });
       return;
     }
 
-    // 🔁 Normal flow
     print('🔁 [WES Init] Running full BB2 plan load');
 
-// These 3 appear order-dependent → keep them sequential
-    await loadExercisesFromFirestoreForWES(); //done
+    // ──────────────────────────────────────────────────────────────
+// SUPER-CACHE READ: hydrate from WESInitSnapshot if available
+// (Gives you an immediate scaffold before any network)
+// ──────────────────────────────────────────────────────────────
+    try {
+      final uid = _cachedUid;
+      final bid = _selectedBlockId;
+      if (uid != null && bid != null) {
+        final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+        final snap = await BlockPlanCache.getInitSnapshot(
+          uid: uid,
+          blockId: bid,
+          dateYmd: ymd,
+        );
+        if (snap != null) {
+          print('⚡ [WES Init] Hydrating from WESInitSnapshot cache for $ymd');
+
+          // (A) Pre-fill planned exercise rows (names + circuitIndex) as placeholders
+          final List<dynamic> plannedList =
+          (snap.plannedExercisesJson.isNotEmpty) ? (jsonDecode(snap.plannedExercisesJson) as List<dynamic>) : const [];
+          if (plannedList.isNotEmpty) {
+            setState(() {
+              _selectedExercisesWithCircuits.clear();
+              _workoutSets.clear();
+              _repsControllers.clear();
+              _weightControllers.clear();
+              _rirControllers.clear();
+              _velocityControllers.clear();
+              _notesControllers.clear();
+
+              for (final raw in plannedList) {
+                final m = Map<String, dynamic>.from(raw as Map);
+                final name = (m['name'] ?? '').toString().trim();
+                final ci   = (m['circuitIndex'] ?? 0) as int;
+                if (name.isEmpty) continue;
+
+                _selectedExercisesWithCircuits.add({'name': name, 'circuitIndex': ci});
+                _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
+                _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+                _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+                _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+                _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+                _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+              }
+              // This gives you something on screen immediately
+              _isLoadingData = false;
+              _isInitialized = true;
+            });
+          }
+
+          // (B) (Optional) If you want to pre-hydrate top-set charts, parse here:
+          // final Map<String, dynamic> topSetHistory = (snap.topSetHistoryJson.isNotEmpty)
+          //     ? (jsonDecode(snap.topSetHistoryJson) as Map<String, dynamic>)
+          //     : const {};
+
+          // (C) (Optional) If you persisted a previousWorkout overlay snapshot, you
+          // could pre-seed controllers here too. Keeping it simple for now.
+        }
+      }
+    } catch (e) {
+      print('⚠️ [WES Init] WESInitSnapshot read failed: $e');
+    }
+
+    // A) ORDER-DEPENDENT chain (keep sequential)
+    //    1) load exercises base list
+    await loadExercisesFromFirestoreForWES(); // has its own stopwatch
+    //    2) name/id maps
     await _buildNameToIdMapsFromFirestore();
-    await _loadPlannedExerciseDetails(); //done
+    //    3) planned exercise **details** (depends on maps)
+    await _loadPlannedExerciseDetails();
 
-// These are independent once the above are done → run in parallel
-    final uid = _cachedUid; // use the selected athlete
-    await Future.wait([
-      PeriodizationModelUtils.fetchFullTopSetHistory(uid: uid),
-      loadSavedWorkoutsForInstanceCount(), //done
+    // B) FIRE CACHE-FIRST READS IN PARALLEL (independent after A)
+    final uid = _cachedUid;
+    final List<Future> reads = [
+      // Saved workouts (instance counts / overlays)
+      loadSavedWorkoutsForInstanceCount(),          // already ~134ms
+      // Planned exercises rows (weekly/day plan containers)
       loadPlannedExercisesFromFirestore(),
-      loadPreviousWorkoutData(),//done
-    ]);
+      // Previous workout data (overlay)
+      loadPreviousWorkoutData(),                    // ~100ms
+      // Full top-set history (can be long: keep parallel)
+      PeriodizationModelUtils.fetchFullTopSetHistory(uid: uid),
+    ];
 
-// 💾 Draft Load
+    // C) ALSO kick a cache-first touch of today’s BB2 day via Isar so first paint has data
+//    (non-blocking; _mergeNewBB2ExercisesIntoDraft will read Isar first now)
+// ignore: unawaited_futures
+    (() async {
+      try {
+        if (_blockStartDate != null && _selectedDate != null && _selectedBlockId != null) {
+          final ds = _selectedDate.difference(_blockStartDate!).inDays;
+          if (ds >= 0) {
+            final wi = ds ~/ 7;
+            final di = ds % 7;
+            final isarList = await BlockPlanCache.getDay(
+              uid: _cachedUid ?? '',
+              blockId: _selectedBlockId!,
+              weekIndex: wi,
+              dayIndex: di,
+            );
+            if (isarList != null) {
+              print('🟣 [Init] ISAR day prefetch count=${isarList.length}');
+            }
+          }
+        }
+      } catch (_) {}
+    })();
+
+
+    // D) Await the parallel batch (don’t block paint on server reconciliation elsewhere)
+    await Future.wait(reads);
+
+    // E) Draft load (as before)
     print('💾 [WES Init] Attempting to load draft from cache...');
     final draftLoaded = await _loadWorkoutDraftFromCache();
     print('📦 [WES Init] Draft loaded: $draftLoaded');
 
-// 🔸 Minimal: ensure the BB2 day doc is fresh from SERVER before merging
+    // F) Touch BB2 day doc from SERVER (best-effort) so merge has fresh data
+    //    Keep **non-blocking**: the merge will re-run when data arrives if needed
+    //    (You already have a server touch below; keep it best-effort)
     try {
       final uid = _cachedUid;
       final bid = _selectedBlockId;
@@ -4054,6 +4157,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         if (ds >= 0) {
           final wi = (ds / 7).floor();
           final di = ds % 7;
+          // server touch; cache-first UI has already painted from Isar/draft
           await FirebaseFirestore.instance
               .collection('planned_blocks').doc(uid)
               .collection('blocks').doc(bid)
@@ -4066,56 +4170,144 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       print('⚠️ [WES Init] Server touch failed (non-fatal): $e');
     }
 
+    // G) Merge BB2 into UI
     if (draftLoaded) {
       print('🔁 [WES Init] Merging BB2 exercises post-draft...');
-      await _mergeNewBB2ExercisesIntoDraft();
-      if (mounted) setState(() {}); // force UI to render merged exercises
+      await _mergeNewBB2ExercisesIntoDraft(); // gated; Isar-first inside now
     } else {
       print('📭 [WES Init] No draft found → merging BB2 from scratch');
-      _selectedExercisesWithCircuits.clear(); // ensure fully fresh
-      print('[WES Init] Exercises before BB2 merge: ${_selectedExercisesWithCircuits.length}');
-      await _mergeNewBB2ExercisesIntoDraft();
-      if (mounted) setState(() {}); // force UI to render merged exercises
-      print('[WES Init] Exercises after BB2 merge: ${_selectedExercisesWithCircuits.length}');
+      _selectedExercisesWithCircuits.clear();
+      await _mergeNewBB2ExercisesIntoDraft(); // gated; Isar-first inside now
     }
 
-    print('🧪 [WES Init] Resolved BB2 values:');
-    _resolvedBB2Values.forEach((name, values) {
-      print('    → $name → $values');
-    });
-
-
+    // H) Finalize UI flags + paint
     setState(() {
       _isLoadingData = false;
       _isInitialized = true;
     });
+
+    // ──────────────────────────────────────────────────────────────
+// SUPER-CACHE WRITE: persist a minimal snapshot for next open
+// (planned list + previous overlay + top-set history)
+// ──────────────────────────────────────────────────────────────
+    try {
+      final uid = _cachedUid;
+      final bid = _selectedBlockId;
+      if (uid != null && bid != null) {
+        final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+
+        // (1) Planned list: keep it compact (name + circuitIndex)
+        final plannedCompact = _selectedExercisesWithCircuits.map((e) {
+          final name = (e['name'] ?? '').toString().trim();
+          final ci   = (e['circuitIndex'] ?? 0) as int;
+          return {'name': name, 'circuitIndex': ci};
+        }).toList();
+
+        // (2) Previous workout overlay (compact rows)
+        // We serialize only what’s needed to quickly re-hydrate fields.
+        final List<Map<String, dynamic>> previousOverlay = [];
+        for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+          final exName = (_selectedExercisesWithCircuits[i]['name'] ?? '').toString().trim();
+          final ci     = (_selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0) as int;
+          if (i >= _workoutSets.length) continue;
+          final sets = _workoutSets[i]
+              .map((s) => {
+            if (s.reps != null) 'reps': s.reps,
+            if (s.weight != null) 'weight': s.weight,
+            if (s.rir != null) 'rir': s.rir,
+            if (s.velocity != null) 'velocity': s.velocity,
+            if ((s.notes ?? '').toString().isNotEmpty) 'notes': s.notes,
+          })
+              .toList();
+          previousOverlay.add({
+            'name': exName,
+            'circuitIndex': ci,
+            'sets': sets,
+          });
+        }
+
+        // (3) Top-set history (best-effort; if you have a cache accessor, use it)
+        Map<String, dynamic> topSetHistory = const {};
+        try {
+          // If your PMU exposes an in-memory cache, prefer that.
+          // Otherwise, leave as empty and fill later once you wire it.
+          // topSetHistory = PeriodizationModelUtils.fullTopSetHistoryCache ?? const {};
+        } catch (_) {}
+
+        final snap = WESInitSnapshot()
+          ..uid = uid
+          ..blockId = bid
+          ..dateYmd = ymd
+          ..plannedExercisesJson = jsonEncode(plannedCompact)
+          ..previousWorkoutJson  = jsonEncode(previousOverlay)
+          ..topSetHistoryJson    = jsonEncode(topSetHistory)
+          ..updatedAt = DateTime.now();
+
+        await BlockPlanCache.putInitSnapshot(snap);
+        print('💾 [WES Init] WESInitSnapshot saved for $ymd (${plannedCompact.length} planned)');
+      }
+    } catch (e) {
+      print('⚠️ [WES Init] WESInitSnapshot save failed: $e');
+    }
+
+
     print('✅ [WES Init] _loadInitialData complete');
     _loadInitialDataTimer.stop();
     print('⏱️ [WES] _loadInitialData took ${_loadInitialDataTimer.elapsedMilliseconds}ms');
-    _wesOpenDone('_loadInitialData');
 
-    setState(() {}); // to repaint saved color/collapse if you gate on it
+    // ⏱️ Add this for the full wall-clock first-paint measure
+    print('⏱️ [WES] FIRST-PAINT total = ${_loadInitialDataTimer.elapsedMilliseconds}ms (_loadInitialData)');
+
+    // I) Overlay saved workout rows AFTER initial paint (kept non-blocking now)
+    //    You previously called this synchronously; now kick it after paint
+    //    (Your _loadExistingWorkoutIfAny already has cache/Isar-first)
+    // ignore: unawaited_futures
+    (() async {
+      await _loadExistingWorkoutIfAny();
+
+      if (mounted) setState(() {}); // subtle repaint with overlays if changed
+    })();
+
+
+
   }
+
 
   Future<void> _loadExistingWorkoutIfAny() async {
     final _tLoadExisting = Stopwatch()..start();
     print('⏱️ [WES] _loadExistingWorkoutIfAny started');
     try {
-    final uid = UserContext.of(context, listen: false).currentUid ?? FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) return;
+      final uid = UserContext.of(context, listen: false).currentUid ?? FirebaseAuth.instance.currentUser?.uid;
+      if (uid == null) return;
 
-    final workoutsCol = FirebaseFirestore.instance.collection('users').doc(uid).collection('workouts');
-    final String newDocId = _workoutDocIdForDate(_selectedDate); // e.g. 2025-08-24
-    final DateTime startOfDay = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day);
-    final DateTime nextDay = startOfDay.add(const Duration(days: 1));
-    bool _printedLoadBw = false;
+      final workoutsCol = FirebaseFirestore.instance.collection('users').doc(uid).collection('workouts');
+      final String newDocId = _workoutDocIdForDate(_selectedDate); // e.g. 2025-08-24
+      final DateTime startOfDay = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day);
+      final DateTime nextDay = startOfDay.add(const Duration(days: 1));
+      bool _printedLoadBw = false;
 
-    print('🔎 [WES LoadExisting] Looking up workout for ${DateFormat('yyyy-MM-dd').format(_selectedDate)}');
-    print('   └─ primary docId = $newDocId');
+      print('🔎 [WES LoadExisting] Looking up workout for ${DateFormat('yyyy-MM-dd').format(_selectedDate)}');
+      print('   └─ primary docId = $newDocId');
 
-    // 1) Primary: new-style doc keyed by date string
-// --- BEGIN UNION LOOKUP (new-style preferred; include legacy-only) ---
-// Helpers kept local so names don't leak
+      // ⬇️ SUPER-CACHE: try local Isar first for instant hydration
+      try {
+        final isarList = await BlockPlanCache.getDay(
+          uid: uid,
+          blockId: _selectedBlockId ?? '',
+          weekIndex: PeriodizationModelUtils.getWeekIndexForDate(_selectedDate, blockStartDate!),
+          dayIndex: _selectedDate.difference(blockStartDate!).inDays % 7,
+        );
+        if (isarList != null && isarList.isNotEmpty) {
+          print('[WES LoadExisting] Found ${isarList.length} exercise(s) in ISAR super-cache');
+          // TODO: hydrate state/controllers if you want ISAR data to render immediately
+        }
+      } catch (e) {
+        print('[WES LoadExisting] ISAR read failed (non-fatal): $e');
+      }
+
+      // 1) Primary: new-style doc keyed by date string
+      // --- BEGIN UNION LOOKUP (new-style preferred; include legacy-only) ---
+      // Helpers kept local so names don't leak
       List<Map<String, dynamic>> _exListFromDoc(DocumentSnapshot<Map<String, dynamic>>? d) {
         if (d == null || !d.exists) return const [];
         final data = d.data();
@@ -4123,6 +4315,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         final raw = (data['exercises'] as List?) ?? const [];
         return raw.map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map)).toList();
       }
+
       List<Map<String, dynamic>> _wesPlannedFromDoc(DocumentSnapshot<Map<String, dynamic>>? d) {
         if (d == null || !d.exists) return const [];
         final data = d.data();
@@ -4131,19 +4324,20 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         return raw.map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map)).toList();
       }
 
-// Variables the rest of the function expects
+      // Variables the rest of the function expects
       List exList = const [];
       List<Map<String, dynamic>> wesPlannedList = const [];
 
       bool _usedFastPath = false;
 
-// FAST PATH: cache-first new-style → render immediately if present; reconcile legacy in background
+      // FAST PATH: cache-first new-style → render immediately if present; reconcile legacy in background
       DocumentSnapshot<Map<String, dynamic>>? _newDocCache;
       try {
         _newDocCache = await workoutsCol.doc(newDocId).get(const GetOptions(source: Source.cache));
       } catch (_) {
         _newDocCache = null;
       }
+
 
       if (_newDocCache != null && _newDocCache.exists) {
         final _newExListCache = _exListFromDoc(_newDocCache);
@@ -7089,59 +7283,102 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final weekIndex = (daysSinceStart / 7).floor();
     final dayIndex  = daysSinceStart % 7;
 
-    // 1) Primary: planned_blocks weeks/days
-    // ── CACHE FIRST; then refresh from SERVER in the background ──
-    final dayDocRef = FirebaseFirestore.instance
-        .collection('planned_blocks')
-        .doc(uid)
-        .collection('blocks')
-        .doc(blockId)
-        .collection('weeks')
-        .doc('week_$weekIndex')
-        .collection('days')
-        .doc('day_$dayIndex');
+// 1) Primary: planned_blocks weeks/days
+// ── CACHE FIRST; then refresh from SERVER in the background ──
+      final dayDocRef = FirebaseFirestore.instance
+          .collection('planned_blocks')
+          .doc(uid)
+          .collection('blocks')
+          .doc(blockId)
+          .collection('weeks')
+          .doc('week_$weekIndex')
+          .collection('days')
+          .doc('day_$dayIndex');
 
-    List<Map<String, dynamic>> bb2Exercises = [];
+// Keep bb2Exercises declared here so all code below can use it
+      List<Map<String, dynamic>> bb2Exercises = [];
 
-    // Cache read (non-blocking first paint if present)
-    try {
-      final dayDocCache = await dayDocRef.get(const GetOptions(source: Source.cache));
-      if (dayDocCache.exists && dayDocCache.data()?['exercises'] != null) {
-        bb2Exercises = List<Map<String, dynamic>>.from(dayDocCache.data()!['exercises']);
-        print('[WES] BB2 day doc (CACHE) exercises: ${bb2Exercises.length}');
-
-        // Background refresh from server (best-effort)
-        // ignore: unawaited_futures
-        (() async {
-          try {
-            final srv = await dayDocRef.get(const GetOptions(source: Source.server));
-            if (srv.exists && srv.data()?['exercises'] != null) {
-              final srvList = List<Map<String, dynamic>>.from(srv.data()!['exercises']);
-              if (srvList.length != bb2Exercises.length /* (optional: deep diff) */) {
-                if (mounted) setState(() {}); // minimal UI tick after server hydrate
-                print('[WES] BB2 day doc refreshed from SERVER');
-              }
-            }
-          } catch (_) { /* best-effort */ }
-        })();
-      }
-    } catch (_) { /* cache miss is fine */ }
-
-    // If cache was empty, try server now (still keeping things tight)
-    if (bb2Exercises.isEmpty) {
+// ── SUPER-CACHE: try local Isar first for instant paint ──
       try {
-        final dayDocServer = await dayDocRef.get(const GetOptions(source: Source.server));
-        if (dayDocServer.exists && dayDocServer.data()?['exercises'] != null) {
-          bb2Exercises = List<Map<String, dynamic>>.from(dayDocServer.data()!['exercises']);
-          print('[WES] BB2 day doc (SERVER) exercises: ${bb2Exercises.length}');
-        } else {
-          print('[WES] BB2 day doc missing (both CACHE empty & SERVER none) for week_$weekIndex/day_$dayIndex');
+        final isarList = await BlockPlanCache.getDay(
+          uid: uid,
+          blockId: blockId,
+          weekIndex: weekIndex,
+          dayIndex: dayIndex,
+        );
+        if (isarList != null && isarList.isNotEmpty) {
+          bb2Exercises = isarList;
+          print('[WES] BB2 day doc (ISAR) exercises: ${isarList.length}');
         }
-      } catch (_) {
-        print('[WES] BB2 day doc server read failed (non-fatal) for week_$weekIndex/day_$dayIndex');
+      } catch (e) {
+        print('[WES] ISAR read failed (non-fatal): $e');
       }
-    }
 
+// Cache read (non-blocking first paint if present)
+      try {
+        final dayDocCache = await dayDocRef.get(const GetOptions(source: Source.cache));
+        if (dayDocCache.exists && dayDocCache.data()?['exercises'] != null) {
+          bb2Exercises = List<Map<String, dynamic>>.from(dayDocCache.data()!['exercises']);
+          print('[WES] BB2 day doc (CACHE) exercises: ${bb2Exercises.length}');
+
+          // ✅ Save cache hit back to Isar
+          await BlockPlanCache.putDay(
+            uid: uid,
+            blockId: blockId,
+            weekIndex: weekIndex,
+            dayIndex: dayIndex,
+            exercises: bb2Exercises,
+          );
+
+          // Background refresh from server (best-effort)
+          // ignore: unawaited_futures
+          (() async {
+            try {
+              final srv = await dayDocRef.get(const GetOptions(source: Source.server));
+              if (srv.exists && srv.data()?['exercises'] != null) {
+                final srvList = List<Map<String, dynamic>>.from(srv.data()!['exercises']);
+                if (srvList.length != bb2Exercises.length /* (optional: deep diff) */) {
+                  if (mounted) setState(() {}); // minimal UI tick after server hydrate
+                  print('[WES] BB2 day doc refreshed from SERVER');
+
+                  // ✅ Refresh ISAR with server copy
+                  await BlockPlanCache.putDay(
+                    uid: uid,
+                    blockId: blockId,
+                    weekIndex: weekIndex,
+                    dayIndex: dayIndex,
+                    exercises: srvList,
+                  );
+                }
+              }
+            } catch (_) { /* best-effort */ }
+          })();
+        }
+      } catch (_) { /* cache miss is fine */ }
+
+// If cache was empty, try server now (still keeping things tight)
+      if (bb2Exercises.isEmpty) {
+        try {
+          final dayDocServer = await dayDocRef.get(const GetOptions(source: Source.server));
+          if (dayDocServer.exists && dayDocServer.data()?['exercises'] != null) {
+            bb2Exercises = List<Map<String, dynamic>>.from(dayDocServer.data()!['exercises']);
+            print('[WES] BB2 day doc (SERVER) exercises: ${bb2Exercises.length}');
+
+            // ✅ Save server copy into ISAR
+            await BlockPlanCache.putDay(
+              uid: uid,
+              blockId: blockId,
+              weekIndex: weekIndex,
+              dayIndex: dayIndex,
+              exercises: bb2Exercises,
+            );
+          } else {
+            print('[WES] BB2 day doc missing (both CACHE empty & SERVER none) for week_$weekIndex/day_$dayIndex');
+          }
+        } catch (_) {
+          print('[WES] BB2 day doc server read failed (non-fatal) for week_$weekIndex/day_$dayIndex');
+        }
+      }
 
 // ── Fallback: block_data (CACHE FIRST; then background server refresh) ──
       if (bb2Exercises.isEmpty) {
@@ -7163,6 +7400,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
             gotFromCache = true;
             print('[WES] BB2 fallback (block_data CACHE) rows: ${bb2Exercises.length}');
 
+            // ✅ Save cache hit into ISAR
+            await BlockPlanCache.putDay(
+              uid: uid,
+              blockId: blockId,
+              weekIndex: weekIndex,
+              dayIndex: dayIndex,
+              exercises: bb2Exercises,
+            );
+
             // Background refresh from server
             // ignore: unawaited_futures
             (() async {
@@ -7173,6 +7419,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                   if (srvList.length != bb2Exercises.length /* (optional: deep diff) */) {
                     if (mounted) setState(() {}); // minimal repaint after server hydrate
                     print('[WES] BB2 block_data refreshed from SERVER');
+
+                    // ✅ Refresh ISAR with server copy
+                    await BlockPlanCache.putDay(
+                      uid: uid,
+                      blockId: blockId,
+                      weekIndex: weekIndex,
+                      dayIndex: dayIndex,
+                      exercises: srvList,
+                    );
                   }
                 }
               } catch (_) { /* best-effort */ }
@@ -7187,12 +7442,28 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
             if (blockDataServer.exists && blockDataServer.data()?['rows'] != null) {
               bb2Exercises = List<Map<String, dynamic>>.from(blockDataServer.data()!['rows']);
               print('[WES] BB2 fallback (block_data SERVER) rows: ${bb2Exercises.length}');
+
+              // ✅ Save server copy into ISAR super-cache for next fast paint
+              try {
+                await BlockPlanCache.putDay(
+                  uid: uid,
+                  blockId: blockId,
+                  weekIndex: weekIndex,
+                  dayIndex: dayIndex,
+                  exercises: bb2Exercises,
+                );
+                print('[WES] BB2 block_data SERVER rows written to ISAR cache');
+              } catch (e) {
+                print('[WES] ISAR write failed (non-fatal): $e');
+              }
             }
-          } catch (_) {
-            print('[WES] BB2 block_data server read failed (non-fatal) for $dateKey');
+          } catch (e) {
+            print('[WES] BB2 block_data server read failed (non-fatal) for $dateKey → $e');
           }
         }
+
       }
+
 
     // NEW: Capture BB2-planned keys for this date for later dedupe/upsert
     _bb2PlannedKeysForSelectedDate.clear();
@@ -7495,6 +7766,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   }
 
   Future<void> _selectDate(BuildContext context) async {
+    final _tSelect = Stopwatch()..start();   // ⏱️ start total timer
+    print('⏱️ [WES] _selectDate started');
+
     final DateTime? pickedDate = await showDatePicker(
       context: context,
       initialDate: _selectedDate,
@@ -7509,16 +7783,22 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
     print('📆 [WES] Date changed to: ${DateFormat('yyyy-MM-dd').format(pickedDate)}');
 
-    _cachedProgressedValues.clear(); // ✅ Main fix
+    _cachedProgressedValues.clear();
 
-    // ⭐ NEW: autosave current day (and push BB2) before switching
+    // 💾 Do NOT block the UI: best-effort autosave previous day in background
     if (mounted) {
-      print('💾 [WES] Autosaving current date before switch…');
-      await _upsertWorkoutToFirestore(alsoPushToBB2: true, markAllSaved: false);
+      // ignore: unawaited_futures
+      (() async {
+        try {
+          print('💾 [WES] Autosaving current date in background…');
+          await _upsertWorkoutToFirestore(alsoPushToBB2: true, markAllSaved: false);
+          await _persistDraftLocally();
+          await _persistSavedFlagsLocally();
+        } catch (e) {
+          print('⚠️ [WES] Background autosave failed (non-fatal): $e');
+        }
+      })();
     }
-
-    await _persistDraftLocally(); // ✅ Save previous date before switching
-    await _persistSavedFlagsLocally(); // ⭐ NEW: persist done flags for current date
 
     // 2️⃣ Update selected date and clear UI state
     print('🧼 [WES] Clearing UI and updating selected date...');
@@ -7526,44 +7806,83 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       _selectedDate = pickedDate;
       _workoutNameController.text = _formatWorkoutDate(_selectedDate);
 
-      // Clear exercise + controllers (include all controller families)
       _selectedExercisesWithCircuits.clear();
       _workoutSets.clear();
       _repsControllers.clear();
       _weightControllers.clear();
       _rirControllers.clear();
-      _velocityControllers.clear();   // ⭐ NEW: ensure cleared
-      _notesControllers.clear();      // ⭐ NEW: ensure cleared
+      _velocityControllers.clear();
+      _notesControllers.clear();
 
       _resolvedBB2Values.clear();
 
-      // Per-date runtime state resets
-      _savedExerciseKeysForDate.clear(); // ⭐ NEW: we'll rehydrate for new date
-      _pendingChanges = false;           // ⭐ NEW
-      _lastSavedHash = null;             // ⭐ NEW: force fresh write on new date
+      _savedExerciseKeysForDate.clear();
+      _pendingChanges = false;
+      _lastSavedHash = null;
     });
 
-    // 3️⃣ Load locally saved draft (if available)
+    // ⚡ SUPER-CACHE FIRST PAINT: try WESInitSnapshot for the picked date
+    try {
+      final uid = _cachedUid;
+      final bid = _selectedBlockId;
+      if (uid != null && bid != null) {
+        final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+        final snap = await BlockPlanCache.getInitSnapshot(
+          uid: uid, blockId: bid, dateYmd: ymd,
+        );
+        if (snap != null) {
+          final plannedList = snap.plannedExercisesJson.isNotEmpty
+              ? (jsonDecode(snap.plannedExercisesJson) as List)
+              : const [];
+
+          if (plannedList.isNotEmpty) {
+            setState(() {
+              for (final raw in plannedList) {
+                final m = Map<String, dynamic>.from(raw as Map);
+                final name = (m['name'] ?? '').toString().trim();
+                final ci   = (m['circuitIndex'] ?? 0) as int;
+                if (name.isEmpty) continue;
+
+                _selectedExercisesWithCircuits.add({'name': name, 'circuitIndex': ci});
+                _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
+                _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+                _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+                _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+                _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+                _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+              }
+            });
+            print('⚡ [WES] Snapshot planned rows painted for $ymd (${plannedList.length})');
+          }
+
+          // (Optional) You can also hydrate previous sets from snap.previousWorkoutJson here
+          // if you want the controllers populated instantly too.
+        }
+      }
+    } catch (e) {
+      print('⚠️ [WES] Snapshot hydrate on date switch failed: $e');
+    }
+
+    // 3️⃣ Load locally saved draft (if available) — now that rows exist
+    //    (This fills any locally drafted sets/notes for the picked date.)
     print('📂 [WES] Attempting to load local draft for new date...');
     await _loadDraftLocallyIfAvailable();
 
-    // 4️⃣ Merge in BB2 exercises (primary loader)
-    print('🔁 [WES] Merging in BB2 exercises for selected date...');
-    await _mergeNewBB2ExercisesIntoDraft();
+    // 4️⃣ Kick the heavy hitters in PARALLEL (both are cache/isar-first now)
+    print('🔁 [WES] Kicking BB2 merge + existing overlay in parallel...');
+    await Future.wait([
+      _mergeNewBB2ExercisesIntoDraft(),
+      _loadExistingWorkoutIfAny(),
+    ]);
 
-    // 5️⃣ Rehydrate saved/done flags + overlay Firestore sets for the NEW date
-    print('🔄 [WES] Loading existing workout (Firestore + local flags) for new date…');
-    await _loadExistingWorkoutIfAny(); // ⭐ NEW: brings back savedAt + sets for picked date
-
-    // 6️⃣ (Optional) ensure listeners are attached in case controllers resized
-    _attachDirtyListeners(); // ⭐ NEW: safe no-op if already attached
-
-    // 7️⃣ Visual hints if you use them
-    print('🔍 [WES] Loading BB2 read-only visual hints...');
-    // await _loadExercisesFromBB2ForDay();
+    // 5️⃣ Ensure listeners are attached in case controllers resized
+    _attachDirtyListeners();
 
     print('✅ [WES] Date switch complete.');
+    _tSelect.stop();
+    print('⏱️ [WES] _selectDate total = ${_tSelect.elapsedMilliseconds}ms');
   }
+
 
 
   String _formatWorkoutDate(DateTime date) {
