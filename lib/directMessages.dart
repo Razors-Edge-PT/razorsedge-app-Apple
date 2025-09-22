@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:math';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
+import 'package:flutter/services.dart';
 
 
 /// Deterministic conversation id for a pair of users.
@@ -305,6 +306,72 @@ class _ConversationPageState extends State<ConversationPage> {
     _pendingLatencyMarks[clientId] = startedAt;
   }
 
+  //message reactions bit
+  static const List<String> _reactionChoices = ['👍','❤️','😂','🔥','😮','😢','👏','🙏'];
+
+  // Toggle my reaction on a message (set/remove one emoji)
+  Future<void> _toggleReactionForDoc(DocumentReference<Map<String, dynamic>> docRef, String? emoji) async {
+    final uid = FirebaseAuth.instance.currentUser!.uid;
+    if (emoji == null) {
+      await docRef.update({'reactions.$uid': FieldValue.delete()});
+    } else {
+      // If same emoji already set, remove; else set new
+      final snap = await docRef.get();
+      final data = snap.data() ?? {};
+      final current = (data['reactions'] ?? {})[uid];
+      if (current == emoji) {
+        await docRef.update({'reactions.$uid': FieldValue.delete()});
+      } else {
+        await docRef.update({'reactions.$uid': emoji});
+      }
+    }
+  }
+
+
+  // Bottom-sheet picker
+  Future<void> _pickReactionForDoc(DocumentReference<Map<String, dynamic>> docRef) async {
+    final chosen = await showModalBottomSheet<String?>(
+      context: context,
+      backgroundColor: Colors.blueGrey.shade900,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Wrap(
+            spacing: 10, runSpacing: 10,
+            children: [
+              for (final e in _reactionChoices)
+                InkWell(
+                  onTap: () => Navigator.of(context).pop(e),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.blueGrey.shade700,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(e, style: const TextStyle(fontSize: 22)),
+                  ),
+                ),
+              InkWell(
+                onTap: () => Navigator.of(context).pop(null),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.redAccent.shade400,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Text('Remove', style: TextStyle(color: Colors.white)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await _toggleReactionForDoc(docRef, chosen);
+  }
+
+
   @override
   void initState() {
     super.initState();
@@ -462,29 +529,78 @@ class _ConversationPageState extends State<ConversationPage> {
 
                       final type = (data['type'] ?? 'text') as String;
 
+                      // --- Reactions: aggregate + "mine" ---
+                      final reactionsMap = Map<String, dynamic>.from(data['reactions'] ?? {});
+                      final Map<String, int> reactionCounts = {};
+                      final Set<String> myReactions = {};
+                      final uidForReactions = FirebaseAuth.instance.currentUser!.uid;
+
+                      reactionsMap.forEach((user, emoji) {
+                        if (emoji is String && emoji.isNotEmpty) {
+                          reactionCounts[emoji] = (reactionCounts[emoji] ?? 0) + 1;
+                          if (user == uidForReactions) myReactions.add(emoji);
+                        }
+                      });
+
+
                       return Align(
                         alignment: fromSelf ? Alignment.centerRight : Alignment.centerLeft,
-                        child: Container(
-                          margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: fromSelf ? Colors.cyanAccent.shade700 : Colors.blueGrey.shade700,
-                            borderRadius: BorderRadius.circular(12),
+                        child: GestureDetector(
+                          onLongPress: () => _pickReactionForDoc(
+                            qDoc.reference as DocumentReference<Map<String, dynamic>>,
                           ),
-                          child: (type == 'image' && (data['imageUrl'] ?? '').toString().isNotEmpty)
-                              ? ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: Image.network(
-                              data['imageUrl'],
-                              fit: BoxFit.cover,
+                          child: Container(
+                            margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: fromSelf ? Colors.cyanAccent.shade700 : Colors.blueGrey.shade700,
+                              borderRadius: BorderRadius.circular(12),
                             ),
-                          )
-                              : Text(
-                            (data['text'] ?? '').toString(),
-                            style: const TextStyle(color: Colors.white),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                if (type == 'image' && (data['imageUrl'] ?? '').toString().isNotEmpty)
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Image.network(
+                                      data['imageUrl'],
+                                      fit: BoxFit.cover,
+                                    ),
+                                  )
+                                else
+                                  Text(
+                                    (data['text'] ?? '').toString(),
+                                    style: const TextStyle(color: Colors.white),
+                                  ),
+
+                                if (reactionCounts.isNotEmpty) ...[
+                                  const SizedBox(height: 6),
+                                  Wrap(
+                                    spacing: 6,
+                                    children: reactionCounts.entries.map((e) {
+                                      final emoji = e.key;
+                                      final count = e.value;
+                                      final mine = myReactions.contains(emoji);
+                                      return Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: mine ? Colors.black26 : Colors.black12,
+                                          borderRadius: BorderRadius.circular(12),
+                                        ),
+                                        child: Text(
+                                          '$emoji $count',
+                                          style: const TextStyle(color: Colors.white, fontSize: 12),
+                                        ),
+                                      );
+                                    }).toList(),
+                                  ),
+                                ],
+                              ],
+                            ),
                           ),
                         ),
                       );
+
                     },
                   );
                 },
@@ -530,7 +646,7 @@ class _MessageComposer extends StatefulWidget {
 
 class _MessageComposerState extends State<_MessageComposer> {
   final _controller = TextEditingController();
-
+  final _focusNode = FocusNode(); // 👈 add this
   bool _sending = false;                 // 👈 prevents double-sends
   static const int _maxChars = 2000;     // 👈 matches Firestore rule cap
 
@@ -606,6 +722,12 @@ class _MessageComposerState extends State<_MessageComposer> {
     }
   }
 
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
 
 
   @override
@@ -615,14 +737,20 @@ class _MessageComposerState extends State<_MessageComposer> {
         Expanded(
           child: TextField(
             controller: _controller,
+            focusNode: _focusNode,                // keep if you already have this
+            keyboardType: TextInputType.multiline,
+            textInputAction: TextInputAction.newline, // 👈 Enter adds a newline
+            minLines: 1,
+            maxLines: 35,                              // or null for unlimited
             decoration: const InputDecoration(
               hintText: "Type a message…",
               border: OutlineInputBorder(),
               isDense: true,
             ),
-            onSubmitted: (_) => _sendMessage(),
+            onSubmitted: null,                        // 👈 disable "Done" submit
           ),
         ),
+
         const SizedBox(width: 6),
         IconButton(
           icon: const Icon(Icons.send, color: Colors.cyanAccent),
