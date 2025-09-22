@@ -310,22 +310,64 @@ class _ConversationPageState extends State<ConversationPage> {
   static const List<String> _reactionChoices = ['👍','❤️','😂','🔥','😮','😢','👏','🙏'];
 
   // Toggle my reaction on a message (set/remove one emoji)
-  Future<void> _toggleReactionForDoc(DocumentReference<Map<String, dynamic>> docRef, String? emoji) async {
+  Future<void> _toggleReactionForDoc(
+      DocumentReference<Map<String, dynamic>> docRef,
+      String? emoji,
+      ) async {
     final uid = FirebaseAuth.instance.currentUser!.uid;
-    if (emoji == null) {
-      await docRef.update({'reactions.$uid': FieldValue.delete()});
-    } else {
-      // If same emoji already set, remove; else set new
-      final snap = await docRef.get();
-      final data = snap.data() ?? {};
-      final current = (data['reactions'] ?? {})[uid];
-      if (current == emoji) {
-        await docRef.update({'reactions.$uid': FieldValue.delete()});
-      } else {
-        await docRef.update({'reactions.$uid': emoji});
-      }
+
+    try {
+      // BEFORE (read from server to avoid stale local cache)
+      final beforeSnap = await docRef.get(const GetOptions(source: Source.server));
+      final before = beforeSnap.data() ?? <String, dynamic>{};
+      final beforeReactions = Map<String, dynamic>.from(before['reactions'] ?? {});
+
+      // Prepare the exact write we're about to send
+      final Map<String, Object?> updateData = emoji == null
+          ? {'reactions.$uid': FieldValue.delete()}
+          : {'reactions.$uid': emoji};
+
+      // Debug: print shapes
+      // ignore: avoid_print
+      print('🧪 REACT before: '
+          'hasReactions=${before.containsKey('reactions')} '
+          'mapKeys=${beforeReactions.keys.toList()} '
+          'myPrev="${beforeReactions[uid]}" '
+          'update=${updateData}');
+
+      // SEND
+      await docRef.update(updateData);
+
+      // AFTER (get from server so we see the committed shape)
+      final afterSnap = await docRef.get(const GetOptions(source: Source.server));
+      final after = afterSnap.data() ?? <String, dynamic>{};
+      final afterReactions = Map<String, dynamic>.from(after['reactions'] ?? {});
+
+      // ignore: avoid_print
+      print('✅ REACT success: '
+          'nowHasReactions=${after.containsKey('reactions')} '
+          'mapKeys=${afterReactions.keys.toList()} '
+          'myNow="${afterReactions[uid]}"');
+    } on FirebaseException catch (e) {
+      // ignore: avoid_print
+      print('⛔ REACT error: code=${e.code} msg="${e.message}" '
+          'details=${e.stackTrace?.toString().split('\n').first ?? ''}');
+
+      // Optional: fetch current server doc to compare what actually exists right now
+      try {
+        final curr = await docRef.get(const GetOptions(source: Source.server));
+        final currMap = Map<String, dynamic>.from(curr.data() ?? {});
+        final currReactions = Map<String, dynamic>.from(currMap['reactions'] ?? {});
+        // ignore: avoid_print
+        print('📡 REACT server-state-now: '
+            'hasReactions=${currMap.containsKey('reactions')} '
+            'mapKeys=${currReactions.keys.toList()} '
+            'my="${currReactions[uid]}"');
+      } catch (_) {}
+      rethrow;
     }
   }
+
 
 
   // Bottom-sheet picker
@@ -531,6 +573,9 @@ class _ConversationPageState extends State<ConversationPage> {
 
                       // --- Reactions: aggregate + "mine" ---
                       final reactionsMap = Map<String, dynamic>.from(data['reactions'] ?? {});
+                      // ignore: avoid_print
+                      print('👀 REACT view msg=${qDoc.id} keys=${reactionsMap.keys.toList()} mine="${reactionsMap[FirebaseAuth.instance.currentUser!.uid]}" pending=${qDoc.metadata.hasPendingWrites}');
+
                       final Map<String, int> reactionCounts = {};
                       final Set<String> myReactions = {};
                       final uidForReactions = FirebaseAuth.instance.currentUser!.uid;

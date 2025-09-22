@@ -5,7 +5,7 @@ buildscript {
     }
     dependencies {
         classpath 'com.google.gms:google-services:4.3.15' // ✅ Firebase Gradle plugin
-        classpath 'com.android.tools.build:gradle:8.2.2' // ✅ Android Gradle plugin
+        classpath 'com.android.tools.build:gradle:8.2.2'   // ✅ Android Gradle plugin
     }
 }
 
@@ -25,6 +25,39 @@ subprojects {
 subprojects {
     project.evaluationDependsOn(":app")
 }
+
+// --- PATCH: fix isar_flutter_libs manifest for AGP 8
+subprojects { sub ->
+    if (sub.name == "isar_flutter_libs") {
+        sub.plugins.withId("com.android.library") {
+            def androidExt = sub.extensions.findByName("android")
+            if (androidExt != null &&
+                    (!androidExt.hasProperty("namespace") ||
+                            androidExt.namespace == null ||
+                            androidExt.namespace.toString().trim().isEmpty())) {
+                androidExt.namespace = "fallback.${sub.name.replace('-', '_')}"
+                println("⚠️ isar_flutter_libs: applied fallback namespace → ${androidExt.namespace}")
+            }
+        }
+
+        // Strip the illegal package="..." from the manifest
+        sub.afterEvaluate {
+            def manifestFile = file("${sub.projectDir}/src/main/AndroidManifest.xml")
+            if (manifestFile.exists()) {
+                def txt = manifestFile.getText('UTF-8')
+                if (txt.contains('package="')) {
+                    def patched = txt.replaceAll(/\s*package="[^"]*"/, "")
+                    if (patched != txt) {
+                        manifestFile.write(patched, 'UTF-8')
+                        println("✅ Patched isar_flutter_libs manifest: removed package attribute")
+                    }
+                }
+            }
+        }
+    }
+}
+
+
 
 tasks.register("clean", Delete) {
     delete rootProject.buildDir

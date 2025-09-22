@@ -25,3 +25,14 @@ plugins {
 }
 
 include ":app"
+
+// ✅ Patch: give all Android library subprojects (e.g. isar_flutter_libs) a fallback namespace if missing
+gradle.afterProject { p ->
+    if (p.plugins.hasPlugin("com.android.library")) {
+        def androidExt = p.extensions.findByName("android")
+        if (androidExt != null && !androidExt.hasProperty("namespace")) {
+            androidExt.namespace = "fallback.${p.name.replace('-', '_')}"
+            println "⚠️ Added fallback namespace to ${p.name}: ${androidExt.namespace}"
+        }
+    }
+}
