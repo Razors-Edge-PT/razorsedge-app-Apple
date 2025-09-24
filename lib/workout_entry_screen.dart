@@ -4734,8 +4734,29 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       print('🔎 [WES Boot] Exact snapshot lookup (uid=$uid, block=$bid, ymd=$ymd) → ${snap == null ? 'MISS' : 'HIT'}');
       if (snap == null) return;
 
-      final planned = snap.plannedExercisesJson.isNotEmpty ? (jsonDecode(snap.plannedExercisesJson) as List) : const [];
-      final prev    = snap.previousWorkoutJson.isNotEmpty    ? (jsonDecode(snap.previousWorkoutJson) as List)    : const [];
+      // 🔐 Robust decode for planned / previous (handles legacy Map shapes)
+      List<dynamic> _safeListFromJson(String raw, {String? fallbackKey}) {
+        if (raw.isEmpty) return const [];
+        try {
+          final decoded = jsonDecode(raw);
+          if (decoded is List) return decoded;
+          if (decoded is Map) {
+            // Try common legacy keys
+            final keys = <String>[
+              if (fallbackKey != null) fallbackKey,
+              'rows', 'planned', 'exercises', 'list'
+            ];
+            for (final k in keys.where((k) => k != null)) {
+              final v = decoded[k];
+              if (v is List) return v;
+            }
+          }
+        } catch (_) {/* swallow */}
+        return const [];
+      }
+
+      final planned = _safeListFromJson(snap.plannedExercisesJson, fallbackKey: 'planned');
+      final prev    = _safeListFromJson(snap.previousWorkoutJson,   fallbackKey: 'exercises');
 
       print('🧪 [WES Boot] plannedLen=${planned.length} prevLen=${prev.length}');
       print('🔔 [FAST-check] about to inspect snap.hintsJson=${snap.hintsJson}');
