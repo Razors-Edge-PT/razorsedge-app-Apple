@@ -610,7 +610,7 @@ class _ConversationPageState extends State<ConversationPage> {
                       // --- Reactions: aggregate + "mine" ---
                       final reactionsMap = Map<String, dynamic>.from(data['reactions'] ?? {});
                       // ignore: avoid_print
-                      print('👀 REACT view msg=${qDoc.id} keys=${reactionsMap.keys.toList()} mine="${reactionsMap[FirebaseAuth.instance.currentUser!.uid]}" pending=${qDoc.metadata.hasPendingWrites}');
+
 
                       final Map<String, int> reactionCounts = {};
                       final Set<String> myReactions = {};

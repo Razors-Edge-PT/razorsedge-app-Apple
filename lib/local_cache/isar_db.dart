@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:isar/isar.dart';
 import 'package:path_provider/path_provider.dart';
 import 'isar_wes_init.dart';
+import 'workout_day_cache.dart'; // <-- brings in WorkoutDayCacheSchema
+
 
 import 'isar_block_plan.dart';
 
@@ -26,7 +28,8 @@ class IsarDb {
     _isar = await Isar.open(
       [
         BlockDaySchema,
-        WESInitSnapshotSchema, // 👈 add more schemas here if you create them
+        WESInitSnapshotSchema,
+        WorkoutDayCacheSchema,// 👈 add more schemas here if you create them
       ],
       directory: dir.path,
       inspector: false,      // set true if you want Isar Inspector in dev

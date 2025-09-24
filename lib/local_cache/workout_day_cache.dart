@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:isar/isar.dart';
 import 'package:path_provider/path_provider.dart';
+import 'isar_db.dart';
 
 part 'workout_day_cache.g.dart';
 
@@ -27,10 +28,10 @@ class WorkoutCacheDb {
 
   static Future<Isar> _open() async {
     if (_isar != null) return _isar!;
-    final dir = await getApplicationDocumentsDirectory();
-    _isar = await Isar.open([WorkoutDayCacheSchema], directory: dir.path);
+    _isar = await IsarDb.instance; // <-- reuse the unified singleton
     return _isar!;
   }
+
 
   static Future<Map<String, dynamic>?> getDay({
     required String uid,
