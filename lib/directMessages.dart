@@ -255,6 +255,9 @@ class ConversationPage extends StatefulWidget {
 }
 
 class _ConversationPageState extends State<ConversationPage> {
+  // 👇 avoid duplicate .snapshots() listeners per message doc
+  final Set<String> _watchedMsgIds = {};
+
   final Map<String, DateTime> _pendingLatencyMarks = {};
   final Set<String> _localEchoPrinted = {};
 
@@ -278,6 +281,22 @@ class _ConversationPageState extends State<ConversationPage> {
       'participantState.$uid.lastReadAt': FieldValue.serverTimestamp(),
     });
   }
+  // ---- DEBUG: live watcher for a single message doc ----
+  void _debugWatchReactions(DocumentReference<Map<String, dynamic>> docRef, {String tag = ''}) {
+    docRef.snapshots(includeMetadataChanges: true).listen((snap) {
+      final data = snap.data() ?? <String, dynamic>{};
+      final reactions = Map<String, dynamic>.from(data['reactions'] ?? {});
+      final src = snap.metadata.isFromCache ? 'CACHE' : 'SERVER';
+      // ignore: avoid_print
+      print('👀 REACT watch $tag [$src] '
+          'exists=${snap.exists} keys=${data.keys.toList()} '
+          'reactionsKeys=${reactions.keys.toList()} values=${reactions}');
+    }, onError: (e, st) {
+      // ignore: avoid_print
+      print('❗ REACT watch ERROR $tag: $e');
+    });
+  }
+
 
   // Helper: jump to index safely
   void _jumpToIndex(int index, {double alignment = 0.1}) {
@@ -324,9 +343,12 @@ class _ConversationPageState extends State<ConversationPage> {
 
       // Prepare the exact write we're about to send
       final Map<String, Object?> updateData = emoji == null
+
           ? {'reactions.$uid': FieldValue.delete()}
           : {'reactions.$uid': emoji};
 
+// ignore: avoid_print
+      print('✍️ REACT writeIntent: doc=${docRef.path} updateData=$updateData');
       // Debug: print shapes
       // ignore: avoid_print
       print('🧪 REACT before: '
@@ -337,18 +359,21 @@ class _ConversationPageState extends State<ConversationPage> {
 
       // SEND
       await docRef.update(updateData);
+      print('📤 REACT writeSent (await returned OK) for ${docRef.path}');
 
       // AFTER (get from server so we see the committed shape)
       final afterSnap = await docRef.get(const GetOptions(source: Source.server));
       final after = afterSnap.data() ?? <String, dynamic>{};
       final afterReactions = Map<String, dynamic>.from(after['reactions'] ?? {});
-
+      print('🔁 REACT serverEcho: keys=${afterReactions.keys.toList()} '
+          'mine="${afterReactions[uid]}" fullMap=$afterReactions');
       // ignore: avoid_print
       print('✅ REACT success: '
           'nowHasReactions=${after.containsKey('reactions')} '
           'mapKeys=${afterReactions.keys.toList()} '
           'myNow="${afterReactions[uid]}"');
     } on FirebaseException catch (e) {
+      print('🛑 REACT update threw BEFORE serverEcho. code=${e.code}');
       // ignore: avoid_print
       print('⛔ REACT error: code=${e.code} msg="${e.message}" '
           'details=${e.stackTrace?.toString().split('\n').first ?? ''}');
@@ -410,7 +435,9 @@ class _ConversationPageState extends State<ConversationPage> {
         ),
       ),
     );
+    print('🎯 REACT chosen="$chosen" → calling toggle for ${docRef.path}');
     await _toggleReactionForDoc(docRef, chosen);
+    print('✅ REACT toggle completed for ${docRef.path}');
   }
 
 
@@ -540,6 +567,15 @@ class _ConversationPageState extends State<ConversationPage> {
                     itemCount: msgs.length,
                     itemBuilder: (context, i) {
                       final qDoc = msgs[i];
+                      // 👀 start live reaction watch for this msg (once)
+                      if (!_watchedMsgIds.contains(qDoc.id)) {
+                        _watchedMsgIds.add(qDoc.id);
+                        _debugWatchReactions(
+                          qDoc.reference as DocumentReference<Map<String, dynamic>>,
+                          tag: 'tile:${qDoc.id}',
+                        );
+                      }
+
                       final raw  = qDoc.data();
                       if (raw is! Map<String, dynamic>) return const SizedBox.shrink();
                       final data = raw;

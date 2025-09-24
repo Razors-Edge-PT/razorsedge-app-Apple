@@ -1061,6 +1061,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     print('⏱️ [WES] loadPreviousWorkoutData took ${sw.elapsedMilliseconds}ms');
   }
 
+
+
   static const TextStyle _headerStyle = TextStyle(
     fontSize: 10.0,
     color: Colors.white70,
@@ -4847,6 +4849,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final _tInit = Stopwatch()
       ..start(); // ⏱️ start total timer
     print('⏱️ [WES] _loadInitialData started');
+    // If fast-paint already put rows on screen, never gate UI again.
+    final _bootPainted = _didFastPaint || _selectedExercisesWithCircuits.isNotEmpty;
+    if (_bootPainted) {
+      // Make sure UI shows content and never regresses to a spinner/placeholder
+      _isInitialized = true;
+      _isLoadingData = false;
+    }
+
     print('🚀 [WES Init] Starting _loadInitialData');
     final _loadInitialDataTimer = Stopwatch()
       ..start();
@@ -9076,53 +9086,20 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
   @override
   Widget build(BuildContext context) {
-    // Non-blocking: always build the page; show a slim overlay while background init runs.
-    final overlayLoading = _selectedExercisesWithCircuits.isEmpty && (_isLoadingData && !_isInitialized);
-
-
-    return Stack(
-      children: [
-        _buildWesScaffold(),
-
-        // Non-blocking slim overlay while background init runs
-        if (overlayLoading)
-          Positioned.fill(
-            child: IgnorePointer(
-              ignoring: true,
-              child: Container(
-                color: Colors.transparent,
-                alignment: Alignment.topCenter,
-                padding: const EdgeInsets.only(top: 8),
-                child: const SizedBox(
-                  height: 20,
-                  width: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
+    // Non-blocking: always build the page; no spinner overlay.
+    return _buildWesScaffold();
   }
 
 // Tiny helper used above. Your existing Scaffold body stays unchanged.
   Widget _buildWesScaffold() {
-
-    // ── DEBUG: prove whether the spinner path is gating first paint ─────────
-    final overlayLoading = _selectedExercisesWithCircuits.isEmpty && (_isLoadingData && !_isInitialized);
-
-    if (overlayLoading && !_overlayLogged) {
-      _overlayLogged = true;
-      print('🟡 [WES UI] Spinner showing → rows=${_selectedExercisesWithCircuits.length} isLoading=$_isLoadingData init=$_isInitialized');
-    }
-
+    // ── DEBUG: first rows visible (no spinner path at all) ─────────
     if (!_firstRowsLogged && _selectedExercisesWithCircuits.isNotEmpty) {
       _firstRowsLogged = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         print('🟢 [WES UI] First rows visible in frame → rows=${_selectedExercisesWithCircuits.length}');
       });
     }
-    // ────────────────────────────────────────────────────────────────────────
+    // ───────────────────────────────────────────────────────────────
 
     return WillPopScope(
       onWillPop: () async {
@@ -9137,9 +9114,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           backgroundColor: Colors.blueGrey.shade800,
           title: Builder(
             builder: (context) {
-              final actingAsUid = Provider
-                  .of<UserContext>(context, listen: true)
-                  .actingAsUid;
+              final actingAsUid = Provider.of<UserContext>(context, listen: true).actingAsUid;
 
               final nameStyle = GoogleFonts.monda(
                 color: Colors.white,
@@ -9183,6 +9158,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
               );
             },
           ),
+
           iconTheme: const IconThemeData(color: Colors.white),
           actionsIconTheme: const IconThemeData(color: Colors.white),
           actions: [
