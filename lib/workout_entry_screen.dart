@@ -2804,16 +2804,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     print('🧷 [WES] increments (expanded) for $exerciseId → '
         '${increments.take(12).toList()} … total=${increments.length}');
 
-    print('🧾 [WES→PMU] exId=$exerciseId exName=$exerciseName '
-        'repTarget=${repTarget.toInt()} rir=$rir '
-        'defaultWeight=${defaultWeight.toStringAsFixed(2)}');
+
     final maxWeightMap = _exerciseSettings[exerciseId]?['maxWeightByReps'];
     final maxWeightKeys = (maxWeightMap is Map)
         ? maxWeightMap.keys.toList()
         : 'null';
 
-    print('🧾 [WES→PMU] increments=${(increments ?? []).join(", ")} '
-        'maxWeightByRepsKeys=$maxWeightKeys');
 
 
     final Map<String, dynamic> progressed =
@@ -2828,8 +2824,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       maxWeightByReps: _exerciseSettings[exerciseId]?['maxWeightByReps'],
 
       topSetHistory: PeriodizationModelUtils.topSetsByExercise[exerciseName],
-      weekIndex: PeriodizationModelUtils.getWeekIndexForDate(
-          _selectedDate, blockStartDate!),
+      weekIndex: (blockStartDate == null || _selectedDate == null)
+          ? 0 // safe default until initialized
+          : PeriodizationModelUtils.getWeekIndexForDate(
+        _selectedDate, blockStartDate!,
+      ),
+
 
     );
     print(
@@ -3585,16 +3585,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final weekIndex = _getApplicableWeekIndex(exerciseId);
     if (weekIndex == null) return setNumber == 1 ? 1 : 1.5;
 
-    print('🧭 [WES RIR] _getApplicableWeekIndex → weekIndex=$weekIndex');
+
 
     if (blockStartDate == null) {
       print(
           '❌ [WES] RIR_blockStartDate is null in getRirFromPlanOrInput for $exerciseName');
-      return 1; // fallback RIR value
+      return 2; // fallback RIR value
     }
 
-    print('📞 [WES RIR] calling getInstanceCountForExerciseInWeek with '
-        'weekIndex=$weekIndex selectedDate=$_selectedDate');
 
     final sessionIndex =
     PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
@@ -3635,8 +3633,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final fallback = 1.0;
 
     final finalRir = plannedRir ?? fallback;
-    print(
-        '📦 [WES] Final RIR used for "$exerciseName" set $setNumber → $finalRir');
+
     return finalRir;
   }
 
@@ -3701,17 +3698,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         ((bb2Entry?['rir'] is num && (bb2Entry?['rir'] as num) > 0)
             ? (bb2Entry?['rir'] as num).toDouble()
             : null);
-    print(
-        '🎛️ [WES S1Weight] weightTxt="$weightText" repsTxt="$repsText" rirTxt="$rirText" '
-            '→ parsed userWeight=$userWeight userReps=$userReps userRir=$userRir');
-    print('🔎 [WES S1Weight] hasUserReps=${userReps !=
-        null} hasUserRir=${userRir != null}');
-    // ADD PRINT ↓
-    print('🎛️ [WES S1Weight Flags] '
-        'isBw=${PeriodizationModelUtils.isBodyweightExercise(
-        name: exerciseName)} '
-        'userReps=${userReps?.toStringAsFixed(1) ?? "null"} '
-        'userRir=${userRir?.toStringAsFixed(1) ?? "null"}');
+
 
 
     // 🛑 Step 3: Respect user-entered weight
@@ -3886,8 +3873,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         '🎯 [WES] Final progression for $exerciseName using default RIR $modelRir → $fallbackRounded kg');
 
 // 👇 print first, then return (BW converts to display)
-    print(
-        '🟡 [WES S1Weight] fallback path (no overrides used) → abs=$fallbackRounded');
+
     if (PeriodizationModelUtils.isBodyweightExercise(
         id: _exId, name: exerciseName)) {
       final double displayAdded = PeriodizationModelUtils.toDisplayAddedWeight(
@@ -5733,7 +5719,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           PeriodizationModelUtils.nameToId[name] = id;
           PeriodizationModelUtils.idToName[id] = name;
           mapped++;
-          print('✅ [WES] Mapped "$name" → $id');
+
         }
       }
       mapSw.stop();
@@ -5742,7 +5728,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       print('🧭 [WES] Mapping loop took ${mapSw
           .elapsedMilliseconds}ms (mapped $mapped)');
     } catch (e, st) {
-      print('❌ [WES] loadExercisesFromFirestoreForWES error: $e');
       print(st);
     } finally {
       total.stop();
@@ -5925,7 +5910,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
             .isEmpty) &&
             PeriodizationModelUtils.idToName.containsKey(id)) {
           name = PeriodizationModelUtils.idToName[id];
-          print('🔁 [WES] Using fallback name from idToName for $id → $name');
         }
 
         if (name != null && name
@@ -5948,16 +5932,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     print('✅ [WES] idToNameMap injected with ${idToNameMap.length} entries');
   }
 
-  void _injectIdToNameFromSelectedExercises() {
-    for (final ex in _selectedExercisesWithCircuits) {
-      final id = ex['id'];
-      final name = ex['name'];
-      if (id != null && name != null) {
-        PeriodizationModelUtils.idToName[id] = name;
-        print("🧩 [WES inject] id=$id → name=$name"); // ✅ Debug print
-      }
-    }
-  }
 
   Future<void> loadSavedWorkoutsForInstanceCount() async {
     final sw = Stopwatch()
@@ -6029,8 +6003,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         model == PeriodizationModelType.dailyUndulatingWeek ||
         model == PeriodizationModelType.dupSignature ||
         model == PeriodizationModelType.dailyUndulatingExposure) {
-      print(
-          '🧩 [_getApplicableWeekIndex] _blockStartDate=$_blockStartDate (vs blockStartDate=$blockStartDate)');
+
 
       if (blockStartDate == null) return 0;
 
@@ -6040,7 +6013,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
       final weekIndex = (daysSinceStart / 7).floor().clamp(0, 11);
 
-      print('📆 [WES] Calculated weekIndex=$weekIndex for $exerciseId');
+
 
       return weekIndex;
     }
@@ -7485,7 +7458,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     // Resolve the acting UID WITHOUT using context (dispose-safe)
     final uid = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) {
-      print('❌ [WES upsert] No UID found — aborting.');
       return;
     }
 
@@ -9369,9 +9341,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                     final isNewCircuit = i == 0 ||
                         current['circuitIndex'] != prev?['circuitIndex'];
 
+// 🔑 stable key for this row
+                    final name = (current['name'] ?? '').toString().trim();
+                    final ci   = (current['circuitIndex'] ?? 0) as int;
+                    final rowKey = '${name.toLowerCase()}|$ci';
+
                     return Column(
-                      key: ValueKey("column_$i"),
-                      // 🔑 Required for ReorderableListView
+                      key: ValueKey('col_$rowKey'),
+
+
+
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         if (isNewCircuit)if (isNewCircuit) ...[
@@ -9406,7 +9385,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
 
                         Dismissible(
-                          key: ValueKey(current['name']),
+                          key: ValueKey(rowKey),
                           direction: DismissDirection.endToStart,
                           background: Container(
                             color: Colors.red,
@@ -9459,23 +9438,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                           },
                           child: FutureBuilder<void>(
                               future: _initialLoad,
-                              // ✅ Wait for full blockMeta + data load
+                              // ✅ Keep the wrapper, but do NOT gate rendering on snapshot
                               builder: (context, snapshot) {
-                                if (snapshot.connectionState !=
-                                    ConnectionState.done) {
-                                  return const Padding(
-                                    padding: EdgeInsets.all(8),
-                                    child: SizedBox(
-                                      height: 48,
-                                      child: Center(
-                                          child: CircularProgressIndicator(
-                                              strokeWidth: 2)),
-                                    ),
-                                  );
-                                }
-                                print(
-                                    "⏱️ [WES Row Delay] Delay complete for row $i — blockStartDate = $_blockStartDate");
-
+                                // 🔓 No gating: always render the row; reconciliation happens in background
                                 final bool isSaved = _isExerciseSaved(i);
 
                                 return Card(
@@ -9621,6 +9586,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
 
                                     children: [
+
                                       // 👇 Your set rows and other ExpansionTile children continue here
 
                                       // New row between selected exercise and workout sets:
@@ -10053,9 +10019,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                                                             decoration: InputDecoration(
                                                               hintText: !_isInitialized
                                                                   ? ''
-                                                                  : formatWeight(
-                                                                  set1SuggestedWeight(
-                                                                      i)),
+                                                                  : (() {
+                                                                print("🐞 [Debug] set1SuggestedWeight($i) about to run, _isInitialized=$_isInitialized");
+                                                                final w = set1SuggestedWeight(i);
+                                                                print("🐞 [Debug] set1SuggestedWeight($i) returned $w");
+                                                                return formatWeight(w);
+                                                              })(),
                                                               hintStyle: const TextStyle(
                                                                 color: Colors
                                                                     .grey,
@@ -10185,14 +10154,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                                                                   .only(
                                                                   left: 2),
                                                               // align with RIR/E1RM
-                                                              hintText: (_isLoadingData ||
-                                                                  !_isInitialized)
+                                                              hintText: (_isLoadingData || !_isInitialized)
                                                                   ? ''
-                                                                  : (set1SuggestedReps(
-                                                                  i)
-                                                                  ?.toInt()
-                                                                  .toString() ??
-                                                                  ''),
+                                                                  : (() {
+                                                                print("🐞 [Debug] set1SuggestedReps($i) about to run, "
+                                                                    "_isInitialized=$_isInitialized _isLoadingData=$_isLoadingData");
+                                                                final r = set1SuggestedReps(i);
+                                                                print("🐞 [Debug] set1SuggestedReps($i) returned $r");
+                                                                return (r?.toInt().toString() ?? '');
+                                                              })(),
+
                                                               hintStyle: const TextStyle(
                                                                 color: Colors
                                                                     .grey,

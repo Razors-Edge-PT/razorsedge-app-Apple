@@ -174,12 +174,10 @@ class PeriodizationModelUtils {
 
     final double targetEff = repTarget + plannedRIR;
 
-    print('📊 [computeBaseE1RM] historyWithE1RM count=${historyWithE1RM.length}, '
-        'targetEff=$targetEff (repTarget=$repTarget, plannedRIR=$plannedRIR)');
+
     if (historyWithE1RM.isNotEmpty) {
       for (final e in historyWithE1RM.take(5)) {
-        print('  • sample ${e['date']} → ${e['weight']}×${e['reps']} @RIR ${e['rir']} '
-            '→ E1RM=${(e['e1rm'] as num).toStringAsFixed(2)} effReps=${e['effectiveReps']}');
+
       }
     }
 
@@ -194,9 +192,7 @@ class PeriodizationModelUtils {
       },
       orElse: () => {},
     );
-    print('🅰️ [computeBaseE1RM] Using recent_match → '
-        '${recentMatch['weight']}×${recentMatch['reps']} @RIR ${recentMatch['rir']} '
-        'E1RM=${recentMatch['e1rm']}');
+
 
     if (recentMatch.isNotEmpty) {
       return {
@@ -748,7 +744,6 @@ class PeriodizationModelUtils {
               ? repTargetsRaw['week1'] as Map<String, dynamic>?
               : null;
           if (weekMap == null || weekMap.isEmpty) {
-            print('⚠️ [DUP By Week] No usable data in week1 for $exerciseName');
             return 10;
           }
 
@@ -1097,12 +1092,12 @@ class PeriodizationModelUtils {
 
   static List<double> getIncrementsForExercise(String exerciseNameOrId) {
     dynamic incRaw = _exerciseSettings[exerciseNameOrId]?['increments'];
-    print('🔧 [getIncrementsForExercise] byNameOrId=$incRaw');
+
 
     final id = nameToId[exerciseNameOrId];
     if (incRaw == null && id != null && _exerciseSettings.containsKey(id)) {
       incRaw = _exerciseSettings[id]?['increments'];
-      print('🔧 [getIncrementsForExercise] fallback byId=$incRaw (id=$id)');
+
     }
 
     if (incRaw == null) {
@@ -1157,8 +1152,6 @@ class PeriodizationModelUtils {
 
 
     final list = weightOptions.toList()..sort();
-    print('✅ [PMU] getIncrementsForExercise($exerciseNameOrId) '
-        '→ count=${list.length}, sample=${list.take(10).toList()}');
 
     return list;
 
@@ -1168,13 +1161,10 @@ class PeriodizationModelUtils {
     required double baseWeight,
     required String exerciseName,
   }) {
-    print('🧰 [roundToAllValidIncrements] baseWeight=${baseWeight.toStringAsFixed(3)} '
-        'exerciseName="$exerciseName"');
+
 
     final increments = getIncrementsForExercise(exerciseName);
 
-    // 🔎 ADD THIS: show which increments were actually used
-    print('🧰 [roundToAllValidIncrements] incrementsUsed=${increments.join(", ")}');
 
     final Set<double> options = {};
 
@@ -1189,16 +1179,14 @@ class PeriodizationModelUtils {
     // 🔎 ADD THIS: quick coverage + neighborhood check around baseWeight
     final min = list.isEmpty ? null : list.first;
     final max = list.isEmpty ? null : list.last;
-    print('🧰 [roundToAllValidIncrements] generated count=${list.length} '
-        'range=${min}..${max}');
+
 
     // nearest below / above to see rounding context
     final below = list.where((w) => w <= baseWeight).toList();
     final above = list.where((w) => w > baseWeight).toList();
     final nb = below.isNotEmpty ? below.last : null;
     final na = above.isNotEmpty ? above.first : null;
-    print('🧰 [roundToAllValidIncrements] nearestBelow=$nb nearestAbove=$na '
-        'Δup=${na != null ? (na - baseWeight).toStringAsFixed(3) : "—"}');
+
 
     return list;
   }
@@ -1268,12 +1256,10 @@ class PeriodizationModelUtils {
 
     final previousReps = PeriodizationModelUtils.exercisePreviousTopSetReps[exerciseName];
     if (previousReps == null || previousReps.isEmpty) {
-      print('🚫 No top set rep history found for $exerciseName');
+
       return defaultWeight;
     }
 
-    print('📦 [Progression] Stored top set reps for $exerciseName: $previousReps');
-    print('🔍 Looking for a match on repTarget = $repTarget');
 
     final matchIndex = previousReps.indexWhere((r) => r == repTarget);
 
@@ -1284,7 +1270,7 @@ class PeriodizationModelUtils {
     final double increment = (incrementMap?['primary'] as num?)?.toDouble() ?? 2.5;
 
     if (matchIndex == -1) {
-      print('🚫 No matching rep target found in history.');
+
     } else {
       final matchedReps = previousReps[matchIndex];
       double weightUsed = defaultWeight;
@@ -1296,7 +1282,7 @@ class PeriodizationModelUtils {
         );
         if (matchEntry.isNotEmpty && matchEntry['weight'] != null) {
           weightUsed = (matchEntry['weight'] as num).toDouble();
-          print('📊 [Progression] Using actual weight from history: $weightUsed');
+
         }
       }
 
@@ -1554,18 +1540,16 @@ class PeriodizationModelUtils {
     ];
 
 
-    print('🧪 [SmartProgression] Trial weights = ${trialWeights.map((w)=>w.toStringAsFixed(1)).toList()} '
-        '(centered on defaultWeight=${defaultWeight.toStringAsFixed(1)}, delta=${delta.toStringAsFixed(1)})');
 
 
     final List<int> trialReps = [
       for (int d = -2; d <= 8; d++) (repTarget + d).clamp(1, 25),
     ];
 
-    print('🧪 Diagnostic: Testing rep possibilities for weights around $defaultWeight ± $delta');
+
 
     for (final w in trialWeights) {
-      print('🔍 Weight: $w');
+
       for (final r in trialReps) {
         final double trialE1RM = calculateE1RM(w, r.toDouble(), rirValue);
         final String comboKey = '${w.toStringAsFixed(1)}_${r}_${rirValue.toStringAsFixed(1)}';
@@ -1615,7 +1599,7 @@ class PeriodizationModelUtils {
                 (weightDistance * 0.05);     // slight preference for staying near defaultWeight
 
 
-        print('🔬 Trial: $w × $r → E1RM = ${tryE1RM.toStringAsFixed(2)} (score = ${score.toStringAsFixed(2)})');
+
 
         if (score < bestScore) {
           bestScore = score;
@@ -2766,23 +2750,19 @@ class PeriodizationModelUtils {
         final idMatch = (exId != null && exId == targetId);
         final nameMatch = exName == targetName;
 
-        if (idMatch || nameMatch) {
-          print('🔍 Candidate match on $date → idMatch=$idMatch, nameMatch=$nameMatch, sets=${sets.length}');
-        }
 
         return (idMatch || nameMatch) && sets.isNotEmpty;
       });
 
       if (matched) {
         usedDates.add(dateStr.length >= 10 ? dateStr.substring(0, 10) : dateStr);
-        print('✅ Matched "$exerciseName" on $date');
       } else {
       }
     }
 
     final count = usedDates.length;
     // 🔍 FINAL PRINT
-    print('📊 [Week Instance Count] "$exerciseName" used on $count unique day(s) this week. Dates=$usedDates');
+
 
     return count;
   }
