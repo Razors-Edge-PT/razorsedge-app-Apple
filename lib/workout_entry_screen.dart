@@ -176,6 +176,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   late Future<void> _initialLoad;
   late Future<void> _blockDateLoad;
   bool _didFastPaint = false;
+  bool _bootPaintDone = false;  // prevent double fast-paint
+  bool _uiLoggedOnce = false; // debug: only log UI decision once
+  bool _overlayLogged = false;
+  bool _firstRowsLogged = false;
 
 
   //autosave bits
@@ -4006,24 +4010,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     _blockStartDate  = uc.blockStartDate ?? _blockStartDate;
     _blockEndDate    = uc.blockEndDate   ?? _blockEndDate;
 
+    // 🔎 Offline preflight: verify caches are present before painting (non-blocking)
+    Future.microtask(() async { await _offlinePreflightDebug(); });
+
     // Fast paint #1: uid+date fallback (works even if blockId not known yet)
     // ignore: unawaited_futures
     _paintFromSnapshotIfAny();
 
-    // Fast paint #2: exact uid+blockId+date if we already have blockId
-    if ((_selectedBlockId ?? '').isNotEmpty) {
-      // ignore: unawaited_futures
-      _paintFromSnapshotIfAny();
-    }
-
     _wesOpenTotal = Stopwatch()..start();
 
-
-    final contextUid = UserContext.of(context, listen: false).currentUid;
-    final formattedDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
-
-    final legacyDraftKey = 'workout_draft_$formattedDate';
-    final namespacedDraftKey = 'workout_draft_${contextUid}_$formattedDate';
 
     _blockDateLoad = _loadBlockDatesOnly(userId); // ✅ actingAsUid
 
@@ -4065,7 +4060,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
           print("🧱 [WES] Selected blockId: $_selectedBlockId");
           // ⚡ Try exact-key fast paint now that blockId is known
-          unawaited(_paintFromSnapshotIfAny());
 
           // ✅ Pre-warm exact block doc for WES
           // right after: print("🧱 [WES] Selected blockId: $_selectedBlockId");
@@ -4411,44 +4405,304 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     }
   }
 
-  // Anchor A: add inside _WorkoutPageState
-  Future<void> _paintFromSnapshotIfAny() async {
+  Future<void> _offlinePreflightDebug() async {
     try {
       final uid = _cachedUid ?? UserContext.of(context, listen: false).currentUid;
-      final bid = _selectedBlockId ?? _activeBlockId; // whatever we have earliest
+      final bid = _selectedBlockId
+          ?? _activeBlockId
+          ?? UserContext.of(context, listen: false).activeBlockId;
       final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
 
-      print('🟨 [WES Boot] _paintFromSnapshotIfAny enter uid=$uid bid=$bid ymd=$ymd');
+      print('🧪 [Offline] Preflight → uid=$uid bid=$bid ymd=$ymd');
 
       if (uid == null || bid == null) {
-        print('⚪ [WES Boot] Skip snapshot paint (uid or blockId missing)');
+        print('⚠️ [Offline] Missing uid or blockId — cannot verify caches');
         return;
       }
 
-      // 🔁 CHANGE START: use helper that sorts by cachedAt DESC (latest snapshot)
+      // A) WESInitSnapshot (what fast-paint uses)
       final snap = await BlockPlanCache.getInitSnapshot(
         uid: uid,
         blockId: bid,
         dateYmd: ymd,
       );
-      // 🔁 CHANGE END
 
-      print('🔎 [WES Boot] Exact snapshot lookup (uid=$uid, block=$bid, ymd=$ymd) → ${snap == null ? 'MISS' : 'HIT'}');
       if (snap == null) {
+        print('🔴 [Offline] No WESInitSnapshot in Isar for $ymd');
+      } else {
+        final plannedLen = (snap.plannedExercisesJson.isNotEmpty)
+            ? (jsonDecode(snap.plannedExercisesJson) as List).length
+            : 0;
+        final prevLen = (snap.previousWorkoutJson.isNotEmpty)
+            ? (jsonDecode(snap.previousWorkoutJson) as List).length
+            : 0;
+        print('🟢 [Offline] WESInitSnapshot OK → planned=$plannedLen prev=$prevLen for $ymd');
+      }
+
+      // B) Day super-cache (week/day rows from BB2)
+      final bs = _blockStartDate ?? UserContext.of(context, listen: false).blockStartDate;
+      if (bs == null) {
+        print('⚠️ [Offline] blockStartDate unknown — skipping day-cache check');
         return;
       }
 
-      final plannedRaw = snap.plannedExercisesJson;
-      final prevRaw    = snap.previousWorkoutJson;
+      final startOnly = DateTime(bs.year, bs.month, bs.day);
+      final daysSince = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day)
+          .difference(startOnly)
+          .inDays;
 
-      final List planned = plannedRaw.isNotEmpty ? (jsonDecode(plannedRaw) as List) : const [];
-      final List prev    = prevRaw.isNotEmpty    ? (jsonDecode(prevRaw) as List)    : const [];
+      if (daysSince < 0) {
+        print('⚠️ [Offline] Selected date is before block start — no day-cache expected');
+        return;
+      }
+
+      final wi = daysSince ~/ 7;
+      final di = daysSince % 7;
+
+      final day = await BlockPlanCache.getDay(
+        uid: uid,
+        blockId: bid,
+        weekIndex: wi,
+        dayIndex: di,
+      );
+
+      if (day == null || day.isEmpty) {
+        print('🟡 [Offline] Day cache empty for week=$wi day=$di (not fatal if snapshot exists)');
+      } else {
+        print('🟢 [Offline] Day cache OK → week=$wi day=$di rows=${day.length}');
+      }
+    } catch (e) {
+      print('🟥 [Offline] Preflight failed: $e');
+    }
+  }
+  // ─────────────────────────────────────────────────────────────
+// Silent, in-place overlay: updates existing rows' controllers,
+// and appends new rows if the server has extras. No clearing.
+// ─────────────────────────────────────────────────────────────
+  void _applyOverlayInPlace(List<Map<String, dynamic>> exList) {
+    if (!mounted || exList.isEmpty) return;
+
+    // Build quick lookup for incoming rows by name|ci
+    String _key(String name, int ci) => '${name.trim().toLowerCase()}|$ci';
+    final incomingByKey = <String, Map<String, dynamic>>{};
+    for (final raw in exList) {
+      final name = (raw['name'] ?? '').toString().trim();
+      if (name.isEmpty) continue;
+      final ci = (raw['circuitIndex'] ?? 0) is int
+          ? raw['circuitIndex'] as int
+          : int.tryParse('${raw['circuitIndex'] ?? 0}') ?? 0;
+      incomingByKey[_key(name, ci)] = raw;
+    }
+
+    // 1) Update existing rows
+    for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+      final name = ((_selectedExercisesWithCircuits[i]['name'] ?? '') as String).trim();
+      final ci   = (_selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0) as int;
+      final k    = _key(name, ci);
+
+      final match = incomingByKey[k];
+      if (match == null) continue;
+
+      // Extract sets -> SetDetails list (respect BW conversion the same way you already do)
+      final setMaps = List<Map<String, dynamic>>.from(match['sets'] ?? const []);
+      if (setMaps.isEmpty) continue;
+
+      final isBw = PeriodizationModelUtils.isBodyweightExercise(name: name);
+      final asOf = _selectedDate;
+
+      final sets = setMaps.map((s) {
+        final reps = (s['reps'] is int) ? s['reps'] : int.tryParse(s['reps']?.toString() ?? '');
+        final double? abs = (s['weight'] is num) ? (s['weight'] as num).toDouble() : null;
+        final num? awRaw = (s['addedWeight'] as num?) ?? (s['weightAdded'] as num?); // legacy fallback
+
+        final double? display = isBw
+            ? (awRaw != null
+            ? awRaw.toDouble()
+            : (abs != null
+            ? PeriodizationModelUtils.toDisplayAddedWeight(
+          uid: _cachedUid ?? '',
+          absoluteKg: abs,
+          exerciseName: name,
+          asOfDate: asOf,
+        )
+            : null))
+            : abs;
+
+        return SetDetails(
+          reps: reps,
+          weight: display,
+          rir: (s['rir'] is num) ? (s['rir'] as num).toDouble() : null,
+          velocity: (s['velocity'] is num) ? (s['velocity'] as num).toDouble() : null,
+          notes: s['notes']?.toString(),
+        );
+      }).toList();
+
+      // Pad to default rows for hint text
+      while (sets.length < _defaultSets) {
+        sets.add(SetDetails());
+      }
+
+      // Ensure controller lists exist and match size
+      if (_workoutSets.length <= i) {
+        _workoutSets.add(List<SetDetails>.from(sets));
+        _repsControllers.add(List.generate(sets.length, (_) => TextEditingController()));
+        _weightControllers.add(List.generate(sets.length, (_) => TextEditingController()));
+        _rirControllers.add(List.generate(sets.length, (_) => TextEditingController()));
+        _velocityControllers.add(List.generate(sets.length, (_) => TextEditingController()));
+        _notesControllers.add(List.generate(sets.length, (_) => TextEditingController()));
+      } else {
+        _workoutSets[i] = List<SetDetails>.from(sets);
+        // Resize controllers if needed
+        void _ensureLen(List<List<TextEditingController>> list) {
+          if (list.length <= i) {
+            list.add(List.generate(sets.length, (_) => TextEditingController()));
+          } else if (list[i].length != sets.length) {
+            list[i] = List.generate(sets.length, (_) => TextEditingController());
+          }
+        }
+        _ensureLen(_repsControllers);
+        _ensureLen(_weightControllers);
+        _ensureLen(_rirControllers);
+        _ensureLen(_velocityControllers);
+        _ensureLen(_notesControllers);
+      }
+
+      // Seed controller text
+      for (int j = 0; j < sets.length; j++) {
+        final s = sets[j];
+        _repsControllers[i][j].text     = (s.reps?.toString() ?? '');
+        _weightControllers[i][j].text   = (s.weight?.toString() ?? '');
+        _rirControllers[i][j].text      = (s.rir?.toString() ?? '');
+        _velocityControllers[i][j].text = (s.velocity?.toString() ?? '');
+        _notesControllers[i][j].text    = (s.notes ?? '');
+      }
+    }
+
+    // 2) Append any incoming rows that don’t exist in UI yet
+    final existingKeys = _selectedExercisesWithCircuits
+        .map<String>((e) => '${((e['name'] ?? '') as String).trim().toLowerCase()}|${(e['circuitIndex'] ?? 0) as int}')
+        .toSet();
+
+    for (final raw in exList) {
+      final name = (raw['name'] ?? '').toString().trim();
+      if (name.isEmpty) continue;
+      final ci = (raw['circuitIndex'] ?? 0) is int
+          ? raw['circuitIndex'] as int
+          : int.tryParse('${raw['circuitIndex'] ?? 0}') ?? 0;
+      final k  = _key(name, ci);
+      if (existingKeys.contains(k)) continue;
+
+      // Build new row sets
+      final setMaps = List<Map<String, dynamic>>.from(raw['sets'] ?? const []);
+      final isBw = PeriodizationModelUtils.isBodyweightExercise(name: name);
+      final asOf = _selectedDate;
+
+      final sets = setMaps.map((s) {
+        final reps = (s['reps'] is int) ? s['reps'] : int.tryParse(s['reps']?.toString() ?? '');
+        final double? abs = (s['weight'] is num) ? (s['weight'] as num).toDouble() : null;
+        final num? awRaw = (s['addedWeight'] as num?) ?? (s['weightAdded'] as num?);
+        final double? display = isBw
+            ? (awRaw != null
+            ? awRaw.toDouble()
+            : (abs != null
+            ? PeriodizationModelUtils.toDisplayAddedWeight(
+          uid: _cachedUid ?? '',
+          absoluteKg: abs,
+          exerciseName: name,
+          asOfDate: asOf,
+        )
+            : null))
+            : abs;
+
+        return SetDetails(
+          reps: reps,
+          weight: display,
+          rir: (s['rir'] is num) ? (s['rir'] as num).toDouble() : null,
+          velocity: (s['velocity'] is num) ? (s['velocity'] as num).toDouble() : null,
+          notes: s['notes']?.toString(),
+        );
+      }).toList();
+
+      while (sets.length < _defaultSets) {
+        sets.add(SetDetails());
+      }
+
+      // Append UI row + controllers
+      _selectedExercisesWithCircuits.add({'name': name, 'circuitIndex': ci});
+      _workoutSets.add(sets);
+      _repsControllers.add(List.generate(sets.length, (_) => TextEditingController()));
+      _weightControllers.add(List.generate(sets.length, (_) => TextEditingController()));
+      _rirControllers.add(List.generate(sets.length, (_) => TextEditingController()));
+      _velocityControllers.add(List.generate(sets.length, (_) => TextEditingController()));
+      _notesControllers.add(List.generate(sets.length, (_) => TextEditingController()));
+      final idx = _selectedExercisesWithCircuits.length - 1;
+      for (int j = 0; j < sets.length; j++) {
+        final s = sets[j];
+        _repsControllers[idx][j].text     = (s.reps?.toString() ?? '');
+        _weightControllers[idx][j].text   = (s.weight?.toString() ?? '');
+        _rirControllers[idx][j].text      = (s.rir?.toString() ?? '');
+        _velocityControllers[idx][j].text = (s.velocity?.toString() ?? '');
+        _notesControllers[idx][j].text    = (s.notes ?? '');
+      }
+    }
+
+    // We updated in place; only a single subtle repaint.
+    if (mounted) setState(() {});
+  }
+
+
+
+  void _ensureControllersForRowsLazily() {
+    // Build minimal controllers/sets ONLY if missing (non-blocking first frame).
+    final int n = _selectedExercisesWithCircuits.length;
+
+    while (_workoutSets.length < n) {
+      _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
+    }
+    while (_repsControllers.length < n) {
+      _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+      _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+      _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+      _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+      _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+    }
+
+    _attachDirtyListeners();
+  }
+
+
+  // Anchor A: add inside _WorkoutPageState
+  Future<void> _paintFromSnapshotIfAny() async {
+    try {
+      // 🔒 Make this strictly single-shot. Set BEFORE any awaits to avoid races.
+      if (_bootPaintDone) return;
+      _bootPaintDone = true;
+
+      final uid = _cachedUid ?? UserContext.of(context, listen: false).currentUid;
+      final bid = _selectedBlockId ?? _activeBlockId;
+      final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+
+      print('🟨 [WES Boot] _paintFromSnapshotIfAny enter uid=$uid bid=$bid ymd=$ymd');
+      if (uid == null || bid == null) {
+        print('⚪ [WES Boot] Skip snapshot paint (uid or blockId missing)');
+        return;
+      }
+
+      // Use latest snapshot by cachedAt DESC (via helper)
+      final snap = await BlockPlanCache.getInitSnapshot(
+        uid: uid,
+        blockId: bid,
+        dateYmd: ymd,
+      );
+      print('🔎 [WES Boot] Exact snapshot lookup (uid=$uid, block=$bid, ymd=$ymd) → ${snap == null ? 'MISS' : 'HIT'}');
+      if (snap == null) return;
+
+      final planned = snap.plannedExercisesJson.isNotEmpty ? (jsonDecode(snap.plannedExercisesJson) as List) : const [];
+      final prev    = snap.previousWorkoutJson.isNotEmpty    ? (jsonDecode(snap.previousWorkoutJson) as List)    : const [];
 
       print('🧪 [WES Boot] plannedLen=${planned.length} prevLen=${prev.length}');
 
-      // Choose rows to paint:
-      // 1) Prefer planned (WES planned placeholders)
-      // 2) Else derive rows from previous overlay (names + circuitIndex)
+      // Choose rows to paint (prefer planned, else derive from prev)
       List<Map<String, dynamic>> rows = [];
       if (planned.isNotEmpty) {
         rows = planned.map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map)).toList();
@@ -4471,35 +4725,115 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
       if (!mounted) return;
       setState(() {
-        _selectedExercisesWithCircuits.clear();
-        _workoutSets.clear();
-        _repsControllers.clear();
-        _weightControllers.clear();
-        _rirControllers.clear();
-        _velocityControllers.clear();
-        _notesControllers.clear();
+        // ⚡ First frame: paint names only (controllers later)
+        _selectedExercisesWithCircuits
+          ..clear()
+          ..addAll(rows);
 
-        for (final m in rows) {
-          final name = (m['name'] ?? '').toString().trim();
-          final ci   = (m['circuitIndex'] ?? 0) as int;
-          if (name.isEmpty) continue;
-
-          _selectedExercisesWithCircuits.add({'name': name, 'circuitIndex': ci});
-          _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
-          _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-          _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-          _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-          _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-          _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-        }
-
-        // Ensure UI is not blocked while other async work continues.
         _isLoadingData = false;
         _isInitialized = true;
-        _didFastPaint  = true; // 🔑 so later clears don’t nuke this paint
+        _didFastPaint  = true;
+      });
+      // 🔭 DEBUG: confirm the *frame after* setState actually presented the rows
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        print('🟢 [WES Boot] Fast-paint rows are now on-screen (frame complete). rows=${_selectedExercisesWithCircuits.length}');
       });
 
+      // 🔧 Seed sets + controllers to match the newly-painted rows (avoid 1-frame mismatch)
+      for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+        // Ensure a SetDetails list exists for this row
+        if (i >= _workoutSets.length) {
+          _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
+        } else if (_workoutSets[i].isEmpty) {
+          _workoutSets[i] = List.generate(_defaultSets, (_) => SetDetails());
+        }
+
+        // Ensure controller matrix has a row for index i
+        void _ensureRow(List<List<TextEditingController>> m) {
+          while (m.length <= i) m.add(<TextEditingController>[]);
+          final need = _workoutSets[i].length;
+          if (m[i].length != need) {
+            m[i] = List.generate(need, (_) => TextEditingController());
+          }
+        }
+
+        _ensureRow(_repsControllers);
+        _ensureRow(_weightControllers);
+        _ensureRow(_rirControllers);
+        _ensureRow(_velocityControllers);
+        _ensureRow(_notesControllers);
+      }
+
+// (Optional) listeners
       _attachDirtyListeners();
+
+// ✅ At this point, builder won’t see mismatched lengths
+
+// 🔌 If snapshot had a previous overlay, prefill the first few set fields now (instant values)
+      if (prev.isNotEmpty) {
+        // Build quick lookup: "name|ci" -> sets[]
+        String _k(String n, int ci) => '${n.trim().toLowerCase()}|$ci';
+        final Map<String, List<Map<String, dynamic>>> prevByKey = {};
+        for (final raw in prev) {
+          if (raw is! Map) continue;
+          final m = Map<String, dynamic>.from(raw as Map);
+          final name = (m['name'] ?? '').toString().trim();
+          final ci = (m['circuitIndex'] is int)
+              ? (m['circuitIndex'] as int)
+              : int.tryParse('${m['circuitIndex'] ?? 0}') ?? 0;
+          final sets = (m['sets'] as List?)?.whereType<Map>().map((s0) => Map<String, dynamic>.from(s0)).toList() ?? const [];
+          if (name.isNotEmpty && sets.isNotEmpty) {
+            prevByKey[_k(name, ci)] = sets;
+          }
+        }
+
+        for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+          final name = (_selectedExercisesWithCircuits[i]['name'] ?? '').toString();
+          final ci   = (_selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0) as int;
+          final sets = prevByKey[_k(name, ci)];
+          if (sets == null || sets.isEmpty) continue;
+
+          // Fill up to the number of seeded set rows
+          final limit = (_workoutSets[i].length < sets.length) ? _workoutSets[i].length : sets.length;
+          for (int j = 0; j < limit; j++) {
+            final s = sets[j];
+            // Normalize bodyweight “addedWeight” vs absolute weight
+            final reps = (s['reps'] is int) ? s['reps'] : int.tryParse('${s['reps'] ?? ''}');
+            final weight = (s['weight'] is num) ? (s['weight'] as num).toDouble()
+                : (s['addedWeight'] is num) ? (s['addedWeight'] as num).toDouble()
+                : (s['weightAdded'] is num) ? (s['weightAdded'] as num).toDouble()
+                : null;
+            final rir = (s['rir'] is num) ? (s['rir'] as num).toDouble() : null;
+            final vel = (s['velocity'] is num) ? (s['velocity'] as num).toDouble() : null;
+            final notes = (s['notes'] ?? '').toString();
+
+            // Update model
+            _workoutSets[i][j] = SetDetails(
+              reps: reps,
+              weight: weight,
+              rir: rir,
+              velocity: vel,
+              notes: notes.isEmpty ? null : notes,
+            );
+
+            // Update controllers
+            _repsControllers[i][j].text     = reps?.toString() ?? '';
+            _weightControllers[i][j].text   = weight?.toString() ?? '';
+            _rirControllers[i][j].text      = rir?.toString() ?? '';
+            _velocityControllers[i][j].text = vel?.toString() ?? '';
+            _notesControllers[i][j].text    = notes;
+          }
+        }
+      }
+
+
+      // Build controllers AFTER first paint
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _ensureControllersForRowsLazily();
+        if (mounted) setState(() {}); // tick if sizes changed
+      });
 
       print('⚡ [WES Boot] Snapshot PAINTED ${rows.length} row(s) for $ymd (instant-visible)');
     } catch (e, st) {
@@ -4507,9 +4841,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       print(st);
     }
   }
-
-
-
 
 
   Future<void> _loadInitialData() async {
@@ -4558,64 +4889,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
     print('🔁 [WES Init] Running full BB2 plan load');
 
-    // ──────────────────────────────────────────────────────────────
-// SUPER-CACHE READ: hydrate from WESInitSnapshot if available
-// (Gives you an immediate scaffold before any network)
 // ──────────────────────────────────────────────────────────────
-    try {
-      final uid = _cachedUid;
-      final bid = _selectedBlockId;
-      if (uid != null && bid != null) {
-        final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
-        final snap = await BlockPlanCache.getInitSnapshot(
-          uid: uid,
-          blockId: bid,
-          dateYmd: ymd,
-        );
-        if (snap != null) {
-          print('⚡ [WES Init] Hydrating from WESInitSnapshot cache for $ymd');
+// SUPER-CACHE READ: disabled here to avoid double fast-paint.
+// ──────────────────────────────────────────────────────────────
+    print('⏭️ [WES Init] Skipping in-function snapshot hydrate (boot paint handles it)');
 
-          // (A) Pre-fill planned exercise rows (names + circuitIndex) as placeholders
-          final List<dynamic> plannedList =
-          (snap.plannedExercisesJson.isNotEmpty) ? (jsonDecode(
-              snap.plannedExercisesJson) as List<dynamic>) : const [];
-          if (plannedList.isNotEmpty) {
-            if (!_didFastPaint && plannedList.isNotEmpty) {
-              setState(() {
-                _selectedExercisesWithCircuits.clear();
-                _workoutSets.clear();
-                _repsControllers.clear();
-                _weightControllers.clear();
-                _rirControllers.clear();
-                _velocityControllers.clear();
-                _notesControllers.clear();
-
-                for (final raw in plannedList) {
-                  final m = Map<String, dynamic>.from(raw as Map);
-                  final name = (m['name'] ?? '').toString().trim();
-                  final ci   = (m['circuitIndex'] ?? 0) as int;
-                  if (name.isEmpty) continue;
-
-                  _selectedExercisesWithCircuits.add({'name': name, 'circuitIndex': ci});
-                  _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
-                  _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-                  _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-                  _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-                  _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-                  _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-                }
-                _isLoadingData = false;
-                _isInitialized = true;
-              });
-            }
-
-          }
-
-        }
-      }
-    } catch (e) {
-      print('⚠️ [WES Init] WESInitSnapshot read failed: $e');
-    }
 
     // A) ORDER-DEPENDENT chain (keep sequential)
     //    1) load exercises base list
@@ -5321,282 +5599,58 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         }
       }
 
-      // 5) Pass 1 (existing behavior): overlay onto any rows that already exist (from BB2 merge)
-      for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
-        final nameRaw = (_selectedExercisesWithCircuits[i]['name'] as String?) ??
-            'Unnamed';
-        final nameLc = nameRaw.trim().toLowerCase();
-        final circuitIndex = _selectedExercisesWithCircuits[i]['circuitIndex'] ??
-            0;
+      //5 === SILENT RECONCILE: update in place (no clearing, no spinner) ===
+      final List<Map<String, dynamic>> overlayRows = exList
+          .whereType<Map>()
+          .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e))
+          .toList();
 
-        final match = exList.cast<Map<String, dynamic>?>().firstWhere(
-              (e) {
-            if (e == null) return false;
-            final exNameLc = (e['name'] as String?)?.trim().toLowerCase();
-            final exCi = (e['circuitIndex'] ?? 0) as int;
-            return exNameLc == nameLc && exCi == circuitIndex;
-          },
-          orElse: () => null,
-        );
+      _applyOverlayInPlace(overlayRows);
 
 
-        if (match != null) {
-          final setMaps = List<Map<String, dynamic>>.from(match['sets'] ?? []);
-          if (setMaps.isEmpty) {
-            continue; // keep local draft visible
-          }
-
-          final isBw = PeriodizationModelUtils.isBodyweightExercise(
-              name: nameRaw);
-          final asOf = _selectedDate;
-
-          final sets = setMaps.map((s) {
-            final reps = (s['reps'] is int)
-                ? s['reps']
-                : int.tryParse(s['reps']?.toString() ?? '');
-            final double? abs = (s['weight'] is num)
-                ? (s['weight'] as num).toDouble()
-                : null;
-            final num? awRaw = (s['addedWeight'] as num?) ??
-                (s['weightAdded'] as num?); // legacy fallback
-
-            final double? display = isBw
-                ? (awRaw != null
-                ? awRaw.toDouble() // ✅ prefer saved addedWeight
-                : (abs != null
-                ? PeriodizationModelUtils.toDisplayAddedWeight(
-              uid: uid ?? '',
-              absoluteKg: abs,
-              exerciseName: nameRaw,
-              asOfDate: asOf,
-            )
-                : null))
-                : abs;
-            if (isBw && !_printedLoadBw) {
-              print(
-                  '🔎[LOAD] $nameRaw savedAdded=$awRaw, savedAbs=$abs → display=$display');
-              _printedLoadBw = true;
-            }
-
-
-            return SetDetails(
-              reps: reps,
-              weight: display,
-              // BW shows ADDED
-              rir: (s['rir'] is num) ? (s['rir'] as num).toDouble() : null,
-              velocity: (s['velocity'] is num) ? (s['velocity'] as num)
-                  .toDouble() : null,
-              notes: s['notes']?.toString(),
-            );
-          }).toList();
-
-
-          if (i >= _workoutSets.length) continue;
-
-          // pad to default rows for hint text
-          final int minRows = _defaultSets;
-          if (sets.length < minRows) {
-            sets.addAll(
-                List.generate(minRows - sets.length, (_) => SetDetails()));
-          }
-          _workoutSets[i] = sets;
-
-          // resize + seed controllers
-          if (_repsControllers.length <= i ||
-              _repsControllers[i].length != sets.length) {
-            _repsControllers[i] =
-                List.generate(sets.length, (_) => TextEditingController());
-            _weightControllers[i] =
-                List.generate(sets.length, (_) => TextEditingController());
-            _rirControllers[i] =
-                List.generate(sets.length, (_) => TextEditingController());
-            _velocityControllers[i] =
-                List.generate(sets.length, (_) => TextEditingController());
-            _notesControllers[i] =
-                List.generate(sets.length, (_) => TextEditingController());
-          }
-          for (int j = 0; j < sets.length; j++) {
-            final s = _workoutSets[i][j];
-            _repsControllers[i][j].text = (s.reps?.toString() ?? '');
-            _weightControllers[i][j].text = (s.weight?.toString() ?? '');
-            _rirControllers[i][j].text = (s.rir?.toString() ?? '');
-            _velocityControllers[i][j].text = (s.velocity?.toString() ?? '');
-            _notesControllers[i][j].text = (s.notes ?? '');
-          }
-        }
-      }
-
-      // 6) Pass 2 (NEW): add any saved exercises that aren’t in the plan/UI yet
+      // 6) Pass 2 (optional): add any saved exercises that aren’t in the plan/UI yet
       final existingKeys = _selectedExercisesWithCircuits
-          .map<String>((e) =>
-          _exerciseKey(
-            ((e['name'] ?? '') as String).trim(),
-            (e['circuitIndex'] ?? 0) as int,
-          ))
+          .map<String>((e) => _exerciseKey(
+        ((e['name'] ?? '') as String).trim(),
+        (e['circuitIndex'] ?? 0) as int,
+      ))
           .toSet();
 
-      int added = 0;
-      for (final raw in exList) {
-        if (raw is! Map) continue;
-        final name = (raw['name'] ?? '').toString().trim();
-        final ci = (raw['circuitIndex'] ?? 0) as int;
-        final key = _exerciseKey(name, ci);
-        if (existingKeys.contains(key)) continue;
 
-        final setMaps = List<Map<String, dynamic>>.from(raw['sets'] ?? []);
-        // build SetDetails (pad to default rows)
-        final isBw = PeriodizationModelUtils.isBodyweightExercise(name: name);
-        final asOf = _selectedDate;
-
-        final sets = setMaps.map((s) {
-          final reps = (s['reps'] is int)
-              ? s['reps']
-              : int.tryParse(s['reps']?.toString() ?? '');
-          final double? abs = (s['weight'] is num)
-              ? (s['weight'] as num).toDouble()
-              : null;
-          final num? awRaw = (s['addedWeight'] as num?) ??
-              (s['weightAdded'] as num?); // legacy fallback
-
-          final double? display = isBw
-              ? (awRaw != null
-              ? awRaw.toDouble() // ✅ prefer saved addedWeight
-              : (abs != null
-              ? PeriodizationModelUtils.toDisplayAddedWeight(
-            uid: uid ?? '',
-            absoluteKg: abs,
-            exerciseName: name,
-            asOfDate: asOf,
-          )
-              : null))
-              : abs;
-
-
-          return SetDetails(
-            reps: reps,
-            weight: display,
-            // BW shows ADDED
-            rir: (s['rir'] is num) ? (s['rir'] as num).toDouble() : null,
-            velocity: (s['velocity'] is num)
-                ? (s['velocity'] as num).toDouble()
-                : null,
-            notes: s['notes']?.toString(),
-          );
-        }).toList();
-
-
-        if (sets.length < _defaultSets) {
-          sets.addAll(
-              List.generate(_defaultSets - sets.length, (_) => SetDetails()));
-        }
-
-        // append row
-        _selectedExercisesWithCircuits.add({'name': name, 'circuitIndex': ci});
-        _workoutSets.add(sets);
-        _repsControllers.add(
-            List.generate(sets.length, (_) => TextEditingController()));
-        _weightControllers.add(
-            List.generate(sets.length, (_) => TextEditingController()));
-        _rirControllers.add(
-            List.generate(sets.length, (_) => TextEditingController()));
-        _velocityControllers.add(
-            List.generate(sets.length, (_) => TextEditingController()));
-        _notesControllers.add(
-            List.generate(sets.length, (_) => TextEditingController()));
-
-        final idx = _selectedExercisesWithCircuits.length - 1;
-        for (int j = 0; j < sets.length; j++) {
-          final s = sets[j];
-          _repsControllers[idx][j].text = (s.reps?.toString() ?? '');
-          _weightControllers[idx][j].text = (s.weight?.toString() ?? '');
-          _rirControllers[idx][j].text = (s.rir?.toString() ?? '');
-          _velocityControllers[idx][j].text = (s.velocity?.toString() ?? '');
-          _notesControllers[idx][j].text = (s.notes ?? '');
-        }
-
-        // mark saved for paint if savedAt present
-        if (raw['savedAt'] != null) {
-          _savedExerciseKeysForDate.add(key);
-        }
-
-        added++;
-      }
-
-      print(
-          '🧩 [WES LoadExisting] Added $added saved-only exercise row(s) from Firestore');
-
-      // 7.5) Pass 3 (NEW): add WES-planned rows (placeholders) that aren’t in UI yet
+      // 7.5) Pass 3 (NEW): merge WES-planned rows (placeholders) IN-PLACE (no clears, no dupes)
       int plannedAdded = 0;
 
-// Use your existing name|circuitIndex set for quick dedupe
-      final existingNameKeys = _selectedExercisesWithCircuits
-          .map<String>((e) => _exerciseKey(((e['name'] ?? '') as String).trim(),
-          (e['circuitIndex'] ?? 0) as int))
-          .toSet();
+// Build a minimal overlay from wesPlannedList: name + circuitIndex, empty sets.
+// _applyOverlayInPlace will skip existing rows and append any missing ones.
+      final int beforeCount = _selectedExercisesWithCircuits.length;
 
-      for (final p in wesPlannedList) {
-        print('🧪 Pass3: consider ${(p['name'] ?? '')
-            .toString()
-            .trim()}|${p['circuitIndex'] ?? 0}');
+      final List<Map<String, dynamic>> plannedOverlay = wesPlannedList
+          .whereType<Map>()
+          .map<Map<String, dynamic>>((m0) {
+        final m = Map<String, dynamic>.from(m0);
+        final name = (m['name'] ?? '').toString().trim();
+        if (name.isEmpty) return const <String, dynamic>{};
+        final ci = (m['circuitIndex'] is int)
+            ? m['circuitIndex'] as int
+            : int.tryParse('${m['circuitIndex'] ?? 0}') ?? 0;
+        return {
+          'name': name,
+          'circuitIndex': ci,
+          // empty sets → acts as a placeholder; overlay helper will not wipe existing sets
+          'sets': const <Map<String, dynamic>>[],
+        };
+      })
+          .where((e) => e.isNotEmpty)
+          .toList();
 
+// 🔧 In-place merge (no UI teardown)
+      _applyOverlayInPlace(plannedOverlay);
 
-        final name = (p['name'] ?? '').toString().trim();
-        if (name.isEmpty) continue;
-        final ci = (p['circuitIndex'] ?? 0) as int;
+// Count how many were appended by the helper
+      plannedAdded = _selectedExercisesWithCircuits.length - beforeCount;
 
-        final keyName = _exerciseKey(name, ci);
-        final keyId = _wesKeyPrefId(name, ci);
+      print('🧩 [WES LoadExisting] Added $plannedAdded WES-planned placeholder row(s) (in-place)');
 
-        final __inUI = _selectedExercisesWithCircuits.any(
-                (e) =>
-            _exerciseKey(((e['name'] ?? '') as String).trim(),
-                (e['circuitIndex'] ?? 0) as int)
-                == (/* use your var */ keyName /* or key */)
-        );
-        print('   inUI? → $__inUI');
-
-
-        // Precedence: skip if already present (completed or BB2 planned)
-        final isBb2Planned = _bb2PlannedKeysForSelectedDate.contains(keyId);
-        print('   ⏭️ skip: already in UI');
-
-        if (existingNameKeys.contains(keyName) || isBb2Planned) continue;
-
-        // Append placeholder row with empty sets (padded to default set count)
-        final sets = List<SetDetails>.generate(
-            _defaultSets, (_) => SetDetails());
-
-        print('   ✅ ADD placeholder: $name|$ci');
-
-        _selectedExercisesWithCircuits.add({'name': name, 'circuitIndex': ci});
-        _workoutSets.add(sets);
-        _repsControllers.add(
-            List.generate(sets.length, (_) => TextEditingController()));
-        _weightControllers.add(
-            List.generate(sets.length, (_) => TextEditingController()));
-        _rirControllers.add(
-            List.generate(sets.length, (_) => TextEditingController()));
-        _velocityControllers.add(
-            List.generate(sets.length, (_) => TextEditingController()));
-        _notesControllers.add(
-            List.generate(sets.length, (_) => TextEditingController()));
-
-        // Seed empty text (placeholders only)
-        final idx = _selectedExercisesWithCircuits.length - 1;
-        for (int j = 0; j < sets.length; j++) {
-          _repsControllers[idx][j].text = '';
-          _weightControllers[idx][j].text = '';
-          _rirControllers[idx][j].text = '';
-          _velocityControllers[idx][j].text = '';
-          _notesControllers[idx][j].text = '';
-        }
-
-        existingNameKeys.add(keyName);
-        plannedAdded++;
-      }
-
-      print(
-          '🧩 [WES LoadExisting] Added $plannedAdded WES-planned placeholder row(s)');
 
 
       // 7) Ensure listeners on any new controllers
@@ -9053,6 +9107,23 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
 // Tiny helper used above. Your existing Scaffold body stays unchanged.
   Widget _buildWesScaffold() {
+
+    // ── DEBUG: prove whether the spinner path is gating first paint ─────────
+    final overlayLoading = _selectedExercisesWithCircuits.isEmpty && (_isLoadingData && !_isInitialized);
+
+    if (overlayLoading && !_overlayLogged) {
+      _overlayLogged = true;
+      print('🟡 [WES UI] Spinner showing → rows=${_selectedExercisesWithCircuits.length} isLoading=$_isLoadingData init=$_isInitialized');
+    }
+
+    if (!_firstRowsLogged && _selectedExercisesWithCircuits.isNotEmpty) {
+      _firstRowsLogged = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        print('🟢 [WES UI] First rows visible in frame → rows=${_selectedExercisesWithCircuits.length}');
+      });
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
     return WillPopScope(
       onWillPop: () async {
         if (_pendingChanges) {

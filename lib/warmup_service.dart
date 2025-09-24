@@ -149,21 +149,9 @@ class WarmupService {
         unawaited(blocksCol.doc(activeBlockId).get(const GetOptions(source: Source.server)));
       }
 
-      // 👉 Precompute a WESInitSnapshot so first-frame paint has rows
-      if (activeBlockId != null && activeBlockId.isNotEmpty) {
-        final d = (selectedDate != null)
-            ? DateTime(selectedDate.year, selectedDate.month, selectedDate.day)
-            : DateTime.now();
-        unawaited(_precomputeWesInitSnapshotIfPossible(
-          uid: uid,
-          blockId: activeBlockId,
-          date: d,
-        ));
-      }
-
-
       // ───────────────────────────────────────────────────────────────
-      // NEW: Precompute WESInitSnapshot so WES fast-paint hits Isar
+      // NEW: Precompute & persist a WESInitSnapshot in Isar so WES
+      // first-frame paint can use it even on cold boot/offline.
       // ───────────────────────────────────────────────────────────────
       if (activeBlockId != null && activeBlockId.isNotEmpty) {
         // If caller didn't pass a date, default to "today" (date-only)
@@ -176,6 +164,7 @@ class WarmupService {
       // best-effort
     }
   }
+
 
 
 
@@ -201,6 +190,7 @@ class WarmupService {
         return '${dt.year}-$m-$dd';
       }
       final dateKey = ymd(d);
+      final nextDateKey = ymd(d.add(const Duration(days: 1)));
 
       // 0) If a non-empty snapshot already exists, do not clobber it.
       try {
@@ -211,6 +201,8 @@ class WarmupService {
             existing.plannedExercisesJson.isNotEmpty &&
             existing.plannedExercisesJson != '[]') {
           // We already have planned rows; keep as-is. (We could merge prev later if needed.)
+          print('🟢 [Warmup] Snapshot exists for $dateKey (uid=$uid, block=$blockId) — skip recompute');
+
           return;
         }
       } catch (_) {/* ignore */}
@@ -354,7 +346,6 @@ class WarmupService {
           final workouts = fs.collection('users').doc(uid).collection('workouts');
           final startOfDay = DateTime(d.year, d.month, d.day);
           final nextDay = startOfDay.add(const Duration(days: 1));
-          final dateOnly = dateKey;
           final isoLocal = startOfDay.toIso8601String();
           final isoUtc = DateTime.utc(startOfDay.year, startOfDay.month, startOfDay.day).toIso8601String();
 
@@ -363,11 +354,14 @@ class WarmupService {
           final snaps = await Future.wait([
             qEq(isoLocal),
             qEq(isoUtc),
-            qEq(dateOnly),
-            workouts.where('date', isGreaterThanOrEqualTo: '${dateOnly}T00:00:00')
-                .where('date', isLessThan: '${dateOnly}T24:00:00')
+            qEq(dateKey),
+            // FIXED: upper bound should be next day 00:00:00, not T24:00:00
+            workouts
+                .where('date', isGreaterThanOrEqualTo: '${dateKey}T00:00:00')
+                .where('date', isLessThan: '${nextDateKey}T00:00:00')
                 .get(const GetOptions(source: Source.server)),
-            workouts.where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+            workouts
+                .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
                 .where('date', isLessThan: Timestamp.fromDate(nextDay))
                 .get(const GetOptions(source: Source.server)),
           ]);
@@ -452,6 +446,8 @@ class WarmupService {
         topSetHistory: const <Map<String, dynamic>>[],
         updatedAt: DateTime.now(),
       );
+      print('🟢 [Warmup] Snapshot PUT $dateKey planned=${plannedCompact.length} prev=${previousOverlay.length}');
+
 
       // (Optional) debug:
       // print('🟢 [Warmup] Snapshot PUT $dateKey planned=${plannedCompact.length} prev=${previousOverlay.length}');
@@ -459,6 +455,7 @@ class WarmupService {
       // best-effort
     }
   }
+
 
 
 }
