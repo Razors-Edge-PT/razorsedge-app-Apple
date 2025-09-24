@@ -18,6 +18,14 @@ class WESInitSnapshot {
   late String plannedExercisesJson;   // from loadPlannedExercisesFromFirestore()
   late String previousWorkoutJson;    // from loadPreviousWorkoutData()
   late String topSetHistoryJson;      // from PeriodizationModelUtils.fetchFullTopSetHistory()
+  // Pre-resolved S1 hints for instant first paint (JSON map: "name|ci" -> fields)
+  // For non-BW: { "s1_weight": <kg>, "s1_reps": <int>, "s1_rir": <num>, "e1rm": <num> }
+  // For BW:     { "s1_weight_added": <kg>, "s1_reps": <int>, "s1_rir": <num>, "e1rm": <num> }
+  late String hintsJson;
+
+  // Optional freshness fingerprint for recompute decisions (leave null if you don’t use it yet)
+  String? hintsInputsHash;
+
 
   // Optional freshness metadata
   DateTime? updatedAt;       // last time server data considered fresh

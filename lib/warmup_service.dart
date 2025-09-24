@@ -2,6 +2,10 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'periodization_model_utils.dart';
+import 'dart:convert';   // for jsonEncode / jsonDecode
+import 'dart:async' show unawaited; // if you use unawaited() here
+
 
 import 'local_cache/block_plan_cache.dart'; // BlockPlanCache.putInitSnapshot()
 
@@ -432,7 +436,60 @@ class WarmupService {
         ];
       }
 
-      // 8) Write snapshot only if we have *something*
+      // 8) Build hintsJson (final-quality targets) before writing snapshot.
+//    Only if we have planned rows; otherwise leave it empty.
+      String hintsJson = '[]';
+      try {
+        if (plannedCompact.isNotEmpty) {
+          // Safely compute week index (fallback to 0 if blockStart is null)
+          final int wi = (blockStart != null)
+              ? PeriodizationModelUtils.getWeekIndexForDate(
+            d,
+            DateTime(blockStart!.year, blockStart!.month, blockStart!.day),
+          )
+              : 0;
+
+          final List<Map<String, dynamic>> hints = [];
+          for (final row in plannedCompact) {
+            final name = (row['name'] ?? '').toString().trim();
+            final ci   = (row['circuitIndex'] ?? 0) as int;
+            if (name.isEmpty) continue;
+
+            // Ask PMU for this exercise's rep target for the week.
+            // NOTE: Signature expects exerciseName + weekIndex.
+            int? repTarget;
+            try {
+              final rt = PeriodizationModelUtils.getSuggestedRepTargetByModel(
+                exerciseName: name,
+                plannedIndex: 0,      // 👈 required
+                weekIndex: wi,        // 👈 optional but you already have it
+                blockStartDate: blockStart,
+                selectedDate: d,
+                plannedExerciseDetails: PeriodizationModelUtils.plannedExerciseDetails,
+              );
+
+              repTarget = rt; // already an int
+            } catch (_) {
+              // best-effort
+            }
+
+
+            hints.add({
+              'name': name,
+              'circuitIndex': ci,
+              if (repTarget != null) 'reps': repTarget,
+              // leave weight/absWeight/rir empty; WES will compute/overlay on boot
+            });
+          }
+
+          hintsJson = jsonEncode(hints);
+        }
+      } catch (_) {
+        // best-effort
+        hintsJson = '[]';
+      }
+
+// 9) Write snapshot only if we have *something*
       if (plannedCompact.isEmpty && previousOverlay.isEmpty) {
         return; // Don't write "[]"
       }
@@ -444,9 +501,11 @@ class WarmupService {
         plannedExercises: plannedCompact,
         previousWorkout: previousOverlay,
         topSetHistory: const <Map<String, dynamic>>[],
+        hintsJson: hintsJson, // 👈 make sure your putInitSnapshot accepts this
         updatedAt: DateTime.now(),
       );
-      print('🟢 [Warmup] Snapshot PUT $dateKey planned=${plannedCompact.length} prev=${previousOverlay.length}');
+      print('🟢 [Warmup] Snapshot PUT $dateKey planned=${plannedCompact.length} prev=${previousOverlay.length} hintsLen=${hintsJson.length}');
+
 
 
       // (Optional) debug:

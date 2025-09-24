@@ -109,8 +109,11 @@ class BlockPlanCache {
     required List<Map<String, dynamic>> plannedExercises,
     required List<Map<String, dynamic>> previousWorkout,
     required List<Map<String, dynamic>> topSetHistory,
+    String? hintsJson,            // 👈 NEW
+    String? hintsInputsHash,      // 👈 NEW
     DateTime? updatedAt,
   }) async {
+
     final isar = await IsarDb.instance;
 
     final snap = WESInitSnapshot()
@@ -120,6 +123,8 @@ class BlockPlanCache {
       ..plannedExercisesJson = jsonEncode(plannedExercises)
       ..previousWorkoutJson  = jsonEncode(previousWorkout)
       ..topSetHistoryJson    = jsonEncode(topSetHistory)
+      ..hintsJson            = (hintsJson == null || hintsJson.isEmpty) ? '{}' : hintsJson   // 👈 NEW
+      ..hintsInputsHash      = hintsInputsHash                                                // 👈 NEW
       ..updatedAt = updatedAt
       ..cachedAt = DateTime.now();
 

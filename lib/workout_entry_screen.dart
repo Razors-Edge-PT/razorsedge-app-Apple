@@ -167,6 +167,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   Map<String, Map<String, dynamic>> _resolvedBB2Values = {};
   Map<String, String> _progressionModelsByExercise = {};
   final Map<String, Map<String, dynamic>> _cachedProgressedValues = {};
+  // Pre-resolved S1 hints from snapshot for instant first paint
+  final Map<String, Map<String, dynamic>> _seedHintsByKey = {};
+
+  // Stable key for a row: "name|circuitIndex"
+  String _rowKeyBy(int i) {
+    final n = (_selectedExercisesWithCircuits[i]['name'] ?? '').toString().trim().toLowerCase();
+    final ci = (_selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0) as int;
+    return '$n|$ci';
+  }
+
 
 
   bool _isLoadingData = true;
@@ -2911,6 +2921,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   //Determine hint texts for this workout:NEW METHOD
 
   double set1SuggestedReps(int exerciseIndex) {
+    // FAST-PATH: use precomputed hint if available
+    final hintK = _rowKeyBy(exerciseIndex);
+    final num? hr = _seedHintsByKey[hintK]?['s1_reps'] as num?;
+    if (hr != null) {
+      // print('⚡ [WES Hints] S1 reps from snapshot for $hintK = $hr');
+      return hr.toDouble();
+    }
+
     final exerciseName =
         _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
     final rirText = _rirControllers[exerciseIndex][0].text;
@@ -3656,6 +3674,21 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   double set8RIR(int i) => getRirFromPlanOrInput(i, 8);
 
   double set1SuggestedWeight(int exerciseIndex) {
+    // FAST-PATH: use precomputed hint if available
+    final hintK = _rowKeyBy(exerciseIndex);
+    final hint  = _seedHintsByKey[hintK];
+    if (hint != null) {
+      final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
+      final exId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
+      final isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: exerciseName);
+
+      final num? v = isBw ? (hint['s1_weight_added'] as num?) : (hint['s1_weight'] as num?);
+      if (v != null) {
+        // print('⚡ [WES Hints] S1 weight from snapshot for $hintK = $v');
+        return v.toDouble();
+      }
+    }
+
     final exerciseName =
         _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
     final normalizedKey = exerciseName.toLowerCase();
@@ -4689,6 +4722,24 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       final prev    = snap.previousWorkoutJson.isNotEmpty    ? (jsonDecode(snap.previousWorkoutJson) as List)    : const [];
 
       print('🧪 [WES Boot] plannedLen=${planned.length} prevLen=${prev.length}');
+      // 👇 Load pre-resolved hints if present
+      try {
+        if (snap.hintsJson.isNotEmpty && snap.hintsJson != '{}') {
+          final raw = jsonDecode(snap.hintsJson);
+          if (raw is Map) {
+            _seedHintsByKey.clear();
+            raw.forEach((k, v) {
+              if (v is Map) {
+                _seedHintsByKey[k.toString()] = Map<String, dynamic>.from(v);
+              }
+            });
+            print('⚡ [WES Boot] Loaded ${_seedHintsByKey.length} pre-resolved hint(s)');
+          }
+        }
+      } catch (e) {
+        print('⚠️ [WES Boot] hintsJson parse failed: $e');
+      }
+
 
       // Choose rows to paint (prefer planned, else derive from prev)
       List<Map<String, dynamic>> rows = [];
@@ -4755,6 +4806,110 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
 // (Optional) listeners
       _attachDirtyListeners();
+// 🟣 NEW: Seed first-set fields from hintsJson (final targets) for instant, correct first paint.
+      final List hintsList = (snap.hintsJson.isNotEmpty)
+          ? (jsonDecode(snap.hintsJson) as List)
+          : const [];
+
+      if (hintsList.isNotEmpty) {
+        // Build quick lookup by "name|ci"
+        String _k(String n, int ci) => '${n.trim().toLowerCase()}|$ci';
+        final Map<String, Map<String, dynamic>> hintsByKey = {};
+        for (final raw in hintsList) {
+          if (raw is! Map) continue;
+          final m = Map<String, dynamic>.from(raw as Map);
+          final name = (m['name'] ?? '').toString().trim();
+          final ci = (m['circuitIndex'] is int)
+              ? (m['circuitIndex'] as int)
+              : int.tryParse('${m['circuitIndex'] ?? 0}') ?? 0;
+          if (name.isEmpty) continue;
+          hintsByKey[_k(name, ci)] = m;
+        }
+
+        // Apply to rows we just painted
+        for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+          final name = (_selectedExercisesWithCircuits[i]['name'] ?? '').toString();
+          final ci   = (_selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0) as int;
+          final key  = _k(name, ci);
+          final hint = hintsByKey[key];
+          if (hint == null) continue;
+
+          // Ensure we have at least one set slot + controllers
+          if (_workoutSets.length <= i || _workoutSets[i].isEmpty) {
+            if (_workoutSets.length <= i) {
+              _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
+            } else {
+              _workoutSets[i] = List.generate(_defaultSets, (_) => SetDetails());
+            }
+          }
+          void _ensureRow(List<List<TextEditingController>> m) {
+            while (m.length <= i) m.add(<TextEditingController>[]);
+            final need = _workoutSets[i].length;
+            if (m[i].length != need) {
+              m[i] = List.generate(need, (_) => TextEditingController());
+            }
+          }
+          _ensureRow(_repsControllers);
+          _ensureRow(_weightControllers);
+          _ensureRow(_rirControllers);
+          _ensureRow(_velocityControllers);
+          _ensureRow(_notesControllers);
+
+          // Pull set1 targets (display-ready). We accept either display "weight" or "absWeight" fallback.
+          final String exId = PeriodizationModelUtils.nameToId[name] ?? name;
+          final bool isBw   = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
+
+          // targets are display-ready (added kg for BW, absolute for others)
+          double? dispWeight = (hint['weight']      is num) ? (hint['weight'] as num).toDouble() : null;
+          final  double? absWeight  = (hint['absWeight']   is num) ? (hint['absWeight'] as num).toDouble() : null;
+          final  double? reps1      = (hint['reps']        is num) ? (hint['reps'] as num).toDouble()      : null;
+          final  double? rir1       = (hint['rir']         is num) ? (hint['rir'] as num).toDouble()       : null;
+
+          // If BW and only absWeight is present, convert abs → displayAdded for the text field
+          if (dispWeight == null && isBw && absWeight != null) {
+            try {
+              dispWeight = PeriodizationModelUtils.toDisplayAddedWeight(
+                uid: _cachedUid ?? '',
+                absoluteKg: absWeight,
+                exerciseId: exId,
+                exerciseName: name,
+                asOfDate: _selectedDate,
+              );
+            } catch (_) {}
+          }
+          // If non-BW and only absWeight present, that's the display too
+          if (dispWeight == null && !isBw && absWeight != null) {
+            dispWeight = absWeight;
+          }
+
+          // Seed set[0] model + controllers ONLY if fields are currently empty
+          final int j = 0;
+          final repsCtl   = _repsControllers[i][j];
+          final weightCtl = _weightControllers[i][j];
+          final rirCtl    = _rirControllers[i][j];
+
+          final bool hasReps   = repsCtl.text.trim().isNotEmpty;
+          final bool hasWeight = weightCtl.text.trim().isNotEmpty;
+          final bool hasRir    = rirCtl.text.trim().isNotEmpty;
+
+          // Update underlying model (SetDetails) as well
+          final current = _workoutSets[i][j];
+          _workoutSets[i][j] = SetDetails(
+            reps:    current.reps    ?? (reps1?.toInt()),
+            weight:  current.weight  ?? dispWeight,
+            rir:     current.rir     ?? rir1,
+            velocity: current.velocity,
+            notes:    current.notes,
+          );
+
+          if (!hasReps && reps1 != null)   repsCtl.text   = reps1.toInt().toString();
+          if (!hasWeight && dispWeight != null) weightCtl.text = dispWeight.toString();
+          if (!hasRir && rir1 != null)     rirCtl.text    = rir1.toString();
+        }
+
+        // We updated values in place before any server reconcile.
+        if (mounted) setState(() {});
+      }
 
 // ✅ At this point, builder won’t see mismatched lengths
 
@@ -5052,6 +5207,54 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         final plannedCount  = plannedCompact.length;
         final previousCount = previousOverlay.length;
 
+        // (4) Pre-resolved S1 hints map for instant first paint next time
+        final Map<String, dynamic> hints = {};
+        for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+          final name = (_selectedExercisesWithCircuits[i]['name'] ?? '').toString().trim();
+          if (name.isEmpty) continue;
+          final ci   = (_selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0) as int;
+          final key  = '${name.toLowerCase()}|$ci';
+
+          // Use current helpers (they won’t recurse because _seedHintsByKey is empty on first save)
+          final double s1W = set1SuggestedWeight(i);
+          final double s1R = set1SuggestedReps(i);
+          final double s1Ri = getRirFromPlanOrInput(i, 1);
+
+          final exId = PeriodizationModelUtils.nameToId[name] ?? name;
+          final isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
+
+          final double e1 = PeriodizationModelUtils.calculateE1RM(
+            // For BW: reverse to absolute for e1rm computation
+            isBw
+                ? PeriodizationModelUtils.toAbsoluteWeight(
+              uid: _cachedUid ?? '',
+              displayAddedKg: s1W,
+              exerciseId: exId,
+              exerciseName: name,
+              asOfDate: _selectedDate,
+            )
+                : s1W,
+            s1R,
+            s1Ri,
+          );
+
+          hints[key] = isBw
+              ? {
+            's1_weight_added': s1W,
+            's1_reps': s1R,
+            's1_rir': s1Ri,
+            'e1rm': e1,
+          }
+              : {
+            's1_weight': s1W,
+            's1_reps': s1R,
+            's1_rir': s1Ri,
+            'e1rm': e1,
+          };
+        }
+        final String hintsJson = jsonEncode(hints);
+
+
         if (plannedCount == 0 && previousCount == 0) {
           print('🟨 [WES Init] Skip snapshot save (both planned & previous empty) for $ymd');
         } else {
@@ -5062,6 +5265,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
             plannedExercises: plannedCompact,
             previousWorkout: previousOverlay,
             topSetHistory: topSetHistoryList,
+            hintsJson: hintsJson,            // 👈 NEW
+            // hintsInputsHash: null,        // (optional, add later)
             updatedAt: DateTime.now(),
           );
           print('💾 [WES Init] Snapshot saved for $ymd (planned=$plannedCount, prev=$previousCount)');
