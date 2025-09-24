@@ -1083,7 +1083,6 @@ class PeriodizationModelUtils {
     final rounded = options.reduce((a, b) =>
     (a - targetWeight).abs() < (b - targetWeight).abs() ? a : b);
 
-    print('📏 [BB2] Valid options for $exerciseName: ${options.toList()..toSet().toList()..sort()}');
     print('🎯 [BB2] Chose: $rounded from target: $targetWeight');
 
     return rounded;
@@ -2703,9 +2702,7 @@ class PeriodizationModelUtils {
     DateTime? selectedDate,
   }) {
     // 🔍 ENTRY PRINT
-    print('🚦 [getInstanceCountForExerciseInWeek] START → ex="$exerciseName", '
-        'savedWorkouts=${savedWorkouts.length}, '
-        'blockStart=$blockStartDate, weekIndex=$weekIndex, selectedDate=$selectedDate');
+
 
     final base = DateTime(blockStartDate.year, blockStartDate.month, blockStartDate.day);
     final idx = weekIndex ??

@@ -2305,8 +2305,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
 
   void _debugPrintBlockDates() {
-    print('🗓️ [DEBUG] _blockStartDate: $blockStartDate');
-    print('🗓️ [DEBUG] _blockEndDate: $blockEndDate');
+
   }
 
   Future<void> debugPrintRepTargetsFromExerciseSettings(BuildContext context,
@@ -2387,12 +2386,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final uidForBw = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '';
 
     final weekIndex = _getApplicableWeekIndex(exerciseId);
-    print('📅 [WES] selectedDate = $_selectedDate');
-    print('📅 [WES] blockStartDate = $blockStartDate');
-    print('🧮 [WES] Computed weekIndex = ${blockStartDate != null
-        ? PeriodizationModelUtils.getWeekIndexForDate(
-        _selectedDate, blockStartDate!)
-        : '⚠️ blockStartDate is null!'}');
+
 
     // Determine how many times this exercise appeared before.
     int plannedCountBefore = 0;
@@ -2820,6 +2814,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         ? maxWeightMap.keys.toList()
         : 'null';
 
+    print('⚙️ [PMU] inputs name=$exerciseName '
+        'model=$progressionModel '
+        'repTarget=$repTarget '
+        'incs=${increments ?? [2.5]} '
+        'bw=${PeriodizationModelUtils.bodyweightKgForDate(uid: uidForBw, asOf: _selectedDate)} '
+        'hasMaxByReps=${_exerciseSettings[exerciseId]?['maxWeightByReps'] != null} '
+        'week=${blockStartDate != null ? PeriodizationModelUtils.getWeekIndexForDate(_selectedDate, blockStartDate!) : -1}');
 
 
     final Map<String, dynamic> progressed =
@@ -2844,6 +2845,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     );
     print(
         '🧾 [WES <- PMU] pre-overlay ${progressed['weight']} × ${progressed['reps']}');
+    print('✅ [PMU] progressed=${progressed['weight']}x${progressed['reps']} (pre-snap) ORIGIN='
+        '${_isLoadingData ? 'EARLY_DEFAULTS' : 'READY'}');
+
 // as-of date for BW lookups = the day being edited in WES
     final DateTime _asOfDate = _selectedDate ?? DateTime.now();
 
@@ -3674,6 +3678,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   double set8RIR(int i) => getRirFromPlanOrInput(i, 8);
 
   double set1SuggestedWeight(int exerciseIndex) {
+    print('🪫 [S1W] start i=$exerciseIndex '
+        'init=$_isInitialized load=$_isLoadingData '
+        'name=${_selectedExercisesWithCircuits[exerciseIndex]['name']}');
+
     // FAST-PATH: use precomputed hint if available
     final hintK = _rowKeyBy(exerciseIndex);
     final hint  = _seedHintsByKey[hintK];
@@ -3696,11 +3704,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
 
     final bb2Entry = _resolvedBB2Values[normalizedKey];
+    print('🧩 [S1W] bb2Entry weight=${bb2Entry?['weight']} '
+        'reps=${bb2Entry?['reps']} rir=${bb2Entry?['rir']}');
+
 
     // ✅ Step 1: Use BB2-entered weight if available
     final double? bb2Weight = bb2Entry?['weight']?.toDouble();
     if (bb2Weight != null && bb2Weight > 0) {
-      print('🔁 [WES] Using BB2-entered weight for $exerciseName: $bb2Weight');
+
       if (PeriodizationModelUtils.isBodyweightExercise(
           id: exerciseId, name: exerciseName)) {
         return PeriodizationModelUtils.toDisplayAddedWeight(
@@ -3745,6 +3756,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       return userWeight; // unchanged for non-BW
     }
 
+    print('🧮 [S1W] calling _getProgressedValues for '
+        '${_selectedExercisesWithCircuits[exerciseIndex]['name']}');
 
     // ✅ Step 4: Pull model progression values
     final progressed = _getProgressedValues(exerciseIndex);
@@ -4081,6 +4094,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
           print("🧱 [WES] Selected blockId: $_selectedBlockId");
           // ⚡ Try exact-key fast paint now that blockId is known
+          unawaited(_paintFromSnapshotIfAny());
+
 
           // ✅ Pre-warm exact block doc for WES
           // right after: print("🧱 [WES] Selected blockId: $_selectedBlockId");
@@ -4694,6 +4709,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
   // Anchor A: add inside _WorkoutPageState
   Future<void> _paintFromSnapshotIfAny() async {
+    print('🚩 [WES Boot] _paintFromSnapshotIfAny CALLED');  // <── add here
     try {
       // 🔒 Make this strictly single-shot. Set BEFORE any awaits to avoid races.
       if (_bootPaintDone) return;
@@ -4722,6 +4738,31 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       final prev    = snap.previousWorkoutJson.isNotEmpty    ? (jsonDecode(snap.previousWorkoutJson) as List)    : const [];
 
       print('🧪 [WES Boot] plannedLen=${planned.length} prevLen=${prev.length}');
+      print('🔔 [FAST-check] about to inspect snap.hintsJson=${snap.hintsJson}');
+
+      // 🔎 FAST-path hints (from snapshot.hintsJson)
+      final String _hj = snap.hintsJson ?? '';
+      if (_hj.isEmpty || _hj == '{}') {
+        print('🚫 [FAST] no hintsJson in snapshot.');
+      } else {
+        try {
+          final Map<String, dynamic> hintsMap =
+          (jsonDecode(_hj) as Map).cast<String, dynamic>();
+
+          final Map<String, dynamic> weights =
+              (hintsMap['weights'] as Map?)?.cast<String, dynamic>() ?? const {};
+          final Map<String, dynamic> reps =
+              (hintsMap['reps'] as Map?)?.cast<String, dynamic>() ?? const {};
+          final Map<String, dynamic> rir =
+              (hintsMap['rir'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+          print('🚀 [FAST] hints sizes → weights=${weights.length} reps=${reps.length} rir=${rir.length}');
+        } catch (e) {
+          print('⚠️ [WES Boot] hintsJson parse failed: $e');
+        }
+      }
+
+
       // 👇 Load pre-resolved hints if present
       try {
         if (snap.hintsJson.isNotEmpty && snap.hintsJson != '{}') {
