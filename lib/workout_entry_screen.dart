@@ -175,6 +175,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
   late Future<void> _initialLoad;
   late Future<void> _blockDateLoad;
+  bool _didFastPaint = false;
+
 
   //autosave bits
   // ---- NEW: State fields ----
@@ -3991,14 +3993,31 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
     print('🚀 [WES] initState started');
 
-// Ensure UID is available before fast paint
-    _cachedUid = UserContext.of(context, listen: false).currentUid;
+    _selectedDate = widget.initialDate ?? DateTime.now();
+    if (_workoutNameController.text.trim().isEmpty) {
+      _workoutNameController.text = DateFormat('EEE d MMM yyyy').format(_selectedDate);
+    }
 
-// ⚡ Try instant paint from cached snapshot (non-blocking, best-effort)
-// This first call works with uid+date even if blockId isn't known yet.
-    unawaited(_paintFromSnapshotIfAny());
+    // Read global block meta published by UserContext bootstrap (instant, no fetch)
+    _cachedUid = UserContext.of(context, listen: false).currentUid;
+    final uc = UserContext.of(context, listen: false);
+    _activeBlockId   = uc.activeBlockId ?? _activeBlockId;
+    _selectedBlockId = uc.activeBlockId ?? _selectedBlockId;
+    _blockStartDate  = uc.blockStartDate ?? _blockStartDate;
+    _blockEndDate    = uc.blockEndDate   ?? _blockEndDate;
+
+    // Fast paint #1: uid+date fallback (works even if blockId not known yet)
+    // ignore: unawaited_futures
+    _paintFromSnapshotIfAny();
+
+    // Fast paint #2: exact uid+blockId+date if we already have blockId
+    if ((_selectedBlockId ?? '').isNotEmpty) {
+      // ignore: unawaited_futures
+      _paintFromSnapshotIfAny();
+    }
 
     _wesOpenTotal = Stopwatch()..start();
+
 
     final contextUid = UserContext.of(context, listen: false).currentUid;
     final formattedDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
@@ -4090,8 +4109,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           _cachedProgressedValues.clear();
 
 // ⚠️ Do NOT wipe rows if a snapshot already painted them.
-          final _hadRowsFromSnapshot = _selectedExercisesWithCircuits.isNotEmpty;
-          if (!_hadRowsFromSnapshot) {
+          if (!_didFastPaint) {
             _selectedExercisesWithCircuits.clear();
             _workoutSets.clear();
             _repsControllers.clear();
@@ -4100,14 +4118,17 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
             _velocityControllers.clear();
             _notesControllers.clear();
             _resolvedBB2Values.clear();
+          } else {
+            // Keep rows the fast paint drew; still reset non-row flags if needed.
+            _resolvedBB2Values.clear();
           }
-
 
           await _loadDraftLocallyIfAvailable();
           _populateVelocityFlags();
           print("🔀 [WES] Merged BB2 into draft");
 
           _cachedProgressedValues.clear();
+
 
           final hasUserData = _weightControllers.any((controllerList) =>
               controllerList.any((c) =>
@@ -4399,88 +4420,56 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
       print('🟨 [WES Boot] _paintFromSnapshotIfAny enter uid=$uid bid=$bid ymd=$ymd');
 
-      if (uid == null) {
-        print('⚪ [WES Boot] No UID yet → skip fast paint');
+      if (uid == null || bid == null) {
+        print('⚪ [WES Boot] Skip snapshot paint (uid or blockId missing)');
         return;
       }
 
-      WESInitSnapshot? snap;
+      // 🔁 CHANGE START: use helper that sorts by cachedAt DESC (latest snapshot)
+      final snap = await BlockPlanCache.getInitSnapshot(
+        uid: uid,
+        blockId: bid,
+        dateYmd: ymd,
+      );
+      // 🔁 CHANGE END
 
-      // Primary: exact key (uid+block+date) if we have block id already
-      if (bid != null && bid.isNotEmpty) {
-        final isar = await IsarDb.instance;
-        snap = await isar.wESInitSnapshots
-            .filter()
-            .uidEqualTo(uid)
-            .and()
-            .blockIdEqualTo(bid)
-            .and()
-            .dateYmdEqualTo(ymd)
-            .build()
-            .findFirst();
-        print('🔎 [WES Boot] Exact snapshot lookup (uid=$uid, block=$bid, ymd=$ymd) → ${snap == null ? "MISS" : "HIT"}');
-      }
-
-      // Fallback: if blockId isn’t known yet, try any snapshot for uid+date
+      print('🔎 [WES Boot] Exact snapshot lookup (uid=$uid, block=$bid, ymd=$ymd) → ${snap == null ? 'MISS' : 'HIT'}');
       if (snap == null) {
-        final isar = await IsarDb.instance;
-        snap = await isar.wESInitSnapshots
-            .filter()
-            .uidEqualTo(uid)
-            .and()
-            .dateYmdEqualTo(ymd)
-            .build()
-            .findFirst();
-        print('🔎 [WES Boot] Fallback snapshot lookup (uid=$uid, any block, ymd=$ymd) → ${snap == null ? "MISS" : "HIT"}');
-      }
-
-      if (snap == null) {
-        print('⚪ [WES Boot] No snapshot found for $ymd (uid=$uid, block=${bid ?? "none"})');
         return;
       }
 
-      // We found one—log payload size just for sanity
-      print('✅ [WES Boot] Snapshot FOUND for $ymd (uid=$uid, block=${snap.blockId}). '
-          'plannedJson=${snap.plannedExercisesJson.length} chars');
+      final plannedRaw = snap.plannedExercisesJson;
+      final prevRaw    = snap.previousWorkoutJson;
 
-      // Decode just enough to render rows immediately
-      final planned = snap.plannedExercisesJson.isNotEmpty
-          ? (jsonDecode(snap.plannedExercisesJson) as List)
-          : const [];
+      final List planned = plannedRaw.isNotEmpty ? (jsonDecode(plannedRaw) as List) : const [];
+      final List prev    = prevRaw.isNotEmpty    ? (jsonDecode(prevRaw) as List)    : const [];
 
-      if (planned.isEmpty) {
-        // Fallback: try to derive rows from previousWorkoutJson
-        final prev = snap.previousWorkoutJson.isNotEmpty
-            ? (jsonDecode(snap.previousWorkoutJson) as List)
-            : const [];
-        if (prev.isEmpty) {
-          print('⚪ [WES Boot] Snapshot had no planned rows and no prev overlay — nothing to paint');
-          return;
-        }
+      print('🧪 [WES Boot] plannedLen=${planned.length} prevLen=${prev.length}');
 
-        final derived = <Map<String, dynamic>>[];
-        for (final raw in prev) {
-          final m = Map<String, dynamic>.from(raw as Map);
-          final name = (m['name'] ?? '').toString().trim();
-          if (name.isEmpty) continue;
-          final ci = (m['circuitIndex'] ?? 0) as int;
-          derived.add({'name': name, 'circuitIndex': ci});
-        }
-
-        if (derived.isEmpty) {
-          print('⚪ [WES Boot] Prev overlay couldn’t yield names — nothing to paint');
-          return;
-        }
-
-        print('🟪 [WES Boot] Using prev overlay as planned fallback (count=${derived.length})');
-        // reuse `planned` variable so the rest of the function paints it
-        planned
-          ..clear()
-          ..addAll(derived);
+      // Choose rows to paint:
+      // 1) Prefer planned (WES planned placeholders)
+      // 2) Else derive rows from previous overlay (names + circuitIndex)
+      List<Map<String, dynamic>> rows = [];
+      if (planned.isNotEmpty) {
+        rows = planned.map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map)).toList();
+      } else if (prev.isNotEmpty) {
+        rows = prev.map<Map<String, dynamic>>((e) {
+          final m = Map<String, dynamic>.from(e as Map);
+          return {
+            'name': (m['name'] ?? '').toString().trim(),
+            'circuitIndex': (m['circuitIndex'] is int)
+                ? (m['circuitIndex'] as int)
+                : int.tryParse('${m['circuitIndex'] ?? 0}') ?? 0,
+          };
+        }).toList();
       }
 
+      if (rows.isEmpty) {
+        print('⚪ [WES Boot] Snapshot had no planned rows and no prev overlay — nothing to paint');
+        return;
+      }
 
-      // Paint minimal structure so UI appears instantly
+      if (!mounted) return;
       setState(() {
         _selectedExercisesWithCircuits.clear();
         _workoutSets.clear();
@@ -4490,8 +4479,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         _velocityControllers.clear();
         _notesControllers.clear();
 
-        for (final raw in planned) {
-          final m = Map<String, dynamic>.from(raw as Map);
+        for (final m in rows) {
           final name = (m['name'] ?? '').toString().trim();
           final ci   = (m['circuitIndex'] ?? 0) as int;
           if (name.isEmpty) continue;
@@ -4505,21 +4493,22 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
         }
 
-        // Make sure the UI won’t show a blocking spinner just because other
-        // async work is continuing in the background.
+        // Ensure UI is not blocked while other async work continues.
         _isLoadingData = false;
         _isInitialized = true;
+        _didFastPaint  = true; // 🔑 so later clears don’t nuke this paint
       });
 
-      // Keep controllers wired
       _attachDirtyListeners();
 
-      print('⚡ [WES Boot] Snapshot PAINTED ${planned.length} row(s) for $ymd (instant-visible)');
+      print('⚡ [WES Boot] Snapshot PAINTED ${rows.length} row(s) for $ymd (instant-visible)');
     } catch (e, st) {
       print('⚠️ [WES Boot] Snapshot hydrate failed: $e');
       print(st);
     }
   }
+
+
 
 
 
@@ -4591,49 +4580,37 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           (snap.plannedExercisesJson.isNotEmpty) ? (jsonDecode(
               snap.plannedExercisesJson) as List<dynamic>) : const [];
           if (plannedList.isNotEmpty) {
-            setState(() {
-              _selectedExercisesWithCircuits.clear();
-              _workoutSets.clear();
-              _repsControllers.clear();
-              _weightControllers.clear();
-              _rirControllers.clear();
-              _velocityControllers.clear();
-              _notesControllers.clear();
+            if (!_didFastPaint && plannedList.isNotEmpty) {
+              setState(() {
+                _selectedExercisesWithCircuits.clear();
+                _workoutSets.clear();
+                _repsControllers.clear();
+                _weightControllers.clear();
+                _rirControllers.clear();
+                _velocityControllers.clear();
+                _notesControllers.clear();
 
-              for (final raw in plannedList) {
-                final m = Map<String, dynamic>.from(raw as Map);
-                final name = (m['name'] ?? '').toString().trim();
-                final ci = (m['circuitIndex'] ?? 0) as int;
-                if (name.isEmpty) continue;
+                for (final raw in plannedList) {
+                  final m = Map<String, dynamic>.from(raw as Map);
+                  final name = (m['name'] ?? '').toString().trim();
+                  final ci   = (m['circuitIndex'] ?? 0) as int;
+                  if (name.isEmpty) continue;
 
-                _selectedExercisesWithCircuits.add(
-                    {'name': name, 'circuitIndex': ci});
-                _workoutSets.add(
-                    List.generate(_defaultSets, (_) => SetDetails()));
-                _repsControllers.add(List.generate(
-                    _defaultSets, (_) => TextEditingController()));
-                _weightControllers.add(List.generate(
-                    _defaultSets, (_) => TextEditingController()));
-                _rirControllers.add(List.generate(
-                    _defaultSets, (_) => TextEditingController()));
-                _velocityControllers.add(List.generate(
-                    _defaultSets, (_) => TextEditingController()));
-                _notesControllers.add(List.generate(
-                    _defaultSets, (_) => TextEditingController()));
-              }
-              // This gives you something on screen immediately
-              _isLoadingData = false;
-              _isInitialized = true;
-            });
+                  _selectedExercisesWithCircuits.add({'name': name, 'circuitIndex': ci});
+                  _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
+                  _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+                  _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+                  _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+                  _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+                  _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+                }
+                _isLoadingData = false;
+                _isInitialized = true;
+              });
+            }
+
           }
 
-          // (B) (Optional) If you want to pre-hydrate top-set charts, parse here:
-          // final Map<String, dynamic> topSetHistory = (snap.topSetHistoryJson.isNotEmpty)
-          //     ? (jsonDecode(snap.topSetHistoryJson) as Map<String, dynamic>)
-          //     : const {};
-
-          // (C) (Optional) If you persisted a previousWorkout overlay snapshot, you
-          // could pre-seed controllers here too. Keeping it simple for now.
         }
       }
     } catch (e) {
@@ -4732,11 +4709,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       await _mergeNewBB2ExercisesIntoDraft(); // Isar-first inside
     } else {
       print('📭 [WES Init] No draft found → merging BB2...');
-      // If snapshot rows already exist, DO NOT clear; let merge overlay in place.
-      if (!_rowsExist) {
+      if (!_rowsExist && !_didFastPaint) {
         _selectedExercisesWithCircuits.clear();
       }
-      await _mergeNewBB2ExercisesIntoDraft(); // Isar-first inside
+      await _mergeNewBB2ExercisesIntoDraft();
+
     }
 
 
@@ -9045,33 +9022,41 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<void>(
-      future: _initialLoad, // ✅ only runs once, doesn't re-run on rebuild
-      builder: (context, snapshot) {
-        // ⚡ If a snapshot has already painted (or fast paths flipped flags), show the page now.
-        if (_isInitialized && !_isLoadingData) {
-          return _buildWesScaffold();
-        }
+    // Non-blocking: always build the page; show a slim overlay while background init runs.
+    final overlayLoading = _selectedExercisesWithCircuits.isEmpty && (_isLoadingData && !_isInitialized);
 
-        if (snapshot.connectionState != ConnectionState.done) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
-        }
 
-        // Normal path once initial load completes
-        return _buildWesScaffold();
-      },
+    return Stack(
+      children: [
+        _buildWesScaffold(),
+
+        // Non-blocking slim overlay while background init runs
+        if (overlayLoading)
+          Positioned.fill(
+            child: IgnorePointer(
+              ignoring: true,
+              child: Container(
+                color: Colors.transparent,
+                alignment: Alignment.topCenter,
+                padding: const EdgeInsets.only(top: 8),
+                child: const SizedBox(
+                  height: 20,
+                  width: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 
-// Tiny helper used above. Paste your existing Scaffold body inside (unchanged).
+// Tiny helper used above. Your existing Scaffold body stays unchanged.
   Widget _buildWesScaffold() {
     return WillPopScope(
       onWillPop: () async {
         if (_pendingChanges) {
-          await _upsertWorkoutToFirestore(
-              alsoPushToBB2: true, markAllSaved: false);
+          await _upsertWorkoutToFirestore(alsoPushToBB2: true, markAllSaved: false);
         }
         return true;
       },
@@ -9086,7 +9071,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                   .actingAsUid;
 
               final nameStyle = GoogleFonts.monda(
-
                 color: Colors.white,
               ).copyWith(
                 // Fallbacks if Monda can't load for any reason
@@ -9132,7 +9116,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           actionsIconTheme: const IconThemeData(color: Colors.white),
           actions: [
             IconButton(
-              icon: const Icon(Icons.undo),
+
+            icon: const Icon(Icons.undo),
               tooltip: "Undo last action",
               onPressed: _lastUndoAction != null
                   ? () {

@@ -83,22 +83,23 @@ class BlockPlanCache {
 // WESInitSnapshot cache helpers (for _loadInitialData super-cache)
 // ──────────────────────────────────────────────────────────────
 
-  /// Try to get an init snapshot for a given date.
+  /// Try to get the **latest** init snapshot for a given date.
   static Future<WESInitSnapshot?> getInitSnapshot({
     required String uid,
     required String blockId,
     required String dateYmd,
   }) async {
     final isar = await IsarDb.instance;
-    // Note: no `.and()` in Isar v3; also call `.build().findFirst()`
     return await isar.wESInitSnapshots
         .filter()
         .uidEqualTo(uid)
         .blockIdEqualTo(blockId)
         .dateYmdEqualTo(dateYmd)
+        .sortByCachedAtDesc()   // 👈 pick the newest snapshot (fixes empty/old reads)
         .build()
         .findFirst();
   }
+
 
   /// Upsert an init snapshot after Firestore loads finish.
   static Future<void> putInitSnapshot({

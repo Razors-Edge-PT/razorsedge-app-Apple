@@ -62,12 +62,19 @@ class AppRoot extends StatelessWidget {
             // 🐛 DEBUG: Confirm coach/admin flags for this login
             print('🔍 UID: ${user.uid} | isCoach: $isCoach | isAdmin: ${userContext.isAdmin}');
 
+            // ── ANCHOR APP-ROOT:A — bootstrap global block meta (non-blocking; kicks WarmupService too)
+            // NOTE: safe to call before providing; it doesn't need BuildContext.
+            // Do NOT await—this hydrates from prefs instantly and refreshes server in background.
+            // If you prefer, you can import dart:async and use `unawaited(...)` here.
+            userContext.bootstrapBlockMeta(uid: user.uid);
+
             return ChangeNotifierProvider<UserContext>.value(
               value: userContext,
               child: const MyApp(), // 🟢 Now provider wraps entire app
             );
           },
         );
+
       },
     );
   }
