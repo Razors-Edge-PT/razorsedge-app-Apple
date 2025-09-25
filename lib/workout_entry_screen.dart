@@ -1041,8 +1041,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   bool _didShineThisOpen = false;
 
 // Shine animation
-  late final AnimationController _catchupShineCtl;
-  late final Animation<double> _catchupShineAnim;
+  late final AnimationController? _catchupShineCtl;
+  late final Animation<double>? _catchupShineAnim;
 
 
   //UI bits
@@ -4108,10 +4108,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     super.initState();
 
     print('🚀 [WES] initState started');
-    _catchupShineCtl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 800),
-    );
+
 
     _selectedDate = widget.initialDate ?? DateTime.now();
     if (_workoutNameController.text.trim().isEmpty) {
@@ -4316,12 +4313,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
             vsync: this,
             duration: const Duration(milliseconds: 1200),
           );
-
-
           _catchupShineAnim = CurvedAnimation(
-            parent: _catchupShineCtl,
+            parent: _catchupShineCtl!,
             curve: Curves.easeInOut,
           );
+
 
           Future.delayed(const Duration(milliseconds: 10), () {
             if (_selectedExercisesWithCircuits.isNotEmpty) {
@@ -4555,6 +4551,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         blockId: bid,
         dateYmd: ymd,
       );
+      print('📥 [FAST-snap] got snapshot for $ymd '
+          'ready=${snap?.hintsReady} '
+          'sv=${snap?.schemaVersion} '
+          'hash=${snap?.hintsInputsHash} '
+          'jsonPreview=${(snap?.hintsJson ?? '').substring(0, (snap?.hintsJson ?? '').length.clamp(0, 80))}...');
+
 
       if (snap == null) {
         print('🔴 [Offline] No WESInitSnapshot in Isar for $ymd');
@@ -4897,17 +4899,54 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
       if (hintsOk && snap.hintsInputsHash == nowHash) {
         try {
-          final decoded = (snap.hintsJson!.trimLeft().startsWith('{') || snap.hintsJson!.trimLeft().startsWith('['))
-              ? jsonDecode(snap.hintsJson!)
+          final raw = snap.hintsJson!;
+          final decoded = (raw.trimLeft().startsWith('{') || raw.trimLeft().startsWith('['))
+              ? jsonDecode(raw)
               : {};
-          if (decoded is Map) {
-            _seedHintsByKey
-              ..clear()
-              ..addAll(decoded.cast<String, Map<String, dynamic>>());
 
-          }
-        } catch (_) {
           _seedHintsByKey.clear();
+
+          if (decoded is Map) {
+            // Existing path (keep)
+            _seedHintsByKey.addAll(decoded.cast<String, Map<String, dynamic>>());
+
+          } else if (decoded is List) {
+            // NEW: seed from list-of-hints (as written by Warmup)
+            String _k(String n, int ci) => '${n.trim().toLowerCase()}|$ci';
+
+            for (final item in decoded) {
+              if (item is! Map) continue;
+              final m   = Map<String, dynamic>.from(item as Map);
+              final n   = (m['name'] ?? '').toString().trim();
+              if (n.isEmpty) continue;
+              final ci  = (m['circuitIndex'] is int)
+                  ? (m['circuitIndex'] as int)
+                  : int.tryParse('${m['circuitIndex'] ?? 0}') ?? 0;
+
+              // Warmup provides: weight (display), absWeight (absolute), reps, rir
+              final double? disp   = (m['weight']    is num) ? (m['weight']    as num).toDouble() : null;
+              final double? abs    = (m['absWeight'] is num) ? (m['absWeight'] as num).toDouble() : null;
+              final double? reps   = (m['reps']      is num) ? (m['reps']      as num).toDouble() : null;
+              final double? rir    = (m['rir']       is num) ? (m['rir']       as num).toDouble() : null;
+
+              _seedHintsByKey[_k(n, ci)] = <String, dynamic>{
+                // include both absolute and display-added so downstream can choose
+                's1_weight'       : abs,     // absolute kg (non-BW path)
+                's1_weight_added' : disp,    // display domain (BW path)
+                's1_reps'         : reps,
+                'rir'             : rir,
+                // keep originals too (handy for debugging)
+                'name'            : n,
+                'circuitIndex'    : ci,
+                'weight'          : disp,
+                'absWeight'       : abs,
+              };
+            }
+            print('⚡ [FAST] seeded ${_seedHintsByKey.length} hint(s) from list');
+          }
+        } catch (e) {
+          _seedHintsByKey.clear();
+          print('⚠️ [FAST] hints decode failed: $e');
         }
 
         print('🟢 [FAST] hints accepted (sv=${snap.schemaVersion}, hash match)');
@@ -4921,6 +4960,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           selectedDate: _selectedDate ?? DateTime.now(),
         ));
       }
+
 
       // Choose rows to paint (prefer planned, else derive from prev)
       List<Map<String, dynamic>> rows = [];
@@ -6681,7 +6721,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   @override
   void dispose() {
     print('🧹 [WES] dispose called — uid=$_cachedUid');
-    _catchupShineCtl.dispose();
+    _catchupShineCtl?.dispose();
     print('💾 [WES dispose] Persisting local draft...');
     _persistDraftLocally();
 
@@ -6706,7 +6746,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       }
     }
     WidgetsBinding.instance.removeObserver(this);
-    _catchupShineCtl.dispose();
+
 
     _horizontalScrollController.dispose();
     print('✅ [WES dispose] Completed cleanup.');
@@ -9029,12 +9069,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         });
 
         // One-time shine each page open if we have missed items
-        if (_hasMissedForToday && !_didShineThisOpen) {
+        if (_hasMissedForToday && !_didShineThisOpen && _catchupShineCtl != null) {
           _didShineThisOpen = true;
-          _catchupShineCtl
+          _catchupShineCtl!
             ..reset()
             ..forward();
         }
+
       });
     });
   }
@@ -9409,11 +9450,17 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       ),
     );
 
+    if (_catchupShineAnim == null) {
+      // Before shine is initialized, render nothing (or a placeholder)
+      return const SizedBox.shrink();
+    }
+
     return AnimatedBuilder(
-      animation: _catchupShineAnim,
+      animation: _catchupShineAnim!,
       builder: (context, _) {
         // t goes 0 → 1 once per open
-        final t = _catchupShineAnim.value;
+        final t = _catchupShineAnim!.value;
+
 
         return TextButton(
           onPressed: _hasMissedForToday

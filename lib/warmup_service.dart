@@ -178,6 +178,64 @@ class WarmupService {
 //  • plannedExercisesJson: name + circuitIndex (from BB2 plan or fallbacks)
 //  • previousWorkoutJson : rows with sets (from workout doc fallbacks)
 // ───────────────────────────────────────────────────────────────
+
+  // ───────────────────────────────────────────────────────────────
+  // Helper: ensure PeriodizationModelUtils.nameToId has an entry for `name`.
+  // Returns the resolved exerciseId (or `name` as a last-resort fallback).
+  // ───────────────────────────────────────────────────────────────
+  Future<String> _ensureNameToIdFor(
+      FirebaseFirestore fs, {
+        required String name,
+      }) async {
+    final n = name.trim();
+    if (n.isEmpty) return n;
+
+    // Fast path: already known
+    final hit = PeriodizationModelUtils.nameToId[n];
+    if (hit != null && hit.isNotEmpty) return hit;
+
+    // 1) Try exact match (server)
+    try {
+      final q = await fs
+          .collection('exercises')
+          .where('name', isEqualTo: n)
+          .limit(1)
+          .get(const GetOptions(source: Source.server));
+      if (q.docs.isNotEmpty) {
+        final id = q.docs.first.id;
+        PeriodizationModelUtils.nameToId[n] = id;
+        // diag
+        print('🧭 [Warmup NameToId] mapped "$n" → $id (exact)');
+        return id;
+      }
+    } catch (_) {}
+
+    // 2) If the global map is still cold, hydrate a small page to fill it
+    //    This also helps future lookups in the same warmup pass.
+    try {
+      final snap = await fs
+          .collection('exercises')
+          .orderBy('name')
+          .limit(250)
+          .get(const GetOptions(source: Source.server));
+      for (final d in snap.docs) {
+        final dn = (d.data()['name'] ?? '').toString().trim();
+        if (dn.isNotEmpty) {
+          PeriodizationModelUtils.nameToId[dn] = d.id;
+        }
+      }
+      final id2 = PeriodizationModelUtils.nameToId[n];
+      if (id2 != null && id2.isNotEmpty) {
+        print('🧭 [Warmup NameToId] mapped "$n" → $id2 (paged warm)');
+        return id2;
+      }
+    } catch (_) {}
+
+    // 3) Last resort: fallback to using the name itself as ID (keeps flow alive)
+    print('⚪ [Warmup NameToId] fallback for "$n" → "$n" (no match)');
+    return n;
+  }
+
   Future<void> _precomputeWesInitSnapshotIfPossible({
     required String uid,
     required String blockId,
@@ -295,15 +353,14 @@ class WarmupService {
           final name = (row['name'] ?? '').toString().trim();
           if (name.isEmpty) continue;
 
-          // Use the exerciseId if we can resolve it, else fallback to name
-          final exId = PeriodizationModelUtils.nameToId[name] ?? row['id']?.toString() ?? '';
+          // Resolve a stable id if possible, else fallback to name
+          final exId = PeriodizationModelUtils.nameToId[name] ??
+              row['id']?.toString() ??
+              name;
 
-          final detail = (exId.isNotEmpty)
-              ? PeriodizationModelUtils.plannedExerciseDetails[exId]
-              : null;
-
+          final detail = PeriodizationModelUtils.plannedExerciseDetails[exId];
           if (detail != null) {
-            // Mirror into plannedExerciseDetails under name
+            // Mirror into plannedExerciseDetails under display name
             PeriodizationModelUtils.plannedExerciseDetails[name] =
             Map<String, dynamic>.from(detail);
 
@@ -315,12 +372,17 @@ class WarmupService {
             }
 
             // Mirror periodization model
-            final modelEnum = PeriodizationModelUtils.exercisePeriodizationModels[exId];
+            final modelEnum =
+            PeriodizationModelUtils.exercisePeriodizationModels[exId];
             if (modelEnum != null) {
               PeriodizationModelUtils.exercisePeriodizationModels[name] = modelEnum;
             }
+
+            // 🔎 Debug mirror
+            print('🪞 Mirror exId="$exId" → name="$name" keys=${detail.keys.toList()}');
           }
         }
+
 
 
         print('🟣 [Warmup] block doc fetched uid=$uid blockId=$blockId → $blockData');
@@ -367,6 +429,16 @@ class WarmupService {
         PeriodizationModelUtils.plannedExerciseDetails
           ..clear()
           ..addAll(details);
+        // Mirror details by display name so name lookups also work during warmup
+        for (final entry in details.entries) {
+          final exId = entry.key;
+          final v    = entry.value;
+          final display = (v['displayName'] ?? v['name'] ?? '').toString().trim();
+          if (display.isNotEmpty) {
+            PeriodizationModelUtils.plannedExerciseDetails[display] = v;
+          }
+        }
+
 
         // 6) Build the periodization model map
         PeriodizationModelUtils.exercisePeriodizationModels.clear();
@@ -682,26 +754,132 @@ class WarmupService {
               : int.tryParse('${plannedCompact[idx]['circuitIndex'] ?? 0}') ?? 0;
           print('🔎 [Warmup Loop] building hint for "$name" ci=$ci wi=$wiForPlan');
 
-          final exId = PeriodizationModelUtils.nameToId[name] ?? name;
-          final bool isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
+          // 🔑 Resolve canonical exId, even if we only got a display name
+          String exId = PeriodizationModelUtils.nameToId[name] ?? name;
+
+// If details were mirrored by display name, try to recover a canonical id
+          final detByName = PeriodizationModelUtils.plannedExerciseDetails[name] as Map<String, dynamic>?;
+          final canonicalId = (detByName?['id'] ?? detByName?['exerciseId'])?.toString();
+          if (canonicalId != null && canonicalId.isNotEmpty) {
+            exId = canonicalId;
+          }
+
+          final bool isBw = PeriodizationModelUtils.isBodyweightExercise(
+            id: exId,
+            name: name,
+          );
+
+
+// (insert this print BEFORE calling getSuggestedRepTargetByModel)
+          final exIdForDbg = PeriodizationModelUtils.nameToId[name] ?? name;
+          print('🧩 [Warmup RepTargetCtx] name="$name" '
+              'exId=$exIdForDbg '
+              'weekIndex=$wiForPlan '
+              'selectedDate=$d '
+              'blockStart=$blockStart '
+              'blockEnd=$blockEnd '
+              'repTargets?=${PeriodizationModelUtils.plannedExerciseDetails[exIdForDbg]?['repTargets'] != null} '
+              'rirPlan?=${PeriodizationModelUtils.plannedExerciseDetails[exIdForDbg]?['rirPlan'] != null} '
+              'detailsKeys=${PeriodizationModelUtils.plannedExerciseDetails.keys.take(3).toList()}…');
+
+          // 🔍 EXTRA DIAG: what PMU will actually look at for this exercise
+          final modelEnumById   = PeriodizationModelUtils.exercisePeriodizationModels[exIdForDbg];
+          final modelEnumByName = PeriodizationModelUtils.exercisePeriodizationModels[name];
+          final detailsEntry    = PeriodizationModelUtils.plannedExerciseDetails[exIdForDbg] ?? const {};
+          final weeklyFreq      = detailsEntry['weeklyFrequency'];
+          final repTargetsAny   = detailsEntry['repTargets'];
+          final repTargetsJson  = (repTargetsAny != null) ? jsonEncode(repTargetsAny) : 'null';
+
+          String whichModelKey;
+          if (modelEnumById != null) {
+            whichModelKey = 'byId';
+          } else if (modelEnumByName != null) {
+            whichModelKey = 'byName';
+          } else {
+            whichModelKey = 'none';
+          }
+
+          print('🧭 [Warmup RepTargetSrc] modelKey=$whichModelKey '
+              'model=${modelEnumById ?? modelEnumByName} '
+              'weeklyFrequency=$weeklyFreq '
+              'repTargetsKeys='
+              '${(repTargetsAny is Map) ? repTargetsAny.keys.take(4).toList() : repTargetsAny.runtimeType}');
+
+          if (repTargetsAny is Map) {
+            final wkKey = 'week${(wiForPlan ?? 0) + 1}';
+            final wk = repTargetsAny[wkKey];
+            print('📚 [Warmup RepTargetsPeek] weekKey=$wkKey '
+                'type=${wk.runtimeType} '
+                'peek='
+                '${(wk is Map) ? wk.keys.take(6).toList() : wk}');
+          }
 
           // Planned rep target for set1
-          // Planned rep target for set1
+          // Planned rep target for set1 (DUP Exposure/Signature keep week1 across all weeks)
           int repTarget;
-          try {
-            repTarget = PeriodizationModelUtils.getSuggestedRepTargetByModel(
+
+// 1) Try to read from plannedExerciseDetails.repTargets
+          final Map<String, dynamic>? details =
+          PeriodizationModelUtils.plannedExerciseDetails[exId] as Map<String, dynamic>?;
+          final Map<String, dynamic>? repTargets =
+          (details?['repTargets'] as Map?)?.cast<String, dynamic>();
+
+          int? _dupRepFromWeek1() {
+            if (repTargets == null || repTargets.isEmpty) return null;
+
+            // choose week bucket: for DUP there may only be week1
+            final String wkKey =
+            repTargets.containsKey('week1') ? 'week1' : 'week${(wiForPlan ?? 0) + 1}';
+            final Map<String, dynamic>? wk =
+                (repTargets[wkKey] as Map?)?.cast<String, dynamic>() ??
+                    (repTargets['week1'] as Map?)?.cast<String, dynamic>();
+            if (wk == null || wk.isEmpty) return null;
+
+            // which instance (session) of this exercise this week?
+            final int instIdx = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
               exerciseName: name,
-              plannedIndex: 0, // set 1
-              weekIndex: wiForPlan,
+              savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+              blockStartDate: (blockStart == null)
+                  ? DateTime(d.year, d.month, d.day) // harmless fallback
+                  : DateTime(blockStart!.year, blockStart!.month, blockStart!.day),
+              weekIndex: wiForPlan ?? 0,
               selectedDate: d,
-              blockStartDate: blockStart,
-              blockEndDate: null,
-              repTargetsByExercise: null,
-              plannedExerciseDetails: null,
             );
-          } catch (_) {
-            repTarget = 10; // fallback default
+
+            // clamp 1..N. Most plans have up to 4 instances.
+            final String instKey = 'instance${(instIdx + 1).clamp(1, 4)}';
+            final String raw = (wk[instKey] ?? wk['instance1'] ?? '').toString().trim();
+
+            // parse "6 x 3" → 6
+            final match = RegExp(r'^(\d+)\s*x').firstMatch(raw);
+            return int.tryParse(match?.group(1) ?? '');
           }
+
+// prefer DUP-style direct read when available
+          final int? dupRep = _dupRepFromWeek1();
+          if (dupRep != null) {
+            repTarget = dupRep;
+          } else {
+            // 2) Fall back to PMU (covers Linear etc.)
+            try {
+              repTarget = PeriodizationModelUtils.getSuggestedRepTargetByModel(
+                exerciseName: name,
+                plannedIndex: 0, // set 1
+                weekIndex: wiForPlan,
+                selectedDate: d,
+                blockStartDate: blockStart,
+                blockEndDate: blockEnd,
+                repTargetsByExercise: null,
+                plannedExerciseDetails: null,
+              );
+            } catch (_) {
+              repTarget = 10; // final fallback default
+            }
+          }
+
+// (optional) quick diag
+          print('🎯 [Warmup RepTarget] "$name" → $repTarget (dup? ${dupRep != null})');
+
 
 
           // Planned RIR for set1
@@ -804,6 +982,13 @@ class WarmupService {
         blockEndDate: blockEnd,   // ✅ now use the real end date
         selectedDate: d,
       );
+
+      print('📦 [Warmup Persist] '
+          'ready=$ready '
+          'hintsLen=${hintsList.length} '
+          'hintsReady=$ready '
+          'hash=$nowHash '
+          'hintsJsonPreview=${hintsJson.substring(0, hintsJson.length.clamp(0, 80))}...');
 
 
 

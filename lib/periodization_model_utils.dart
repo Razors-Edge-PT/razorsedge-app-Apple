@@ -1601,7 +1601,6 @@ class PeriodizationModelUtils {
         final String comboKey = '${w.toStringAsFixed(1)}_${r}_${rirValue.toStringAsFixed(1)}';
         final double tryE1RM = calculateE1RM(w, r.toDouble(), rirValue);
         if (tryE1RM < baseE1RM) {
-          print('⛔ Skipping combo: $w × $r (E1RM regression)');
           continue;
         }
         final bool isUsed = usedCombos.contains(comboKey);
@@ -1629,7 +1628,7 @@ class PeriodizationModelUtils {
 
         final double tryE1RM = calculateE1RM(w, r.toDouble(), rirValue);
         if (tryE1RM < baseE1RM) {
-          print('⛔ Skipping combo: $w × $r (E1RM regression)');
+
           continue;
         }
 
