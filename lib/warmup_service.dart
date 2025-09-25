@@ -641,8 +641,18 @@ class WarmupService {
           // Progressed absolute weight via your PMU
           // (We use the same path WES uses so math matches UI later)
           final List<double> incs = PeriodizationModelUtils.getIncrementsForExercise(exId);
+
+// 👇 ADD THIS LINE
+          final rawProg = PeriodizationModelUtils.plannedExerciseDetails[exId]?['progressionModel'] as String?;
+          final pm = PeriodizationModelUtils.parseProgressionModel(rawProg);
+
+// 👉 ONE DIAG PRINT:
+          print('🧪 [Warmup Inputs] name="$name" exId=$exId wi=$wiForPlan repTarget=$repTarget rir=$rir1 '
+              'prog="$rawProg"→$pm incsLen=${incs.length} details?=${PeriodizationModelUtils.plannedExerciseDetails.containsKey(exId)} '
+              'rirPlan?=${PeriodizationModelUtils.plannedExerciseDetails[exId]?['rirPlan'] != null}');
+
           final progressed = PeriodizationModelUtils.getWeightByProgressionModel(
-            model: PeriodizationModelUtils.plannedExerciseDetails[exId]?['progressionModel'],
+            model: PeriodizationModelUtils.parseProgressionModel(rawProg),
             exerciseName: name,
             repTarget: repTarget,
             defaultWeight: 20.0,
@@ -653,6 +663,7 @@ class WarmupService {
             topSetHistory: PeriodizationModelUtils.topSetsByExercise[name],
             weekIndex: wiForPlan ?? -1,
           );
+
 
           // Absolute (storage/math)
           final double absWeight = (progressed['weight'] is num)
