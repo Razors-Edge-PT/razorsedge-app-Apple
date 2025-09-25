@@ -814,8 +814,9 @@ class WarmupService {
                 '${(wk is Map) ? wk.keys.take(6).toList() : wk}');
           }
 
+
+
           // Planned rep target for set1
-          // Planned rep target for set1 (DUP Exposure/Signature keep week1 across all weeks)
           int repTarget;
 
 // 1) Try to read from plannedExerciseDetails.repTargets
