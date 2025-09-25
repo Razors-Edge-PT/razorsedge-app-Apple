@@ -109,8 +109,10 @@ class BlockPlanCache {
     required List<Map<String, dynamic>> plannedExercises,
     required List<Map<String, dynamic>> previousWorkout,
     required List<Map<String, dynamic>> topSetHistory,
-    String? hintsJson,            // 👈 NEW
-    String? hintsInputsHash,      // 👈 NEW
+    String? hintsJson,
+    String? hintsInputsHash,
+    bool? hintsReady,        // NEW
+    int? schemaVersion,      // NEW
     DateTime? updatedAt,
   }) async {
 
@@ -124,7 +126,9 @@ class BlockPlanCache {
       ..previousWorkoutJson  = jsonEncode(previousWorkout)
       ..topSetHistoryJson    = jsonEncode(topSetHistory)
       ..hintsJson            = (hintsJson == null || hintsJson.isEmpty) ? '{}' : hintsJson   // 👈 NEW
-      ..hintsInputsHash      = hintsInputsHash                                                // 👈 NEW
+      ..hintsInputsHash      = hintsInputsHash
+      ..hintsReady          = hintsReady    // NEW
+      ..schemaVersion       = schemaVersion // NEW
       ..updatedAt = updatedAt
       ..cachedAt = DateTime.now();
 

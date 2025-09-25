@@ -13,6 +13,7 @@ import 'dart:convert';
 import 'WorkoutSummaryScreen.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:crypto/crypto.dart';
 
 
 
@@ -721,9 +722,7 @@ class PeriodizationModelUtils {
 
 
 
-    print('🧪 [PMU] getSuggestedRepTargetByModel → weekIndex = $weekIndex');
 
-    print('🧠 Model detected: ${exercisePeriodizationModels[exerciseName]}');
 
     final model = exercisePeriodizationModels[exerciseName] ?? PeriodizationModelType.dupSignature;
     print('🧠 getSuggestedRepTargetByModel → $exerciseName using model: $model (plannedIndex: $plannedIndex)');
@@ -804,7 +803,7 @@ class PeriodizationModelUtils {
               : plannedExerciseDetails?[exerciseName]?['repTargets'];
 
 
-          print('📦 repTargetsRaw for $exerciseName: ${jsonEncode(repTargetsRaw)}');
+
 
           if (repTargetsRaw == null || repTargetsRaw is! Map<String, dynamic>) {
             print('⚠️ No rep targets found for $exerciseName');
@@ -996,12 +995,14 @@ class PeriodizationModelUtils {
 
 
   static void setExerciseSettings(Map<String, dynamic> settings) {
+
     _exerciseSettings = settings;
     print('✅ [PMU] setExerciseSettings called with keys: ${settings.keys}');
     final testId = 'AmfUWbF1DH3I7qPAdh5k';
     print('🔍 [PMU] Details for Bench ID ($testId): ${settings[testId]}');
-
   }
+
+  static Map<String, dynamic> getExerciseSettings() => _exerciseSettings;
 
   static Map<String, dynamic> _exerciseSettings = {};
 
@@ -1012,14 +1013,10 @@ class PeriodizationModelUtils {
 
     dynamic incRaw = _exerciseSettings[exerciseName]?['increments'];
     final id = nameToId[exerciseName];
-    print('🧠 [BB2] nameToId lookup for "$exerciseName" → $id');
+
     print('🧾 [BB2] Details for ID $id → ${_exerciseSettings[id]}');
 
     // 👇 ADD THESE PRINTS (no logic change)
-    print('🧭 [PMU:roundToNearestValidIncrement] key="$exerciseName" id=$id '
-        'hasByName=${_exerciseSettings[exerciseName]?['increments'] != null} '
-        'hasById=${id != null && _exerciseSettings.containsKey(id) && _exerciseSettings[id]?['increments'] != null} '
-        'chosen=${_exerciseSettings[exerciseName]?['increments'] != null ? 'NAME' : ((id != null && _exerciseSettings.containsKey(id) && _exerciseSettings[id]?['increments'] != null) ? 'ID' : 'FALLBACK')}');
 
     if (_exerciseSettings[exerciseName]?['increments'] != null) {
       print('   ↳ byName increments: ${_exerciseSettings[exerciseName]?['increments']}');
@@ -1083,7 +1080,7 @@ class PeriodizationModelUtils {
     final rounded = options.reduce((a, b) =>
     (a - targetWeight).abs() < (b - targetWeight).abs() ? a : b);
 
-    print('🎯 [BB2] Chose: $rounded from target: $targetWeight');
+
 
     return rounded;
 
@@ -1883,7 +1880,7 @@ class PeriodizationModelUtils {
   })
   {
 
-    print("🧪 [Routing] About to run model logic: $model");
+
     print('🧪 [PMU Router] model=$model repTarget=$repTarget '
         'defaultWeight=${defaultWeight.toStringAsFixed(2)} '
         'rirValue=$rirValue '
@@ -3615,5 +3612,102 @@ class PeriodizationModelUtils {
     return 0; // ✅ Default case
   }
 }
+
+// ───────────────────────────────────────────────────────────────
+// WES hint-inputs fingerprint helpers (snapshot freshness)
+// ───────────────────────────────────────────────────────────────
+const int kWesSnapshotSchema = 2; // bump when snapshot structure changes
+
+class WesHintInputsPayload {
+  final String uid;
+  final String blockId;
+  final String dateYmd;
+  final int weekIndex;
+
+  final List<Map<String, dynamic>> plannedExercises;
+  final Map<String, dynamic> plannedExerciseDetails;
+  final Map<String, dynamic> exerciseSettings;
+
+  final double bodyweightAsOfDay;
+  final String lastWorkoutDate; // yyyy-MM-dd or ''
+  final String lastTopSetDate;  // yyyy-MM-dd or ''
+
+  WesHintInputsPayload({
+    required this.uid,
+    required this.blockId,
+    required this.dateYmd,
+    required this.weekIndex,
+    required this.plannedExercises,
+    required this.plannedExerciseDetails,
+    required this.exerciseSettings,
+    required this.bodyweightAsOfDay,
+    required this.lastWorkoutDate,
+    required this.lastTopSetDate,
+  });
+
+  String hash() {
+    final payload = {
+      'v'   : kWesSnapshotSchema,
+      'uid' : uid,
+      'bid' : blockId,
+      'd'   : dateYmd,
+      'wk'  : weekIndex,
+      'bw'  : double.parse(bodyweightAsOfDay.toStringAsFixed(3)),
+      'lw'  : lastWorkoutDate,
+      'lt'  : lastTopSetDate,
+      'planned': plannedExercises.map((e) => {
+        'id': (e['id'] ?? e['exerciseId'] ?? e['name'] ?? '').toString(),
+        'c' : (e['circuitIndex'] ?? 0),
+      }).toList(),
+      'details': plannedExerciseDetails.map((k, v) {
+        final m = (v is Map) ? v : const {};
+        return MapEntry(k.toString(), {
+          'periodizationModel': m['periodizationModel'],
+          'progressionModel'  : m['progressionModel'],
+          'repTargets'        : m['repTargets'],
+          'rirPlan'           : m['rirPlan'],
+          'increments'        : m['increments'],
+        });
+      }),
+      'settings': exerciseSettings.map((k, v) {
+        final m = (v is Map) ? v : const {};
+        return MapEntry(k.toString(), {
+          if (m['increments'] != null) 'increments': m['increments'],
+        });
+      }),
+    };
+
+    final jsonStr = jsonEncode(payload);
+    return sha1.convert(utf8.encode(jsonStr)).toString();
+  }
+}
+
+String wesMaxWorkoutDate(List<Map<String,dynamic>> saved) {
+  String best = '';
+  for (final w in saved) {
+    final d = (w['date'] ?? '').toString();
+    if (d.length >= 10) {
+      final ymd = d.substring(0,10);
+      if (ymd.compareTo(best) > 0) best = ymd;
+    }
+  }
+  return best;
+}
+
+String wesMaxTopSetDate(Map<String, List<Map<String,dynamic>>> topSets) {
+  String best = '';
+  for (final list in topSets.values) {
+    for (final s in list) {
+      final v = s['date'];
+      final iso = (v is DateTime) ? v.toIso8601String() : (v?.toString() ?? '');
+      if (iso.length >= 10) {
+        final ymd = iso.substring(0,10);
+        if (ymd.compareTo(best) > 0) best = ymd;
+      }
+    }
+  }
+  return best;
+}
+
 
 

@@ -25,6 +25,8 @@ class WESInitSnapshot {
 
   // Optional freshness fingerprint for recompute decisions (leave null if you don’t use it yet)
   String? hintsInputsHash;
+  int? schemaVersion;   // NEW: snapshot contract version
+  bool? hintsReady;     // NEW: signals hints are final for first paint
 
 
   // Optional freshness metadata

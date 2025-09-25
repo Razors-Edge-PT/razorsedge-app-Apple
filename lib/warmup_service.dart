@@ -196,20 +196,47 @@ class WarmupService {
       final dateKey = ymd(d);
       final nextDateKey = ymd(d.add(const Duration(days: 1)));
 
-      // 0) If a non-empty snapshot already exists, do not clobber it.
       try {
         final existing = await BlockPlanCache.getInitSnapshot(
           uid: uid, blockId: blockId, dateYmd: dateKey,
         );
-        if (existing != null &&
-            existing.plannedExercisesJson.isNotEmpty &&
-            existing.plannedExercisesJson != '[]') {
-          // We already have planned rows; keep as-is. (We could merge prev later if needed.)
-          print('🟢 [Warmup] Snapshot exists for $dateKey (uid=$uid, block=$blockId) — skip recompute');
 
+        // Build current hash for freshness
+        final wk = (/* if you have blockStart here, compute week; else */ 0);
+        final bw = PeriodizationModelUtils.bodyweightKgForDate(uid: uid, asOf: d);
+        final lastW = wesMaxWorkoutDate(PeriodizationModelUtils.savedWorkoutsList);
+        final lastT = wesMaxTopSetDate(PeriodizationModelUtils.topSetsByExercise);
+
+        final plannedForHash = <Map<String,dynamic>>[]; // (optional) fill if easy
+
+        final nowHash = WesHintInputsPayload(
+          uid: uid,
+          blockId: blockId,
+          dateYmd: dateKey,
+          weekIndex: wk,
+          plannedExercises: plannedForHash,
+          plannedExerciseDetails: PeriodizationModelUtils.plannedExerciseDetails,
+          exerciseSettings: PeriodizationModelUtils.getExerciseSettings(),
+          bodyweightAsOfDay: bw,
+          lastWorkoutDate: lastW,
+          lastTopSetDate: lastT,
+        ).hash();
+
+        final canSkip = (existing != null)
+            && (existing.schemaVersion != null && existing.schemaVersion! >= kWesSnapshotSchema)
+            && (existing.hintsReady == true)
+            && (existing.hintsInputsHash == nowHash)
+            && (existing.hintsJson.isNotEmpty && existing.hintsJson != '{}');
+
+        if (canSkip) {
+          print('🟢 [Warmup] Skip recompute → ready hints (sv=${existing!.schemaVersion}) hash=match');
           return;
+        } else if (existing != null) {
+          print('🟠 [Warmup] Recompute (sv=${existing.schemaVersion}, ready=${existing.hintsReady}, '
+              'snapHash=${existing.hintsInputsHash}, nowHash=$nowHash)');
         }
       } catch (_) {/* ignore */}
+
 
       // Accumulators
       List<Map<String, dynamic>> plannedCompact = [];
@@ -435,6 +462,135 @@ class WarmupService {
             if (seen.add('${(m['name'] ?? '').toString().trim().toLowerCase()}|${m['circuitIndex'] ?? 0}')) m,
         ];
       }
+      // ───────────────────────────────────────────────────────────────
+      // NEW: Build final-target hints for first paint (set 1 per row)
+      //  • weights are DISPLAY domain (added kg for BW; absolute for others)
+      //  • absWeight also included for audit (absolute kg for all)
+      //  • reps/rir are the planned targets for set 1
+      // ───────────────────────────────────────────────────────────────
+      final List<Map<String, dynamic>> hintsList = [];
+      try {
+        // We'll need week/day index if available
+        int? wiForPlan;
+        if (blockStart != null) {
+          final startOnly = DateTime(blockStart.year, blockStart.month, blockStart.day);
+          final daysSince = d.difference(startOnly).inDays;
+          if (daysSince >= 0) {
+            wiForPlan = daysSince ~/ 7;
+          }
+        }
+
+        // Helper: planned set-1 RIR from BB2 plan (falls back to 2.0)
+        double _plannedRirForSet1(String exerciseName) {
+          final exId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
+          final plan = PeriodizationModelUtils.plannedExerciseDetails[exId]?['rirPlan'];
+          if (plan == null || blockStart == null || wiForPlan == null) return 2.0;
+
+          final int wk = wiForPlan!;
+          final int instanceIndex = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+            exerciseName: exerciseName,
+            savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+            blockStartDate: DateTime(blockStart!.year, blockStart!.month, blockStart!.day),
+            weekIndex: wk,
+            selectedDate: d,
+          );
+
+          final String weekKey = 'week${wk + 1}';
+          final Map? weekData = plan[weekKey] as Map?;
+          final int maxSessions = weekData?.keys
+              .where((k) => k.toString().startsWith('session'))
+              .length ?? 0;
+          final int safeSession = (maxSessions > 0)
+              ? instanceIndex.clamp(0, maxSessions - 1)
+              : 0;
+
+          final String sessionKey = 'session${safeSession + 1}';
+          final String setKey = 'set1';
+          final String? raw = plan[weekKey]?[sessionKey]?[setKey]?['rir']?.toString();
+          return double.tryParse(raw ?? '') ?? 2.0;
+        }
+
+        for (int idx = 0; idx < plannedCompact.length; idx++) {
+          final name = (plannedCompact[idx]['name'] ?? '').toString().trim();
+          if (name.isEmpty) continue;
+          final int ci = (plannedCompact[idx]['circuitIndex'] is int)
+              ? plannedCompact[idx]['circuitIndex'] as int
+              : int.tryParse('${plannedCompact[idx]['circuitIndex'] ?? 0}') ?? 0;
+
+          final exId = PeriodizationModelUtils.nameToId[name] ?? name;
+          final bool isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
+
+          // Planned rep target for set1
+          // Planned rep target for set1
+          int repTarget;
+          try {
+            repTarget = PeriodizationModelUtils.getSuggestedRepTargetByModel(
+              exerciseName: name,
+              plannedIndex: 0, // set 1
+              weekIndex: wiForPlan,
+              selectedDate: d,
+              blockStartDate: blockStart,
+              blockEndDate: null,
+              repTargetsByExercise: null,
+              plannedExerciseDetails: null,
+            );
+          } catch (_) {
+            repTarget = 10; // fallback default
+          }
+
+
+          // Planned RIR for set1
+          final double rir1 = _plannedRirForSet1(name);
+
+          // Progressed absolute weight via your PMU
+          // (We use the same path WES uses so math matches UI later)
+          final List<double> incs = PeriodizationModelUtils.getIncrementsForExercise(exId);
+          final progressed = PeriodizationModelUtils.getWeightByProgressionModel(
+            model: PeriodizationModelUtils.plannedExerciseDetails[exId]?['progressionModel'],
+            exerciseName: name,
+            repTarget: repTarget,
+            defaultWeight: 20.0,
+            rirValue: rir1,
+            increments: incs.isEmpty ? [2.5] : incs,
+            maxWeightByReps: PeriodizationModelUtils
+                .plannedExerciseDetails[exId]?['maxWeightByReps'],
+            topSetHistory: PeriodizationModelUtils.topSetsByExercise[name],
+            weekIndex: wiForPlan ?? -1,
+          );
+
+          // Absolute (storage/math)
+          final double absWeight = (progressed['weight'] is num)
+              ? (progressed['weight'] as num).toDouble()
+              : 20.0;
+
+          // Display domain for fast paint field
+          double displayWeight;
+          if (isBw) {
+            displayWeight = PeriodizationModelUtils.toDisplayAddedWeight(
+              uid: uid,
+              absoluteKg: absWeight,
+              exerciseId: exId,
+              exerciseName: name,
+              asOfDate: d,
+            );
+          } else {
+            displayWeight = absWeight;
+          }
+
+          hintsList.add({
+            'name': name,
+            'circuitIndex': ci,
+            'reps': repTarget,
+            'rir': rir1,
+            'weight': displayWeight, // what the field should show on first frame
+            'absWeight': absWeight,  // audit/consistency
+          });
+        }
+      } catch (_) {
+        // best-effort; leave hintsList empty if anything goes wrong
+      }
+
+
 
       // 8) Build hintsJson (final-quality targets) before writing snapshot.
 //    Only if we have planned rows; otherwise leave it empty.
@@ -494,6 +650,23 @@ class WarmupService {
         return; // Don't write "[]"
       }
 
+      // decide readiness: ready only if we have planned rows + non-empty hints
+      final bool ready = plannedCompact.isNotEmpty && hintsJson.isNotEmpty && hintsJson != '[]';
+
+// recompute hash with the exact inputs we used (match section 9.1)
+      final nowHash = WesHintInputsPayload(
+        uid: uid,
+        blockId: blockId,
+        dateYmd: dateKey,
+        weekIndex: (/* compute if you had blockStart; else */ 0),
+        plannedExercises: plannedCompact,
+        plannedExerciseDetails: PeriodizationModelUtils.plannedExerciseDetails,
+        exerciseSettings: PeriodizationModelUtils.getExerciseSettings(),
+        bodyweightAsOfDay: PeriodizationModelUtils.bodyweightKgForDate(uid: uid, asOf: d),
+        lastWorkoutDate: wesMaxWorkoutDate(PeriodizationModelUtils.savedWorkoutsList),
+        lastTopSetDate: wesMaxTopSetDate(PeriodizationModelUtils.topSetsByExercise),
+      ).hash();
+
       await BlockPlanCache.putInitSnapshot(
         uid: uid,
         blockId: blockId,
@@ -501,9 +674,13 @@ class WarmupService {
         plannedExercises: plannedCompact,
         previousWorkout: previousOverlay,
         topSetHistory: const <Map<String, dynamic>>[],
-        hintsJson: hintsJson, // 👈 make sure your putInitSnapshot accepts this
+        hintsJson: hintsJson,
+        hintsInputsHash: nowHash,
+        hintsReady: ready,
+        schemaVersion: kWesSnapshotSchema,
         updatedAt: DateTime.now(),
       );
+
       print('🟢 [Warmup] Snapshot PUT $dateKey planned=${plannedCompact.length} prev=${previousOverlay.length} hintsLen=${hintsJson.length}');
 
 

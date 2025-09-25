@@ -567,9 +567,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     ];
     final prevDisplayCap = capCandidates.reduce((a, b) => a < b ? a : b);
 
-    print('🛑 [cap] setIdx=$setIdx prevTyped=$prevTypedDisplay '
-        'prevHintMax=$prevHintMaxDisplay prevSuggested=$prevSuggestedDisplay '
-        '→ cap=$prevDisplayCap');
 
 // Apply cap to candidates
     weightCandidatesDisplay = weightCandidatesDisplay
@@ -788,10 +785,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       rirCurrent,
     );
 
-// (optional) debug
-    print(
-        '✅ [final-cap] setIdx=$setIdx cap=$cap midDisplay=$weightMidDisplayCapped '
-            'reps=$repsMidFinal e1rmMid=$e1rmMidFinal');
+
+
 
 // 5) Return capped values
     return (
@@ -980,6 +975,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
 
 // ...set 2 & 3 hint logic functions 14th Sep 2025 ends
+
+
 
   final Set<TextEditingController> _attachedDirty = {
   }; // guards against double-attach
@@ -1375,19 +1372,62 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     });
   }
 
+  String _computeNowInputsHash() {
+    final uid = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '';
+    final bid = _selectedBlockId ?? _activeBlockId ?? '';
+    final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate ?? DateTime.now());
+
+    final wk = (blockStartDate != null && _selectedDate != null)
+        ? PeriodizationModelUtils.getWeekIndexForDate(_selectedDate!, blockStartDate!)
+        : 0;
+
+    final planned = _selectedExercisesWithCircuits
+        .map<Map<String,dynamic>>((e) => {
+      'id': PeriodizationModelUtils.nameToId[e['name']] ?? e['id'] ?? e['name'],
+      'circuitIndex': e['circuitIndex'] ?? 0,
+    })
+        .toList();
+
+    final details  = PeriodizationModelUtils.plannedExerciseDetails;
+    final settings = PeriodizationModelUtils.getExerciseSettings();
+
+    final bw = PeriodizationModelUtils.bodyweightKgForDate(
+      uid: uid,
+      asOf: _selectedDate,
+    );
+    final lastW = wesMaxWorkoutDate(PeriodizationModelUtils.savedWorkoutsList);
+    final lastT = wesMaxTopSetDate(PeriodizationModelUtils.topSetsByExercise);
+
+    return WesHintInputsPayload(
+      uid: uid,
+      blockId: bid,
+      dateYmd: ymd,
+      weekIndex: wk,
+      plannedExercises: planned,
+      plannedExerciseDetails: details,
+      exerciseSettings: settings,
+      bodyweightAsOfDay: bw,
+      lastWorkoutDate: lastW,
+      lastTopSetDate: lastT,
+    ).hash();
+  }
+
+
   String _rowCacheKey(int rowIndex) {
     var id = _selectedExercisesWithCircuits[rowIndex]['rowId'];
     if (id == null || (id as String).isEmpty) {
       // generate stable identity once
-      id = '${DateTime
-          .now()
-          .microsecondsSinceEpoch}_$rowIndex';
+      id = '${DateTime.now().microsecondsSinceEpoch}_$rowIndex';
       _selectedExercisesWithCircuits[rowIndex]['rowId'] = id;
     }
     final ymd = DateFormat('yyyy-MM-dd').format(
         _selectedDate ?? DateTime.now());
-    return '$id|$ymd';
+
+    // 🔑 include hash of current inputs so stale rows can’t leak through
+    final hash = _computeNowInputsHash(); // new helper from Step 3
+    return '$id|$ymd|$hash';
   }
+
 
 
   Future<List<_MissedItem>> _computeMissedExercisesForWeek() async {
@@ -2375,6 +2415,17 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           'weight=${cached['weight']} reps=${cached['reps']}');
       return cached;
     }
+    // Avoid caching placeholders before core meta/history land
+    if (blockStartDate == null || _selectedDate == null || PeriodizationModelUtils.savedWorkoutsList.isEmpty) {
+      print('⏳ [WES] delaying progressed calc; meta/history not ready');
+      final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
+      return {
+        'exerciseName': exerciseName,
+        'weight': 20.0,
+        'reps': 10,
+      };
+    }
+
 
 
     _debugPrintBlockDates();
@@ -2409,10 +2460,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       final week1 = fullDetails?['repTargets']?['week1'];
 
 
-      print(
-          '🔍 [WES] Checking DUP Exposure → exerciseId: $exerciseId, exerciseName: $exerciseName');
-      print(
-          '📦 Full exerciseSettings[$exerciseId] = ${jsonEncode(fullDetails)}');
+
       print('📦 repTargets = ${jsonEncode(fullDetails?['repTargets'])}');
       print('📦 week1 = ${jsonEncode(week1)}');
 
@@ -2784,10 +2832,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     // Get default weight using rep and RIR logic.
     // Get the progression model info.
     final String? progressionModelName = _exerciseSettings[exerciseId]?['progressionModel'];
-    print(
-        '🔧 [WES] progressionModelName for $exerciseId = $progressionModelName');
-    print('📦 [WES] Full _exerciseSettings for $exerciseId: ${jsonEncode(
-        _exerciseSettings[exerciseId])}');
+
 
     final progressionModel =
     PeriodizationModelUtils.parseProgressionModel(progressionModelName);
@@ -2805,8 +2850,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final incMap = PeriodizationModelUtils.incMapFromRaw(incRaw);
     final increments = PeriodizationModelUtils.expandIncrementOptions(incMap);
 
-    print('🧷 [WES] increments (expanded) for $exerciseId → '
-        '${increments.take(12).toList()} … total=${increments.length}');
+
 
 
     final maxWeightMap = _exerciseSettings[exerciseId]?['maxWeightByReps'];
@@ -2913,7 +2957,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 // Cache and return
     progressed['exerciseName'] = exerciseName;
     progressed['exerciseId'] = exerciseId;
-    _cachedProgressedValues[_rowCacheKey(exerciseIndex)] = progressed;
+    final canCache = (blockStartDate != null) && (_selectedDate != null) && (PeriodizationModelUtils.savedWorkoutsList.isNotEmpty);
+    if (canCache) {
+      _cachedProgressedValues[_rowCacheKey(exerciseIndex)] = progressed;
+    }
+
 
 
     print(
@@ -2987,7 +3035,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
     // CASE 2: BB2-entered reps → use them
     if (hasBB2Reps) {
-      print('🔁 [WES] Using BB2-entered reps for $exerciseName = $bb2Reps');
+
       return bb2Reps!;
     }
 
@@ -3610,8 +3658,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
 
     if (blockStartDate == null) {
-      print(
-          '❌ [WES] RIR_blockStartDate is null in getRirFromPlanOrInput for $exerciseName');
+
       return 2; // fallback RIR value
     }
 
@@ -3704,8 +3751,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
 
     final bb2Entry = _resolvedBB2Values[normalizedKey];
-    print('🧩 [S1W] bb2Entry weight=${bb2Entry?['weight']} '
-        'reps=${bb2Entry?['reps']} rir=${bb2Entry?['rir']}');
+
 
 
     // ✅ Step 1: Use BB2-entered weight if available
@@ -3756,8 +3802,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       return userWeight; // unchanged for non-BW
     }
 
-    print('🧮 [S1W] calling _getProgressedValues for '
-        '${_selectedExercisesWithCircuits[exerciseIndex]['name']}');
+
 
     // ✅ Step 4: Pull model progression values
     final progressed = _getProgressedValues(exerciseIndex);
@@ -3835,10 +3880,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     );
 
 // (Optional, compact trace to confirm seeds during testing)
-    print('🎯 [WES Seed] isBw=$_isBwEx rirOnlyBw=$_rirOnlyBw seedRIR=${_seedRIR
-        .toStringAsFixed(2)} '
-        '→ baseE1RM=${baseE1RM.toStringAsFixed(2)} (base=${baseWeight
-        .toStringAsFixed(2)}×${baseReps.toStringAsFixed(1)})');
+
 
 
     // ✅ Step 6: Use user RIR and/or reps if available
@@ -4208,8 +4250,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                   plannedExercises: planned,
                   previousWorkout: previous,
                   topSetHistory: topSets,
+                  hintsJson: '{}',             // empty at boot
+                  hintsInputsHash: '',         // unknown at boot
+                  hintsReady: false,           // mark not ready
+                  schemaVersion: kWesSnapshotSchema,
                   updatedAt: DateTime.now(),
                 );
+
 
                 print('🟩 [WES Init] Snapshot PUT to Isar for $ymd (uid=$uid, block=$bid) '
                     'planned=$plannedCount, prev=$previousCount');
@@ -4241,7 +4288,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
               final testExercise = _selectedExercisesWithCircuits.first['name']
                   ?.trim() ?? '';
               final rep = getRepTargetForExerciseWES(testExercise, 0);
-              print('🧪 [WES Init] Test rep target for "$testExercise" = $rep');
+
             } else {
               print(
                   '⚠️ [WES Init] No exercises in _selectedExercisesWithCircuits');
@@ -4441,7 +4488,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     }
   }
 
-  Future<void> _offlinePreflightDebug() async {
+  //fast page-open bits...
+
+
+
+
+
+    Future<void> _offlinePreflightDebug() async {
     try {
       final uid = _cachedUid ?? UserContext.of(context, listen: false).currentUid;
       final bid = _selectedBlockId
@@ -4734,6 +4787,38 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       print('🔎 [WES Boot] Exact snapshot lookup (uid=$uid, block=$bid, ymd=$ymd) → ${snap == null ? 'MISS' : 'HIT'}');
       if (snap == null) return;
 
+      // ── DEBUG: inspect raw JSON shapes before any cast ───────────────────────────
+      try {
+        print('🧩 [WES Boot] plannedExercisesJson len=${snap.plannedExercisesJson.length} '
+            'preview=${snap.plannedExercisesJson.substring(0, snap.plannedExercisesJson.length.clamp(0, 120))}');
+        final _plannedRaw = snap.plannedExercisesJson.isNotEmpty
+            ? jsonDecode(snap.plannedExercisesJson)
+            : [];
+        print('🧩 [WES Boot] planned runtimeType=${_plannedRaw.runtimeType}');
+
+        print('🧩 [WES Boot] previousWorkoutJson len=${snap.previousWorkoutJson.length} '
+            'preview=${snap.previousWorkoutJson.substring(0, snap.previousWorkoutJson.length.clamp(0, 120))}');
+        final _prevRaw = snap.previousWorkoutJson.isNotEmpty
+            ? jsonDecode(snap.previousWorkoutJson)
+            : [];
+        print('🧩 [WES Boot] prev runtimeType=${_prevRaw.runtimeType}');
+
+        final _hj = snap.hintsJson ?? '';
+        print('🧩 [WES Boot] hintsJson len=${_hj.length} '
+            'preview=${_hj.substring(0, _hj.length.clamp(0, 120))}');
+        if (_hj.isNotEmpty) {
+          final _hRaw = jsonDecode(_hj);
+          print('🧩 [WES Boot] hints runtimeType=${_hRaw.runtimeType}');
+        } else {
+          print('🧩 [WES Boot] hints runtimeType=<empty>');
+        }
+      } catch (e, st) {
+        print('❌ [WES Boot] JSON shape probe failed: $e');
+        print(st);
+      }
+// ─────────────────────────────────────────────────────────────────────────────
+
+
       // 🔐 Robust decode for planned / previous (handles legacy Map shapes)
       List<dynamic> _safeListFromJson(String raw, {String? fallbackKey}) {
         if (raw.isEmpty) return const [];
@@ -4759,29 +4844,40 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       final prev    = _safeListFromJson(snap.previousWorkoutJson,   fallbackKey: 'exercises');
 
       print('🧪 [WES Boot] plannedLen=${planned.length} prevLen=${prev.length}');
-      print('🔔 [FAST-check] about to inspect snap.hintsJson=${snap.hintsJson}');
+      final bool hintsOk = (snap.schemaVersion != null && snap.schemaVersion! >= kWesSnapshotSchema)
+          && (snap.hintsReady == true)
+          && (snap.hintsJson != null && snap.hintsJson!.isNotEmpty)
+          && (snap.hintsInputsHash != null && snap.hintsInputsHash!.isNotEmpty);
 
-      // 🔎 FAST-path hints (from snapshot.hintsJson)
-      final String _hj = snap.hintsJson ?? '';
-      if (_hj.isEmpty || _hj == '{}') {
-        print('🚫 [FAST] no hintsJson in snapshot.');
-      } else {
+      final nowHash = _computeNowInputsHash();
+
+      if (hintsOk && snap.hintsInputsHash == nowHash) {
         try {
-          final Map<String, dynamic> hintsMap =
-          (jsonDecode(_hj) as Map).cast<String, dynamic>();
+          final decoded = (snap.hintsJson!.trimLeft().startsWith('{') || snap.hintsJson!.trimLeft().startsWith('['))
+              ? jsonDecode(snap.hintsJson!)
+              : {};
+          if (decoded is Map) {
+            _seedHintsByKey
+              ..clear()
+              ..addAll(decoded.cast<String, Map<String, dynamic>>());
 
-          final Map<String, dynamic> weights =
-              (hintsMap['weights'] as Map?)?.cast<String, dynamic>() ?? const {};
-          final Map<String, dynamic> reps =
-              (hintsMap['reps'] as Map?)?.cast<String, dynamic>() ?? const {};
-          final Map<String, dynamic> rir =
-              (hintsMap['rir'] as Map?)?.cast<String, dynamic>() ?? const {};
-
-          print('🚀 [FAST] hints sizes → weights=${weights.length} reps=${reps.length} rir=${rir.length}');
-        } catch (e) {
-          print('⚠️ [WES Boot] hintsJson parse failed: $e');
+          }
+        } catch (_) {
+          _seedHintsByKey.clear();
         }
+
+        print('🟢 [FAST] hints accepted (sv=${snap.schemaVersion}, hash match)');
+      } else {
+        print('🟠 [FAST] hints rejected (ready=${snap.hintsReady}, sv=${snap.schemaVersion}, '
+            'snapHash=${snap.hintsInputsHash}, nowHash=$nowHash)');
+
+        unawaited(WarmupService.instance.warmWES(
+          _cachedUid ?? '',
+          activeBlockId: _selectedBlockId ?? _activeBlockId ?? '',
+          selectedDate: _selectedDate ?? DateTime.now(),
+        ));
       }
+
 
 
       // 👇 Load pre-resolved hints if present
@@ -4869,109 +4965,123 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 // (Optional) listeners
       _attachDirtyListeners();
 // 🟣 NEW: Seed first-set fields from hintsJson (final targets) for instant, correct first paint.
-      final List hintsList = (snap.hintsJson.isNotEmpty)
-          ? (jsonDecode(snap.hintsJson) as List)
-          : const [];
+      if (snap.hintsJson.isNotEmpty && snap.hintsJson != '{}') {
+        try {
+          final decoded = jsonDecode(snap.hintsJson);
 
-      if (hintsList.isNotEmpty) {
-        // Build quick lookup by "name|ci"
-        String _k(String n, int ci) => '${n.trim().toLowerCase()}|$ci';
-        final Map<String, Map<String, dynamic>> hintsByKey = {};
-        for (final raw in hintsList) {
-          if (raw is! Map) continue;
-          final m = Map<String, dynamic>.from(raw as Map);
-          final name = (m['name'] ?? '').toString().trim();
-          final ci = (m['circuitIndex'] is int)
-              ? (m['circuitIndex'] as int)
-              : int.tryParse('${m['circuitIndex'] ?? 0}') ?? 0;
-          if (name.isEmpty) continue;
-          hintsByKey[_k(name, ci)] = m;
-        }
+          // Build lookup by "name|ci" regardless of whether decoded is a Map or List
+          String _k(String n, int ci) => '${n.trim().toLowerCase()}|$ci';
+          final Map<String, Map<String, dynamic>> hintsByKey = {};
 
-        // Apply to rows we just painted
-        for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
-          final name = (_selectedExercisesWithCircuits[i]['name'] ?? '').toString();
-          final ci   = (_selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0) as int;
-          final key  = _k(name, ci);
-          final hint = hintsByKey[key];
-          if (hint == null) continue;
-
-          // Ensure we have at least one set slot + controllers
-          if (_workoutSets.length <= i || _workoutSets[i].isEmpty) {
-            if (_workoutSets.length <= i) {
-              _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
-            } else {
-              _workoutSets[i] = List.generate(_defaultSets, (_) => SetDetails());
+          if (decoded is Map) {
+            decoded.forEach((k, v) {
+              if (v is Map) {
+                final m = Map<String, dynamic>.from(v);
+                final name = (m['name'] ?? '').toString().trim();
+                final ci = (m['circuitIndex'] is int)
+                    ? (m['circuitIndex'] as int)
+                    : int.tryParse('${m['circuitIndex'] ?? 0}') ?? 0;
+                if (name.isNotEmpty) {
+                  hintsByKey[_k(name, ci)] = m;
+                }
+              }
+            });
+          } else if (decoded is List) {
+            for (final raw in decoded) {
+              if (raw is! Map) continue;
+              final m = Map<String, dynamic>.from(raw as Map);
+              final name = (m['name'] ?? '').toString().trim();
+              final ci = (m['circuitIndex'] is int)
+                  ? (m['circuitIndex'] as int)
+                  : int.tryParse('${m['circuitIndex'] ?? 0}') ?? 0;
+              if (name.isNotEmpty) {
+                hintsByKey[_k(name, ci)] = m;
+              }
             }
           }
-          void _ensureRow(List<List<TextEditingController>> m) {
-            while (m.length <= i) m.add(<TextEditingController>[]);
-            final need = _workoutSets[i].length;
-            if (m[i].length != need) {
-              m[i] = List.generate(need, (_) => TextEditingController());
+
+          // Apply to rows we just painted
+          for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+            final name = (_selectedExercisesWithCircuits[i]['name'] ?? '').toString();
+            final ci   = (_selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0) as int;
+            final key  = _k(name, ci);
+            final hint = hintsByKey[key];
+            if (hint == null) continue;
+
+            // Ensure at least one set + controllers
+            if (_workoutSets.length <= i || _workoutSets[i].isEmpty) {
+              if (_workoutSets.length <= i) {
+                _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
+              } else {
+                _workoutSets[i] = List.generate(_defaultSets, (_) => SetDetails());
+              }
             }
+            void _ensureRow(List<List<TextEditingController>> m) {
+              while (m.length <= i) m.add(<TextEditingController>[]);
+              final need = _workoutSets[i].length;
+              if (m[i].length != need) {
+                m[i] = List.generate(need, (_) => TextEditingController());
+              }
+            }
+            _ensureRow(_repsControllers);
+            _ensureRow(_weightControllers);
+            _ensureRow(_rirControllers);
+            _ensureRow(_velocityControllers);
+            _ensureRow(_notesControllers);
+
+            // Pull set1 targets
+            final String exId = PeriodizationModelUtils.nameToId[name] ?? name;
+            final bool isBw   = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
+
+            double? dispWeight = (hint['weight'] is num) ? (hint['weight'] as num).toDouble() : null;
+            final  double? absWeight  = (hint['absWeight'] is num) ? (hint['absWeight'] as num).toDouble() : null;
+            final  double? reps1      = (hint['reps'] is num) ? (hint['reps'] as num).toDouble() : null;
+            final  double? rir1       = (hint['rir'] is num) ? (hint['rir'] as num).toDouble() : null;
+
+            if (dispWeight == null && isBw && absWeight != null) {
+              try {
+                dispWeight = PeriodizationModelUtils.toDisplayAddedWeight(
+                  uid: _cachedUid ?? '',
+                  absoluteKg: absWeight,
+                  exerciseId: exId,
+                  exerciseName: name,
+                  asOfDate: _selectedDate,
+                );
+              } catch (_) {}
+            }
+            if (dispWeight == null && !isBw && absWeight != null) {
+              dispWeight = absWeight;
+            }
+
+            final int j = 0;
+            final repsCtl   = _repsControllers[i][j];
+            final weightCtl = _weightControllers[i][j];
+            final rirCtl    = _rirControllers[i][j];
+
+            final bool hasReps   = repsCtl.text.trim().isNotEmpty;
+            final bool hasWeight = weightCtl.text.trim().isNotEmpty;
+            final bool hasRir    = rirCtl.text.trim().isNotEmpty;
+
+            final current = _workoutSets[i][j];
+            _workoutSets[i][j] = SetDetails(
+              reps:    current.reps    ?? (reps1?.toInt()),
+              weight:  current.weight  ?? dispWeight,
+              rir:     current.rir     ?? rir1,
+              velocity: current.velocity,
+              notes:    current.notes,
+            );
+
+            if (!hasReps && reps1 != null)   repsCtl.text   = reps1.toInt().toString();
+            if (!hasWeight && dispWeight != null) weightCtl.text = dispWeight.toString();
+            if (!hasRir && rir1 != null)     rirCtl.text    = rir1.toString();
           }
-          _ensureRow(_repsControllers);
-          _ensureRow(_weightControllers);
-          _ensureRow(_rirControllers);
-          _ensureRow(_velocityControllers);
-          _ensureRow(_notesControllers);
 
-          // Pull set1 targets (display-ready). We accept either display "weight" or "absWeight" fallback.
-          final String exId = PeriodizationModelUtils.nameToId[name] ?? name;
-          final bool isBw   = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
-
-          // targets are display-ready (added kg for BW, absolute for others)
-          double? dispWeight = (hint['weight']      is num) ? (hint['weight'] as num).toDouble() : null;
-          final  double? absWeight  = (hint['absWeight']   is num) ? (hint['absWeight'] as num).toDouble() : null;
-          final  double? reps1      = (hint['reps']        is num) ? (hint['reps'] as num).toDouble()      : null;
-          final  double? rir1       = (hint['rir']         is num) ? (hint['rir'] as num).toDouble()       : null;
-
-          // If BW and only absWeight is present, convert abs → displayAdded for the text field
-          if (dispWeight == null && isBw && absWeight != null) {
-            try {
-              dispWeight = PeriodizationModelUtils.toDisplayAddedWeight(
-                uid: _cachedUid ?? '',
-                absoluteKg: absWeight,
-                exerciseId: exId,
-                exerciseName: name,
-                asOfDate: _selectedDate,
-              );
-            } catch (_) {}
-          }
-          // If non-BW and only absWeight present, that's the display too
-          if (dispWeight == null && !isBw && absWeight != null) {
-            dispWeight = absWeight;
-          }
-
-          // Seed set[0] model + controllers ONLY if fields are currently empty
-          final int j = 0;
-          final repsCtl   = _repsControllers[i][j];
-          final weightCtl = _weightControllers[i][j];
-          final rirCtl    = _rirControllers[i][j];
-
-          final bool hasReps   = repsCtl.text.trim().isNotEmpty;
-          final bool hasWeight = weightCtl.text.trim().isNotEmpty;
-          final bool hasRir    = rirCtl.text.trim().isNotEmpty;
-
-          // Update underlying model (SetDetails) as well
-          final current = _workoutSets[i][j];
-          _workoutSets[i][j] = SetDetails(
-            reps:    current.reps    ?? (reps1?.toInt()),
-            weight:  current.weight  ?? dispWeight,
-            rir:     current.rir     ?? rir1,
-            velocity: current.velocity,
-            notes:    current.notes,
-          );
-
-          if (!hasReps && reps1 != null)   repsCtl.text   = reps1.toInt().toString();
-          if (!hasWeight && dispWeight != null) weightCtl.text = dispWeight.toString();
-          if (!hasRir && rir1 != null)     rirCtl.text    = rir1.toString();
+          if (mounted) setState(() {});
+        } catch (e) {
+          print('⚠️ [WES Boot] hintsJson parse failed: $e');
         }
-
-        // We updated values in place before any server reconcile.
-        if (mounted) setState(() {});
       }
+
 
 // ✅ At this point, builder won’t see mismatched lengths
 
