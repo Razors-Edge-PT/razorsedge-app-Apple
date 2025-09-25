@@ -253,6 +253,75 @@ class WarmupService {
             .get(const GetOptions(source: Source.server));
         blockData = blk.data() ?? const {};
 
+        // ── STEP 1: Prime PMU with exercise details ────────────────
+        final rawDetails = (blockData['plannedExerciseDetails'] as Map?) ?? const {};
+        final rawSettings = (blockData['exerciseSettings'] as Map?) ?? const {};
+
+// Normalize to <String, Map<String,dynamic>>
+        final details = <String, Map<String, dynamic>>{
+          for (final e in rawDetails.entries)
+            e.key.toString(): Map<String, dynamic>.from(e.value as Map),
+        };
+
+        final settings = <String, Map<String, dynamic>>{
+          for (final e in rawSettings.entries)
+            e.key.toString(): Map<String, dynamic>.from(e.value as Map),
+        };
+
+// Overlay increments (source of truth = exerciseSettings)
+        final merged = <String, Map<String, dynamic>>{
+          for (final e in details.entries) e.key: Map<String, dynamic>.from(e.value),
+        };
+        settings.forEach((exId, s) {
+          final inc = s['increments'];
+          if (inc != null) {
+            merged[exId] = Map<String, dynamic>.from(merged[exId] ?? {});
+            merged[exId]!['increments'] = inc;
+          }
+        });
+
+// Publish into PMU
+        PeriodizationModelUtils.setExerciseSettings(merged);
+        PeriodizationModelUtils.plannedExerciseDetails
+          ..clear()
+          ..addAll(details);
+
+// Reset periodization model map
+        PeriodizationModelUtils.exercisePeriodizationModels.clear();
+
+
+        // ── STEP 2: Mirror details/settings by NAME for first paint ───────────────
+        for (final row in plannedCompact) {
+          final name = (row['name'] ?? '').toString().trim();
+          if (name.isEmpty) continue;
+
+          // Use the exerciseId if we can resolve it, else fallback to name
+          final exId = PeriodizationModelUtils.nameToId[name] ?? row['id']?.toString() ?? '';
+
+          final detail = (exId.isNotEmpty)
+              ? PeriodizationModelUtils.plannedExerciseDetails[exId]
+              : null;
+
+          if (detail != null) {
+            // Mirror into plannedExerciseDetails under name
+            PeriodizationModelUtils.plannedExerciseDetails[name] =
+            Map<String, dynamic>.from(detail);
+
+            // Mirror increments into exerciseSettings (already merged inside PMU)
+            final mergedDetail = PeriodizationModelUtils.getExerciseSettings()[exId];
+            if (mergedDetail != null) {
+              final clone = Map<String, dynamic>.from(mergedDetail);
+              PeriodizationModelUtils.getExerciseSettings()[name] = clone;
+            }
+
+            // Mirror periodization model
+            final modelEnum = PeriodizationModelUtils.exercisePeriodizationModels[exId];
+            if (modelEnum != null) {
+              PeriodizationModelUtils.exercisePeriodizationModels[name] = modelEnum;
+            }
+          }
+        }
+
 
         print('🟣 [Warmup] block doc fetched uid=$uid blockId=$blockId → $blockData');
 

@@ -4108,6 +4108,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     super.initState();
 
     print('🚀 [WES] initState started');
+    _catchupShineCtl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    );
 
     _selectedDate = widget.initialDate ?? DateTime.now();
     if (_workoutNameController.text.trim().isEmpty) {
@@ -6677,7 +6681,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   @override
   void dispose() {
     print('🧹 [WES] dispose called — uid=$_cachedUid');
-
+    _catchupShineCtl.dispose();
     print('💾 [WES dispose] Persisting local draft...');
     _persistDraftLocally();
 
