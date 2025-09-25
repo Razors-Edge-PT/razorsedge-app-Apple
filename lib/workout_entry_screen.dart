@@ -4801,6 +4801,35 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     _attachDirtyListeners();
   }
 
+// 🔸 FAST seed for velocity flags before first paint
+  bool _wesShouldShowVelocityFast({
+    required String exerciseName,
+    required String exerciseId,
+    Map<String, dynamic>? hintEntry, // may be null
+  }) {
+    // 1) Highest priority: if hint carried it
+    final hv = (hintEntry?['velocity'] ?? hintEntry?['s1_velocity']);
+    if (hv is num) return true;
+
+    // 2) If RIR/rep scheme implies velocity work (common for your velocity days)
+    final rir = (hintEntry?['rir'] ?? hintEntry?['s1_rir']);
+    if (rir is num && rir <= 1.0) {
+      // tweak if you only show velocity for ≤1 RIR days
+      // return true;
+    }
+
+    // 3) PMU detail-level switch (present in many of your plans)
+    final detail = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]
+        ?? PeriodizationModelUtils.plannedExerciseDetails[exerciseName];
+    if (detail is Map && detail['velocityEnabled'] == true) return true;
+
+    // 4) Model-based heuristic (kept conservative to avoid flicker)
+    final model = PeriodizationModelUtils.exercisePeriodizationModels[exerciseId]
+        ?? PeriodizationModelUtils.exercisePeriodizationModels[exerciseName];
+    if (model != null && model.toString().contains('velocity')) return true;
+
+    return false;
+  }
 
   // Anchor A: add inside _WorkoutPageState
   Future<void> _paintFromSnapshotIfAny() async {
@@ -4982,6 +5011,60 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         print('⚪ [WES Boot] Snapshot had no planned rows and no prev overlay — nothing to paint');
         return;
       }
+
+      // 🟣 Seed velocity flags for the rows we're about to paint (first frame, no flicker)
+      try {
+        // Build quick lookup for previous sets by "name|ci" so we can detect velocity use
+        String _k(String n, int ci) => '${n.trim().toLowerCase()}|$ci';
+
+        final Map<String, List<Map<String, dynamic>>> _prevByKey = {};
+        try {
+          // Re-decode previous if you already have it above; otherwise reuse your parsed `prev`
+          // We’re inside _paintFromSnapshotIfAny and you already computed `prev`
+          for (final raw in prev) {
+            if (raw is! Map) continue;
+            final m = Map<String, dynamic>.from(raw as Map);
+            final name = (m['name'] ?? '').toString().trim();
+            final ci = (m['circuitIndex'] is int)
+                ? (m['circuitIndex'] as int)
+                : int.tryParse('${m['circuitIndex'] ?? 0}') ?? 0;
+            final sets = (m['sets'] as List?)?.whereType<Map>()
+                .map((s0) => Map<String, dynamic>.from(s0)).toList() ?? const [];
+            if (name.isNotEmpty && sets.isNotEmpty) {
+              _prevByKey[_k(name, ci)] = sets;
+            }
+          }
+        } catch (_) {}
+
+        for (final r in rows) {
+          final name = (r['name'] ?? '').toString().trim();
+          final ci   = (r['circuitIndex'] ?? 0) as int;
+          if (name.isEmpty) continue;
+          final key  = _k(name, ci);
+
+          // Resolve an id if possible (your mapping is warmed by exercises.load)
+          final exId = PeriodizationModelUtils.nameToId[name] ?? name;
+
+          // Heuristic 1: explicitly enabled on the plan/details
+          final bool enabledByPlan =
+              (PeriodizationModelUtils.plannedExerciseDetails[exId]?['velocityEnabled'] == true) ||
+                  (PeriodizationModelUtils.plannedExerciseDetails[name]?['velocityEnabled'] == true);
+
+          // Heuristic 2: velocity was used in previous overlay (same row)
+          final prevSets = _prevByKey[key] ?? const <Map<String, dynamic>>[];
+          final bool seenInPrev = prevSets.any((s) => s['velocity'] is num);
+
+          // Decide once, up front
+          final bool shouldShow = enabledByPlan || seenInPrev;
+
+          // Seed map only if not already present (prevents later flips)
+          _showVelocityByExercise.putIfAbsent(key, () => shouldShow);
+        }
+      } catch (_) {
+        // best-effort; never block fast paint
+      }
+
+
 
       if (!mounted) return;
       setState(() {
@@ -10432,16 +10515,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                                                         // ✅ Conditionally include Velocity (for this exercise only)
                                                         if (_showVelocityByExercise[
                                                         (_selectedExercisesWithCircuits[i]['name'] as String)
-                                                            .toLowerCase()] ==
-                                                            true) ...[
+                                                            .toLowerCase()] == true) ...[
                                                           const SizedBox(
                                                               width: 45,
                                                               child: Text(
                                                                   'Vel.',
                                                                   style: _headerStyle)),
-                                                          const SizedBox(
-                                                              width: 4),
+                                                          const SizedBox(width: 4),
                                                         ],
+
                                                         const SizedBox(
                                                             width: 120,
                                                             child: Text('Notes',
