@@ -130,6 +130,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   Map<String, bool> _showVelocityByExercise = {
   }; // exerciseName.toLowerCase() → true/false
 
+
   String get userId =>
       UserContext
           .of(context, listen: false)
@@ -2415,6 +2416,44 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           'weight=${cached['weight']} reps=${cached['reps']}');
       return cached;
     }
+// 🔹 NEW: if we have seeded hints, use them for the very first paint
+    final seedKey = _rowKeyBy(exerciseIndex);
+    final seed = _seedHintsByKey[seedKey];
+    if (seed != null) {
+      final exName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.toString() ?? '';
+      final exId   = PeriodizationModelUtils.nameToId[exName] ?? exName;
+      final isBw   = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: exName);
+
+      // Prefer absolute if present; otherwise, for BW convert added→absolute; else use added as-is.
+      double? absW = (seed['s1_weight'] as num?)?.toDouble();
+      final  double? addedW = (seed['s1_weight_added'] as num?)?.toDouble();
+      if (absW == null && addedW != null) {
+        absW = isBw
+            ? PeriodizationModelUtils.toAbsoluteWeight(
+          uid: _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '',
+          displayAddedKg: addedW,
+          exerciseId: exId,
+          exerciseName: exName,
+          asOfDate: _selectedDate,
+        )
+            : addedW; // non-BW hints sometimes only provide one field
+      }
+      absW ??= 20.0;
+
+      final seeded = <String, dynamic>{
+        'exerciseName': exName,
+        'exerciseId'  : exId,
+        'weight'      : absW, // ← store absolute kg for downstream math
+        'reps'        : (seed['s1_reps'] as num?)?.toDouble() ?? 10.0,
+      };
+
+      _cachedProgressedValues[_rowCacheKey(exerciseIndex)] = seeded;
+      print('⚡ [WES Seed] progressed primed from hints for "$exName" '
+          '= ${seeded['weight']} × ${seeded['reps']}');
+      return seeded;
+    }
+
+
     // Avoid caching placeholders before core meta/history land
     if (blockStartDate == null || _selectedDate == null || PeriodizationModelUtils.savedWorkoutsList.isEmpty) {
       print('⏳ [WES] delaying progressed calc; meta/history not ready');
@@ -2621,10 +2660,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
             final cyclePos = sorted.isEmpty ? 'n/a' : ((i % sorted.length) + 1)
                 .toString();
             final cycleDen = sorted.isEmpty ? 'n/a' : sorted.length.toString();
-            print('🧾 [WES DUP Exposure] prior #${i + 1} → ${e['date']} '
-                '• ${e['weight']} kg × ${e['reps']} '
-                '${e['rir'] != '—' ? '(RIR ${e['rir']}) ' : ''}'
-                '→ cycle ${cyclePos}/${cycleDen}');
+
           }
 
 // Now compute plannedIndex / index as before
@@ -4844,12 +4880,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       final prev    = _safeListFromJson(snap.previousWorkoutJson,   fallbackKey: 'exercises');
 
       print('🧪 [WES Boot] plannedLen=${planned.length} prevLen=${prev.length}');
+
+      final nowHash = _computeNowInputsHash();
+      print('🔔 [FAST-check] snapHash=${snap.hintsInputsHash} nowHash=$nowHash ready=${snap.hintsReady} sv=${snap.schemaVersion}');
+
+
       final bool hintsOk = (snap.schemaVersion != null && snap.schemaVersion! >= kWesSnapshotSchema)
           && (snap.hintsReady == true)
           && (snap.hintsJson != null && snap.hintsJson!.isNotEmpty)
           && (snap.hintsInputsHash != null && snap.hintsInputsHash!.isNotEmpty);
 
-      final nowHash = _computeNowInputsHash();
 
       if (hintsOk && snap.hintsInputsHash == nowHash) {
         try {
@@ -4877,27 +4917,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           selectedDate: _selectedDate ?? DateTime.now(),
         ));
       }
-
-
-
-      // 👇 Load pre-resolved hints if present
-      try {
-        if (snap.hintsJson.isNotEmpty && snap.hintsJson != '{}') {
-          final raw = jsonDecode(snap.hintsJson);
-          if (raw is Map) {
-            _seedHintsByKey.clear();
-            raw.forEach((k, v) {
-              if (v is Map) {
-                _seedHintsByKey[k.toString()] = Map<String, dynamic>.from(v);
-              }
-            });
-            print('⚡ [WES Boot] Loaded ${_seedHintsByKey.length} pre-resolved hint(s)');
-          }
-        }
-      } catch (e) {
-        print('⚠️ [WES Boot] hintsJson parse failed: $e');
-      }
-
 
       // Choose rows to paint (prefer planned, else derive from prev)
       List<Map<String, dynamic>> rows = [];
@@ -4965,7 +4984,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 // (Optional) listeners
       _attachDirtyListeners();
 // 🟣 NEW: Seed first-set fields from hintsJson (final targets) for instant, correct first paint.
-      if (snap.hintsJson.isNotEmpty && snap.hintsJson != '{}') {
+      if (hintsOk && snap.hintsInputsHash == nowHash && snap.hintsJson.isNotEmpty && snap.hintsJson != '{}') {
         try {
           final decoded = jsonDecode(snap.hintsJson);
 

@@ -69,8 +69,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
 
     print('[Warmup] started for $actingUid');
-    // Kick off WES cache warmup (does not block UI, has cooldown)
-    unawaited(WarmupService.instance.warmWES(actingUid ?? ''));
+
+// Pass block + date so Warmup can precompute the exact WES snapshot you’ll need.
+    unawaited(WarmupService.instance.warmWES(
+      actingUid ?? '',
+      activeBlockId: userContext.activeBlockId,      // <-- ensure this is set in UserContext
+      selectedDate: DateTime.now(),                  // <-- or the date you intend to open in WES
+    ));
+
 
     // Delay the email fetch until after build
     WidgetsBinding.instance.addPostFrameCallback((_) {

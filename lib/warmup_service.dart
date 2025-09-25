@@ -242,17 +242,107 @@ class WarmupService {
       List<Map<String, dynamic>> plannedCompact = [];
       List<Map<String, dynamic>> previousOverlay = [];
 
-      // 1) Read block start date to compute week/day
+      // 1) Read block start/end date to compute week/day
       DateTime? blockStart;
+      DateTime? blockEnd;
+      Map<String, dynamic> blockData = const {};   // 👈 hoisted so available later
       try {
         final blk = await fs
             .collection('planned_blocks').doc(uid)
             .collection('blocks').doc(blockId)
             .get(const GetOptions(source: Source.server));
-        final data = blk.data() ?? const {};
-        final tsStart = data['startDate'] as Timestamp?;
+        blockData = blk.data() ?? const {};
+
+
+        print('🟣 [Warmup] block doc fetched uid=$uid blockId=$blockId → $blockData');
+
+        final tsStart = blockData['startDate'] as Timestamp?;
         blockStart = tsStart?.toDate();
+        final tsEnd = blockData['endDate'] as Timestamp?;
+        blockEnd = tsEnd?.toDate();
       } catch (_) {/* ignore */}
+
+// ── PMU PRIMING: inject plannedExerciseDetails + increments + model map ─────────
+      try {
+        // 1) Pull details & exerciseSettings as saved by Block Planner (BP)
+        final detailsRaw = (blockData['plannedExerciseDetails'] as Map?) ?? const {};
+        final exSettingsRaw = (blockData['exerciseSettings'] as Map?) ?? const {};
+
+        // 2) Normalize to Map<String, Map<String,dynamic>>
+        final Map<String, Map<String, dynamic>> details = {
+          for (final e in detailsRaw.entries)
+            e.key.toString(): Map<String, dynamic>.from(e.value as Map),
+        };
+
+        final Map<String, Map<String, dynamic>> exerciseSettings = {
+          for (final e in exSettingsRaw.entries)
+            e.key.toString(): Map<String, dynamic>.from(e.value as Map),
+        };
+
+        // 3) Override/overlay increments like WES does (source of truth = exerciseSettings)
+        final Map<String, Map<String, dynamic>> mergedForPMU = {
+          for (final e in details.entries) e.key: Map<String, dynamic>.from(e.value),
+        };
+        exerciseSettings.forEach((exId, v) {
+          final inc = v['increments'];
+          if (inc != null) {
+            mergedForPMU[exId] = Map<String, dynamic>.from(mergedForPMU[exId] ?? {});
+            mergedForPMU[exId]!['increments'] = inc;
+          }
+        });
+
+        // 4) Publish into PMU
+        PeriodizationModelUtils.setExerciseSettings(mergedForPMU);
+
+        // 5) Publish the raw details
+        PeriodizationModelUtils.plannedExerciseDetails
+          ..clear()
+          ..addAll(details);
+
+        // 6) Build the periodization model map
+        PeriodizationModelUtils.exercisePeriodizationModels.clear();
+
+        details.forEach((exId, entry) {
+          final modelName = entry['periodizationModel'] as String?;
+          final modelEnum = (modelName != null)
+              ? PeriodizationModelUtils.stringToModel(modelName)
+              : null;
+          if (modelEnum != null) {
+            // by ID
+            PeriodizationModelUtils.exercisePeriodizationModels[exId] = modelEnum;
+
+            // also by NAME if we can resolve
+            final maybeName = PeriodizationModelUtils.nameToId.entries
+                .firstWhere(
+                  (kv) => kv.value == exId,
+              orElse: () => const MapEntry<String, String>('', ''),
+            )
+                .key;
+            if (maybeName.trim().isNotEmpty) {
+              PeriodizationModelUtils.exercisePeriodizationModels[maybeName] =
+                  modelEnum;
+            }
+          }
+        });
+
+        // Finally, bind names from planned rows to the same model
+        for (final row in plannedCompact) {
+          final n = (row['name'] ?? '').toString().trim();
+          if (n.isEmpty) continue;
+          final exId = PeriodizationModelUtils.nameToId[n] ?? '';
+          final model = (exId.isNotEmpty)
+              ? PeriodizationModelUtils.exercisePeriodizationModels[exId]
+              : null;
+          if (model != null) {
+            PeriodizationModelUtils.exercisePeriodizationModels[n] = model;
+          }
+        }
+      } catch (_) {
+        // best-effort; don’t crash warmup if anything goes sideways
+      }
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 
       if (blockStart != null) {
         final startOnly = DateTime(blockStart.year, blockStart.month, blockStart.day);
@@ -462,6 +552,11 @@ class WarmupService {
             if (seen.add('${(m['name'] ?? '').toString().trim().toLowerCase()}|${m['circuitIndex'] ?? 0}')) m,
         ];
       }
+      print('🟠 [Warmup PlanProbe] plannedCompact=${plannedCompact.length} '
+          'first=${plannedCompact.isNotEmpty ? plannedCompact.first : '<none>'} '
+          'previousOverlay=${previousOverlay.length} '
+          'blockStart=$blockStart blockEnd=$blockEnd date=$d');
+
       // ───────────────────────────────────────────────────────────────
       // NEW: Build final-target hints for first paint (set 1 per row)
       //  • weights are DISPLAY domain (added kg for BW; absolute for others)
@@ -516,6 +611,7 @@ class WarmupService {
           final int ci = (plannedCompact[idx]['circuitIndex'] is int)
               ? plannedCompact[idx]['circuitIndex'] as int
               : int.tryParse('${plannedCompact[idx]['circuitIndex'] ?? 0}') ?? 0;
+          print('🔎 [Warmup Loop] building hint for "$name" ci=$ci wi=$wiForPlan');
 
           final exId = PeriodizationModelUtils.nameToId[name] ?? name;
           final bool isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
@@ -585,65 +681,32 @@ class WarmupService {
             'weight': displayWeight, // what the field should show on first frame
             'absWeight': absWeight,  // audit/consistency
           });
+          // 👇 ADD THIS ONE PRINT
+          if (repTarget == null || absWeight == 20.0) {
+            print('❌ [Warmup Hints] Missing proper hint for "$name" '
+                'repTarget=$repTarget absWeight=$absWeight '
+                'blockStart=$blockStart blockEnd=$blockEnd '
+                'details?=${PeriodizationModelUtils.plannedExerciseDetails[exId] != null}');
+          } else {
+            print('✅ [Warmup Hints] OK "$name" → ${absWeight}kg × $repTarget');
+          }
         }
       } catch (_) {
         // best-effort; leave hintsList empty if anything goes wrong
       }
 
 
-
-      // 8) Build hintsJson (final-quality targets) before writing snapshot.
-//    Only if we have planned rows; otherwise leave it empty.
+      // 8) Build hintsJson using the rich hintsList from step 7
       String hintsJson = '[]';
       try {
-        if (plannedCompact.isNotEmpty) {
-          // Safely compute week index (fallback to 0 if blockStart is null)
-          final int wi = (blockStart != null)
-              ? PeriodizationModelUtils.getWeekIndexForDate(
-            d,
-            DateTime(blockStart!.year, blockStart!.month, blockStart!.day),
-          )
-              : 0;
-
-          final List<Map<String, dynamic>> hints = [];
-          for (final row in plannedCompact) {
-            final name = (row['name'] ?? '').toString().trim();
-            final ci   = (row['circuitIndex'] ?? 0) as int;
-            if (name.isEmpty) continue;
-
-            // Ask PMU for this exercise's rep target for the week.
-            // NOTE: Signature expects exerciseName + weekIndex.
-            int? repTarget;
-            try {
-              final rt = PeriodizationModelUtils.getSuggestedRepTargetByModel(
-                exerciseName: name,
-                plannedIndex: 0,      // 👈 required
-                weekIndex: wi,        // 👈 optional but you already have it
-                blockStartDate: blockStart,
-                selectedDate: d,
-                plannedExerciseDetails: PeriodizationModelUtils.plannedExerciseDetails,
-              );
-
-              repTarget = rt; // already an int
-            } catch (_) {
-              // best-effort
-            }
-
-
-            hints.add({
-              'name': name,
-              'circuitIndex': ci,
-              if (repTarget != null) 'reps': repTarget,
-              // leave weight/absWeight/rir empty; WES will compute/overlay on boot
-            });
-          }
-
-          hintsJson = jsonEncode(hints);
+        if (hintsList.isNotEmpty) {
+          hintsJson = jsonEncode(hintsList);
         }
       } catch (_) {
-        // best-effort
         hintsJson = '[]';
       }
+      // 👇 ADD THIS PRINT
+      print('🟣 [Warmup Hints] Final hintsJson=$hintsJson');
 
 // 9) Write snapshot only if we have *something*
       if (plannedCompact.isEmpty && previousOverlay.isEmpty) {
@@ -654,18 +717,15 @@ class WarmupService {
       final bool ready = plannedCompact.isNotEmpty && hintsJson.isNotEmpty && hintsJson != '[]';
 
 // recompute hash with the exact inputs we used (match section 9.1)
-      final nowHash = WesHintInputsPayload(
-        uid: uid,
-        blockId: blockId,
-        dateYmd: dateKey,
-        weekIndex: (/* compute if you had blockStart; else */ 0),
+      final nowHash = PeriodizationModelUtils.computePlanInputsHash(
         plannedExercises: plannedCompact,
         plannedExerciseDetails: PeriodizationModelUtils.plannedExerciseDetails,
-        exerciseSettings: PeriodizationModelUtils.getExerciseSettings(),
-        bodyweightAsOfDay: PeriodizationModelUtils.bodyweightKgForDate(uid: uid, asOf: d),
-        lastWorkoutDate: wesMaxWorkoutDate(PeriodizationModelUtils.savedWorkoutsList),
-        lastTopSetDate: wesMaxTopSetDate(PeriodizationModelUtils.topSetsByExercise),
-      ).hash();
+        blockStartDate: blockStart,   // ✅ use actual block start
+        blockEndDate: blockEnd,   // ✅ now use the real end date
+        selectedDate: d,
+      );
+
+
 
       await BlockPlanCache.putInitSnapshot(
         uid: uid,

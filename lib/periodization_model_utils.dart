@@ -1231,6 +1231,56 @@ class PeriodizationModelUtils {
     return list;
   }
 
+  // ==== BEGIN: Shared plan inputs hash (Warmup + WES use the same) ====
+  static String computePlanInputsHash({
+    required List<Map<String, dynamic>> plannedExercises,           // WES rows to paint
+    required Map<String, dynamic> plannedExerciseDetails,           // from Firestore (rirPlan, repTargets, increments, progressionModel, etc.)
+    required DateTime? blockStartDate,
+    required DateTime? blockEndDate,
+    DateTime? selectedDate,
+  }) {
+    // Canonicalize minimal-but-sufficient inputs that affect hints.
+    // IMPORTANT: Keep this exact field subset identical in Warmup & WES.
+
+    String normName(String s) => s.trim().toLowerCase();
+
+    final planLite = plannedExercises.map((e) {
+      return {
+        'name': normName((e['name'] ?? '').toString()),
+        'circuitIndex': e['circuitIndex'] ?? 0,
+      };
+    }).toList();
+
+    // Only serialize per-exercise bits Warmup uses for hinted values
+    final detailsLite = <String, dynamic>{};
+    plannedExerciseDetails.forEach((k, v) {
+      if (k == 'blockMeta') return; // block meta is in its own fields below
+      if (v is! Map) return;
+      final m = v as Map;
+      detailsLite[k] = {
+        // These are the fields that affect reps/weight/RIR hints:
+        if (m['progressionModel'] != null) 'progressionModel': m['progressionModel'],
+        if (m['repTargets'] != null)       'repTargets': m['repTargets'],
+        if (m['rirPlan'] != null)          'rirPlan': m['rirPlan'],
+        if (m['increments'] != null)       'increments': m['increments'],
+      };
+    });
+
+    final payload = {
+      'plan': planLite,
+      'details': detailsLite,
+      'blockStartDate': blockStartDate?.toIso8601String(),
+      'blockEndDate': blockEndDate?.toIso8601String(),
+      // weekIndex matters whenever DUP by week or linear w/ week interpolation
+      if (selectedDate != null && blockStartDate != null)
+        'weekIndex': getWeekIndexForDate(selectedDate, blockStartDate),
+    };
+
+    final s = jsonEncode(payload);
+    return sha1.convert(utf8.encode(s)).toString(); // import 'dart:convert' & 'package:crypto/crypto.dart'
+  }
+// ==== END: Shared plan inputs hash ====
+
 
   // Progression model logic
 
@@ -1556,7 +1606,7 @@ class PeriodizationModelUtils {
         }
         final bool isUsed = usedCombos.contains(comboKey);
         final String tag = isUsed ? '⛔ used' : (trialE1RM < baseE1RM ? '⬇️ regressive' : '✅ valid');
-        print('  → $w × $r = E1RM ${trialE1RM.toStringAsFixed(2)} → $tag');
+
       }
     }
 
@@ -2803,7 +2853,7 @@ class PeriodizationModelUtils {
 
         if (w != null && r != null && rir != null) {
           final key = '${w.toStringAsFixed(1)}_${r}_${rir.toStringAsFixed(1)}';
-          print('✅ Used combo added from exercises: $key');
+
           used.add(key);
         }
       }
