@@ -632,7 +632,9 @@ class _ConversationPageState extends State<ConversationPage> {
                       return ts(a).compareTo(ts(b));
                     });
 
-                  _lastItemIndex = msgs.isEmpty ? 0 : msgs.length - 1;
+                  final int listCount = msgs.length + 1; // +1 tail spacer prevents bottom cutoff
+                  _lastItemIndex = listCount - 1;        // spacer is now the visual last item
+
 
                   // Compute "first unread" index based on the cached _initialLastReadAt
                   int firstUnreadIndex = -1;
@@ -689,13 +691,18 @@ class _ConversationPageState extends State<ConversationPage> {
                   return ScrollablePositionedList.builder(
                     itemScrollController: _itemScrollController,
                     itemPositionsListener: _itemPositionsListener,
-                    padding: EdgeInsets.only(
-                      bottom: 8 + MediaQuery.of(context).viewInsets.bottom,
-                    ),
+                    padding: const EdgeInsets.only(bottom: 0),
 
-                    itemCount: msgs.length,
+
+                    itemCount: listCount,
                     itemBuilder: (context, i) {
+                      // Tail spacer to ensure the last real message is fully visible above the bottom edge
+                      if (i == msgs.length) {
+                        return const SizedBox(height: 20); // 16–24 is fine; 20 is a good default
+                      }
+
                       final qDoc = msgs[i];
+
                       // 👀 start live reaction watch for this msg (once)
                       if (!_watchedMsgIds.contains(qDoc.id)) {
                         _watchedMsgIds.add(qDoc.id);
