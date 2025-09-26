@@ -4256,8 +4256,32 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           }
           print(
               '🔄 [WES Init] Overlaying saved workout (completed + WES-planned) after final BB2 merge…');
-          await _loadExistingWorkoutIfAny(); // <- puts the WES-planned rows back
-          if (mounted) setState(() {}); // <- repaint
+          // Capture row/controller structure before overlay
+          final _beforeSel  = _selectedExercisesWithCircuits.length;
+          final _beforeSets = _workoutSets.length;
+          final _beforeReps = _repsControllers.length;
+          final _beforeWts  = _weightControllers.length;
+          final _beforeRir  = _rirControllers.length;
+          final _beforeVel  = _velocityControllers.length;
+          final _beforeNote = _notesControllers.length;
+
+          await _loadExistingWorkoutIfAny(); // ← updates controllers & may insert rows
+
+// Compare after overlay; only rebuild if the structure actually changed
+          final _structureChanged =
+              _selectedExercisesWithCircuits.length != _beforeSel  ||
+                  _workoutSets.length                     != _beforeSets ||
+                  _repsControllers.length                 != _beforeReps ||
+                  _weightControllers.length               != _beforeWts  ||
+                  _rirControllers.length                  != _beforeRir  ||
+                  _velocityControllers.length             != _beforeVel  ||
+                  _notesControllers.length                != _beforeNote;
+
+          if (mounted && _structureChanged) {
+            setState(() {}); // rebuild only when new rows were added/removed
+          }
+// else: only controller.text changed → TextFields update themselves; no repaint.
+
 
           // === BEGIN: SAVE WESInitSnapshot TO ISAR ===
           try {
@@ -5465,10 +5489,17 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
 
     // H) Finalize UI flags + paint
-    setState(() {
-      _isLoadingData = false;
-      _isInitialized = true;
-    });
+    final _needSpinnerFlip = (!_isInitialized || _isLoadingData);
+    _isLoadingData = false;
+    _isInitialized = true;
+// Only rebuild if we’d otherwise show a spinner and there’s no content yet
+    if (mounted && _needSpinnerFlip && _selectedExercisesWithCircuits.isEmpty) {
+      print('🟢 [WES] Spinner→content flip repaint');
+      setState(() {});
+    } else {
+      print('⚪ [WES] Skip spinner repaint (content already on screen)');
+    }
+
 
     // ──────────────────────────────────────────────────────────────
 // SUPER-CACHE WRITE: persist a minimal snapshot for next open
@@ -5612,10 +5643,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     //    (Your _loadExistingWorkoutIfAny already has cache/Isar-first)
     // ignore: unawaited_futures
     (() async {
+      final _before = _structureHash();
       await _loadExistingWorkoutIfAny();
-
-      if (mounted) setState(() {}); // subtle repaint with overlays if changed
+      final _after = _structureHash();
+      if (mounted && _after != _before) setState(() {}); // only if shape changed
     })();
+
   }
 
 
@@ -5623,6 +5656,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final _tLoadExisting = Stopwatch()
       ..start();
     print('⏱️ [WES] _loadExistingWorkoutIfAny started');
+    final _beforeHash = _structureHash();
     try {
       final uid = UserContext
           .of(context, listen: false)
@@ -5938,32 +5972,27 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                   newDocServer = await workoutsCol.doc(newDocId).get();
                 }
 
-                Future<QuerySnapshot<Map<String, dynamic>>> _eqServer(
-                    String v) =>
-                    workoutsCol.where('date', isEqualTo: v).get(
-                        const GetOptions(source: Source.server));
+                Future<QuerySnapshot<Map<String, dynamic>>> _eqServer(String v) =>
+                    workoutsCol.where('date', isEqualTo: v)
+                        .get(const GetOptions(source: Source.server));
 
                 final srvResults = await Future.wait([
                   _eqServer(isoLocal),
                   _eqServer(isoUtc),
                   _eqServer(dateOnly),
                   workoutsCol
-                      .where(
-                      'date', isGreaterThanOrEqualTo: '${dateOnly}T00:00:00')
+                      .where('date', isGreaterThanOrEqualTo: '${dateOnly}T00:00:00')
                       .where('date', isLessThan: '${nextDateOnly}T00:00:00')
                       .get(const GetOptions(source: Source.server)),
                   workoutsCol
-                      .where('date',
-                      isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+                      .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
                       .where('date', isLessThan: Timestamp.fromDate(nextDay))
                       .get(const GetOptions(source: Source.server)),
                 ]);
 
-                final Map<String,
-                    DocumentSnapshot<Map<String, dynamic>>> legacyByIdSrv = {};
+                final Map<String, DocumentSnapshot<Map<String, dynamic>>> legacyByIdSrv = {};
                 for (final snap in srvResults) {
-                  for (final d in snap.docs)
-                    legacyByIdSrv[d.id] = d;
+                  for (final d in snap.docs) legacyByIdSrv[d.id] = d;
                 }
 
                 final newExSrv = _exListFromDoc(newDocServer);
@@ -5983,15 +6012,29 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                     combinedSrv.length != combinedCache.length ||
                         wesPlannedSrv.length != wesPlannedCache.length;
 
-                if (changed && mounted) {
-                  setState(() {}); // minimal repaint; data already updated in memory by callers
-                  print(
-                      '🔄 [WES LoadExisting] Applied server-union refresh (background)');
+                if (changed) {
+                  // mutate in-memory data structures as you already do (if any)
+                  // (If you assign combinedSrv/wesPlannedSrv back to state lists, do it here.)
+
+                  // Guard the repaint: only if the *shape* actually changed
+                  final __pre = _structureHash();
+                  // If you actually apply combinedSrv/wesPlannedSrv to your UI lists here,
+                  // do that *before* computing __post.
+                  final __post = _structureHash();
+
+                  if (mounted && __post != __pre) {
+                    print('🟢 [WES] Reconcile repaint (shape changed)');
+                    setState(() {});
+                  } else {
+                    print('⚪ [WES] Reconcile no repaint (values only)');
+                  }
+                  print('🔄 [WES LoadExisting] Applied server-union refresh (background)');
                 }
               } catch (_) {
                 /* best-effort */
               }
             })();
+
           } else {
             print(
                 '🕳️ [WES LoadExisting] Cache-union empty → falling back to server union');
@@ -6181,7 +6224,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       _pendingChanges = false;
       _lastSavedHash = null;
 
-      if (mounted) setState(() {}); // repaint now that overlay + additions are in
+      final _afterHash = _structureHash();
+      if (mounted && _afterHash != _beforeHash) setState(() {});
+// repaint now that overlay + additions are in
       if (exList.isEmpty && plannedAdded == 0) {
         print('   ❌ no workout items (completed or WES-planned) for this date');
       }
@@ -6836,6 +6881,19 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     super.dispose();
   }
 
+// === STRUCTURE HASH: only changes when rows/sets shape changes ===
+  int _structureHash() {
+    int h = _selectedExercisesWithCircuits.length;
+    h = (h * 31) ^ _workoutSets.length;
+    h = (h * 31) ^ _repsControllers.length;
+    h = (h * 31) ^ _weightControllers.length;
+    h = (h * 31) ^ _rirControllers.length;
+    h = (h * 31) ^ _velocityControllers.length;
+    h = (h * 31) ^ _notesControllers.length;
+    // Per-row set counts (cheap)
+    for (final s in _workoutSets) { h = (h * 31) ^ s.length; }
+    return h;
+  }
 
   void _initializeControllers() {
     // ✅ Ensure controller lists are at least as long as the exercise list

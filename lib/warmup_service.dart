@@ -128,6 +128,32 @@ class WarmupService {
               .limit(_workoutWarmLimit)
               .get(const GetOptions(source: Source.server)),
         );
+
+        // ✅ Also materialize savedWorkoutsList for PMU (matches WES loadSavedWorkoutsForInstanceCount)
+        try {
+          final col = fs.collection('users').doc(uid).collection('workouts');
+
+          // 1) Try cache first
+          List<Map<String, dynamic>> workouts = const <Map<String, dynamic>>[];
+          try {
+            final cached = await col.get(const GetOptions(source: Source.cache));
+            workouts = cached.docs.map((d) => d.data()).toList();
+          } catch (_) { /* cache miss is fine */ }
+
+          // 2) If cache empty, hit server
+          if (workouts.isEmpty) {
+            final server = await col.get(); // server
+            workouts = server.docs.map((d) => d.data()).toList();
+          }
+
+          // 3) Assign to PMU so rep indexing & progression models see history now
+          PeriodizationModelUtils.savedWorkoutsList =
+          List<Map<String, dynamic>>.from(workouts);
+          print('📦 [Warmup→PMU] seeded savedWorkoutsList count=${workouts.length}');
+        } catch (e) {
+          print('⚠️ [Warmup→PMU] failed to seed savedWorkoutsList: $e');
+        }
+
       }
 
       if (warmExercises) {
@@ -346,43 +372,6 @@ class WarmupService {
 
 // Reset periodization model map
         PeriodizationModelUtils.exercisePeriodizationModels.clear();
-
-
-        // ── STEP 2: Mirror details/settings by NAME for first paint ───────────────
-        for (final row in plannedCompact) {
-          final name = (row['name'] ?? '').toString().trim();
-          if (name.isEmpty) continue;
-
-          // Resolve a stable id if possible, else fallback to name
-          final exId = PeriodizationModelUtils.nameToId[name] ??
-              row['id']?.toString() ??
-              name;
-
-          final detail = PeriodizationModelUtils.plannedExerciseDetails[exId];
-          if (detail != null) {
-            // Mirror into plannedExerciseDetails under display name
-            PeriodizationModelUtils.plannedExerciseDetails[name] =
-            Map<String, dynamic>.from(detail);
-
-            // Mirror increments into exerciseSettings (already merged inside PMU)
-            final mergedDetail = PeriodizationModelUtils.getExerciseSettings()[exId];
-            if (mergedDetail != null) {
-              final clone = Map<String, dynamic>.from(mergedDetail);
-              PeriodizationModelUtils.getExerciseSettings()[name] = clone;
-            }
-
-            // Mirror periodization model
-            final modelEnum =
-            PeriodizationModelUtils.exercisePeriodizationModels[exId];
-            if (modelEnum != null) {
-              PeriodizationModelUtils.exercisePeriodizationModels[name] = modelEnum;
-            }
-
-            // 🔎 Debug mirror
-            print('🪞 Mirror exId="$exId" → name="$name" keys=${detail.keys.toList()}');
-          }
-        }
-
 
 
         print('🟣 [Warmup] block doc fetched uid=$uid blockId=$blockId → $blockData');
@@ -698,13 +687,73 @@ class WarmupService {
           'previousOverlay=${previousOverlay.length} '
           'blockStart=$blockStart blockEnd=$blockEnd date=$d');
 
+      // ── STEP 2: Mirror details/settings by NAME for first paint ───────────────
+      for (final row in plannedCompact) {
+        final name = (row['name'] ?? '').toString().trim();
+        if (name.isEmpty) continue;
+
+        // Resolve a stable id if possible, else fallback to name
+        final exId = PeriodizationModelUtils.nameToId[name] ??
+            row['id']?.toString() ??
+            name;
+
+        final detail = PeriodizationModelUtils.plannedExerciseDetails[exId];
+        if (detail != null) {
+          // Mirror into plannedExerciseDetails under display name
+          PeriodizationModelUtils.plannedExerciseDetails[name] =
+          Map<String, dynamic>.from(detail);
+
+          // Mirror increments into exerciseSettings (already merged inside PMU)
+          final mergedDetail = PeriodizationModelUtils.getExerciseSettings()[exId];
+          if (mergedDetail != null) {
+            final clone = Map<String, dynamic>.from(mergedDetail);
+            PeriodizationModelUtils.getExerciseSettings()[name] = clone;
+          }
+
+          // Mirror periodization model
+          final modelEnum =
+          PeriodizationModelUtils.exercisePeriodizationModels[exId];
+          if (modelEnum != null) {
+            PeriodizationModelUtils.exercisePeriodizationModels[name] = modelEnum;
+          }
+
+          // 🔎 Debug mirror
+          print('🪞 Mirror exId="$exId" → name="$name" keys=${detail.keys.toList()}');
+        }
+      }
+
+      // ✅ Ensure top-set history is ready for progression math (matches WES)
+      try {
+        await PeriodizationModelUtils.fetchFullTopSetHistory(uid: uid);
+        print('📈 [Warmup→PMU] topSetsByExercise ready: '
+            '${PeriodizationModelUtils.topSetsByExercise.keys.length} keys');
+      } catch (e) {
+        print('⚠️ [Warmup→PMU] fetchFullTopSetHistory failed: $e');
+      }
+
+      // 🔬 One-time pre-hints input probe
+      try {
+        print('🧪 [Warmup Probe] savedWorkoutsList=${PeriodizationModelUtils.savedWorkoutsList.length} '
+            'topSetsKeys=${PeriodizationModelUtils.topSetsByExercise.keys.length}');
+        if (PeriodizationModelUtils.savedWorkoutsList.isNotEmpty) {
+          final w = PeriodizationModelUtils.savedWorkoutsList.first;
+          final exs = (w['exercises'] is List) ? (w['exercises'] as List).length : 'n/a';
+          print('🧪 [Warmup Probe] example workout keys=${w is Map ? (w as Map).keys.toList() : []} '
+              'exCount=$exs date=${w['date']}');
+        }
+      } catch (e) {
+        print('⚠️ [Warmup Probe] inputs probe failed: $e');
+      }
+
+
       // ───────────────────────────────────────────────────────────────
       // NEW: Build final-target hints for first paint (set 1 per row)
       //  • weights are DISPLAY domain (added kg for BW; absolute for others)
       //  • absWeight also included for audit (absolute kg for all)
       //  • reps/rir are the planned targets for set 1
       // ───────────────────────────────────────────────────────────────
-      final List<Map<String, dynamic>> hintsList = [];
+      final Map<String, dynamic> hintsMap = {};  // key: "${name.toLowerCase()}|$ci" → { s1_* fields }
+
       try {
         // We'll need week/day index if available
         int? wiForPlan;
@@ -804,6 +853,19 @@ class WarmupService {
               'weeklyFrequency=$weeklyFreq '
               'repTargetsKeys='
               '${(repTargetsAny is Map) ? repTargetsAny.keys.take(4).toList() : repTargetsAny.runtimeType}');
+// Minimal dump of repTargets (id → week keys)
+          final _rtIdMap = (PeriodizationModelUtils.plannedExerciseDetails[exIdForDbg] as Map?)?['repTargets'];
+          print('RT dump → id.weekKeys=${(_rtIdMap is Map) ? _rtIdMap.keys.toList() : _rtIdMap.runtimeType}');
+
+          // simple repTargets presence check (id vs name)
+          final _rtId = (PeriodizationModelUtils.plannedExerciseDetails[exId] as Map?)?['repTargets'] as Map?;
+          final _rtNm = (PeriodizationModelUtils.plannedExerciseDetails[name] as Map?)?['repTargets'] as Map?;
+          print('RT present → byId=${_rtId != null} byName=${_rtNm != null}');
+
+          final _w1Id = (_rtId?['week1'] as Map?)?.keys.where((k) => k.toString().startsWith('instance')).toList() ?? const [];
+          final _w1Nm = (_rtNm?['week1'] as Map?)?.keys.where((k) => k.toString().startsWith('instance')).toList() ?? const [];
+          print('RT week1 instances → id=${_w1Id.length} name=${_w1Nm.length}');
+
 
           if (repTargetsAny is Map) {
             final wkKey = 'week${(wiForPlan ?? 0) + 1}';
@@ -826,6 +888,7 @@ class WarmupService {
           (details?['repTargets'] as Map?)?.cast<String, dynamic>();
 
           int? _dupRepFromWeek1() {
+
             if (repTargets == null || repTargets.isEmpty) return null;
 
             // choose week bucket: for DUP there may only be week1
@@ -836,24 +899,59 @@ class WarmupService {
                     (repTargets['week1'] as Map?)?.cast<String, dynamic>();
             if (wk == null || wk.isEmpty) return null;
 
-            // which instance (session) of this exercise this week?
+// which instance (same rule WES uses)
             final int instIdx = PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
               exerciseName: name,
               savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
               blockStartDate: (blockStart == null)
-                  ? DateTime(d.year, d.month, d.day) // harmless fallback
+                  ? DateTime(d.year, d.month, d.day)
                   : DateTime(blockStart!.year, blockStart!.month, blockStart!.day),
               weekIndex: wiForPlan ?? 0,
               selectedDate: d,
             );
 
-            // clamp 1..N. Most plans have up to 4 instances.
+// 1) Try week1.instanceN; accept "9" or "9 x 3"
             final String instKey = 'instance${(instIdx + 1).clamp(1, 4)}';
-            final String raw = (wk[instKey] ?? wk['instance1'] ?? '').toString().trim();
+            final String rawInst = (wk[instKey] ?? wk['instance1'] ?? '').toString().trim();
+            final RegExpMatch? m1 = RegExp(r'^(\d+)').firstMatch(rawInst);
+            if (m1 != null) {
+              final int? reps = int.tryParse(m1.group(1)!);
+              print('RT week1 pick → $instKey raw="$rawInst" reps=${reps ?? 'null'}');
+              if (reps != null) return reps;
+            }
 
-            // parse "6 x 3" → 6
-            final match = RegExp(r'^(\d+)\s*x').firstMatch(raw);
-            return int.tryParse(match?.group(1) ?? '');
+// 2) Fallback: week1.sessionN.set1.{reps|targetReps|text}
+            final List<MapEntry<String, dynamic>> sessions = wk.entries
+                .where((e) => e.key.toString().startsWith('session'))
+                .toList()
+              ..sort((a, b) => a.key.compareTo(b.key));
+
+            if (sessions.isNotEmpty) {
+              final int sIdx = instIdx % sessions.length;
+              final dynamic sVal = sessions[sIdx].value;
+
+              int? reps;
+              if (sVal is Map) {
+                final dynamic set1 = sVal['set1'];
+                final dynamic r = (set1 is Map) ? (set1['reps'] ?? set1['targetReps']) : set1;
+
+                if (r is num) reps = r.toInt();
+                reps ??= int.tryParse((r ?? '').toString());
+                if (reps == null) {
+                  final String txt = (set1 is Map)
+                      ? (set1['text'] ?? set1.toString()).toString()
+                      : (set1 ?? '').toString();
+                  final RegExpMatch? m2 = RegExp(r'^(\d+)').firstMatch(txt);
+                  if (m2 != null) reps = int.tryParse(m2.group(1)!);
+                }
+              }
+
+              print('RT week1 session pick → idx=$sIdx reps=${reps ?? 'null'}');
+              if (reps != null) return reps;
+            }
+// 3) Nothing matched
+            return null;
+
           }
 
 // prefer DUP-style direct read when available
@@ -914,9 +1012,11 @@ class WarmupService {
 
 
           // Absolute (storage/math)
-          final double absWeight = (progressed['weight'] is num)
+          double absWeight = (progressed['weight'] is num)
               ? (progressed['weight'] as num).toDouble()
               : 20.0;
+          if (absWeight.isNaN) absWeight = 20.0;
+
 
           // Display domain for fast paint field
           double displayWeight;
@@ -932,14 +1032,52 @@ class WarmupService {
             displayWeight = absWeight;
           }
 
-          hintsList.add({
-            'name': name,
-            'circuitIndex': ci,
-            'reps': repTarget,
-            'rir': rir1,
-            'weight': displayWeight, // what the field should show on first frame
-            'absWeight': absWeight,  // audit/consistency
-          });
+          // 🔑 Seed WES-style map for first paint (key = "name|circuitIndex")
+          final String seedKey = '${name.toLowerCase()}|$ci';
+
+// Optional e1rm (same math as WES)
+          final double e1rm = PeriodizationModelUtils.calculateE1RM(
+            absWeight,                         // absolute for e1rm
+            repTarget.toDouble(),
+            rir1,
+          );
+
+          if (isBw) {
+            // For BW, seed ADDED weight (display domain)
+            hintsMap[seedKey] = {
+              's1_weight_added': displayWeight, // already added-domain
+              's1_reps': repTarget,
+              's1_rir': rir1,
+              'e1rm': e1rm,
+            };
+          } else {
+            // For non-BW, seed ABSOLUTE kg
+            hintsMap[seedKey] = {
+              's1_weight': absWeight,
+              's1_reps': repTarget,
+              's1_rir': rir1,
+              'e1rm': e1rm,
+            };
+          }
+          // 🏁 Final (Warmup-produced) values for first paint — mirrors WES run #3
+          final repModelEnum =
+              PeriodizationModelUtils.exercisePeriodizationModels[exId] ??
+                  PeriodizationModelUtils.exercisePeriodizationModels[name];
+          final repModelStr = repModelEnum?.toString() ?? 'unknown';
+          final progModelStr = (rawProg ?? 'default').toString();
+
+          if (isBw) {
+            print('🏁 [Warmup Final] (BW) "$name" ci=$ci '
+                '→ ${displayWeight.toStringAsFixed(2)} added '
+                '× $repTarget @ RIR ${rir1.toStringAsFixed(1)} '
+                '| repModel=$repModelStr, progression="$progModelStr", weekIndex=${wiForPlan ?? -1}');
+          } else {
+            print('🏁 [Warmup Final] "$name" ci=$ci '
+                '→ ${absWeight.toStringAsFixed(2)} kg '
+                '× $repTarget @ RIR ${rir1.toStringAsFixed(1)} '
+                '| repModel=$repModelStr, progression="$progModelStr", weekIndex=${wiForPlan ?? -1}');
+          }
+
           // 👇 ADD THIS ONE PRINT
           if (repTarget == null || absWeight == 20.0) {
             print('❌ [Warmup Hints] Missing proper hint for "$name" '
@@ -956,16 +1094,19 @@ class WarmupService {
 
 
       // 8) Build hintsJson using the rich hintsList from step 7
-      String hintsJson = '[]';
+      String hintsJson = '{}';
       try {
-        if (hintsList.isNotEmpty) {
-          hintsJson = jsonEncode(hintsList);
+        if (hintsMap.isNotEmpty) {
+          hintsJson = jsonEncode(hintsMap);
         }
       } catch (_) {
-        hintsJson = '[]';
+        hintsJson = '{}';
       }
-      // 👇 ADD THIS PRINT
       print('🟣 [Warmup Hints] Final hintsJson=$hintsJson');
+      try {
+        print('📊 [Warmup Final] summary: ${hintsMap.length} exercise hint(s) computed for first paint');
+      } catch (_) {}
+
 
 // 9) Write snapshot only if we have *something*
       if (plannedCompact.isEmpty && previousOverlay.isEmpty) {
@@ -973,7 +1114,7 @@ class WarmupService {
       }
 
       // decide readiness: ready only if we have planned rows + non-empty hints
-      final bool ready = plannedCompact.isNotEmpty && hintsJson.isNotEmpty && hintsJson != '[]';
+      final bool ready = plannedCompact.isNotEmpty && hintsMap.isNotEmpty;
 
 // recompute hash with the exact inputs we used (match section 9.1)
       final nowHash = PeriodizationModelUtils.computePlanInputsHash(
@@ -986,7 +1127,7 @@ class WarmupService {
 
       print('📦 [Warmup Persist] '
           'ready=$ready '
-          'hintsLen=${hintsList.length} '
+          'hintsLen=${hintsMap.length} '
           'hintsReady=$ready '
           'hash=$nowHash '
           'hintsJsonPreview=${hintsJson.substring(0, hintsJson.length.clamp(0, 80))}...');
