@@ -266,6 +266,8 @@ class _ConversationPageState extends State<ConversationPage> {
   final ItemPositionsListener _itemPositionsListener = ItemPositionsListener.create();
 
   bool _didInitialJump = false;
+  bool _isAtBottom = true; // updated live from itemPositionsListener
+
   String? _lastLatestMsgId; // for "auto-scroll on my new message"
   Timestamp? _initialLastReadAt;   // from my participantState at page open
   bool _gotInitialLastReadAt = false;
@@ -295,6 +297,96 @@ class _ConversationPageState extends State<ConversationPage> {
       // ignore: avoid_print
       print('❗ REACT watch ERROR $tag: $e');
     });
+  }
+
+  // ---- DEBUG: mirror the Firestore rule checks for reactions ----
+  Future<void> _debugRulesPreflight(
+      DocumentReference<Map<String, dynamic>> msgRef,
+      String uid,
+      String? emoji,
+      ) async {
+    final msgPath = msgRef.path;
+    final convRef = msgRef.parent.parent!;
+    final convSnap = await convRef.get(const GetOptions(source: Source.server));
+    final conv = Map<String, dynamic>.from(convSnap.data() ?? {});
+    final participants = Map<String, dynamic>.from(conv['participants'] ?? {});
+
+    final beforeSnap = await msgRef.get(const GetOptions(source: Source.server));
+    final before = Map<String, dynamic>.from(beforeSnap.data() ?? {});
+    final beforeReactions = Map<String, dynamic>.from(before['reactions'] ?? {});
+
+    // prospective "after" document as the rules would see it
+    final Map<String, dynamic> after = Map<String, dynamic>.from(before);
+    final Map<String, dynamic> afterReactions =
+    Map<String, dynamic>.from(beforeReactions);
+    if (emoji == null) {
+      afterReactions.remove(uid);
+      if (afterReactions.isEmpty) {
+        after.remove('reactions'); // this simulates FieldValue.delete becoming no map
+      } else {
+        after['reactions'] = afterReactions;
+      }
+    } else {
+      afterReactions[uid] = emoji;
+      after['reactions'] = afterReactions;
+    }
+
+    bool isSignedInCheck = FirebaseAuth.instance.currentUser != null;
+    bool isParticipantCheck = participants[uid] == true;
+
+    // top-level key diffs
+    Set<String> beforeKeys = before.keys.toSet();
+    Set<String> afterKeys  = after.keys.toSet();
+    final addedTop    = afterKeys.difference(beforeKeys);
+    final removedTop  = beforeKeys.difference(afterKeys);
+    final changedTop  = afterKeys.intersection(beforeKeys).where((k) {
+      final b = before[k];
+      final a = after[k];
+      return k == 'reactions' ? true : a != b;
+    }).toSet();
+
+    // inner map diffs
+    Map<String, dynamic> oldMap = Map<String, dynamic>.from(before['reactions'] ?? {});
+    Map<String, dynamic> newMap = Map<String, dynamic>.from(after['reactions'] ?? {});
+    final oldKeys = oldMap.keys.toSet();
+    final newKeys = newMap.keys.toSet();
+    final addedInner   = newKeys.difference(oldKeys);
+    final removedInner = oldKeys.difference(newKeys);
+    final changedInner = newKeys.intersection(oldKeys).where((k) => newMap[k] != oldMap[k]).toSet();
+
+    // rule subclauses
+    final caseA =
+        addedTop.isEmpty &&
+            removedTop.isEmpty &&
+            changedTop.contains('reactions') &&
+            (changedTop.length == 1) &&
+            addedInner.every((k) => k == uid) &&
+            removedInner.every((k) => k == uid) &&
+            changedInner.every((k) => k == uid);
+
+    final caseB =
+        addedTop.isEmpty &&
+            changedTop.isEmpty &&
+            removedTop.length == 1 &&
+            removedTop.contains('reactions') &&
+            before['reactions'] is Map &&
+            (oldKeys.length == 1 && oldKeys.contains(uid));
+
+    final emojiOk = after.containsKey('reactions')
+        ? (newMap[uid] is String ? (newMap[uid] as String).runes.length <= 8 : true)
+        : true;
+
+    // Print a neat summary
+    print('──────── REACT RULES PREFLIGHT (${msgPath}) ────────');
+    print('user uid=$uid  participant? $isParticipantCheck  signedIn? $isSignedInCheck');
+    print('participants map keys=${participants.keys.toList()}');
+    print('TOP added=$addedTop removed=$removedTop changed=$changedTop');
+    print('INN added=$addedInner removed=$removedInner changed=$changedInner');
+    print('CaseA_keepReactionsOnly=$caseA  CaseB_removeWholeField=$caseB  emojiOk=$emojiOk');
+    print('FINAL allow? ${isSignedInCheck && isParticipantCheck && (caseA || caseB) && emojiOk}');
+    print('before.reactions=${beforeReactions}');
+    print('after .reactions=${after.containsKey('reactions') ? newMap : '(none)'}');
+    print('────────────────────────────────────────────────────');
   }
 
 
@@ -341,6 +433,14 @@ class _ConversationPageState extends State<ConversationPage> {
       final before = beforeSnap.data() ?? <String, dynamic>{};
       final beforeReactions = Map<String, dynamic>.from(before['reactions'] ?? {});
 
+      // 🔒 Skip no-op writes (avoid rule checks & flicker)
+      final prev = beforeReactions[uid];
+      if ((emoji == null && prev == null) || (emoji != null && prev == emoji)) {
+        // ignore: avoid_print
+        print('🧯 REACT noop: prev="$prev" new="$emoji" → no update sent');
+        return;
+      }
+
       // Prepare the exact write we're about to send
       final Map<String, Object?> updateData = emoji == null
 
@@ -358,7 +458,12 @@ class _ConversationPageState extends State<ConversationPage> {
           'update=${updateData}');
 
       // SEND
+      // PREFLIGHT (mirrors the rule and prints exactly which clause fails)
+      await _debugRulesPreflight(docRef, uid, emoji);
+
+      // SEND
       await docRef.update(updateData);
+
       print('📤 REACT writeSent (await returned OK) for ${docRef.path}');
 
       // AFTER (get from server so we see the committed shape)
@@ -389,7 +494,13 @@ class _ConversationPageState extends State<ConversationPage> {
             'mapKeys=${currReactions.keys.toList()} '
             'my="${currReactions[uid]}"');
       } catch (_) {}
-      rethrow;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Reaction failed: ${e.code}')),
+        );
+      }
+      return;
+
     }
   }
 
@@ -450,14 +561,22 @@ class _ConversationPageState extends State<ConversationPage> {
       final positions = _itemPositionsListener.itemPositions.value;
       if (positions.isEmpty) return;
 
-      final lastVisible = positions.where((p) => p.index == _lastItemIndex).toList();
-      if (lastVisible.isNotEmpty) {
-        final p = lastVisible.first;
-        final visiblePortion = (p.itemTrailingEdge - p.itemLeadingEdge).clamp(0.0, 1.0);
-        final isMostlyVisible = p.itemTrailingEdge >= 0.95 && visiblePortion >= 0.95;
-        if (isMostlyVisible) {
-          _markAsRead();
-        }
+      final last = positions.firstWhere(
+            (p) => p.index == _lastItemIndex,
+        orElse: () => positions.reduce((a, b) => a.index > b.index ? a : b),
+      );
+
+      // How much of the last item is on screen
+      final visiblePortion = (last.itemTrailingEdge - last.itemLeadingEdge).clamp(0.0, 1.0);
+
+      // Consider “at bottom” if last item’s trailing edge is basically on-screen
+      final atBottomNow = last.itemTrailingEdge >= 0.98 || visiblePortion >= 0.98;
+      if (_isAtBottom != atBottomNow) {
+        _isAtBottom = atBottomNow;
+      }
+
+      if (atBottomNow) {
+        _markAsRead();
       }
     });
 
@@ -559,11 +678,21 @@ class _ConversationPageState extends State<ConversationPage> {
                       }
                     }
                   }
+                  final keyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0.0;
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (keyboardOpen && _isAtBottom && mounted) {
+                      // No animation = no jank; this keeps the last bubble visible above the keyboard.
+                      _scrollToBottom(animated: false);
+                    }
+                  });
 
                   return ScrollablePositionedList.builder(
                     itemScrollController: _itemScrollController,
                     itemPositionsListener: _itemPositionsListener,
-                    padding: const EdgeInsets.only(bottom: 8),
+                    padding: EdgeInsets.only(
+                      bottom: 8 + MediaQuery.of(context).viewInsets.bottom,
+                    ),
+
                     itemCount: msgs.length,
                     itemBuilder: (context, i) {
                       final qDoc = msgs[i];
@@ -697,7 +826,11 @@ class _ConversationPageState extends State<ConversationPage> {
                   convId: widget.convId,
                   otherUid: widget.otherUid,
                   onClientSend: _markSendStart,
+                  onTapComposer: () {
+                    if (_isAtBottom) _scrollToBottom(animated: false);
+                  },
                 ),
+
               ),
             ),
           ],
@@ -712,12 +845,14 @@ class _MessageComposer extends StatefulWidget {
   final String convId;
   final String otherUid;
   final void Function(String clientId, DateTime startedAt)? onClientSend;
+  final VoidCallback? onTapComposer;
 
   const _MessageComposer({
     super.key,
     required this.convId,
     required this.otherUid,
     this.onClientSend,
+    this.onTapComposer, // 👈 add this
   });
 
 
@@ -821,6 +956,7 @@ class _MessageComposerState extends State<_MessageComposer> {
             focusNode: _focusNode,                // keep if you already have this
             keyboardType: TextInputType.multiline,
             textInputAction: TextInputAction.newline, // 👈 Enter adds a newline
+            onTap: widget.onTapComposer, // keep bottom pinned if we were already there
             minLines: 1,
             maxLines: 35,                              // or null for unlimited
             decoration: const InputDecoration(
@@ -828,6 +964,8 @@ class _MessageComposerState extends State<_MessageComposer> {
               border: OutlineInputBorder(),
               isDense: true,
             ),
+
+
             onSubmitted: null,                        // 👈 disable "Done" submit
           ),
         ),

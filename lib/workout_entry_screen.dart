@@ -179,6 +179,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   }
 
 
+  int _buildN = 0;
 
   bool _isLoadingData = true;
   bool _isInitialized = false;
@@ -4634,8 +4635,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 // Silent, in-place overlay: updates existing rows' controllers,
 // and appends new rows if the server has extras. No clearing.
 // ─────────────────────────────────────────────────────────────
-  void _applyOverlayInPlace(List<Map<String, dynamic>> exList) {
-    if (!mounted || exList.isEmpty) return;
+  bool _applyOverlayInPlace(List<Map<String, dynamic>> exList) {
+    if (!mounted || exList.isEmpty) return false;
+
+    // 🧮 capture shape before
+    final __before = _structureHash();
 
     // Build quick lookup for incoming rows by name|ci
     String _key(String name, int ci) => '${name.trim().toLowerCase()}|$ci';
@@ -4707,7 +4711,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         _notesControllers.add(List.generate(sets.length, (_) => TextEditingController()));
       } else {
         _workoutSets[i] = List<SetDetails>.from(sets);
-        // Resize controllers if needed
+        // Resize controllers if needed (recreate only when length differs)
         void _ensureLen(List<List<TextEditingController>> list) {
           if (list.length <= i) {
             list.add(List.generate(sets.length, (_) => TextEditingController()));
@@ -4790,6 +4794,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       _rirControllers.add(List.generate(sets.length, (_) => TextEditingController()));
       _velocityControllers.add(List.generate(sets.length, (_) => TextEditingController()));
       _notesControllers.add(List.generate(sets.length, (_) => TextEditingController()));
+
       final idx = _selectedExercisesWithCircuits.length - 1;
       for (int j = 0; j < sets.length; j++) {
         final s = sets[j];
@@ -4801,9 +4806,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       }
     }
 
-    // We updated in place; only a single subtle repaint.
-    if (mounted) setState(() {});
+    // 🧮 capture shape after
+    final __after = _structureHash();
+    return __after != __before; // caller decides whether to setState()
   }
+
 
 
 
@@ -4854,6 +4861,25 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
     return false;
   }
+
+  @override
+  void setState(VoidCallback fn) {
+    final before = _structureHash();
+    // Trim the stack so you see caller file:line (top 6 frames is usually perfect)
+    final raw = StackTrace.current.toString().split('\n').where((l) => l.contains('.dart')).take(6).join('\n');
+    print('🎯 [WES setState] BEFORE shape=$before\n$raw');
+
+    super.setState(() {
+      fn();
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final after = _structureHash();
+      final changed = after != before;
+      print('✅ [WES setState] AFTER  shape=$after  changed=$changed');
+    });
+  }
+
 
   // Anchor A: add inside _WorkoutPageState
   Future<void> _paintFromSnapshotIfAny() async {
@@ -5313,11 +5339,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       }
 
 
-      // Build controllers AFTER first paint
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        _ensureControllersForRowsLazily();
-        if (mounted) setState(() {}); // tick if sizes changed
+        final b = _structureHash();
+        _ensureControllersForRowsLazily();  // may add/resize controller rows
+        final a = _structureHash();
+        if (mounted && a != b) {
+          setState(() {});   // only repaint if the shape actually changed
+        } else {
+          // controller.text-only updates don't need a rebuild
+        }
       });
 
       print('⚡ [WES Boot] Snapshot PAINTED ${rows.length} row(s) for $ymd (instant-visible)');
@@ -5656,6 +5686,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final _tLoadExisting = Stopwatch()
       ..start();
     print('⏱️ [WES] _loadExistingWorkoutIfAny started');
+    bool _overlayChanged = false;
+    bool _plannedChanged = false;
+
     final _beforeHash = _structureHash();
     try {
       final uid = UserContext
@@ -6161,13 +6194,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         }
       }
 
-      //5 === SILENT RECONCILE: update in place (no clearing, no spinner) ===
+      // 5) === SILENT RECONCILE: update in place (no clearing, no spinner) ===
       final List<Map<String, dynamic>> overlayRows = exList
           .whereType<Map>()
           .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e))
           .toList();
 
-      _applyOverlayInPlace(overlayRows);
+      final bool changedOverlay = _applyOverlayInPlace(overlayRows);
 
 
       // 6) Pass 2 (optional): add any saved exercises that aren’t in the plan/UI yet
@@ -6206,7 +6239,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           .toList();
 
 // 🔧 In-place merge (no UI teardown)
-      _applyOverlayInPlace(plannedOverlay);
+      final changedPlanned = _applyOverlayInPlace(plannedOverlay);
+
 
 // Count how many were appended by the helper
       plannedAdded = _selectedExercisesWithCircuits.length - beforeCount;
@@ -6224,12 +6258,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       _pendingChanges = false;
       _lastSavedHash = null;
 
-      final _afterHash = _structureHash();
-      if (mounted && _afterHash != _beforeHash) setState(() {});
-// repaint now that overlay + additions are in
+      if (mounted && (changedOverlay || changedPlanned)) {
+        final afterHash = _structureHash();
+        print('🟢 [WES Overlay] repainting — changedOverlay=$changedOverlay changedPlanned=$changedPlanned newShape=$afterHash');
+        setState(() {});
+      }
+
       if (exList.isEmpty && plannedAdded == 0) {
         print('   ❌ no workout items (completed or WES-planned) for this date');
       }
+
     } finally {
       _tLoadExisting.stop();
       print('⏱️ [WES] _loadExistingWorkoutIfAny took ${_tLoadExisting
@@ -9646,6 +9684,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
   @override
   Widget build(BuildContext context) {
+    print('🧱 [WES build#${++_buildN}] shape=${_structureHash()} rows=${_selectedExercisesWithCircuits.length}/${_workoutSets.length} init=$_isInitialized load=$_isLoadingData');
+
+
     // Non-blocking: always build the page; no spinner overlay.
     return _buildWesScaffold();
   }
