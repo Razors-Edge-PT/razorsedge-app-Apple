@@ -1,0 +1,476 @@
+﻿Launching lib\main.dart on SM S911B in debug mode...
+Running Gradle task 'assembleDebug'...                          
+? :cloud_firestore ? namespace=(no namespace), compileSdk=35
+? :cloud_functions ? namespace=(no namespace), compileSdk=35
+? :device_info_plus ? namespace=(no namespace), compileSdk=35
+? :file_picker ? namespace=(no namespace), compileSdk=35
+? :firebase_app_check ? namespace=(no namespace), compileSdk=35
+? :firebase_auth ? namespace=(no namespace), compileSdk=35
+? :firebase_core ? namespace=(no namespace), compileSdk=35
+? :firebase_database ? namespace=(no namespace), compileSdk=35
+? :firebase_storage ? namespace=(no namespace), compileSdk=35
+? :flutter_native_splash ? namespace=(no namespace), compileSdk=35
+? :flutter_plugin_android_lifecycle ? namespace=(no namespace), compileSdk=35
+? :google_sign_in_android ? namespace=(no namespace), compileSdk=35
+? :image_picker_android ? namespace=(no namespace), compileSdk=35
+? :isar_flutter_libs ? namespace=(no namespace), compileSdk=35
+? :path_provider_android ? namespace=(no namespace), compileSdk=35
+? :shared_preferences_android ? namespace=(no namespace), compileSdk=35
+? :sqflite_android ? namespace=(no namespace), compileSdk=35
+? :video_player_android ? namespace=(no namespace), compileSdk=35
+? :video_thumbnail ? namespace=(no namespace), compileSdk=35
+Running Gradle task 'assembleDebug'...                              8.4s
+ΓêÜ Built build\app\outputs\flutter-apk\app-debug.apk
+Installing build\app\outputs\flutter-apk\app-debug.apk...          12.3s
+I/flutter (18026): [IMPORTANT:flutter/shell/platform/android/android_context_vk_impeller.cc(60)] Using the Impeller rendering backend (Vulkan).
+Syncing files to device SM S911B...                             
+I/BLASTBufferQueue(18026): [SurfaceView[com.goodlift.razorsedge/com.goodlift.razorsedge.MainActivity]@0#1](f:0,a:0,s:0) onFrameAvailable the first frame is available
+I/SurfaceComposerClient(18026): apply transaction with the first frame. layerId: 102455, bufferData(ID: 77421080477708, frameNumber: 1)
+D/SurfaceView(18026): 234374452 setAlpha: alpha=1.0
+I/SurfaceView(18026): 234374452 Changes: creating=false format=false size=false visible=false alpha=true hint=false visible=false left=false top=false z=false attached=true lifecycleStrategy=false
+I/SurfaceView(18026): 234374452 Cur surface: Surface(name=null mNativeObject=-5476376640452196352)/@0xbe117e1
+I/SurfaceView@df84534(18026): updateSurface: mVisible = true mSurface.isValid() = true
+I/SurfaceView@df84534(18026): updateSurface: mSurfaceCreated = true surfaceChanged = false visibleChanged = false
+I/SurfaceView(18026): 234374452 surfaceRedrawNeeded
+I/SurfaceView(18026): 234374452 finishedDrawing
+V/SurfaceView(18026): Layout: x=0 y=0 w=1080 h=2340, frame=Rect(0, 0 - 1080, 2340)
+Syncing files to device SM S911B...                                106ms
+
+Flutter run key commands.
+r Hot reload. 
+R Hot restart.
+h List all available interactive commands.
+d Detach (terminate "flutter run" but leave application running).
+c Clear the screen
+q Quit (terminate the application on the device).
+
+A Dart VM Service on SM S911B is available at: http://127.0.0.1:49474/p3LMOX-9ADY=/
+The Flutter DevTools debugger and profiler on SM S911B is available at: http://127.0.0.1:9101?uri=http://127.0.0.1:49474/p3LMOX-9ADY=/
+D/VRI[MainActivity]@f7fc4ce(18026): Setup new sync=wmsSync-VRI[MainActivity]@f7fc4ce#2
+I/VRI[MainActivity]@f7fc4ce(18026): Creating new active sync group VRI[MainActivity]@f7fc4ce#3
+D/VRI[MainActivity]@f7fc4ce(18026): Draw frame after cancel
+D/VRI[MainActivity]@f7fc4ce(18026): registerCallbacksForSync syncBuffer=false
+D/SurfaceView(18026): 234374452 updateSurfacePosition RenderWorker, frameNr = 1, position = [0, 0, 1080, 2340] surfaceSize = 1080x2340
+I/SurfaceView@df84534(18026): uSP: rtp = Rect(0, 0 - 1080, 2340) rtsw = 1080 rtsh = 2340
+I/SurfaceView@df84534(18026): onSSPAndSRT: pl = 0 pt = 0 sx = 1.0 sy = 1.0
+I/SurfaceView@df84534(18026): aOrMT: VRI[MainActivity]@f7fc4ce t = android.view.SurfaceControl$Transaction@e083631 fN = 1 android.view.SurfaceView.-$$Nest$mapplyOrMergeTransaction:0 android.view.SurfaceView$SurfaceViewPositionUpdateListener.positionChanged:1792 android.graphics.RenderNode$CompositePositionUpdateListener.positionChanged:398 
+I/VRI[MainActivity]@f7fc4ce(18026): mWNT: t=0xb4000075ea621500 mBlastBufferQueue=0xb4000075e98b8b00 fn= 1 HdrRenderState mRenderHdrSdrRatio=1.0 caller= android.view.SurfaceView.applyOrMergeTransaction:1723 android.view.SurfaceView.-$$Nest$mapplyOrMergeTransaction:0 android.view.SurfaceView$SurfaceViewPositionUpdateListener.positionChanged:1792 
+D/VRI[MainActivity]@f7fc4ce(18026): Received frameDrawingCallback syncResult=0 frameNum=1.
+I/VRI[MainActivity]@f7fc4ce(18026): mWNT: t=0xb4000075e9bc3580 mBlastBufferQueue=0xb4000075e98b8b00 fn= 1 HdrRenderState mRenderHdrSdrRatio=1.0 caller= android.view.ViewRootImpl$11.onFrameDraw:15016 android.view.ThreadedRenderer$1.onFrameDraw:761 <bottom of call stack> 
+I/VRI[MainActivity]@f7fc4ce(18026): Setting up sync and frameCommitCallback
+I/BLASTBufferQueue(18026): [VRI[MainActivity]@f7fc4ce#0](f:0,a:0,s:0) onFrameAvailable the first frame is available
+I/SurfaceComposerClient(18026): apply transaction with the first frame. layerId: 102451, bufferData(ID: 77421080477713, frameNumber: 1)
+I/VRI[MainActivity]@f7fc4ce(18026): Received frameCommittedCallback lastAttemptedDrawFrameNum=1 didProduceBuffer=true
+D/HWUI    (18026): CFMS:: SetUp Pid : 18026    Tid : 18053
+D/VRI[MainActivity]@f7fc4ce(18026): reportDrawFinished seqId=0
+I/VRI[MainActivity]@f7fc4ce(18026): onDisplayChanged oldDisplayState=2 newDisplayState=2
+I/flutter (18026): ≡ƒöì UID: yoVAqScwLMQLAgNHh8v9IK49fBw2 | isCoach: true | isAdmin: true
+D/VRI[MainActivity]@f7fc4ce(18026): mThreadedRenderer.initializeIfNeeded()#2 mSurface={isValid=true 0xb4000075ea6b9000}
+D/InputMethodManagerUtils(18026): startInputInner - Id : 0
+I/InputMethodManager(18026): startInputInner - IInputMethodManagerGlobalInvoker.startInputOrWindowGainedFocus
+I/VRI[MainActivity]@f7fc4ce(18026): handleResized, frames=ClientWindowFrames{frame=[0,0][1080,2340] display=[0,0][1080,2340] parentFrame=[0,0][0,0]} displayId=0 dragResizing=false compatScale=1.0 frameChanged=false attachedFrameChanged=false configChanged=false displayChanged=false compatScaleChanged=false dragResizingChanged=false
+I/VRI[MainActivity]@f7fc4ce(18026): onDisplayChanged oldDisplayState=2 newDisplayState=2
+I/InsetsSourceConsumer(18026): applyRequestedVisibilityToControl: visible=true, type=navigationBars, host=com.goodlift.razorsedge/com.goodlift.razorsedge.MainActivity
+D/ConnectivityManager(18026): StackLog: [android.net.ConnectivityManager.sendRequestForNetwork(ConnectivityManager.java:4671)] [android.net.ConnectivityManager.registerDefaultNetworkCallbackForUid(ConnectivityManager.java:5360)] [android.net.ConnectivityManager.registerDefaultNetworkCallback(ConnectivityManager.java:5327)] [android.net.ConnectivityManager.registerDefaultNetworkCallback(ConnectivityManager.java:5301)] [com.google.firebase.firestore.remote.AndroidConnectivityMonitor.configureNetworkMonitoring(AndroidConnectivityMonitor.java:87)] [com.google.firebase.firestore.remote.AndroidConnectivityMonitor.<init>(AndroidConnectivityMonitor.java:64)] [com.google.firebase.firestore.remote.RemoteComponenetProvider.createConnectivityMonitor(RemoteComponenetProvider.java:94)] [com.google.firebase.firestore.remote.RemoteComponenetProvider.initialize(RemoteComponenetProvider.java:41)] [com.google.firebase.firestore.core.ComponentProvider.initialize(ComponentProvider.java:158)] [com.google.firebase.firestore.core.FirestoreClient.initialize(FirestoreClient.java:284)] [com.google.firebase.firestore.core.FirestoreClient.lambda$new$0$com-google-firebase-firestore-core-FirestoreClient(FirestoreClient.java:109)] [com.google.firebase.firestore.core.FirestoreClient$$ExternalSyntheticLambda10.run(D8$$SyntheticClass:0)] [com.google.firebase.firestore.util.AsyncQueue.lambda$enqueue$2(AsyncQueue.java:445)] [com.google.firebase.firestore.util.AsyncQueue$$ExternalSyntheticLambda4.call(D8$$SyntheticClass:0)] [com.google.firebase.firestore.util.AsyncQueue$SynchronizedShutdownAwareExecutor.lambda$executeAndReportResult$1(AsyncQueue.java:330)] [com.google.firebase.firestore.util.AsyncQueue$SynchronizedShutdownAwareExecutor$$ExternalSyntheticLambda2.run(D8$$SyntheticClass:0)] [java.util.concurrent.Executors$RunnableAdapter.call(Executors.java:487)] [java.util.concurrent.FutureTask.run(FutureTask.java:264)] [java.util.concurrent.ScheduledThreadPoolExecutor$ScheduledFutureTask.run(ScheduledThreadPoolExecutor.java:307)] [java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1145)] [java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:644)] [com.google.firebase.firestore.util.AsyncQueue$SynchronizedShutdownAwareExecutor$DelayedStartFactory.run(AsyncQueue.java:235)] [java.lang.Thread.run(Thread.java:1012)]
+W/DynamiteModule(18026): Local module descriptor class for com.google.android.gms.providerinstaller.dynamite not found.
+D/InputTransport(18026): Input channel constructed: 'ClientS', fd=206
+I/DynamiteModule(18026): Considering local module com.google.android.gms.providerinstaller.dynamite:0 and remote module com.google.android.gms.providerinstaller.dynamite:0
+W/ProviderInstaller(18026): Failed to load providerinstaller module: No acceptable module com.google.android.gms.providerinstaller.dynamite found. Local version is 0 and remote version is 0.
+D/ApplicationLoaders(18026): Returning zygote-cached class loader: /system/framework/org.apache.http.legacy.jar
+I/InsetsController(18026): onStateChanged: host=com.goodlift.razorsedge/com.goodlift.razorsedge.MainActivity, from=android.view.ViewRootImpl.handleInsetsControlChanged:2888, state=InsetsState: {mDisplayFrame=Rect(0, 0 - 1080, 2340), mDisplayCutout=DisplayCutout{insets=Rect(0, 81 - 0, 0) waterfall=Insets{left=0, top=0, right=0, bottom=0} boundingRect={Bounds=[Rect(0, 0 - 0, 0), Rect(512, 0 - 568, 81), Rect(0, 0 - 0, 0), Rect(0, 0 - 0, 0)]} cutoutPathParserInfo={CutoutPathParserInfo{displayWidth=1080 displayHeight=2340 physicalDisplayWidth=1080 physicalDisplayHeight=2340 density={3.0} cutoutSpec={M 0,0 H -9.333333333333333ΓÇ¼ V 27 H 9.333333333333333ΓÇ¼ V 0 H 0 Z @dp} rotation={0} scale={1.0} physicalPixelDisplaySizeRatio={1.0}}} sideOverrides={}}, mRoundedCorners=RoundedCorners{[RoundedCorner{position=TopLeft, radius=108, center=Point(108, 108)}, RoundedCorner{position=TopRight, radius=108, center=Point(972, 108)}, RoundedCorner{position=BottomRight, radius=108, center=Point(972, 2232)}, RoundedCorner{position=BottomLeft, radius=108, center=Point(108, 2232)}]}  mRoundedCornerFrame=Rect(0, 0 - 1080, 2340), mPrivacyIndicatorBounds=PrivacyIndicatorBounds {static bounds=Rect(948, 0 - 1080, 81) rotation=0}, mDisplayShape=DisplayShape{ spec=-311912193 displayWidth=1080 displayHeight=2340 physicalPixelDisplaySizeRatio=1.0 rotation=0 offsetX=0 offsetY=0 scale=1.0}, mSources= { InsetsSource: {3 mType=ime mFrame=[0,1314][1080,2340] mVisible=false mFlags= mSideHint=BOTTOM mBoundingRects=null}, InsetsSource: {27 mType=displayCutout mFrame=[0,0][1080,81] mVisible=true mFlags= mSideHint=TOP mBoundingRects=null}, InsetsSource: {7790001 mType=navigationBars mFrame=[0,2196][1080,2340] mVisible=true mFlags= mSideHint=BOTTOM mBoundingRects=null}, InsetsSource: {7790004 mType=systemGestures mFrame=[0,0][0,0] mVisible=true mFlags= mSideHint=NONE mBoundingRects=null}, InsetsSource: {7790005 mType=mandatorySystemGestures mFrame=[0,2196][1080,2340] mVisible=true mFlags= mSideHint=BOTTOM mBoundingRects=null}, InsetsSource: {7790006 mType=tappableElement mFrame=[0,2196][1080,2340] mVisible=true mFlags= mSideHint=BOTTOM mBoundingRects=null}, InsetsSource: {7790024 mType=systemGestures mFrame=[0,0][0,0] mVisible=true mFlags= mSideHint=NONE mBoundingRects=null}, InsetsSource: {dc40000 mType=statusBars mFrame=[0,0][1080,81] mVisible=true mFlags= mSideHint=TOP mBoundingRects=null}, InsetsSource: {dc40005 mType=mandatorySystemGestures mFrame=[0,0][1080,117] mVisible=true mFlags= mSideHint=TOP mBoundingRects=null}, InsetsSource: {dc40006 mType=tappableElement mFrame=[0,0][1080,81] mVisible=true mFlags= mSideHint=TOP mBoundingRects=null} }
+I/InsetsSourceConsumer(18026): applyRequestedVisibilityToControl: visible=false, type=ime, host=com.goodlift.razorsedge/com.goodlift.razorsedge.MainActivity
+I/VRI[MainActivity]@f7fc4ce(18026): onDisplayChanged oldDisplayState=2 newDisplayState=2
+D/nativeloader(18026): Configuring clns-9 for other apk /system/framework/com.android.media.remotedisplay.jar. target_sdk_version=36, uses_libraries=ALL, library_path=/data/app/~~l5Ahl2iO3e745fISoJmG0g==/com.google.android.gms-aFMi8nzeo3jRZVnN4b21IA==/lib/arm64:/data/app/~~l5Ahl2iO3e745fISoJmG0g==/com.google.android.gms-aFMi8nzeo3jRZVnN4b21IA==/base.apk!/lib/arm64-v8a, permitted_path=/data:/mnt/expand:/data/user/0/com.google.android.gms
+D/nativeloader(18026): Extending system_exposed_libraries: libhumantracking.arcsoft.so:libface_recognition.arcsoft.so:libpic_best.arcsoft.so:libPortraitDistortionCorrection.arcsoft.so:libPortraitDistortionCorrectionCali.arcsoft.so:libface_landmark.arcsoft.so:libFacialStickerEngine.arcsoft.so:libfrtracking_engine.arcsoft.so:libFaceRecognition.arcsoft.so:libveengine.arcsoft.so:lib_pet_detection.arcsoft.so:libae_bracket_hdr.arcsoft.so:libaiclearzoom_raw.arcsoft.so:libacz_hhdr.arcsoft.so:libhybrid_high_dynamic_range.arcsoft.so:libimage_enhancement.arcsoft.so:libsuperresolution_raw.arcsoft.so:libobjectcapture_jni.arcsoft.so:libobjectcapture.arcsoft.so:libFacialAttributeDetection.arcsoft.so:libaudiomirroring_jni.audiomirroring.samsung.so:libBeauty_v4.camera.samsung.so:libexifa.camera.samsung.so:libjpega.camera.samsung.so:libOpenCv.camera.samsung.so:libaifrcInterface.camera.samsung.so:libC2paDps.camera.samsung.so:libVideoClassifier.camera.samsung.so:libImageScreener.camera.samsung.so:libMyFilter.camera.samsung.so:libtflite2.myfilters.cam
+D/nativeloader(18026): Configuring clns-10 for other apk /system/framework/com.android.location.provider.jar. target_sdk_version=36, uses_libraries=ALL, library_path=/data/app/~~l5Ahl2iO3e745fISoJmG0g==/com.google.android.gms-aFMi8nzeo3jRZVnN4b21IA==/lib/arm64:/data/app/~~l5Ahl2iO3e745fISoJmG0g==/com.google.android.gms-aFMi8nzeo3jRZVnN4b21IA==/base.apk!/lib/arm64-v8a, permitted_path=/data:/mnt/expand:/data/user/0/com.google.android.gms
+D/nativeloader(18026): Extending system_exposed_libraries: libhumantracking.arcsoft.so:libface_recognition.arcsoft.so:libpic_best.arcsoft.so:libPortraitDistortionCorrection.arcsoft.so:libPortraitDistortionCorrectionCali.arcsoft.so:libface_landmark.arcsoft.so:libFacialStickerEngine.arcsoft.so:libfrtracking_engine.arcsoft.so:libFaceRecognition.arcsoft.so:libveengine.arcsoft.so:lib_pet_detection.arcsoft.so:libae_bracket_hdr.arcsoft.so:libaiclearzoom_raw.arcsoft.so:libacz_hhdr.arcsoft.so:libhybrid_high_dynamic_range.arcsoft.so:libimage_enhancement.arcsoft.so:libsuperresolution_raw.arcsoft.so:libobjectcapture_jni.arcsoft.so:libobjectcapture.arcsoft.so:libFacialAttributeDetection.arcsoft.so:libaudiomirroring_jni.audiomirroring.samsung.so:libBeauty_v4.camera.samsung.so:libexifa.camera.samsung.so:libjpega.camera.samsung.so:libOpenCv.camera.samsung.so:libaifrcInterface.camera.samsung.so:libC2paDps.camera.samsung.so:libVideoClassifier.camera.samsung.so:libImageScreener.camera.samsung.so:libMyFilter.camera.samsung.so:libtflite2.myfilters.cam
+D/nativeloader(18026): Configuring clns-11 for other apk /system/system_ext/framework/org.carconnectivity.android.digitalkey.rangingintent.jar. target_sdk_version=36, uses_libraries=ALL, library_path=/data/app/~~l5Ahl2iO3e745fISoJmG0g==/com.google.android.gms-aFMi8nzeo3jRZVnN4b21IA==/lib/arm64:/data/app/~~l5Ahl2iO3e745fISoJmG0g==/com.google.android.gms-aFMi8nzeo3jRZVnN4b21IA==/base.apk!/lib/arm64-v8a, permitted_path=/data:/mnt/expand:/data/user/0/com.google.android.gms
+D/nativeloader(18026): Extending system_exposed_libraries: libhumantracking.arcsoft.so:libface_recognition.arcsoft.so:libpic_best.arcsoft.so:libPortraitDistortionCorrection.arcsoft.so:libPortraitDistortionCorrectionCali.arcsoft.so:libface_landmark.arcsoft.so:libFacialStickerEngine.arcsoft.so:libfrtracking_engine.arcsoft.so:libFaceRecognition.arcsoft.so:libveengine.arcsoft.so:lib_pet_detection.arcsoft.so:libae_bracket_hdr.arcsoft.so:libaiclearzoom_raw.arcsoft.so:libacz_hhdr.arcsoft.so:libhybrid_high_dynamic_range.arcsoft.so:libimage_enhancement.arcsoft.so:libsuperresolution_raw.arcsoft.so:libobjectcapture_jni.arcsoft.so:libobjectcapture.arcsoft.so:libFacialAttributeDetection.arcsoft.so:libaudiomirroring_jni.audiomirroring.samsung.so:libBeauty_v4.camera.samsung.so:libexifa.camera.samsung.so:libjpega.camera.samsung.so:libOpenCv.camera.samsung.so:libaifrcInterface.camera.samsung.so:libC2paDps.camera.samsung.so:libVideoClassifier.camera.samsung.so:libImageScreener.camera.samsung.so:libMyFilter.camera.samsung.so:libtflite2.myfilters.cam
+D/nativeloader(18026): Configuring clns-12 for other apk /system/system_ext/framework/org.carconnectivity.android.digitalkey.secureelement.jar. target_sdk_version=36, uses_libraries=ALL, library_path=/data/app/~~l5Ahl2iO3e745fISoJmG0g==/com.google.android.gms-aFMi8nzeo3jRZVnN4b21IA==/lib/arm64:/data/app/~~l5Ahl2iO3e745fISoJmG0g==/com.google.android.gms-aFMi8nzeo3jRZVnN4b21IA==/base.apk!/lib/arm64-v8a, permitted_path=/data:/mnt/expand:/data/user/0/com.google.android.gms
+D/nativeloader(18026): Extending system_exposed_libraries: libhumantracking.arcsoft.so:libface_recognition.arcsoft.so:libpic_best.arcsoft.so:libPortraitDistortionCorrection.arcsoft.so:libPortraitDistortionCorrectionCali.arcsoft.so:libface_landmark.arcsoft.so:libFacialStickerEngine.arcsoft.so:libfrtracking_engine.arcsoft.so:libFaceRecognition.arcsoft.so:libveengine.arcsoft.so:lib_pet_detection.arcsoft.so:libae_bracket_hdr.arcsoft.so:libaiclearzoom_raw.arcsoft.so:libacz_hhdr.arcsoft.so:libhybrid_high_dynamic_range.arcsoft.so:libimage_enhancement.arcsoft.so:libsuperresolution_raw.arcsoft.so:libobjectcapture_jni.arcsoft.so:libobjectcapture.arcsoft.so:libFacialAttributeDetection.arcsoft.so:libaudiomirroring_jni.audiomirroring.samsung.so:libBeauty_v4.camera.samsung.so:libexifa.camera.samsung.so:libjpega.camera.samsung.so:libOpenCv.camera.samsung.so:libaifrcInterface.camera.samsung.so:libC2paDps.camera.samsung.so:libVideoClassifier.camera.samsung.so:libImageScreener.camera.samsung.so:libMyFilter.camera.samsung.so:libtflite2.myfilters.cam
+D/ApplicationLoaders(18026): Returning zygote-cached class loader: /system_ext/framework/androidx.window.extensions.jar
+D/ApplicationLoaders(18026): Returning zygote-cached class loader: /system_ext/framework/androidx.window.sidecar.jar
+W/lift.razorsedge(18026): Loading /data/app/~~l5Ahl2iO3e745fISoJmG0g==/com.google.android.gms-aFMi8nzeo3jRZVnN4b21IA==/oat/arm64/base.odex non-executable as it requires an image which we failed to load
+D/nativeloader(18026): Configuring clns-13 for other apk /data/app/~~l5Ahl2iO3e745fISoJmG0g==/com.google.android.gms-aFMi8nzeo3jRZVnN4b21IA==/base.apk. target_sdk_version=36, uses_libraries=, library_path=/data/app/~~l5Ahl2iO3e745fISoJmG0g==/com.google.android.gms-aFMi8nzeo3jRZVnN4b21IA==/lib/arm64:/data/app/~~l5Ahl2iO3e745fISoJmG0g==/com.google.android.gms-aFMi8nzeo3jRZVnN4b21IA==/base.apk!/lib/arm64-v8a, permitted_path=/data:/mnt/expand:/data/user/0/com.google.android.gms
+E/GoogleApiManager(18026): Failed to get service from broker. 
+E/GoogleApiManager(18026): java.lang.SecurityException: Unknown calling package name 'com.google.android.gms'.
+E/GoogleApiManager(18026): 	at android.os.Parcel.createExceptionOrNull(Parcel.java:3257)
+E/GoogleApiManager(18026): 	at android.os.Parcel.createException(Parcel.java:3241)
+E/GoogleApiManager(18026): 	at android.os.Parcel.readException(Parcel.java:3224)
+E/GoogleApiManager(18026): 	at android.os.Parcel.readException(Parcel.java:3166)
+E/GoogleApiManager(18026): 	at barl.a(:com.google.android.gms@253534035@25.35.34 (260400-804595880):36)
+E/GoogleApiManager(18026): 	at baps.z(:com.google.android.gms@253534035@25.35.34 (260400-804595880):143)
+E/GoogleApiManager(18026): 	at azwp.run(:com.google.android.gms@253534035@25.35.34 (260400-804595880):42)
+E/GoogleApiManager(18026): 	at android.os.Handler.handleCallback(Handler.java:959)
+E/GoogleApiManager(18026): 	at android.os.Handler.dispatchMessage(Handler.java:100)
+E/GoogleApiManager(18026): 	at cljj.mF(:com.google.android.gms@253534035@25.35.34 (260400-804595880):1)
+E/GoogleApiManager(18026): 	at cljj.dispatchMessage(:com.google.android.gms@253534035@25.35.34 (260400-804595880):5)
+E/GoogleApiManager(18026): 	at android.os.Looper.loopOnce(Looper.java:257)
+E/GoogleApiManager(18026): 	at android.os.Looper.loop(Looper.java:342)
+E/GoogleApiManager(18026): 	at android.os.HandlerThread.run(HandlerThread.java:85)
+W/FlagRegistrar(18026): Failed to register com.google.android.gms.providerinstaller#com.goodlift.razorsedge
+W/FlagRegistrar(18026): fpyc: 17: 17: API: Phenotype.API is not available on this device. Connection failed with: ConnectionResult{statusCode=DEVELOPER_ERROR, resolution=null, message=null}
+W/FlagRegistrar(18026): 	at fpye.a(:com.google.android.gms@253534035@25.35.34 (260400-804595880):13)
+W/FlagRegistrar(18026): 	at gmqq.d(:com.google.android.gms@253534035@25.35.34 (260400-804595880):3)
+W/FlagRegistrar(18026): 	at gmqs.run(:com.google.android.gms@253534035@25.35.34 (260400-804595880):130)
+W/FlagRegistrar(18026): 	at gmsz.execute(:com.google.android.gms@253534035@25.35.34 (260400-804595880):1)
+W/FlagRegistrar(18026): 	at gmra.f(:com.google.android.gms@253534035@25.35.34 (260400-804595880):1)
+W/FlagRegistrar(18026): 	at gmra.m(:com.google.android.gms@253534035@25.35.34 (260400-804595880):99)
+W/FlagRegistrar(18026): 	at gmra.r(:com.google.android.gms@253534035@25.35.34 (260400-804595880):17)
+W/FlagRegistrar(18026): 	at fiem.hH(:com.google.android.gms@253534035@25.35.34 (260400-804595880):35)
+W/FlagRegistrar(18026): 	at ewds.run(:com.google.android.gms@253534035@25.35.34 (260400-804595880):12)
+W/FlagRegistrar(18026): 	at gmsz.execute(:com.google.android.gms@253534035@25.35.34 (260400-804595880):1)
+W/FlagRegistrar(18026): 	at ewdt.b(:com.google.android.gms@253534035@25.35.34 (260400-804595880):18)
+W/FlagRegistrar(18026): 	at ewei.b(:com.google.android.gms@253534035@25.35.34 (260400-804595880):36)
+W/FlagRegistrar(18026): 	at ewek.d(:com.google.android.gms@253534035@25.35.34 (260400-804595880):25)
+W/FlagRegistrar(18026): 	at azty.c(:com.google.android.gms@253534035@25.35.34 (260400-804595880):9)
+W/FlagRegistrar(18026): 	at azwn.q(:com.google.android.gms@253534035@25.35.34 (260400-804595880):48)
+W/FlagRegistrar(18026): 	at azwn.d(:com.google.android.gms@253534035@25.35.34 (260400-804595880):10)
+W/FlagRegistrar(18026): 	at azwn.g(:com.google.android.gms@253534035@25.35.34 (260400-804595880):185)
+W/FlagRegistrar(18026): 	at azwn.onConnectionFailed(:com.google.android.gms@253534035@25.35.34 (260400-804595880):2)
+W/FlagRegistrar(18026): 	at azwp.run(:com.google.android.gms@253534035@25.35.34 (260400-804595880):70)
+W/FlagRegistrar(18026): 	at android.os.Handler.handleCallback(Handler.java:959)
+W/FlagRegistrar(18026): 	at android.os.Handler.dispatchMessage(Handler.java:100)
+W/FlagRegistrar(18026): 	at cljj.mF(:com.google.android.gms@253534035@25.35.34 (260400-804595880):1)
+W/FlagRegistrar(18026): 	at cljj.dispatchMessage(:com.google.android.gms@253534035@25.35.34 (260400-804595880):5)
+W/FlagRegistrar(18026): 	at android.os.Looper.loopOnce(Looper.java:257)
+W/FlagRegistrar(18026): 	at android.os.Looper.loop(Looper.java:342)
+W/FlagRegistrar(18026): 	at android.os.HandlerThread.run(HandlerThread.java:85)
+W/FlagRegistrar(18026): Caused by: azsg: 17: API: Phenotype.API is not available on this device. Connection failed with: ConnectionResult{statusCode=DEVELOPER_ERROR, resolution=null, message=null}
+W/FlagRegistrar(18026): 	at bape.a(:com.google.android.gms@253534035@25.35.34 (260400-804595880):15)
+W/FlagRegistrar(18026): 	at azub.a(:com.google.android.gms@253534035@25.35.34 (260400-804595880):1)
+W/FlagRegistrar(18026): 	at azty.c(:com.google.android.gms@253534035@25.35.34 (260400-804595880):5)
+W/FlagRegistrar(18026): 	... 12 more
+D/nativeloader(18026): Load /data/app/~~l5Ahl2iO3e745fISoJmG0g==/com.google.android.gms-aFMi8nzeo3jRZVnN4b21IA==/base.apk!/lib/arm64-v8a/libconscrypt_gmscore_jni.so using ns clns-13 from class loader (caller=/data/app/~~l5Ahl2iO3e745fISoJmG0g==/com.google.android.gms-aFMi8nzeo3jRZVnN4b21IA==/base.apk): ok
+V/NativeCrypto(18026): Registering com/google/android/gms/org/conscrypt/NativeCrypto's 319 native methods...
+W/lift.razorsedge(18026): Accessing hidden method Ljava/security/spec/ECParameterSpec;->getCurveName()Ljava/lang/String; (unsupported, reflection, allowed)
+I/ProviderInstaller(18026): Installed default security provider GmsCore_OpenSSL
+D/ConnectivityManager(18026): StackLog: [android.net.ConnectivityManager.sendRequestForNetwork(ConnectivityManager.java:4671)] [android.net.ConnectivityManager.registerDefaultNetworkCallbackForUid(ConnectivityManager.java:5360)] [android.net.ConnectivityManager.registerDefaultNetworkCallback(ConnectivityManager.java:5327)] [android.net.ConnectivityManager.registerDefaultNetworkCallback(ConnectivityManager.java:5301)] [io.grpc.android.AndroidChannelBuilder$AndroidChannel.configureNetworkMonitoring(AndroidChannelBuilder.java:217)] [io.grpc.android.AndroidChannelBuilder$AndroidChannel.<init>(AndroidChannelBuilder.java:198)] [io.grpc.android.AndroidChannelBuilder.build(AndroidChannelBuilder.java:169)] [com.google.firebase.firestore.remote.GrpcCallProvider.initChannel(GrpcCallProvider.java:116)] [com.google.firebase.firestore.remote.GrpcCallProvider.lambda$initChannelTask$6$com-google-firebase-firestore-remote-GrpcCallProvider(GrpcCallProvider.java:242)] [com.google.firebase.firestore.remote.GrpcCallProvider$$ExternalSyntheticLambda4.call(D8$$SyntheticClass:0)] [com.google.android.gms.tasks.zzz.run(com.google.android.gms:play-services-tasks@@18.1.0:1)] [com.google.firebase.firestore.util.ThrottledForwardingExecutor.lambda$execute$0$com-google-firebase-firestore-util-ThrottledForwardingExecutor(ThrottledForwardingExecutor.java:54)] [com.google.firebase.firestore.util.ThrottledForwardingExecutor$$ExternalSyntheticLambda0.run(D8$$SyntheticClass:0)] [java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1145)] [java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:644)] [java.lang.Thread.run(Thread.java:1012)]
+I/flutter (18026): ≡ƒÅá Home loaded for yoVAqScwLMQLAgNHh8v9IK49fBw2 (actor: yoVAqScwLMQLAgNHh8v9IK49fBw2, coach: true)
+I/flutter (18026): [Warmup] started for yoVAqScwLMQLAgNHh8v9IK49fBw2
+I/flutter (18026): [UserContext] uid=yoVAqScwLMQLAgNHh8v9IK49fBw2 isCoach=true isAdmin=true 
+W/lift.razorsedge(18026): Accessing hidden field Ljava/net/Socket;->impl:Ljava/net/SocketImpl; (unsupported, reflection, allowed)
+I/flutter (18026): ≡ƒº⌐ Post-frame callback fired
+I/InsetsController(18026): onStateChanged: host=com.goodlift.razorsedge/com.goodlift.razorsedge.MainActivity, from=android.view.ViewRootImpl.handleResized:2789, state=InsetsState: {mDisplayFrame=Rect(0, 0 - 1080, 2340), mDisplayCutout=DisplayCutout{insets=Rect(0, 81 - 0, 0) waterfall=Insets{left=0, top=0, right=0, bottom=0} boundingRect={Bounds=[Rect(0, 0 - 0, 0), Rect(512, 0 - 568, 81), Rect(0, 0 - 0, 0), Rect(0, 0 - 0, 0)]} cutoutPathParserInfo={CutoutPathParserInfo{displayWidth=1080 displayHeight=2340 physicalDisplayWidth=1080 physicalDisplayHeight=2340 density={3.0} cutoutSpec={M 0,0 H -9.333333333333333ΓÇ¼ V 27 H 9.333333333333333ΓÇ¼ V 0 H 0 Z @dp} rotation={0} scale={1.0} physicalPixelDisplaySizeRatio={1.0}}} sideOverrides={}}, mRoundedCorners=RoundedCorners{[RoundedCorner{position=TopLeft, radius=108, center=Point(108, 108)}, RoundedCorner{position=TopRight, radius=108, center=Point(972, 108)}, RoundedCorner{position=BottomRight, radius=108, center=Point(972, 2232)}, RoundedCorner{position=BottomLeft, radius=108, center=Point(108, 2232)}]}  mRoundedCornerFrame=Rect(0, 0 - 1080, 2340), mPrivacyIndicatorBounds=PrivacyIndicatorBounds {static bounds=Rect(948, 0 - 1080, 81) rotation=0}, mDisplayShape=DisplayShape{ spec=-311912193 displayWidth=1080 displayHeight=2340 physicalPixelDisplaySizeRatio=1.0 rotation=0 offsetX=0 offsetY=0 scale=1.0}, mSources= { InsetsSource: {3 mType=ime mFrame=[0,0][0,0] mVisible=false mFlags= mSideHint=NONE mBoundingRects=null}, InsetsSource: {27 mType=displayCutout mFrame=[0,0][1080,81] mVisible=true mFlags= mSideHint=TOP mBoundingRects=null}, InsetsSource: {7790001 mType=navigationBars mFrame=[0,2196][1080,2340] mVisible=true mFlags= mSideHint=BOTTOM mBoundingRects=null}, InsetsSource: {7790004 mType=systemGestures mFrame=[0,0][0,0] mVisible=true mFlags= mSideHint=NONE mBoundingRects=null}, InsetsSource: {7790005 mType=mandatorySystemGestures mFrame=[0,2196][1080,2340] mVisible=true mFlags= mSideHint=BOTTOM mBoundingRects=null}, InsetsSource: {7790006 mType=tappableElement mFrame=[0,2196][1080,2340] mVisible=true mFlags= mSideHint=BOTTOM mBoundingRects=null}, InsetsSource: {7790024 mType=systemGestures mFrame=[0,0][0,0] mVisible=true mFlags= mSideHint=NONE mBoundingRects=null}, InsetsSource: {dc40000 mType=statusBars mFrame=[0,0][1080,81] mVisible=true mFlags= mSideHint=TOP mBoundingRects=null}, InsetsSource: {dc40005 mType=mandatorySystemGestures mFrame=[0,0][1080,117] mVisible=true mFlags= mSideHint=TOP mBoundingRects=null}, InsetsSource: {dc40006 mType=tappableElement mFrame=[0,0][1080,81] mVisible=true mFlags= mSideHint=TOP mBoundingRects=null} }
+I/VRI[MainActivity]@f7fc4ce(18026): handleResized, frames=ClientWindowFrames{frame=[0,0][1080,2340] display=[0,0][1080,2340] parentFrame=[0,0][0,0]} displayId=0 dragResizing=false compatScale=1.0 frameChanged=false attachedFrameChanged=false configChanged=false displayChanged=false compatScaleChanged=false dragResizingChanged=false
+I/VRI[MainActivity]@f7fc4ce(18026): onDisplayChanged oldDisplayState=2 newDisplayState=2
+W/lift.razorsedge(18026): Accessing hidden method Ljava/security/spec/ECParameterSpec;->setCurveName(Ljava/lang/String;)V (unsupported, reflection, allowed)
+I/flutter (18026): Γ£à [upsertUserLookup] Lookup saved for richard@razorsedgept.com
+I/flutter (18026): ≡ƒÄ» [Repo] Active block ID for yoVAqScwLMQLAgNHh8v9IK49fBw2 = sMTOpyKR3cc0oifU8VTW
+I/flutter (18026): ≡ƒƒá [Warmup] Recompute (sv=2, ready=true, snapHash=e9d44a29bb2c80f12b1b73929f87333574f92d19, nowHash=f65fe74dc77de5aedb95c716073abb2121dbf8c1)
+I/flutter (18026): Γ£à [PMU] setExerciseSettings called with keys: (AmfUWbF1DH3I7qPAdh5k, ocNWJv7xLrlinGmjG6cV, RdsGazgdH0xgpjek0n3u, blockMeta, pU7wce56hFDsam53aKDr)
+I/flutter (18026): ≡ƒöì [PMU] Details for Bench ID (AmfUWbF1DH3I7qPAdh5k): {progressionModel: Smart Progression, rirModel: Static RIR, weeklyFrequency: 4, notes: , repTargets: {}, rirPlan: {week1: {session4: {set3: {reps: 1, rir: 3.0}, set2: {reps: 1, rir: 3.0}, set1: {reps: 1, rir: 2.0}}, session3: {set3: {reps: 9, rir: 2.5}, set2: {reps: 9, rir: 2.0}, set1: {reps: 9, rir: 1.5}}, session2: {set3: {reps: 3, rir: 2.5}, set2: {reps: 3, rir: 2.0}, set1: {reps: 3, rir: 2.0}}, session1: {set3: {reps: 5, rir: 2.5}, set2: {reps: 5, rir: 2.0}, set1: {reps: 5, rir: 2.0}}}, week2: {session4: {set3: {reps: 1, rir: 3.0}, set2: {reps: 1, rir: 3.0}, set1: {reps: 1, rir: 1.1}}, session3: {set3: {reps: 9, rir: 2.5}, set2: {reps: 9, rir: 2.0}, set1: {reps: 9, rir: 2.9}}, session2: {set3: {reps: 3, rir: 2.5}, set2: {reps: 3, rir: 2.0}, set1: {reps: 3, rir: 2.3}}, session1: {set3: {reps: 5, rir: 2.5}, set2: {reps: 5, rir: 2.0}, set1: {reps: 5, rir: 2.5}}}, week3: {session4: {set3: {reps: 1, rir: 3.0}, set2: {reps: 1, rir: 3.0}, set1: {reps: 1, r
+I/flutter (18026): ≡ƒƒú [Warmup] block doc fetched uid=yoVAqScwLMQLAgNHh8v9IK49fBw2 blockId=sMTOpyKR3cc0oifU8VTW ΓåÆ {exerciseSettings: {AmfUWbF1DH3I7qPAdh5k: {progressionModel: Smart Progression, weeklyFrequency: 4, rirModel: Static RIR, repTargets: {week1: {instance4: 3, instance3: 12, instance2: 5, instance1: 9}}, rirPlan: {week1: {session4: {set3: {reps: 1, rir: 3.0}, set2: {reps: 1, rir: 3.0}, set1: {reps: 1, rir: 2.0}}, session3: {set3: {reps: 9, rir: 2.5}, set2: {reps: 9, rir: 2.0}, set1: {reps: 9, rir: 1.5}}, session2: {set3: {reps: 3, rir: 2.5}, set2: {reps: 3, rir: 2.0}, set1: {reps: 3, rir: 2.0}}, session1: {set3: {reps: 5, rir: 2.5}, set2: {reps: 5, rir: 2.0}, set1: {reps: 5, rir: 2.0}}}, week2: {session4: {set3: {reps: 1, rir: 3.0}, set2: {reps: 1, rir: 3.0}, set1: {reps: 1, rir: 1.1}}, session3: {set3: {reps: 9, rir: 2.5}, set2: {reps: 9, rir: 2.0}, set1: {reps: 9, rir: 2.9}}, session2: {set3: {reps: 3, rir: 2.5}, set2: {reps: 3, rir: 2.0}, set1: {reps: 3, rir: 2.3}}, session1: {set3: {reps: 5, rir: 2.5}, set2: {
+I/flutter (18026): Γ£à [PMU] setExerciseSettings called with keys: (AmfUWbF1DH3I7qPAdh5k, ocNWJv7xLrlinGmjG6cV, RdsGazgdH0xgpjek0n3u, blockMeta, pU7wce56hFDsam53aKDr)
+I/flutter (18026): ≡ƒöì [PMU] Details for Bench ID (AmfUWbF1DH3I7qPAdh5k): {progressionModel: Smart Progression, rirModel: Static RIR, weeklyFrequency: 4, notes: , repTargets: {}, rirPlan: {week1: {session4: {set3: {reps: 1, rir: 3.0}, set2: {reps: 1, rir: 3.0}, set1: {reps: 1, rir: 2.0}}, session3: {set3: {reps: 9, rir: 2.5}, set2: {reps: 9, rir: 2.0}, set1: {reps: 9, rir: 1.5}}, session2: {set3: {reps: 3, rir: 2.5}, set2: {reps: 3, rir: 2.0}, set1: {reps: 3, rir: 2.0}}, session1: {set3: {reps: 5, rir: 2.5}, set2: {reps: 5, rir: 2.0}, set1: {reps: 5, rir: 2.0}}}, week2: {session4: {set3: {reps: 1, rir: 3.0}, set2: {reps: 1, rir: 3.0}, set1: {reps: 1, rir: 1.1}}, session3: {set3: {reps: 9, rir: 2.5}, set2: {reps: 9, rir: 2.0}, set1: {reps: 9, rir: 2.9}}, session2: {set3: {reps: 3, rir: 2.5}, set2: {reps: 3, rir: 2.0}, set1: {reps: 3, rir: 2.3}}, session1: {set3: {reps: 5, rir: 2.5}, set2: {reps: 5, rir: 2.0}, set1: {reps: 5, rir: 2.5}}}, week3: {session4: {set3: {reps: 1, rir: 3.0}, set2: {reps: 1, rir: 3.0}, set1: {reps: 1, r
+I/flutter (18026): ≡ƒƒá [Warmup] Recompute (sv=2, ready=true, snapHash=e9d44a29bb2c80f12b1b73929f87333574f92d19, nowHash=84d47cc027506cfad4fd12486274da38d1063dbd)
+I/flutter (18026): Γ£à [PMU] setExerciseSettings called with keys: (AmfUWbF1DH3I7qPAdh5k, ocNWJv7xLrlinGmjG6cV, RdsGazgdH0xgpjek0n3u, blockMeta, pU7wce56hFDsam53aKDr)
+I/flutter (18026): ≡ƒöì [PMU] Details for Bench ID (AmfUWbF1DH3I7qPAdh5k): {progressionModel: Smart Progression, rirModel: Static RIR, weeklyFrequency: 4, notes: , repTargets: {}, rirPlan: {week1: {session4: {set3: {reps: 1, rir: 3.0}, set2: {reps: 1, rir: 3.0}, set1: {reps: 1, rir: 2.0}}, session3: {set3: {reps: 9, rir: 2.5}, set2: {reps: 9, rir: 2.0}, set1: {reps: 9, rir: 1.5}}, session2: {set3: {reps: 3, rir: 2.5}, set2: {reps: 3, rir: 2.0}, set1: {reps: 3, rir: 2.0}}, session1: {set3: {reps: 5, rir: 2.5}, set2: {reps: 5, rir: 2.0}, set1: {reps: 5, rir: 2.0}}}, week2: {session4: {set3: {reps: 1, rir: 3.0}, set2: {reps: 1, rir: 3.0}, set1: {reps: 1, rir: 1.1}}, session3: {set3: {reps: 9, rir: 2.5}, set2: {reps: 9, rir: 2.0}, set1: {reps: 9, rir: 2.9}}, session2: {set3: {reps: 3, rir: 2.5}, set2: {reps: 3, rir: 2.0}, set1: {reps: 3, rir: 2.3}}, session1: {set3: {reps: 5, rir: 2.5}, set2: {reps: 5, rir: 2.0}, set1: {reps: 5, rir: 2.5}}}, week3: {session4: {set3: {reps: 1, rir: 3.0}, set2: {reps: 1, rir: 3.0}, set1: {reps: 1, r
+I/flutter (18026): ≡ƒƒú [Warmup] block doc fetched uid=yoVAqScwLMQLAgNHh8v9IK49fBw2 blockId=sMTOpyKR3cc0oifU8VTW ΓåÆ {exerciseSettings: {AmfUWbF1DH3I7qPAdh5k: {progressionModel: Smart Progression, weeklyFrequency: 4, rirModel: Static RIR, repTargets: {week1: {instance4: 3, instance3: 12, instance2: 5, instance1: 9}}, rirPlan: {week1: {session4: {set3: {reps: 1, rir: 3.0}, set2: {reps: 1, rir: 3.0}, set1: {reps: 1, rir: 2.0}}, session3: {set3: {reps: 9, rir: 2.5}, set2: {reps: 9, rir: 2.0}, set1: {reps: 9, rir: 1.5}}, session2: {set3: {reps: 3, rir: 2.5}, set2: {reps: 3, rir: 2.0}, set1: {reps: 3, rir: 2.0}}, session1: {set3: {reps: 5, rir: 2.5}, set2: {reps: 5, rir: 2.0}, set1: {reps: 5, rir: 2.0}}}, week2: {session4: {set3: {reps: 1, rir: 3.0}, set2: {reps: 1, rir: 3.0}, set1: {reps: 1, rir: 1.1}}, session3: {set3: {reps: 9, rir: 2.5}, set2: {reps: 9, rir: 2.0}, set1: {reps: 9, rir: 2.9}}, session2: {set3: {reps: 3, rir: 2.5}, set2: {reps: 3, rir: 2.0}, set1: {reps: 3, rir: 2.3}}, session1: {set3: {reps: 5, rir: 2.5}, set2: {
+I/flutter (18026): Γ£à [PMU] setExerciseSettings called with keys: (AmfUWbF1DH3I7qPAdh5k, ocNWJv7xLrlinGmjG6cV, RdsGazgdH0xgpjek0n3u, blockMeta, pU7wce56hFDsam53aKDr)
+I/flutter (18026): ≡ƒöì [PMU] Details for Bench ID (AmfUWbF1DH3I7qPAdh5k): {progressionModel: Smart Progression, rirModel: Static RIR, weeklyFrequency: 4, notes: , repTargets: {}, rirPlan: {week1: {session4: {set3: {reps: 1, rir: 3.0}, set2: {reps: 1, rir: 3.0}, set1: {reps: 1, rir: 2.0}}, session3: {set3: {reps: 9, rir: 2.5}, set2: {reps: 9, rir: 2.0}, set1: {reps: 9, rir: 1.5}}, session2: {set3: {reps: 3, rir: 2.5}, set2: {reps: 3, rir: 2.0}, set1: {reps: 3, rir: 2.0}}, session1: {set3: {reps: 5, rir: 2.5}, set2: {reps: 5, rir: 2.0}, set1: {reps: 5, rir: 2.0}}}, week2: {session4: {set3: {reps: 1, rir: 3.0}, set2: {reps: 1, rir: 3.0}, set1: {reps: 1, rir: 1.1}}, session3: {set3: {reps: 9, rir: 2.5}, set2: {reps: 9, rir: 2.0}, set1: {reps: 9, rir: 2.9}}, session2: {set3: {reps: 3, rir: 2.5}, set2: {reps: 3, rir: 2.0}, set1: {reps: 3, rir: 2.3}}, session1: {set3: {reps: 5, rir: 2.5}, set2: {reps: 5, rir: 2.0}, set1: {reps: 5, rir: 2.5}}}, week3: {session4: {set3: {reps: 1, rir: 3.0}, set2: {reps: 1, rir: 3.0}, set1: {reps: 1, r
+I/flutter (18026): ≡ƒƒá [Warmup PlanProbe] plannedCompact=1 first={name: Bench Press, Barbell, circuitIndex: 0} previousOverlay=0 blockStart=2025-09-15 00:00:00.000 blockEnd=2025-11-24 00:00:00.000 date=2025-09-26 00:00:00.000
+I/flutter (18026): ≡ƒºá [SmartProgression] Fetching full top set history for yoVAqScwLMQLAgNHh8v9IK49fBw2...
+I/flutter (18026): Γ£à [SmartProgression] Loaded top sets for: (Bench Press, Barbell, Lat Pull Over, Machine, Overhead Dumbbell Press, Unilateral, ..., Bulgarian Split Squat, Triceps Dip)
+I/flutter (18026): ≡ƒôê [WarmupΓåÆPMU] topSetsByExercise ready: 11 keys
+I/flutter (18026): ≡ƒº¬ [Warmup Probe] savedWorkoutsList=0 topSetsKeys=11
+I/flutter (18026): ≡ƒöÄ [Warmup Loop] building hint for "Bench Press, Barbell" ci=0 wi=1
+I/flutter (18026): ≡ƒº⌐ [Warmup RepTargetCtx] name="Bench Press, Barbell" exId=Bench Press, Barbell weekIndex=1 selectedDate=2025-09-26 00:00:00.000 blockStart=2025-09-15 00:00:00.000 blockEnd=2025-11-24 00:00:00.000 repTargets?=false rirPlan?=false detailsKeys=[AmfUWbF1DH3I7qPAdh5k, ocNWJv7xLrlinGmjG6cV, RdsGazgdH0xgpjek0n3u]ΓÇª
+I/flutter (18026): ≡ƒº¡ [Warmup RepTargetSrc] modelKey=none model=null weeklyFrequency=null repTargetsKeys=Null
+I/flutter (18026): RT dump ΓåÆ id.weekKeys=Null
+I/flutter (18026): RT present ΓåÆ byId=false byName=false
+I/flutter (18026): RT week1 instances ΓåÆ id=0 name=0
+I/flutter (18026): ≡ƒºá getSuggestedRepTargetByModel ΓåÆ Bench Press, Barbell using model: PeriodizationModelType.dupSignature (plannedIndex: 0)
+I/flutter (18026): Γ¥î [getDupSignatureRepRange] No details found for "Bench Press, Barbell"
+I/flutter (18026): ≡ƒºá [REsignature] History key used: "Bench Press, Barbell"
+I/flutter (18026): ≡ƒºá [REsignature] History values: null
+I/flutter (18026): ≡ƒºá [REsignature] History key used: "Bench Press, Barbell"
+I/flutter (18026): ≡ƒºá [REsignature] History values: null
+I/flutter (18026): ≡ƒº¬ Full sequence for Bench Press, Barbell ΓåÆ 10, 2, 5, 9, 3, 7, 10, 4, 8, 2, 6, 10, 3, 8, 5, 2, 9, 4, 7, 10
+I/flutter (18026): ≡ƒö« DUP Signature (sequence-based) ΓåÆ 10 reps (index 0)
+I/flutter (18026): ≡ƒÄ» [Warmup RepTarget] "Bench Press, Barbell" ΓåÆ 10 (dup? false)
+I/flutter (18026): ≡ƒº¬ [Warmup Inputs] name="Bench Press, Barbell" exId=Bench Press, Barbell wi=1 repTarget=10 rir=2.0 prog="null"ΓåÆProgressionModelType.none incsLen=100 details?=false rirPlan?=false
+I/flutter (18026): ≡ƒº¬ [PMU Router] model=ProgressionModelType.none repTarget=10 defaultWeight=20.00 rirValue=2.0 incLen=100 incHead=[20.0, 22.5, 25.0, 27.5, 30.0, 32.5] incIsSparse=false
+I/flutter (18026): ≡ƒÅü [Warmup Final] "Bench Press, Barbell" ci=0 ΓåÆ 20.00 kg ├ù 10 @ RIR 2.0 | repModel=unknown, progression="default", weekIndex=1
+I/flutter (18026): Γ¥î [Warmup Hints] Missing proper hint for "Bench Press, Barbell" repTarget=10 absWeight=20.0 blockStart=2025-09-15 00:00:00.000 blockEnd=2025-11-24 00:00:00.000 details?=false
+I/flutter (18026): ≡ƒƒú [Warmup Hints] Final hintsJson={"bench press, barbell|0":{"s1_weight":20.0,"s1_reps":10,"s1_rir":2.0,"e1rm":27.991999999999997}}
+I/flutter (18026): ≡ƒôè [Warmup Final] summary: 1 exercise hint(s) computed for first paint
+I/flutter (18026): ≡ƒôª [Warmup Persist] ready=true hintsLen=1 hintsReady=true hash=e9d44a29bb2c80f12b1b73929f87333574f92d19 hintsJsonPreview={"bench press, barbell|0":{"s1_weight":20.0,"s1_reps":10,"s1_rir":2.0,"e1rm":27....
+I/flutter (18026): ≡ƒƒó [Warmup] Snapshot PUT 2025-09-26 planned=1 prev=0 hintsLen=97
+I/flutter (18026): ≡ƒƒá [Warmup PlanProbe] plannedCompact=1 first={name: Bench Press, Barbell, circuitIndex: 0} previousOverlay=0 blockStart=2025-09-15 00:00:00.000 blockEnd=2025-11-24 00:00:00.000 date=2025-09-26 00:00:00.000
+I/flutter (18026): ≡ƒºá [SmartProgression] Fetching full top set history for yoVAqScwLMQLAgNHh8v9IK49fBw2...
+D/ProfileInstaller(18026): Installing profile for com.goodlift.razorsedge
+I/flutter (18026): Γ£à [SmartProgression] Loaded top sets for: (Bench Press, Barbell, Lat Pull Over, Machine, Overhead Dumbbell Press, Unilateral, ..., Bulgarian Split Squat, Triceps Dip)
+I/flutter (18026): ≡ƒôê [WarmupΓåÆPMU] topSetsByExercise ready: 11 keys
+I/flutter (18026): ≡ƒº¬ [Warmup Probe] savedWorkoutsList=0 topSetsKeys=11
+I/flutter (18026): ≡ƒöÄ [Warmup Loop] building hint for "Bench Press, Barbell" ci=0 wi=1
+I/flutter (18026): ≡ƒº⌐ [Warmup RepTargetCtx] name="Bench Press, Barbell" exId=Bench Press, Barbell weekIndex=1 selectedDate=2025-09-26 00:00:00.000 blockStart=2025-09-15 00:00:00.000 blockEnd=2025-11-24 00:00:00.000 repTargets?=false rirPlan?=false detailsKeys=[AmfUWbF1DH3I7qPAdh5k, ocNWJv7xLrlinGmjG6cV, RdsGazgdH0xgpjek0n3u]ΓÇª
+I/flutter (18026): ≡ƒº¡ [Warmup RepTargetSrc] modelKey=none model=null weeklyFrequency=null repTargetsKeys=Null
+I/flutter (18026): RT dump ΓåÆ id.weekKeys=Null
+I/flutter (18026): RT present ΓåÆ byId=false byName=false
+I/flutter (18026): RT week1 instances ΓåÆ id=0 name=0
+I/flutter (18026): ≡ƒºá getSuggestedRepTargetByModel ΓåÆ Bench Press, Barbell using model: PeriodizationModelType.dupSignature (plannedIndex: 0)
+I/flutter (18026): Γ¥î [getDupSignatureRepRange] No details found for "Bench Press, Barbell"
+I/flutter (18026): ≡ƒºá [REsignature] History key used: "Bench Press, Barbell"
+I/flutter (18026): ≡ƒºá [REsignature] History values: null
+I/flutter (18026): ≡ƒºá [REsignature] History key used: "Bench Press, Barbell"
+I/flutter (18026): ≡ƒºá [REsignature] History values: null
+I/flutter (18026): ≡ƒº¬ Full sequence for Bench Press, Barbell ΓåÆ 10, 2, 5, 9, 3, 7, 10, 4, 8, 2, 6, 10, 3, 8, 5, 2, 9, 4, 7, 10
+I/flutter (18026): ≡ƒö« DUP Signature (sequence-based) ΓåÆ 10 reps (index 0)
+I/flutter (18026): ≡ƒÄ» [Warmup RepTarget] "Bench Press, Barbell" ΓåÆ 10 (dup? false)
+I/flutter (18026): ≡ƒº¬ [Warmup Inputs] name="Bench Press, Barbell" exId=Bench Press, Barbell wi=1 repTarget=10 rir=2.0 prog="null"ΓåÆProgressionModelType.none incsLen=100 details?=false rirPlan?=false
+I/flutter (18026): ≡ƒº¬ [PMU Router] model=ProgressionModelType.none repTarget=10 defaultWeight=20.00 rirValue=2.0 incLen=100 incHead=[20.0, 22.5, 25.0, 27.5, 30.0, 32.5] incIsSparse=false
+I/flutter (18026): ≡ƒÅü [Warmup Final] "Bench Press, Barbell" ci=0 ΓåÆ 20.00 kg ├ù 10 @ RIR 2.0 | repModel=unknown, progression="default", weekIndex=1
+I/flutter (18026): Γ¥î [Warmup Hints] Missing proper hint for "Bench Press, Barbell" repTarget=10 absWeight=20.0 blockStart=2025-09-15 00:00:00.000 blockEnd=2025-11-24 00:00:00.000 details?=false
+I/flutter (18026): ≡ƒƒú [Warmup Hints] Final hintsJson={"bench press, barbell|0":{"s1_weight":20.0,"s1_reps":10,"s1_rir":2.0,"e1rm":27.991999999999997}}
+I/flutter (18026): ≡ƒôè [Warmup Final] summary: 1 exercise hint(s) computed for first paint
+I/flutter (18026): ≡ƒôª [Warmup Persist] ready=true hintsLen=1 hintsReady=true hash=e9d44a29bb2c80f12b1b73929f87333574f92d19 hintsJsonPreview={"bench press, barbell|0":{"s1_weight":20.0,"s1_reps":10,"s1_rir":2.0,"e1rm":27....
+I/flutter (18026): ≡ƒƒó [Warmup] Snapshot PUT 2025-09-26 planned=1 prev=0 hintsLen=97
+I/VRI[MainActivity]@f7fc4ce(18026): onDisplayChanged oldDisplayState=2 newDisplayState=2
+I/VRI[MainActivity]@f7fc4ce(18026): onDisplayChanged oldDisplayState=2 newDisplayState=2
+I/ImeFocusController(18026): onPreWindowFocus: skipped hasWindowFocus=false mHasImeFocus=true
+I/ImeFocusController(18026): onPostWindowFocus: skipped hasWindowFocus=false mHasImeFocus=true
+D/InputTransport(18026): Input channel destroyed: 'ClientS', fd=206
+I/VRI[MainActivity]@f7fc4ce(18026): handleAppVisibility mAppVisible = true visible = false
+D/VRI[MainActivity]@f7fc4ce(18026): visibilityChanged oldVisibility=true newVisibility=false
+I/VRI[MainActivity]@f7fc4ce(18026): stopped(true) old = false
+D/VRI[MainActivity]@f7fc4ce(18026): WindowStopped on com.goodlift.razorsedge/com.goodlift.razorsedge.MainActivity set to true
+D/HWUI    (18026): CacheManager::trimMemory(20)
+D/SurfaceView(18026): 69595123 windowPositionLost, frameNr = 0
+I/SurfaceView@df84534(18026): aOrMT: VRI[MainActivity]@f7fc4ce t = android.view.SurfaceControl$Transaction@c3564b0 fN = 0 android.view.SurfaceView.-$$Nest$mapplyOrMergeTransaction:0 android.view.SurfaceView$SurfaceViewPositionUpdateListener.positionLost:1870 android.graphics.RenderNode$CompositePositionUpdateListener.positionLost:414 
+I/VRI[MainActivity]@f7fc4ce(18026): mWNT: t=0xb4000075ea622a00 mBlastBufferQueue=0xb4000075e98b8b00 fn= 0 HdrRenderState mRenderHdrSdrRatio=1.0 caller= android.view.SurfaceView.applyOrMergeTransaction:1723 android.view.SurfaceView.-$$Nest$mapplyOrMergeTransaction:0 android.view.SurfaceView$SurfaceViewPositionUpdateListener.positionLost:1870 
+I/SurfaceView@df84534(18026): windowStopped(true) false io.flutter.embedding.android.FlutterSurfaceView{df84534 V.E...... ........ 0,0-1080,2340} of VRI[MainActivity]@f7fc4ce
+I/SurfaceView(18026): 234374452 Changes: creating=false format=false size=false visible=true alpha=false hint=false visible=true left=false top=false z=false attached=true lifecycleStrategy=false
+I/SurfaceView(18026): 234374452 Cur surface: Surface(name=null mNativeObject=-5476376640452196352)/@0xbe117e1
+I/SurfaceView(18026): 234374452 surfaceDestroyed
+I/SurfaceView@df84534(18026): surfaceDestroyed callback.size 1 #1 io.flutter.embedding.android.FlutterSurfaceView{df84534 V.E...... ........ 0,0-1080,2340}
+I/SurfaceView@df84534(18026): updateSurface: mVisible = false mSurface.isValid() = true
+I/SurfaceView@df84534(18026): releaseSurfaces: viewRoot = VRI[MainActivity]@f7fc4ce
+V/SurfaceView(18026): Layout: x=0 y=0 w=1080 h=2340, frame=Rect(0, 0 - 1080, 2340)
+D/SurfaceView@df84534(18026): updateSurface: surface is not valid
+I/SurfaceView@df84534(18026): releaseSurfaces: viewRoot = VRI[MainActivity]@f7fc4ce
+I/SurfaceView@df84534(18026): onWindowVisibilityChanged(8) false io.flutter.embedding.android.FlutterSurfaceView{df84534 G.E...... ......I. 0,0-1080,2340} of VRI[MainActivity]@f7fc4ce
+D/SurfaceView@df84534(18026): updateSurface: surface is not valid
+I/SurfaceView@df84534(18026): releaseSurfaces: viewRoot = VRI[MainActivity]@f7fc4ce
+D/HWUI    (18026): CacheManager::trimMemory(20)
+I/VRI[MainActivity]@f7fc4ce(18026): Relayout returned: old=(0,0,1080,2340) new=(0,0,1080,2340) relayoutAsync=false req=(1080,2340)8 dur=13 res=0x2 s={false 0x0} ch=false seqId=0
+D/SurfaceView@df84534(18026): updateSurface: surface is not valid
+I/SurfaceView@df84534(18026): releaseSurfaces: viewRoot = VRI[MainActivity]@f7fc4ce
+D/VRI[MainActivity]@f7fc4ce(18026): applyTransactionOnDraw applyImmediately
+D/VRI[MainActivity]@f7fc4ce(18026): Not drawing due to not visible. Reason=!mAppVisible && !mForceDecorViewVisibility
+D/VRI[MainActivity]@f7fc4ce(18026): Pending transaction will not be applied in sync with a draw due to view not visible
+D/HWUI    (18026): CacheManager::trimMemory(20)
+I/FA      (18026): Application backgrounded at: timestamp_millis: 1758848464727
+I/lift.razorsedge(18026): Background concurrent mark compact GC freed 44MB AllocSpace bytes, 124(5040KB) LOS objects, 75% free, 7832KB/31MB, paused 673us,5.023ms total 98.517ms
+W/lift.razorsedge(18026): ApkAssets: Deleting an ApkAssets object '<empty> and /system/app/DictDiotekForSec/DictDiotekForSec.apk' with 1 weak references
+W/lift.razorsedge(18026): ApkAssets: Deleting an ApkAssets object '<empty> and /data/app/~~x116CbgMllgpOwNbZZXjIA==/com.samsung.android.app.interpreter-3ZNR96GdFeXVv083uEzVeg==/base.apk' with 1 weak references
+W/lift.razorsedge(18026): ApkAssets: Deleting an ApkAssets object '<empty> and /data/app/~~9COCvrnalkra_pgywfOoHA==/com.samsung.android.samsungpass-0hJbI571bY4T6vvQb6u64Q==/base.apk' with 1 weak references
+W/lift.razorsedge(18026): ApkAssets: Deleting an ApkAssets object '<empty> and /data/app/~~t_1tIvV4KGGmT6rGl9onJA==/com.microsoft.office.officehubrow-OKtwYUETAKkndwC0g-CiOA==/base.apk' with 1 weak references
+W/lift.razorsedge(18026): ApkAssets: Deleting an ApkAssets object '<empty> and /data/app/~~t_1tIvV4KGGmT6rGl9onJA==/com.microsoft.office.officehubrow-OKtwYUETAKkndwC0g-CiOA==/split_config.en.apk' with 1 weak references
+W/lift.razorsedge(18026): ApkAssets: Deleting an ApkAssets object '<empty> and /data/app/~~t_1tIvV4KGGmT6rGl9onJA==/com.microsoft.office.officehubrow-OKtwYUETAKkndwC0g-CiOA==/split_config.xxhdpi.apk' with 1 weak references
+W/lift.razorsedge(18026): ApkAssets: Deleting an ApkAssets object '<empty> and /data/app/~~t_1tIvV4KGGmT6rGl9onJA==/com.microsoft.office.officehubrow-OKtwYUETAKkndwC0g-CiOA==/split_dynamic_videoplayback_module.apk' with 1 weak references
+W/lift.razorsedge(18026): ApkAssets: Deleting an ApkAssets object '<empty> and /data/app/~~t_1tIvV4KGGmT6rGl9onJA==/com.microsoft.office.officehubrow-OKtwYUETAKkndwC0g-CiOA==/split_lenssampledoc.apk' with 1 weak references
+W/lift.razorsedge(18026): ApkAssets: Deleting an ApkAssets object '<empty> and /data/app/~~t_1tIvV4KGGmT6rGl9onJA==/com.microsoft.office.officehubrow-OKtwYUETAKkndwC0g-CiOA==/split_mainassetpack.apk' with 1 weak references
+W/lift.razorsedge(18026): ApkAssets: Deleting an ApkAssets object '<empty> and /data/app/~~gmNsH5saZJI8NBJdOXNLQw==/com.openai.chatgpt-OIcuotr3aanyc2fOsibbSw==/base.apk' with 1 weak references
+W/lift.razorsedge(18026): ApkAssets: Deleting an ApkAssets object '<empty> and /data/app/~~gmNsH5saZJI8NBJdOXNLQw==/com.openai.chatgpt-OIcuotr3aanyc2fOsibbSw==/split_config.arm64_v8a.apk' with 1 weak references
+W/lift.razorsedge(18026): ApkAssets: Deleting an ApkAssets object '<empty> and /data/app/~~gmNsH5saZJI8NBJdOXNLQw==/com.openai.chatgpt-OIcuotr3aanyc2fOsibbSw==/split_config.en.apk' with 1 weak references
+W/lift.razorsedge(18026): ApkAssets: Deleting an ApkAssets object '<empty> and /data/app/~~gmNsH5saZJI8NBJdOXNLQw==/com.openai.chatgpt-OIcuotr3aanyc2fOsibbSw==/split_config.xxhdpi.apk' with 1 weak references
+D/HWUI    (18026): CacheManager::trimMemory(40)
+E/GoogleApiManager(18026): Failed to get service from broker. 
+E/GoogleApiManager(18026): java.lang.SecurityException: Unknown calling package name 'com.google.android.gms'.
+E/GoogleApiManager(18026): 	at android.os.Parcel.createExceptionOrNull(Parcel.java:3257)
+E/GoogleApiManager(18026): 	at android.os.Parcel.createException(Parcel.java:3241)
+E/GoogleApiManager(18026): 	at android.os.Parcel.readException(Parcel.java:3224)
+E/GoogleApiManager(18026): 	at android.os.Parcel.readException(Parcel.java:3166)
+E/GoogleApiManager(18026): 	at barl.a(:com.google.android.gms@253534035@25.35.34 (260400-804595880):36)
+E/GoogleApiManager(18026): 	at baps.z(:com.google.android.gms@253534035@25.35.34 (260400-804595880):143)
+E/GoogleApiManager(18026): 	at azwp.run(:com.google.android.gms@253534035@25.35.34 (260400-804595880):42)
+E/GoogleApiManager(18026): 	at android.os.Handler.handleCallback(Handler.java:959)
+E/GoogleApiManager(18026): 	at android.os.Handler.dispatchMessage(Handler.java:100)
+E/GoogleApiManager(18026): 	at cljj.mF(:com.google.android.gms@253534035@25.35.34 (260400-804595880):1)
+E/GoogleApiManager(18026): 	at cljj.dispatchMessage(:com.google.android.gms@253534035@25.35.34 (260400-804595880):5)
+E/GoogleApiManager(18026): 	at android.os.Looper.loopOnce(Looper.java:257)
+E/GoogleApiManager(18026): 	at android.os.Looper.loop(Looper.java:342)
+E/GoogleApiManager(18026): 	at android.os.HandlerThread.run(HandlerThread.java:85)
+V/NativeCrypto(18026): Read error: ssl=0xb4000075d8f46988: I/O error during system call, Software caused connection abort
+V/NativeCrypto(18026): Write error: ssl=0xb4000075d8f46988: I/O error during system call, Broken pipe
+W/ManagedChannelImpl(18026): [{0}] Failed to resolve name. status={1}
+W/Firestore(18026): (25.1.3) [WatchStream]: (cfcdacb) Stream closed with status: Status{code=UNAVAILABLE, description=End of stream or IOException, cause=null}.
+V/NativeCrypto(18026): SSL shutdown failed: ssl=0xb4000075d8f46988: I/O error during system call, Success
+W/Firestore(18026): (25.1.3) [WriteStream]: (e96b0cf) Stream closed with status: Status{code=UNAVAILABLE, description=End of stream or IOException, cause=null}.
+W/Firestore(18026): (25.1.3) [WatchStream]: (cfcdacb) Stream closed with status: Status{code=UNAVAILABLE, description=Unable to resolve host firestore.googleapis.com, cause=java.lang.RuntimeException: java.net.UnknownHostException: Unable to resolve host "firestore.googleapis.com": No address associated with hostname
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.resolveAddresses(DnsNameResolver.java:223)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.doResolve(DnsNameResolver.java:282)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver$Resolve.run(DnsNameResolver.java:318)
+W/Firestore(18026): 	at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1145)
+W/Firestore(18026): 	at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:644)
+W/Firestore(18026): 	at java.lang.Thread.run(Thread.java:1012)
+W/Firestore(18026): Caused by: java.net.UnknownHostException: Unable to resolve host "firestore.googleapis.com": No address associated with hostname
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupHostByName(Inet6AddressImpl.java:156)
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupAllHostAddr(Inet6AddressImpl.java:103)
+W/Firestore(18026): 	at java.net.InetAddress.getAllByName(InetAddress.java:1152)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver$JdkAddressResolver.resolveAddress(DnsNameResolver.java:632)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.resolveAddresses(DnsNameResolver.java:219)
+W/Firestore(18026): 	... 5 more
+W/Firestore(18026): Caused by: android.system.GaiException: android_getaddrinfo failed: EAI_NODATA (No address associated with hostname)
+W/Firestore(18026): 	at libcore.io.Linux.android_getaddrinfo(Native Method)
+W/Firestore(18026): 	at libcore.io.ForwardingOs.android_getaddrinfo(ForwardingOs.java:133)
+W/Firestore(18026): 	at libcore.io.BlockGuardOs.android_getaddrinfo(BlockGuardOs.java:222)
+W/Firestore(18026): 	at libcore.io.ForwardingOs.android_getaddrinfo(ForwardingOs.java:133)
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupHostByName(Inet6AddressImpl.java:135)
+W/Firestore(18026): 	... 9 more
+W/Firestore(18026): }.
+W/ManagedChannelImpl(18026): [{0}] Failed to resolve name. status={1}
+W/Firestore(18026): (25.1.3) [WatchStream]: (cfcdacb) Stream closed with status: Status{code=UNAVAILABLE, description=Unable to resolve host firestore.googleapis.com, cause=java.lang.RuntimeException: java.net.UnknownHostException: Unable to resolve host "firestore.googleapis.com": No address associated with hostname
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.resolveAddresses(DnsNameResolver.java:223)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.doResolve(DnsNameResolver.java:282)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver$Resolve.run(DnsNameResolver.java:318)
+W/Firestore(18026): 	at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1145)
+W/Firestore(18026): 	at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:644)
+W/Firestore(18026): 	at java.lang.Thread.run(Thread.java:1012)
+W/Firestore(18026): Caused by: java.net.UnknownHostException: Unable to resolve host "firestore.googleapis.com": No address associated with hostname
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupHostByName(Inet6AddressImpl.java:124)
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupAllHostAddr(Inet6AddressImpl.java:103)
+W/Firestore(18026): 	at java.net.InetAddress.getAllByName(InetAddress.java:1152)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver$JdkAddressResolver.resolveAddress(DnsNameResolver.java:632)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.resolveAddresses(DnsNameResolver.java:219)
+W/Firestore(18026): 	... 5 more
+W/Firestore(18026): }.
+W/ManagedChannelImpl(18026): [{0}] Failed to resolve name. status={1}
+W/Firestore(18026): (25.1.3) [WatchStream]: (cfcdacb) Stream closed with status: Status{code=UNAVAILABLE, description=Unable to resolve host firestore.googleapis.com, cause=java.lang.RuntimeException: java.net.UnknownHostException: Unable to resolve host "firestore.googleapis.com": No address associated with hostname
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.resolveAddresses(DnsNameResolver.java:223)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.doResolve(DnsNameResolver.java:282)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver$Resolve.run(DnsNameResolver.java:318)
+W/Firestore(18026): 	at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1145)
+W/Firestore(18026): 	at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:644)
+W/Firestore(18026): 	at java.lang.Thread.run(Thread.java:1012)
+W/Firestore(18026): Caused by: java.net.UnknownHostException: Unable to resolve host "firestore.googleapis.com": No address associated with hostname
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupHostByName(Inet6AddressImpl.java:156)
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupAllHostAddr(Inet6AddressImpl.java:103)
+W/Firestore(18026): 	at java.net.InetAddress.getAllByName(InetAddress.java:1152)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver$JdkAddressResolver.resolveAddress(DnsNameResolver.java:632)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.resolveAddresses(DnsNameResolver.java:219)
+W/Firestore(18026): 	... 5 more
+W/Firestore(18026): Caused by: android.system.GaiException: android_getaddrinfo failed: EAI_NODATA (No address associated with hostname)
+W/Firestore(18026): 	at libcore.io.Linux.android_getaddrinfo(Native Method)
+W/Firestore(18026): 	at libcore.io.ForwardingOs.android_getaddrinfo(ForwardingOs.java:133)
+W/Firestore(18026): 	at libcore.io.BlockGuardOs.android_getaddrinfo(BlockGuardOs.java:222)
+W/Firestore(18026): 	at libcore.io.ForwardingOs.android_getaddrinfo(ForwardingOs.java:133)
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupHostByName(Inet6AddressImpl.java:135)
+W/Firestore(18026): 	... 9 more
+W/Firestore(18026): }.
+W/ManagedChannelImpl(18026): [{0}] Failed to resolve name. status={1}
+W/Firestore(18026): (25.1.3) [WatchStream]: (cfcdacb) Stream closed with status: Status{code=UNAVAILABLE, description=Unable to resolve host firestore.googleapis.com, cause=java.lang.RuntimeException: java.net.UnknownHostException: Unable to resolve host "firestore.googleapis.com": No address associated with hostname
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.resolveAddresses(DnsNameResolver.java:223)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.doResolve(DnsNameResolver.java:282)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver$Resolve.run(DnsNameResolver.java:318)
+W/Firestore(18026): 	at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1145)
+W/Firestore(18026): 	at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:644)
+W/Firestore(18026): 	at java.lang.Thread.run(Thread.java:1012)
+W/Firestore(18026): Caused by: java.net.UnknownHostException: Unable to resolve host "firestore.googleapis.com": No address associated with hostname
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupHostByName(Inet6AddressImpl.java:156)
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupAllHostAddr(Inet6AddressImpl.java:103)
+W/Firestore(18026): 	at java.net.InetAddress.getAllByName(InetAddress.java:1152)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver$JdkAddressResolver.resolveAddress(DnsNameResolver.java:632)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.resolveAddresses(DnsNameResolver.java:219)
+W/Firestore(18026): 	... 5 more
+W/Firestore(18026): Caused by: android.system.GaiException: android_getaddrinfo failed: EAI_NODATA (No address associated with hostname)
+W/Firestore(18026): 	at libcore.io.Linux.android_getaddrinfo(Native Method)
+W/Firestore(18026): 	at libcore.io.ForwardingOs.android_getaddrinfo(ForwardingOs.java:133)
+W/Firestore(18026): 	at libcore.io.BlockGuardOs.android_getaddrinfo(BlockGuardOs.java:222)
+W/Firestore(18026): 	at libcore.io.ForwardingOs.android_getaddrinfo(ForwardingOs.java:133)
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupHostByName(Inet6AddressImpl.java:135)
+W/Firestore(18026): 	... 9 more
+W/Firestore(18026): }.
+W/ManagedChannelImpl(18026): [{0}] Failed to resolve name. status={1}
+W/Firestore(18026): (25.1.3) [WatchStream]: (cfcdacb) Stream closed with status: Status{code=UNAVAILABLE, description=Unable to resolve host firestore.googleapis.com, cause=java.lang.RuntimeException: java.net.UnknownHostException: Unable to resolve host "firestore.googleapis.com": No address associated with hostname
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.resolveAddresses(DnsNameResolver.java:223)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.doResolve(DnsNameResolver.java:282)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver$Resolve.run(DnsNameResolver.java:318)
+W/Firestore(18026): 	at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1145)
+W/Firestore(18026): 	at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:644)
+W/Firestore(18026): 	at java.lang.Thread.run(Thread.java:1012)
+W/Firestore(18026): Caused by: java.net.UnknownHostException: Unable to resolve host "firestore.googleapis.com": No address associated with hostname
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupHostByName(Inet6AddressImpl.java:156)
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupAllHostAddr(Inet6AddressImpl.java:103)
+W/Firestore(18026): 	at java.net.InetAddress.getAllByName(InetAddress.java:1152)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver$JdkAddressResolver.resolveAddress(DnsNameResolver.java:632)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.resolveAddresses(DnsNameResolver.java:219)
+W/Firestore(18026): 	... 5 more
+W/Firestore(18026): Caused by: android.system.GaiException: android_getaddrinfo failed: EAI_NODATA (No address associated with hostname)
+W/Firestore(18026): 	at libcore.io.Linux.android_getaddrinfo(Native Method)
+W/Firestore(18026): 	at libcore.io.ForwardingOs.android_getaddrinfo(ForwardingOs.java:133)
+W/Firestore(18026): 	at libcore.io.BlockGuardOs.android_getaddrinfo(BlockGuardOs.java:222)
+W/Firestore(18026): 	at libcore.io.ForwardingOs.android_getaddrinfo(ForwardingOs.java:133)
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupHostByName(Inet6AddressImpl.java:135)
+W/Firestore(18026): 	... 9 more
+W/Firestore(18026): }.
+W/ManagedChannelImpl(18026): [{0}] Failed to resolve name. status={1}
+W/Firestore(18026): (25.1.3) [WatchStream]: (cfcdacb) Stream closed with status: Status{code=UNAVAILABLE, description=Unable to resolve host firestore.googleapis.com, cause=java.lang.RuntimeException: java.net.UnknownHostException: Unable to resolve host "firestore.googleapis.com": No address associated with hostname
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.resolveAddresses(DnsNameResolver.java:223)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.doResolve(DnsNameResolver.java:282)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver$Resolve.run(DnsNameResolver.java:318)
+W/Firestore(18026): 	at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1145)
+W/Firestore(18026): 	at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:644)
+W/Firestore(18026): 	at java.lang.Thread.run(Thread.java:1012)
+W/Firestore(18026): Caused by: java.net.UnknownHostException: Unable to resolve host "firestore.googleapis.com": No address associated with hostname
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupHostByName(Inet6AddressImpl.java:156)
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupAllHostAddr(Inet6AddressImpl.java:103)
+W/Firestore(18026): 	at java.net.InetAddress.getAllByName(InetAddress.java:1152)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver$JdkAddressResolver.resolveAddress(DnsNameResolver.java:632)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.resolveAddresses(DnsNameResolver.java:219)
+W/Firestore(18026): 	... 5 more
+W/Firestore(18026): Caused by: android.system.GaiException: android_getaddrinfo failed: EAI_NODATA (No address associated with hostname)
+W/Firestore(18026): 	at libcore.io.Linux.android_getaddrinfo(Native Method)
+W/Firestore(18026): 	at libcore.io.ForwardingOs.android_getaddrinfo(ForwardingOs.java:133)
+W/Firestore(18026): 	at libcore.io.BlockGuardOs.android_getaddrinfo(BlockGuardOs.java:222)
+W/Firestore(18026): 	at libcore.io.ForwardingOs.android_getaddrinfo(ForwardingOs.java:133)
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupHostByName(Inet6AddressImpl.java:135)
+W/Firestore(18026): 	... 9 more
+W/Firestore(18026): }.
+W/Firestore(18026): (25.1.3) [WatchStream]: (cfcdacb) Stream closed with status: Status{code=UNAVAILABLE, description=Unable to resolve host firestore.googleapis.com, cause=java.lang.RuntimeException: java.net.UnknownHostException: Unable to resolve host "firestore.googleapis.com": No address associated with hostname
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.resolveAddresses(DnsNameResolver.java:223)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.doResolve(DnsNameResolver.java:282)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver$Resolve.run(DnsNameResolver.java:318)
+W/Firestore(18026): 	at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1145)
+W/Firestore(18026): 	at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:644)
+W/Firestore(18026): 	at java.lang.Thread.run(Thread.java:1012)
+W/Firestore(18026): Caused by: java.net.UnknownHostException: Unable to resolve host "firestore.googleapis.com": No address associated with hostname
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupHostByName(Inet6AddressImpl.java:156)
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupAllHostAddr(Inet6AddressImpl.java:103)
+W/Firestore(18026): 	at java.net.InetAddress.getAllByName(InetAddress.java:1152)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver$JdkAddressResolver.resolveAddress(DnsNameResolver.java:632)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.resolveAddresses(DnsNameResolver.java:219)
+W/Firestore(18026): 	... 5 more
+W/Firestore(18026): Caused by: android.system.GaiException: android_getaddrinfo failed: EAI_NODATA (No address associated with hostname)
+W/Firestore(18026): 	at libcore.io.Linux.android_getaddrinfo(Native Method)
+W/Firestore(18026): 	at libcore.io.ForwardingOs.android_getaddrinfo(ForwardingOs.java:133)
+W/Firestore(18026): 	at libcore.io.BlockGuardOs.android_getaddrinfo(BlockGuardOs.java:222)
+W/Firestore(18026): 	at libcore.io.ForwardingOs.android_getaddrinfo(ForwardingOs.java:133)
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupHostByName(Inet6AddressImpl.java:135)
+W/Firestore(18026): 	... 9 more
+W/Firestore(18026): }.
+W/ManagedChannelImpl(18026): [{0}] Failed to resolve name. status={1}
+W/Firestore(18026): (25.1.3) [WatchStream]: (cfcdacb) Stream closed with status: Status{code=UNAVAILABLE, description=Unable to resolve host firestore.googleapis.com, cause=java.lang.RuntimeException: java.net.UnknownHostException: Unable to resolve host "firestore.googleapis.com": No address associated with hostname
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.resolveAddresses(DnsNameResolver.java:223)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.doResolve(DnsNameResolver.java:282)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver$Resolve.run(DnsNameResolver.java:318)
+W/Firestore(18026): 	at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1145)
+W/Firestore(18026): 	at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:644)
+W/Firestore(18026): 	at java.lang.Thread.run(Thread.java:1012)
+W/Firestore(18026): Caused by: java.net.UnknownHostException: Unable to resolve host "firestore.googleapis.com": No address associated with hostname
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupHostByName(Inet6AddressImpl.java:156)
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupAllHostAddr(Inet6AddressImpl.java:103)
+W/Firestore(18026): 	at java.net.InetAddress.getAllByName(InetAddress.java:1152)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver$JdkAddressResolver.resolveAddress(DnsNameResolver.java:632)
+W/Firestore(18026): 	at io.grpc.internal.DnsNameResolver.resolveAddresses(DnsNameResolver.java:219)
+W/Firestore(18026): 	... 5 more
+W/Firestore(18026): Caused by: android.system.GaiException: android_getaddrinfo failed: EAI_NODATA (No address associated with hostname)
+W/Firestore(18026): 	at libcore.io.Linux.android_getaddrinfo(Native Method)
+W/Firestore(18026): 	at libcore.io.ForwardingOs.android_getaddrinfo(ForwardingOs.java:133)
+W/Firestore(18026): 	at libcore.io.BlockGuardOs.android_getaddrinfo(BlockGuardOs.java:222)
+W/Firestore(18026): 	at libcore.io.ForwardingOs.android_getaddrinfo(ForwardingOs.java:133)
+W/Firestore(18026): 	at java.net.Inet6AddressImpl.lookupHostByName(Inet6AddressImpl.java:135)
+W/Firestore(18026): 	... 9 more
+W/Firestore(18026): }.
+Lost connection to device.
