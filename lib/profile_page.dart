@@ -19,6 +19,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 
 // Local storage / utils
@@ -79,6 +80,370 @@ class LiftVideo {
     updatedAt: DateTime.tryParse(j['updatedAt'] ?? '') ?? DateTime.now(),
   );
 }
+
+class _PostDetailPage extends StatelessWidget {
+  final Post post;
+  final Future<void> Function(Post) onToggleLike;
+  final Future<void> Function(Post) onToggleGoodLift;
+  final Future<void> Function(Post, String) onAddComment;
+  final bool canDelete;
+
+  const _PostDetailPage({
+    super.key,
+    required this.post,
+    required this.onToggleLike,
+    required this.onToggleGoodLift,
+    required this.onAddComment,
+    required this.canDelete,
+  });
+
+
+
+  @override
+  Widget build(BuildContext context) {
+    // For brevity: simple viewer + action row with counts.
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Post'),
+        actions: [
+          if (canDelete)
+            IconButton(
+              icon: const Icon(Icons.delete_outline),
+              onPressed: () async {
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (d) => AlertDialog(
+                    title: const Text('Delete post?'),
+                    content: const Text('This will remove the post and its media.'),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancel')),
+                      TextButton(onPressed: () => Navigator.pop(d, true), child: const Text('Delete', style: TextStyle(color: Colors.red))),
+                    ],
+                  ),
+                );
+                if (confirm != true) return;
+
+                // Delete post doc(s)
+                await FirebaseFirestore.instance.collection('posts').doc(post.id).delete();
+
+                // Also try to delete mirrored user doc if you added one (safe to keep even if you didn't):
+                try {
+                  await FirebaseFirestore.instance
+                      .collection('users').doc(post.ownerUid)
+                      .collection('posts').doc(post.id).delete();
+                } catch (_) {}
+
+                // Delete Storage folder
+                final ref = FirebaseStorage.instance.ref('users/${post.ownerUid}/posts/${post.id}');
+                try {
+                  final list = await ref.listAll();
+                  for (final i in list.items) { await i.delete(); }
+                } catch (_) {}
+
+                if (context.mounted) Navigator.pop(context);
+              },
+            ),
+        ],
+
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            child: (post.mediaType == 'image')
+                ? FutureBuilder<File>(
+              future: DefaultCacheManager().getSingleFile(post.smallUrl),
+              builder: (ctx, snap) {
+                if (snap.connectionState == ConnectionState.done && snap.hasData) {
+                  return Center(child: Image.file(snap.data!, fit: BoxFit.contain));
+                }
+                return const Center(child: CircularProgressIndicator());
+              },
+            )
+                : FutureBuilder<String>(
+              future: post.storagePathOriginal.isNotEmpty
+                  ? FirebaseStorage.instance.ref(post.storagePathOriginal).getDownloadURL()
+                  : Future<String>.value(''),
+              builder: (ctx, snap) {
+                if (snap.connectionState != ConnectionState.done) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                final url = (snap.data ?? '').trim();
+                if (url.isEmpty) {
+                  return const Center(child: Text('Video unavailable'));
+                }
+                return _InAppVideoPlayer.networkUrl(url: url);
+              },
+            ),
+          ),
+
+          // --- Simple comments list (last 20) ---
+          SizedBox(
+            height: 160,
+            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance
+                  .collection('posts').doc(post.id)
+                  .collection('comments')
+                  .orderBy('createdAt', descending: true)
+                  .limit(20)
+                  .snapshots(),
+              builder: (context, snap) {
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)));
+                }
+                final docs = snap.data?.docs ?? [];
+                if (docs.isEmpty) {
+                  return const Center(child: Text('No comments yet'));
+                }
+                return ListView.separated(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  reverse: false,
+                  itemCount: docs.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 6),
+                  itemBuilder: (_, i) {
+                    final d = docs[i].data();
+                    final text = (d['text'] ?? '') as String;
+                    final uid = (d['uid'] ?? '') as String;
+                    final storedName = (d['username'] as String?)?.trim();
+
+// If the comment doc already has a username, use it.
+// Otherwise, do a one-off lookup to users_public and cache via the ListView.
+                    if (storedName != null && storedName.isNotEmpty) {
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.person_outline, size: 16),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '$storedName: $text',
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      );
+                    } else {
+                      return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                        future: FirebaseFirestore.instance
+                            .collection('users_public')
+                            .doc(uid)
+                            .get(),
+                        builder: (ctx, snapUser) {
+                          String display = uid; // fallback
+
+                          if (snapUser.hasData) {
+                            final map = snapUser.data!.data(); // Map<String, dynamic>?
+                            if (map != null) {
+                              final u = map['username'];
+                              final dn = map['displayName'];
+                              if (u is String && u.trim().isNotEmpty) {
+                                display = u.trim();
+                              } else if (dn is String && dn.trim().isNotEmpty) {
+                                display = dn.trim();
+                              }
+                            }
+                          }
+
+                          return Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(Icons.person_outline, size: 16),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  '$display: $text',
+                                  maxLines: 3,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      );
+
+                    }
+
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Divider(height: 1),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+              child: _PostActionsBar(
+                post: post,
+                onToggleLike: onToggleLike,
+                onToggleGoodLift: onToggleGoodLift,
+                onAddComment: onAddComment,
+              ),
+
+            ),
+          ],
+        ),
+      ),
+
+    );
+  }
+}
+
+class _PostActionsBar extends StatefulWidget {
+  final Post post;
+  final Future<void> Function(Post) onToggleLike;
+  final Future<void> Function(Post) onToggleGoodLift;
+  final Future<void> Function(Post, String) onAddComment;
+
+  const _PostActionsBar({
+    required this.post,
+    required this.onToggleLike,
+    required this.onToggleGoodLift,
+    required this.onAddComment,
+  });
+
+  @override
+  State<_PostActionsBar> createState() => _PostActionsBarState();
+}
+
+class _PostActionsBarState extends State<_PostActionsBar> {
+  bool _liking = false;
+  bool _glifting = false;
+  bool _commenting = false;
+
+  Future<void> _promptAndComment() async {
+    final ctrl = TextEditingController();
+    final text = await showDialog<String>(
+      context: context,
+      builder: (d) => AlertDialog(
+        title: const Text('Add comment'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: 'Write a comment...'),
+          textInputAction: TextInputAction.done,
+          onSubmitted: (v) => Navigator.pop(d, v),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(d), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(d, ctrl.text), child: const Text('Post')),
+        ],
+      ),
+    );
+    if (text == null || text.trim().isEmpty) return;
+    setState(() => _commenting = true);
+    try {
+      await widget.onAddComment(widget.post, text.trim());
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Comment failed: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _commenting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Live counts from the post doc
+    final postStream = FirebaseFirestore.instance.collection('posts').doc(widget.post.id).snapshots();
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: postStream,
+      builder: (context, snap) {
+        int likeCount = widget.post.likeCount;
+        int goodLiftCount = widget.post.goodLiftCount;
+        int commentCount = widget.post.commentCount;
+
+        if (snap.hasData && snap.data!.data() != null) {
+          final d = snap.data!.data()!;
+          likeCount = (d['likeCount'] as num?)?.toInt() ?? likeCount;
+          goodLiftCount = (d['goodLiftCount'] as num?)?.toInt() ?? goodLiftCount;
+          commentCount = (d['commentCount'] as num?)?.toInt() ?? commentCount;
+        }
+
+        return Row(
+          children: [
+            // Like
+            IconButton(
+              tooltip: 'Like',
+              onPressed: _liking
+                  ? null
+                  : () async {
+                setState(() => _liking = true);
+                try {
+                  await widget.onToggleLike(widget.post);
+                } catch (e) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Like failed: $e')),
+                    );
+                  }
+                } finally {
+                  if (mounted) setState(() => _liking = false);
+                }
+              },
+              icon: const Icon(Icons.thumb_up_alt_outlined),
+            ),
+            Text('$likeCount'),
+
+            const SizedBox(width: 16),
+
+            // Good Lift (videos only)
+            if (widget.post.mediaType == 'video') ...[
+              IconButton(
+                tooltip: 'Good lift',
+                onPressed: _glifting
+                    ? null
+                    : () async {
+                  setState(() => _glifting = true);
+                  try {
+                    await widget.onToggleGoodLift(widget.post);
+                  } catch (e) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Good lift failed: $e')),
+                      );
+                    }
+                  } finally {
+                    if (mounted) setState(() => _glifting = false);
+                  }
+                },
+                icon: const Icon(Icons.check_circle_outline),
+              ),
+              Text('$goodLiftCount'),
+              const SizedBox(width: 16),
+            ],
+
+            // Comments
+            IconButton(
+              tooltip: 'Comment',
+              onPressed: _commenting ? null : _promptAndComment,
+              icon: const Icon(Icons.mode_comment_outlined),
+            ),
+            Text('$commentCount'),
+
+            const Spacer(),
+          ],
+        );
+      },
+    );
+  }
+}
+
+
+
+
+
+
 
 
 class _InAppVideoPlayer extends StatefulWidget {
@@ -169,6 +534,53 @@ class BestLift {
     this.date,
   });
 }
+
+// ===== Profile Posts (grid) =====
+class Post {
+  final String id;
+  final String ownerUid;
+  final String mediaType; // "image" | "video"
+  final String storagePathOriginal; // path in Storage
+  final String smallUrl;
+  final String thumbUrl;
+  final String? caption;
+  final int likeCount;
+  final int goodLiftCount;
+  final int commentCount;
+  final Timestamp createdAt;
+
+  Post({
+    required this.id,
+    required this.ownerUid,
+    required this.mediaType,
+    required this.storagePathOriginal,
+    required this.smallUrl,
+    required this.thumbUrl,
+    required this.caption,
+    required this.likeCount,
+    required this.goodLiftCount,
+    required this.commentCount,
+    required this.createdAt,
+  });
+
+  static Post fromSnap(DocumentSnapshot<Map<String, dynamic>> s) {
+    final d = s.data()!;
+    return Post(
+      id: s.id,
+      ownerUid: (d['ownerUid'] ?? '') as String,
+      mediaType: (d['mediaType'] ?? 'image') as String,
+      storagePathOriginal: (d['storagePathOriginal'] ?? '') as String,
+      smallUrl: (d['smallUrl'] ?? '') as String,
+      thumbUrl: (d['thumbUrl'] ?? '') as String,
+      caption: (d['caption'] as String?),
+      likeCount: (d['likeCount'] as num?)?.toInt() ?? 0,
+      goodLiftCount: (d['goodLiftCount'] as num?)?.toInt() ?? 0,
+      commentCount: (d['commentCount'] as num?)?.toInt() ?? 0,
+      createdAt: (d['createdAt'] as Timestamp?) ?? Timestamp.now(),
+    );
+  }
+}
+
 
 
 class ProfilePage extends StatefulWidget {
@@ -322,6 +734,13 @@ class _ProfilePageState extends State<ProfilePage> {
   final Map<String, VideoPlayerController> _inlineControllers = {};
   String? _inlinePlayingLiftId;
 
+  // Posts grid state
+  final List<Post> _posts = [];
+  DocumentSnapshot<Map<String, dynamic>>? _lastPostSnap;
+  bool _loadingPosts = false;
+  bool _hasMorePosts = true;
+
+
   String _folderForLift(String liftId) {
     if (_bestTrainingByE1RM.any((e) => e['id'] == liftId)) {
       return 'videos/best-e1rm-training';
@@ -426,6 +845,125 @@ class _ProfilePageState extends State<ProfilePage> {
       ],
     );
   }
+
+  Widget _buildPostsSection() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            blurRadius: 8,
+            color: Colors.black.withOpacity(0.04),
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header row
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Posts',
+                  style: TextStyle(
+                    fontFamily: 'Monda',
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              if (_canUploadForOwner)
+                TextButton.icon(
+                  onPressed: _pickAndUploadPost,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add Post'),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+
+          // Grid or placeholder
+          if (_posts.isEmpty)
+            (_loadingPosts)
+                ? const Center(child: CircularProgressIndicator())
+                : Column(
+              children: [
+                const SizedBox(height: 12),
+                const Center(
+                  child: Text(
+                    'Nothing to show yet',
+                    style: TextStyle(fontSize: 14, color: Colors.white70),
+                  ),
+                ),
+                if (_canUploadForOwner)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: TextButton.icon(
+                      onPressed: _pickAndUploadPost,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Add your first post'),
+                    ),
+                  ),
+              ],
+            )
+          else
+            GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: _posts.length + (_hasMorePosts ? 1 : 0),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 3,
+                mainAxisSpacing: 8,
+                crossAxisSpacing: 8,
+                childAspectRatio: 1,
+              ),
+              itemBuilder: (context, index) {
+                if (index >= _posts.length) {
+                  _loadMorePosts();
+                  return const Center(
+                    child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+                  );
+                }
+                final p = _posts[index];
+                final url = (p.mediaType == 'image') ? p.smallUrl : p.thumbUrl;
+                return GestureDetector(
+                  onTap: () => _openPostDetail(p),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        FutureBuilder<File>(
+                          future: DefaultCacheManager().getSingleFile(url),
+                          builder: (ctx, snap) {
+                            if (snap.connectionState == ConnectionState.done && snap.hasData) {
+                              return Image.file(snap.data!, fit: BoxFit.cover);
+                            }
+                            return const ColoredBox(color: Color(0x11000000));
+                          },
+                        ),
+                        if (p.mediaType == 'video')
+                          const Positioned(
+                            right: 6,
+                            top: 6,
+                            child: Icon(Icons.play_circle_fill, size: 22, color: Colors.white70),
+                          ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+
+        ],
+      ),
+    );
+  }
+
 
   Widget _buildLiftVideoGroupGrid({
     required String title,
@@ -695,6 +1233,57 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
+  Future<void> _loadInitialPosts() async {
+    if (_loadingPosts) return;
+    _loadingPosts = true;
+    try {
+      final q = await FirebaseFirestore.instance
+          .collection('posts')
+          .where('ownerUid', isEqualTo: _ownerUid)
+          .orderBy('createdAt', descending: true)
+          .limit(30)
+          .get();
+
+      _posts
+        ..clear()
+        ..addAll(q.docs.map(Post.fromSnap));
+      _lastPostSnap = q.docs.isNotEmpty ? q.docs.last : null;
+      _hasMorePosts = q.docs.length == 30;
+      if (mounted) setState(() {});
+    } catch (e) {
+      debugPrint('❌ [_loadInitialPosts] $e');
+    } finally {
+      _loadingPosts = false;
+    }
+  }
+
+  Future<void> _loadMorePosts() async {
+    if (_loadingPosts || !_hasMorePosts || _lastPostSnap == null) return;
+    _loadingPosts = true;
+    try {
+      final q = await FirebaseFirestore.instance
+          .collection('posts')
+          .where('ownerUid', isEqualTo: _ownerUid)
+          .orderBy('createdAt', descending: true)
+          .startAfterDocument(_lastPostSnap!)
+          .limit(30)
+          .get();
+
+      if (q.docs.isEmpty) {
+        _hasMorePosts = false;
+      } else {
+        _posts.addAll(q.docs.map(Post.fromSnap));
+        _lastPostSnap = q.docs.last;
+      }
+      if (mounted) setState(() {});
+    } catch (e) {
+      debugPrint('❌ [_loadMorePosts] $e');
+    } finally {
+      _loadingPosts = false;
+    }
+  }
+
+
   Future<void> _loadLiftVideosFromLocal() async {
     final ownerUid = _targetUid; // 👈 friend/coach/self-safe
     if (ownerUid == null) return;
@@ -863,6 +1452,22 @@ class _ProfilePageState extends State<ProfilePage> {
 
 
   //Video bits end
+
+  void _openPostDetail(Post p) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => _PostDetailPage(
+          post: p,
+          onToggleLike: _toggleLike,
+          onToggleGoodLift: _toggleGoodLift,
+          onAddComment: _addComment,
+          canDelete: _isSelf && p.ownerUid == _ownerUid, // owner-only delete
+        ),
+      ),
+    );
+  }
+
+
 
 
   Future<void> _loadSnapshotIfReadOnly() async {
@@ -1048,6 +1653,10 @@ class _ProfilePageState extends State<ProfilePage> {
       print('🔒 [Profile.init] FRIEND (read-only) mode for uid=$_targetUid');
       // ==== FRIEND (read-only): nothing extra ====
     }
+
+    // Posts grid (profile feed) for the viewed profile
+    _loadInitialPosts();
+
   }
 
 
@@ -1404,6 +2013,229 @@ class _ProfilePageState extends State<ProfilePage> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Photo upload failed: $e')));
     }));
+  }
+
+  Future<void> _pickAndUploadPost() async {
+    if (!_canUploadForOwner) return;
+
+    // Simple chooser – image or video
+    final type = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('New Post'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, 'image'),
+            child: const Text('Image'),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, 'video'),
+            child: const Text('Video'),
+          ),
+        ],
+      ),
+    );
+    if (type != 'image' && type != 'video') return;
+
+    final XFile? picked = (type == 'image')
+        ? await _imagePicker.pickImage(source: ImageSource.gallery, imageQuality: 90)
+        : await _imagePicker.pickVideo(source: ImageSource.gallery);
+
+    if (picked == null) return;
+
+    final ownerUid = _ownerUid;
+    final postId = FirebaseFirestore.instance.collection('_').doc().id;
+    final baseRef = FirebaseStorage.instance.ref('users/$ownerUid/posts/$postId');
+
+    String smallUrl = '';
+    String thumbUrl = '';
+    String storagePathOriginal = '';
+
+    try {
+      if (type == 'image') {
+        // Compress -> small.jpg (~1080px longest edge)
+        final original = File(picked.path);
+        final tempSmall = File('${(await getTemporaryDirectory()).path}/$postId-small.jpg');
+
+        final compBytes = await FlutterImageCompress.compressWithFile(
+          original.path,
+          format: CompressFormat.jpeg,
+          quality: 85,
+          minWidth: 1080,
+          keepExif: false,
+        );
+        if (compBytes == null) throw Exception('Image compress failed');
+
+        await tempSmall.writeAsBytes(compBytes);
+
+        // Upload small.jpg (grid)
+        final smallRef = baseRef.child('small.jpg');
+        await smallRef.putFile(
+          tempSmall,
+          SettableMetadata(
+            contentType: 'image/jpeg',
+            cacheControl: 'public,max-age=31536000',
+          ),
+        );
+        smallUrl = await smallRef.getDownloadURL();
+        thumbUrl = smallUrl; // images use small as thumb
+
+        // Upload original.jpg (optional bigger view)
+        final origRef = baseRef.child('original.jpg');
+        await origRef.putFile(
+          original,
+          SettableMetadata(contentType: 'image/jpeg'),
+        );
+        storagePathOriginal = origRef.fullPath;
+      } else {
+        // VIDEO: upload .mp4 and thumb.jpg
+        final original = File(picked.path);
+        final videoRef = baseRef.child('original.mp4');
+        await videoRef.putFile(
+          original,
+          SettableMetadata(contentType: 'video/mp4'),
+        );
+        storagePathOriginal = videoRef.fullPath;
+
+        // Generate & upload thumb
+        final thumbBytes = await VideoThumbnail.thumbnailData(
+          video: original.path,
+          imageFormat: ImageFormat.JPEG,
+          maxWidth: 400,
+          quality: 70,
+        );
+        if (thumbBytes == null) throw Exception('Video thumb failed');
+        final tempThumb = File('${(await getTemporaryDirectory()).path}/$postId-thumb.jpg')
+          ..writeAsBytesSync(thumbBytes);
+
+        final thumbRef = baseRef.child('thumb.jpg');
+        await thumbRef.putFile(
+          tempThumb,
+          SettableMetadata(
+            contentType: 'image/jpeg',
+            cacheControl: 'public,max-age=31536000',
+          ),
+        );
+        thumbUrl = await thumbRef.getDownloadURL();
+        smallUrl = thumbUrl; // grid uses thumb for videos too
+      }
+
+      // Create post doc (denormalized counters)
+      await FirebaseFirestore.instance.collection('posts').doc(postId).set({
+        'ownerUid': ownerUid,
+        'mediaType': type,
+        'storagePathOriginal': storagePathOriginal,
+        'thumbUrl': thumbUrl,
+        'smallUrl': smallUrl,
+        'caption': null,
+        'aspectRatio': null,
+        'durationMs': null,
+        'likeCount': 0,
+        'goodLiftCount': 0,
+        'commentCount': 0,
+        'visibility': 'public',
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      // Optimistic refresh
+      await _loadInitialPosts();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Post uploaded')));
+    } catch (e) {
+      debugPrint('❌ [_pickAndUploadPost] $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+    }
+  }
+
+  Future<void> _toggleLike(Post p) async {
+    final uid = UserContext.of(context, listen: false).actorUid;
+    if (uid.isEmpty) throw 'Not signed in';
+
+    final likeRef = FirebaseFirestore.instance.collection('posts').doc(p.id).collection('likes').doc(uid);
+    final postRef = FirebaseFirestore.instance.collection('posts').doc(p.id);
+
+    try {
+      await FirebaseFirestore.instance.runTransaction((tx) async {
+        final likeSnap = await tx.get(likeRef);
+        final postSnap = await tx.get(postRef);
+        if (!postSnap.exists) throw 'Post missing';
+
+        final cur = (postSnap['likeCount'] ?? 0) as int;
+        if (likeSnap.exists) {
+          tx.delete(likeRef);
+          tx.update(postRef, {'likeCount': (cur > 0) ? cur - 1 : 0});
+        } else {
+          tx.set(likeRef, {'createdAt': FieldValue.serverTimestamp()});
+          tx.update(postRef, {'likeCount': cur + 1});
+        }
+      });
+    } catch (e) {
+      debugPrint('❌ [_toggleLike] $e');
+      rethrow;
+    }
+  }
+
+  Future<void> _toggleGoodLift(Post p) async {
+    if (p.mediaType != 'video') return;
+    final uid = UserContext.of(context, listen: false).actorUid;
+    if (uid.isEmpty) throw 'Not signed in';
+
+    final glRef = FirebaseFirestore.instance.collection('posts').doc(p.id).collection('goodLifts').doc(uid);
+    final postRef = FirebaseFirestore.instance.collection('posts').doc(p.id);
+
+    try {
+      await FirebaseFirestore.instance.runTransaction((tx) async {
+        final glSnap = await tx.get(glRef);
+        final postSnap = await tx.get(postRef);
+        if (!postSnap.exists) throw 'Post missing';
+
+        final cur = (postSnap['goodLiftCount'] ?? 0) as int;
+        if (glSnap.exists) {
+          tx.delete(glRef);
+          tx.update(postRef, {'goodLiftCount': (cur > 0) ? cur - 1 : 0});
+        } else {
+          tx.set(glRef, {'createdAt': FieldValue.serverTimestamp()});
+          tx.update(postRef, {'goodLiftCount': cur + 1});
+        }
+      });
+    } catch (e) {
+      debugPrint('❌ [_toggleGoodLift] $e');
+      rethrow;
+    }
+  }
+
+  Future<void> _addComment(Post p, String text) async {
+    final uid = UserContext.of(context, listen: false).actorUid;
+    if (text.trim().isEmpty) return;
+
+    // 🔹 Fetch username from users_public
+    final userDoc = await FirebaseFirestore.instance
+        .collection('users_public')
+        .doc(uid)
+        .get();
+
+    final data = userDoc.data() ?? {};
+    final username = (data['username'] ?? data['displayName'] ?? uid).toString();
+
+    final postRef = FirebaseFirestore.instance.collection('posts').doc(p.id);
+    final commentRef = postRef.collection('comments').doc();
+
+    await FirebaseFirestore.instance.runTransaction((tx) async {
+      final postSnap = await tx.get(postRef);
+      if (!postSnap.exists) return;
+
+      tx.set(commentRef, {
+        'uid': uid,
+        'username': username, // ✅ store username at time of posting
+        'text': text.trim(),
+        'createdAt': FieldValue.serverTimestamp(),
+        'likeCount': 0,
+      });
+
+      final cur = (postSnap.data()?['commentCount'] ?? 0) as int;
+      tx.update(postRef, {'commentCount': cur + 1});
+    });
   }
 
 
@@ -3095,7 +3927,15 @@ class _ProfilePageState extends State<ProfilePage> {
               child: _buildLiftVideoSection(),
             ),
 
+// ===== NEW: Posts Grid (3×3) =====
+            const SizedBox(height: 16),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: _buildPostsSection(),
+            ),
+
             const SizedBox(height: 60),
+
           ],
         ),
 
