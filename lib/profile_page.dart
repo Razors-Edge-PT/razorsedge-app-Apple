@@ -177,97 +177,12 @@ class _PostDetailPage extends StatelessWidget {
           ),
 
           // --- Simple comments list (last 20) ---
+
           SizedBox(
             height: 160,
-            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: FirebaseFirestore.instance
-                  .collection('posts').doc(post.id)
-                  .collection('comments')
-                  .orderBy('createdAt', descending: true)
-                  .limit(20)
-                  .snapshots(),
-              builder: (context, snap) {
-                if (snap.connectionState == ConnectionState.waiting) {
-                  return const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)));
-                }
-                final docs = snap.data?.docs ?? [];
-                if (docs.isEmpty) {
-                  return const Center(child: Text('No comments yet'));
-                }
-                return ListView.separated(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  reverse: false,
-                  itemCount: docs.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 6),
-                  itemBuilder: (_, i) {
-                    final d = docs[i].data();
-                    final text = (d['text'] ?? '') as String;
-                    final uid = (d['uid'] ?? '') as String;
-                    final storedName = (d['username'] as String?)?.trim();
-
-// If the comment doc already has a username, use it.
-// Otherwise, do a one-off lookup to users_public and cache via the ListView.
-                    if (storedName != null && storedName.isNotEmpty) {
-                      return Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Icon(Icons.person_outline, size: 16),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              '$storedName: $text',
-                              maxLines: 3,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      );
-                    } else {
-                      return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                        future: FirebaseFirestore.instance
-                            .collection('users_public')
-                            .doc(uid)
-                            .get(),
-                        builder: (ctx, snapUser) {
-                          String display = uid; // fallback
-
-                          if (snapUser.hasData) {
-                            final map = snapUser.data!.data(); // Map<String, dynamic>?
-                            if (map != null) {
-                              final u = map['username'];
-                              final dn = map['displayName'];
-                              if (u is String && u.trim().isNotEmpty) {
-                                display = u.trim();
-                              } else if (dn is String && dn.trim().isNotEmpty) {
-                                display = dn.trim();
-                              }
-                            }
-                          }
-
-                          return Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Icon(Icons.person_outline, size: 16),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  '$display: $text',
-                                  maxLines: 3,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ],
-                          );
-                        },
-                      );
-
-                    }
-
-                  },
-                );
-              },
-            ),
+            child: _CommentsList(postId: post.id),
           ),
+
         ],
       ),
 
@@ -326,9 +241,14 @@ class _PostActionsBarState extends State<_PostActionsBar> {
         content: TextField(
           controller: ctrl,
           autofocus: true,
-          decoration: const InputDecoration(hintText: 'Write a comment...'),
-          textInputAction: TextInputAction.done,
-          onSubmitted: (v) => Navigator.pop(d, v),
+          keyboardType: TextInputType.multiline,
+          textInputAction: TextInputAction.newline, // ← Enter = newline
+          maxLines: null, // ← grow as you type
+          minLines: 1,
+          decoration: const InputDecoration(
+            hintText: 'Write a comment…',
+            border: OutlineInputBorder(),
+          ),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(d), child: const Text('Cancel')),
@@ -336,6 +256,7 @@ class _PostActionsBarState extends State<_PostActionsBar> {
         ],
       ),
     );
+
     if (text == null || text.trim().isEmpty) return;
     setState(() => _commenting = true);
     try {
@@ -440,6 +361,112 @@ class _PostActionsBarState extends State<_PostActionsBar> {
 }
 
 
+class _CommentsList extends StatefulWidget {
+  final String postId;
+  const _CommentsList({required this.postId});
+
+  @override
+  State<_CommentsList> createState() => _CommentsListState();
+}
+
+class _CommentsListState extends State<_CommentsList> {
+  // Track which comments are expanded
+  final Set<String> _expanded = <String>{};
+
+  @override
+  Widget build(BuildContext context) {
+    final stream = FirebaseFirestore.instance
+        .collection('posts').doc(widget.postId)
+        .collection('comments')
+        .orderBy('createdAt', descending: true)
+        .limit(20)
+        .snapshots();
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: stream,
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Center(
+            child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+          );
+        }
+        final docs = snap.data?.docs ?? const [];
+        if (docs.isEmpty) {
+          return const Center(child: Text('No comments yet'));
+        }
+
+        return ListView.separated(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          itemCount: docs.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 6),
+          itemBuilder: (_, i) {
+            final doc = docs[i];
+            final d = doc.data();
+            final cid = doc.id;
+            final text = (d['text'] ?? '') as String;
+            final uid = (d['uid'] ?? '') as String;
+            final storedName = (d['username'] as String?)?.trim();
+
+            // Resolve a display name (stored username > displayName > uid)
+            Widget nameAndText(String displayName) {
+              final isExpanded = _expanded.contains(cid);
+              return InkWell(
+                onTap: () {
+                  setState(() {
+                    if (isExpanded) {
+                      _expanded.remove(cid);
+                    } else {
+                      _expanded.add(cid);
+                    }
+                  });
+                },
+                child: Text(
+                  '$displayName: $text',
+                  maxLines: isExpanded ? null : 3,
+                  overflow: isExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
+                ),
+              );
+            }
+
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.person_outline, size: 16),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: (storedName != null && storedName.isNotEmpty)
+                      ? nameAndText(storedName)
+                      : FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                    future: FirebaseFirestore.instance
+                        .collection('users_public')
+                        .doc(uid)
+                        .get(),
+                    builder: (ctx, snapUser) {
+                      String display = uid; // fallback
+                      if (snapUser.hasData) {
+                        final map = snapUser.data!.data();
+                        if (map != null) {
+                          final u = map['username'];
+                          final dn = map['displayName'];
+                          if (u is String && u.trim().isNotEmpty) {
+                            display = u.trim();
+                          } else if (dn is String && dn.trim().isNotEmpty) {
+                            display = dn.trim();
+                          }
+                        }
+                      }
+                      return nameAndText(display);
+                    },
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+}
 
 
 
