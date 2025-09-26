@@ -105,45 +105,79 @@ class _PostDetailPage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Post'),
-        actions: [
-          if (canDelete)
-            IconButton(
-              icon: const Icon(Icons.delete_outline),
-              onPressed: () async {
-                final confirm = await showDialog<bool>(
-                  context: context,
-                  builder: (d) => AlertDialog(
-                    title: const Text('Delete post?'),
-                    content: const Text('This will remove the post and its media.'),
-                    actions: [
-                      TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancel')),
-                      TextButton(onPressed: () => Navigator.pop(d, true), child: const Text('Delete', style: TextStyle(color: Colors.red))),
-                    ],
-                  ),
-                );
-                if (confirm != true) return;
+          actions: [
+            if (canDelete)
+              IconButton(
+                icon: const Icon(Icons.delete_outline),
+                onPressed: () async {
+                  final confirm = await showDialog<bool>(
+                    context: context,
+                    builder: (d) => AlertDialog(
+                      title: const Text('Delete post?'),
+                      content: const Text('This will permanently remove the post and its media.'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(d, false),
+                          child: const Text('Cancel'),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(d, true),
+                          child: const Text('Delete', style: TextStyle(color: Colors.red)),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (confirm != true) return;
 
-                // Delete post doc(s)
-                await FirebaseFirestore.instance.collection('posts').doc(post.id).delete();
+                  // Show progress
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Deleting post…')),
+                    );
+                  }
 
-                // Also try to delete mirrored user doc if you added one (safe to keep even if you didn't):
-                try {
-                  await FirebaseFirestore.instance
-                      .collection('users').doc(post.ownerUid)
-                      .collection('posts').doc(post.id).delete();
-                } catch (_) {}
+                  try {
+                    // 1) Delete top-level post doc
+                    await FirebaseFirestore.instance.collection('posts').doc(post.id).delete();
 
-                // Delete Storage folder
-                final ref = FirebaseStorage.instance.ref('users/${post.ownerUid}/posts/${post.id}');
-                try {
-                  final list = await ref.listAll();
-                  for (final i in list.items) { await i.delete(); }
-                } catch (_) {}
+                    // 2) Delete mirrored user doc (safe to ignore if not present)
+                    try {
+                      await FirebaseFirestore.instance
+                          .collection('users')
+                          .doc(post.ownerUid)
+                          .collection('posts')
+                          .doc(post.id)
+                          .delete();
+                    } catch (_) {}
 
-                if (context.mounted) Navigator.pop(context);
-              },
-            ),
-        ],
+                    // 3) Delete storage files for this post
+                    final folder = FirebaseStorage.instance.ref('users/${post.ownerUid}/posts/${post.id}');
+                    try {
+                      final listing = await folder.listAll();
+                      for (final item in listing.items) {
+                        await item.delete();
+                      }
+                    } catch (_) {}
+
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Post deleted')),
+                      );
+                      Navigator.pop(context); // Close detail page
+                    }
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Delete failed: $e')),
+                      );
+                    }
+                  }
+                },
+              ),
+          ]
+
 
       ),
       body: Column(
@@ -221,6 +255,7 @@ class _PostActionsBar extends StatefulWidget {
     required this.onToggleLike,
     required this.onToggleGoodLift,
     required this.onAddComment,
+
   });
 
   @override
@@ -372,6 +407,8 @@ class _CommentsList extends StatefulWidget {
 class _CommentsListState extends State<_CommentsList> {
   // Track which comments are expanded
   final Set<String> _expanded = <String>{};
+  final ScrollController _ctrl = ScrollController();
+
 
   @override
   Widget build(BuildContext context) {
@@ -396,6 +433,8 @@ class _CommentsListState extends State<_CommentsList> {
         }
 
         return ListView.separated(
+          key: PageStorageKey('comments-${widget.postId}'),
+          controller: _ctrl,
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           itemCount: docs.length,
           separatorBuilder: (_, __) => const SizedBox(height: 6),
@@ -412,6 +451,7 @@ class _CommentsListState extends State<_CommentsList> {
               final isExpanded = _expanded.contains(cid);
               return InkWell(
                 onTap: () {
+                  final prev = _ctrl.hasClients ? _ctrl.offset : 0.0;
                   setState(() {
                     if (isExpanded) {
                       _expanded.remove(cid);
@@ -419,7 +459,13 @@ class _CommentsListState extends State<_CommentsList> {
                       _expanded.add(cid);
                     }
                   });
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted && _ctrl.hasClients) {
+                      _ctrl.jumpTo(prev); // keep the same scroll position
+                    }
+                  });
                 },
+
                 child: Text(
                   '$displayName: $text',
                   maxLines: isExpanded ? null : 3,
@@ -575,6 +621,8 @@ class Post {
   final int goodLiftCount;
   final int commentCount;
   final Timestamp createdAt;
+  final String? localThumbPath; // for instant preview before upload completes
+
 
   Post({
     required this.id,
@@ -588,6 +636,7 @@ class Post {
     required this.goodLiftCount,
     required this.commentCount,
     required this.createdAt,
+    this.localThumbPath, // 👈 add here
   });
 
   static Post fromSnap(DocumentSnapshot<Map<String, dynamic>> s) {
@@ -606,6 +655,39 @@ class Post {
       createdAt: (d['createdAt'] as Timestamp?) ?? Timestamp.now(),
     );
   }
+
+  // Add at the bottom of class Post
+  Post copyWith({
+    String? id,
+    String? ownerUid,
+    String? mediaType,
+    String? thumbUrl,
+    String? smallUrl,
+    String? storagePathOriginal,
+    String? caption,
+    int? likeCount,
+    int? goodLiftCount,
+    int? commentCount,
+    Timestamp? createdAt,          // import cloud_firestore for Timestamp
+    String? localThumbPath,        // set a new local preview path
+    bool clearLocalThumbPath = false, // set true to clear local preview
+  }) {
+    return Post(
+      id: id ?? this.id,
+      ownerUid: ownerUid ?? this.ownerUid,
+      mediaType: mediaType ?? this.mediaType,
+      thumbUrl: thumbUrl ?? this.thumbUrl,
+      smallUrl: smallUrl ?? this.smallUrl,
+      storagePathOriginal: storagePathOriginal ?? this.storagePathOriginal,
+      caption: caption ?? this.caption,
+      likeCount: likeCount ?? this.likeCount,
+      goodLiftCount: goodLiftCount ?? this.goodLiftCount,
+      commentCount: commentCount ?? this.commentCount,
+      createdAt: createdAt ?? this.createdAt,
+      localThumbPath: clearLocalThumbPath ? null : (localThumbPath ?? this.localThumbPath),
+    );
+  }
+
 }
 
 
@@ -748,6 +830,7 @@ class _ProfilePageState extends State<ProfilePage> {
   // Toggleable later; default to local.
   VideoStorageMode _videoMode = VideoStorageMode.firestore;
   static const _kProfilePhotoPrefsKeyPrefix = 'profile_local_path_'; // per user
+
 
 // One entry per liftId.
   final Map<String, LiftVideo> _liftVideos = {};
@@ -2063,15 +2146,43 @@ class _ProfilePageState extends State<ProfilePage> {
       ),
     );
     if (type != 'image' && type != 'video') return;
+    final String mediaType = type!;
 
-    final XFile? picked = (type == 'image')
+    final XFile? picked = (mediaType == 'image')
         ? await _imagePicker.pickImage(source: ImageSource.gallery, imageQuality: 90)
         : await _imagePicker.pickVideo(source: ImageSource.gallery);
 
     if (picked == null) return;
 
     final ownerUid = _ownerUid;
+
+    // Generate optimistic Post with local thumb
     final postId = FirebaseFirestore.instance.collection('_').doc().id;
+
+    final optimistic = Post(
+      id: postId,
+      ownerUid: ownerUid,
+      mediaType: mediaType,
+      thumbUrl: '',
+      smallUrl: '',
+      storagePathOriginal: '',
+      caption: '',
+      likeCount: 0,
+      goodLiftCount: 0,
+      commentCount: 0,
+      createdAt: Timestamp.now(),
+      localThumbPath: picked.path,
+    );
+
+
+
+// Insert at top of current posts list so it appears instantly
+    setState(() {
+      _posts.insert(0, optimistic);
+    });
+
+
+
     final baseRef = FirebaseStorage.instance.ref('users/$ownerUid/posts/$postId');
 
     String smallUrl = '';
@@ -2079,7 +2190,7 @@ class _ProfilePageState extends State<ProfilePage> {
     String storagePathOriginal = '';
 
     try {
-      if (type == 'image') {
+      if (mediaType == 'image') {
         // Compress -> small.jpg (~1080px longest edge)
         final original = File(picked.path);
         final tempSmall = File('${(await getTemporaryDirectory()).path}/$postId-small.jpg');
@@ -2150,7 +2261,7 @@ class _ProfilePageState extends State<ProfilePage> {
       // Create post doc (denormalized counters)
       await FirebaseFirestore.instance.collection('posts').doc(postId).set({
         'ownerUid': ownerUid,
-        'mediaType': type,
+        'mediaType': mediaType,
         'storagePathOriginal': storagePathOriginal,
         'thumbUrl': thumbUrl,
         'smallUrl': smallUrl,
@@ -2163,6 +2274,21 @@ class _ProfilePageState extends State<ProfilePage> {
         'visibility': 'public',
         'createdAt': FieldValue.serverTimestamp(),
       });
+
+      // ✅ Replace optimistic local post with real CDN-backed one
+      final idx = _posts.indexWhere((p) => p.id == postId);
+      if (idx != -1 && mounted) {
+        setState(() {
+          _posts[idx] = _posts[idx].copyWith(
+            thumbUrl: thumbUrl,
+            smallUrl: smallUrl,
+            storagePathOriginal: storagePathOriginal,
+            localThumbPath: null, // drop the local preview
+            clearLocalThumbPath: true, // 👈 drop the local preview now
+          );
+        });
+      }
+
 
       // Optimistic refresh
       await _loadInitialPosts();
