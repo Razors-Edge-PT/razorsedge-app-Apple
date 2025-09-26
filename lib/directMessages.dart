@@ -4,6 +4,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:math';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:video_player/video_player.dart';
+import 'package:chewie/chewie.dart';
+import 'dart:io';
 
 
 /// Deterministic conversation id for a pair of users.
@@ -12,6 +17,9 @@ String convIdFor(String a, String b) {
   final list = [a, b]..sort();
   return '${list[0]}_${list[1]}';
 }
+
+
+
 
 class BuddyPickerPage extends StatelessWidget {
   const BuddyPickerPage({super.key});
@@ -776,11 +784,14 @@ class _ConversationPageState extends State<ConversationPage> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                if (type == 'image' && (data['imageUrl'] ?? '').toString().isNotEmpty)
+                                // ---- message body (text / image / video) ----
+                                if (type == 'video' && (data['videoUrl'] ?? '').toString().isNotEmpty)
+                                  _VideoTile(url: data['videoUrl'].toString())
+                                else if (type == 'image' && (data['imageUrl'] ?? '').toString().isNotEmpty)
                                   ClipRRect(
                                     borderRadius: BorderRadius.circular(8),
                                     child: Image.network(
-                                      data['imageUrl'],
+                                      data['imageUrl'].toString(),
                                       fit: BoxFit.cover,
                                     ),
                                   )
@@ -789,6 +800,7 @@ class _ConversationPageState extends State<ConversationPage> {
                                     (data['text'] ?? '').toString(),
                                     style: const TextStyle(color: Colors.white),
                                   ),
+
 
                                 if (reactionCounts.isNotEmpty) ...[
                                   const SizedBox(height: 6),
@@ -846,6 +858,50 @@ class _ConversationPageState extends State<ConversationPage> {
   }
 }
 
+class _VideoTile extends StatefulWidget {
+  final String url;
+  const _VideoTile({required this.url});
+
+  @override
+  State<_VideoTile> createState() => _VideoTileState();
+}
+
+class _VideoTileState extends State<_VideoTile> {
+  late final VideoPlayerController _c;
+  ChewieController? _chewie;
+
+  @override
+  void initState() {
+    super.initState();
+    _c = VideoPlayerController.networkUrl(Uri.parse(widget.url));
+    _c.initialize().then((_) {
+      _chewie = ChewieController(
+        videoPlayerController: _c,
+        autoPlay: false,
+        looping: false,
+      );
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _chewie?.dispose();
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_chewie == null || !_c.value.isInitialized) {
+      return const SizedBox(
+        height: 220,
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    return SizedBox(height: 220, child: Chewie(controller: _chewie!));
+  }
+}
 
 
 class _MessageComposer extends StatefulWidget {
@@ -872,6 +928,76 @@ class _MessageComposerState extends State<_MessageComposer> {
   final _focusNode = FocusNode(); // 👈 add this
   bool _sending = false;                 // 👈 prevents double-sends
   static const int _maxChars = 2000;     // 👈 matches Firestore rule cap
+  final _picker = ImagePicker();
+  File? videoFile;
+
+
+  Future<void> _pickAndSendImage() async {
+    final x = await _picker.pickImage(source: ImageSource.gallery);
+    if (x == null) return;
+
+    final uid = FirebaseAuth.instance.currentUser!.uid;
+    final convId = widget.convId;
+
+    // 1) create a message shell
+    final convRef = FirebaseFirestore.instance.collection('conversations').doc(convId);
+    final msgRef  = convRef.collection('messages').doc();
+
+    await msgRef.set({
+      'senderId': uid,
+      'type': 'image',
+      'text': '',
+      'localSentAt': DateTime.now().millisecondsSinceEpoch,
+      'sentAt': FieldValue.serverTimestamp(),
+    });
+
+    // 2) upload
+    final file = await x.readAsBytes();
+    final path = 'dm/$convId/${msgRef.id}/image_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    final task = FirebaseStorage.instance.ref(path).putData(file);
+    final snap = await task.whenComplete((){});
+    final url  = await snap.ref.getDownloadURL();
+
+    // 3) patch message with url (and update convo preview)
+    await msgRef.update({'imageUrl': url});
+    final now = FieldValue.serverTimestamp();
+    await convRef.update({
+      'lastMessage': {'text': '📷 Photo', 'senderId': uid, 'sentAt': now},
+      'updatedAt': now,
+    });
+  }
+
+  Future<void> _pickAndSendVideo() async {
+    final x = await _picker.pickVideo(source: ImageSource.gallery);
+    if (x == null) return;
+
+    final uid = FirebaseAuth.instance.currentUser!.uid;
+    final convId = widget.convId;
+
+    final convRef = FirebaseFirestore.instance.collection('conversations').doc(convId);
+    final msgRef  = convRef.collection('messages').doc();
+
+    await msgRef.set({
+      'senderId': uid,
+      'type': 'video',
+      'text': '',
+      'localSentAt': DateTime.now().millisecondsSinceEpoch,
+      'sentAt': FieldValue.serverTimestamp(),
+    });
+
+    final bytes = await x.readAsBytes();
+    final path  = 'dm/$convId/${msgRef.id}/video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+    final snap  = await FirebaseStorage.instance.ref(path).putData(bytes).whenComplete((){});
+    final url   = await snap.ref.getDownloadURL();
+
+    await msgRef.update({'videoUrl': url});
+    final now = FieldValue.serverTimestamp();
+    await convRef.update({
+      'lastMessage': {'text': '🎬 Video', 'senderId': uid, 'sentAt': now},
+      'updatedAt': now,
+    });
+  }
+
 
   Future<void> _sendMessage() async {
     if (_sending) return;
@@ -903,15 +1029,34 @@ class _MessageComposerState extends State<_MessageComposer> {
       final clientId = '${DateTime.now().microsecondsSinceEpoch}_$rnd';
       widget.onClientSend?.call(clientId, DateTime.now());
 
-      // 1) Message write (no transaction) → instant local echo
-      await msgRef.set({
-        'senderId': uid,
-        'type': 'text',
-        'text': text,
-        'clientId': clientId,
-        'localSentAt': DateTime.now().millisecondsSinceEpoch, // client-side sort
-        'sentAt': FieldValue.serverTimestamp(),               // server time later
-      });
+      if (text.isNotEmpty) {
+        // 📝 TEXT MESSAGE
+        await msgRef.set({
+          'senderId': uid,
+          'type': 'text',
+          'text': text,
+          'clientId': clientId,
+          'localSentAt': DateTime.now().millisecondsSinceEpoch,
+          'sentAt': FieldValue.serverTimestamp(),
+        });
+      } else if (videoFile != null) {
+        // 🎥 VIDEO MESSAGE
+        final bytes = await videoFile!.readAsBytes(); // File you already picked
+        final path = 'dm/${widget.convId}/${msgRef.id}/video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+        await FirebaseStorage.instance.ref(path).putData(bytes);
+        final url = await FirebaseStorage.instance.ref(path).getDownloadURL();
+
+        await msgRef.set({
+          'senderId': uid,
+          'type': 'video',
+          'text': '',
+          'videoUrl': url,
+          'clientId': clientId,
+          'localSentAt': DateTime.now().millisecondsSinceEpoch,
+          'sentAt': FieldValue.serverTimestamp(),
+        });
+      }
+
 
       // 2) Best-effort conversation state update
       final now = FieldValue.serverTimestamp();
@@ -944,6 +1089,16 @@ class _MessageComposerState extends State<_MessageComposer> {
       if (mounted) setState(() => _sending = false);
     }
   }
+  // 👉 Add this right under _sendMessage()
+  Future<void> _pickVideo() async {
+    final picked = await ImagePicker().pickVideo(source: ImageSource.gallery);
+    if (picked != null) {
+      setState(() {
+        videoFile = File(picked.path);
+      });
+    }
+  }
+
 
   @override
   void dispose() {
@@ -982,6 +1137,15 @@ class _MessageComposerState extends State<_MessageComposer> {
           icon: const Icon(Icons.send, color: Colors.cyanAccent),
           onPressed: _sendMessage,
         ),
+        IconButton(
+          icon: const Icon(Icons.photo, color: Colors.cyanAccent),
+          onPressed: _pickAndSendImage,
+        ),
+        IconButton(
+          icon: const Icon(Icons.videocam, color: Colors.cyanAccent),
+          onPressed: _pickAndSendVideo,
+        ),
+
       ],
     );
   }

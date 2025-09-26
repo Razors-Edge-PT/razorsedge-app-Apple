@@ -41,8 +41,8 @@ dependencies:
   string_similarity: ^2.0.0
   fl_chart: ^0.65.0
   device_info_plus: ^10.1.0
-  image_picker: ^1.0.7 # or latest
-  firebase_storage: ^12.0.0
+  image_picker: ^1.1.2 # or latest
+  firebase_storage: ^12.3.0
   cloud_functions: ^5.0.4
   crypto: ^3.0.3
   path_provider: ^2.1.3
@@ -50,8 +50,9 @@ dependencies:
   flutter_cache_manager: ^3.3.2
   scrollable_positioned_list: ^0.3.8
   isar: ^3.1.0
-  isar_flutter_libs: ^3.1.0+1   # required on iOS/Android
-
+  isar_flutter_libs: ^3.1.0+1
+  chewie: ^1.7.5
+  flutter_image_compress: ^2.3.0
 
 
   flutter:
