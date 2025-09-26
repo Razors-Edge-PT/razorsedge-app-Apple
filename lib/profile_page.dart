@@ -103,7 +103,9 @@ class _PostDetailPage extends StatelessWidget {
   Widget build(BuildContext context) {
     // For brevity: simple viewer + action row with counts.
     return Scaffold(
+      backgroundColor: Colors.black, // 👈 add this line
       appBar: AppBar(
+          backgroundColor: Colors.black, // 👈 optional, to blend header
         title: const Text('Post'),
           actions: [
             if (canDelete)
@@ -225,7 +227,7 @@ class _PostDetailPage extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Divider(height: 1),
+            const Divider(height: 1,color: Colors.white70),
             Padding(
               padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
               child: _PostActionsBar(
