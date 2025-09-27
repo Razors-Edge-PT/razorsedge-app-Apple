@@ -81,14 +81,14 @@ class LiftVideo {
   );
 }
 
-class _PostDetailPage extends StatelessWidget {
+class PostDetailPage extends StatelessWidget {
   final Post post;
   final Future<void> Function(Post) onToggleLike;
   final Future<void> Function(Post) onToggleGoodLift;
   final Future<void> Function(Post, String) onAddComment;
   final bool canDelete;
 
-  const _PostDetailPage({
+  const PostDetailPage({
     super.key,
     required this.post,
     required this.onToggleLike,
@@ -96,6 +96,7 @@ class _PostDetailPage extends StatelessWidget {
     required this.onAddComment,
     required this.canDelete,
   });
+
 
 
 
@@ -565,14 +566,19 @@ class _InAppVideoPlayerState extends State<_InAppVideoPlayer> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Lift Video')),
-      body: Center(
-        child: _ready
-            ? AspectRatio(
-          aspectRatio: _controller.value.aspectRatio,
-          child: VideoPlayer(_controller),
-        )
-            : const CircularProgressIndicator(),
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+          backgroundColor: Colors.black, title: const Text('Lift Video')),
+      body: Container(                     // 👈 wrap body in black
+        color: Colors.black,               // 👈 force background black
+        child: Center(
+          child: _ready
+              ? AspectRatio(
+            aspectRatio: _controller.value.aspectRatio,
+            child: VideoPlayer(_controller),
+          )
+              : const CircularProgressIndicator(),
+        ),
       ),
       floatingActionButton: _ready
           ? FloatingActionButton(
@@ -852,20 +858,6 @@ class _ProfilePageState extends State<ProfilePage> {
   bool _loadingPosts = false;
   bool _hasMorePosts = true;
 
-
-  String _folderForLift(String liftId) {
-    if (_bestTrainingByE1RM.any((e) => e['id'] == liftId)) {
-      return 'videos/best-e1rm-training';
-    }
-    if (_bestSinglesTraining.any((e) => e['id'] == liftId)) {
-      return 'videos/best-singles-training';
-    }
-    if (_bestCompSingles.any((e) => e['id'] == liftId)) {
-      return 'videos/best-comp-lifts';
-    }
-    // Fallback (shouldn’t happen with your lists)
-    return 'videos/misc';
-  }
 
   Future<Map<String, String>> _uploadVideoAndThumb({
     required String liftId,
@@ -1568,7 +1560,7 @@ class _ProfilePageState extends State<ProfilePage> {
   void _openPostDetail(Post p) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => _PostDetailPage(
+        builder: (_) => PostDetailPage(
           post: p,
           onToggleLike: _toggleLike,
           onToggleGoodLift: _toggleGoodLift,
@@ -1582,52 +1574,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
 
 
-  Future<void> _loadSnapshotIfReadOnly() async {
-    if (!widget.readOnly) return;
 
-    final uid = widget.viewedUid ??
-        UserContext.of(context, listen: false).currentUid;
-    if (uid == null) return;
-
-    final snap = await FirebaseFirestore.instance
-        .collection('users_public')
-        .doc(uid)
-        .get();
-    final m = snap.data() ?? {};
-
-    // helpers
-    List<double> _arrOfNums(dynamic v) =>
-        (v is List) ? v.map((e) => (e as num).toDouble()).toList() : <double>[];
-    double _best(List<double> a) => a.isEmpty ? 0 : a.reduce((a1, a2) => a1 > a2 ? a1 : a2);
-
-    // read top3 singles → best singles map for the 5 lifts
-    final top3Singles = Map<String, dynamic>.from(m['top3SinglesKg'] ?? {});
-    final squatBest = _best(_arrOfNums(top3Singles['Back Squat, Barbell']));
-    final benchBest = _best(_arrOfNums(top3Singles['Bench Press, Barbell']));
-    final deadBest  = _best(_arrOfNums(top3Singles['Deadlift, Conventional']));
-    final chinBest  = _best(_arrOfNums(top3Singles['Chin-Up']));
-    final ohpBest   = _best(_arrOfNums(top3Singles['Overhead Dumbbell Press, Unilateral']));
-
-    setState(() {
-      // your UI already uses these
-      _bestSinglesFive = {
-        'Back Squat, Barbell': squatBest,
-        'Bench Press, Barbell': benchBest,
-        'Deadlift, Conventional': deadBest,
-        'Chin-Up': chinBest,
-        'Overhead Dumbbell Press, Unilateral': ohpBest,
-      };
-
-      _bestThreeLiftTotal = (m['threeLiftTotalKg'] as num?)?.toDouble();
-      _bestBenchOnly      = (m['benchOnlyKg'] as num?)?.toDouble();
-
-      // points are optional
-      _rePoints       = (m['rePoints'] as num?)?.toDouble();
-      _goodliftPoints = (m['goodliftPoints'] as num?)?.toDouble();
-
-      isLoading = false; // stop spinner when friend snapshot is loaded
-    });
-  }
 
   void _subscribeUsersPublic() {
     final uid = _selectedUidFromContext();

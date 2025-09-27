@@ -21,6 +21,10 @@ import'stats_snapshot.dart';
 import 'directMessages.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:path_provider/path_provider.dart';
+import 'post_service.dart';
+import 'feed_post_card.dart';
+
+
 
 
 
@@ -58,6 +62,20 @@ class _HomeScreenState extends State<HomeScreen> {
 
   HomeSection _currentSection = HomeSection.calendar;
 
+  // ── Home FEED ─────────────────────────────────────────────────────────
+  final ScrollController _homeScrollCtrl = ScrollController();
+  List<Post> _feedPosts = [];
+  bool _feedLoading = false;
+  bool _feedHasMore = true;
+  DocumentSnapshot<Map<String, dynamic>>? _lastFeedSnap; // last doc for pagination
+  List<String> _feedOwnerUids = []; // self + buddies
+  bool _feedOwnersResolved = false;
+  static const int _kFeedPageSize = 6;
+  bool _feedError = false;
+  String _feedErrorMsg = '';
+  Timestamp? _lastCreatedAt; // simple, stable pagination
+
+
   @override
   void initState() {
     super.initState();
@@ -66,7 +84,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final actingUid = userContext.actingAsUid ?? userContext.actorUid; // add this line
     print("🏠 Home loaded for ${userContext.actingAsUid} "
         "(actor: ${userContext.actorUid}, coach: ${userContext.isCoach})");
-
+    _homeScrollCtrl.addListener(_onHomeScroll);
+    _resolveFeedOwners().then((_) => _loadInitialFeed());
 
     print('[Warmup] started for $actingUid');
 
@@ -253,7 +272,149 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     Provider.of<UserContext>(context, listen: false).removeListener(_onUserContextChange);
+    _homeScrollCtrl.removeListener(_onHomeScroll);
+    _homeScrollCtrl.dispose();
     super.dispose();
+  }
+
+//Home FEED functions
+
+
+  Future<void> _loadInitialFeed() async {
+    if (!_feedOwnersResolved) return;
+    setState(() {
+      _feedLoading = false;   // 👈 reset here
+      _feedHasMore = true;
+      _feedError = false;
+      _feedErrorMsg = '';
+      _feedPosts = [];
+      _lastCreatedAt = null;
+    });
+    await _loadMoreFeed();
+  }
+
+
+  Future<void> _loadMoreFeed() async {
+    debugPrint('[FEED] >>> ENTER _loadMoreFeed, loading=$_feedLoading hasMore=$_feedHasMore owners=${_feedOwnerUids.length}');
+    if (_feedLoading && _feedPosts.isNotEmpty) return;
+
+
+    setState(() {
+      _feedLoading = true;
+      _feedError = false;
+      _feedErrorMsg = '';
+    });
+
+    try {
+      Query<Map<String, dynamic>> q = FirebaseFirestore.instance
+          .collection('posts')
+          .where('ownerUid', whereIn: _feedOwnerUids) // <= works up to 10 UIDs
+          .orderBy('createdAt', descending: true)
+          .limit(_kFeedPageSize);
+
+      // paginate by createdAt only (simple & robust)
+      if (_lastCreatedAt != null) {
+        q = q.startAfter([_lastCreatedAt]);
+      }
+
+      debugPrint('[FEED] issuing query owners=${_feedOwnerUids.length}, lastCreatedAt=$_lastCreatedAt');
+
+      final qs = await q.get();
+      final docs = qs.docs;
+      debugPrint('[FEED] fetched=${docs.length} lastCreatedAt=${_lastCreatedAt?.toDate()}');
+
+      final newPosts = <Post>[];
+      for (final d in docs) {
+        try {
+          newPosts.add(Post.fromSnap(d));
+        } catch (e) {
+          debugPrint('[FEED] Post.fromSnap error on ${d.id}: $e');
+        }
+      }
+
+      // update pagination cursor
+      if (docs.isNotEmpty) {
+        final last = docs.last.data();
+        final ts = (last['createdAt'] as Timestamp?);
+        _lastCreatedAt = ts ?? _lastCreatedAt;
+      }
+
+      setState(() {
+        _feedPosts.addAll(newPosts);
+        _feedHasMore = docs.length >= _kFeedPageSize;
+        _feedLoading = false;
+      });
+    } on FirebaseException catch (e) {
+      debugPrint('[FEED] Firestore error: code=${e.code}, message=${e.message}');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Feed error: ${e.code}')),
+        );
+      }
+      setState(() {
+        _feedError = true;
+        _feedErrorMsg = '${e.code}: ${e.message}';
+        _feedLoading = false;
+        _feedHasMore = false;
+      });
+    } catch (e) {
+      debugPrint('[FEED] Unknown error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Feed failed to load: $e')),
+        );
+      }
+      setState(() {
+        _feedError = true;
+        _feedErrorMsg = '$e';
+        _feedLoading = false;
+        _feedHasMore = false;
+      });
+    }
+  }
+
+
+
+// Trigger more when near bottom of outer scroll view
+  void _onHomeScroll() {
+    if (!_homeScrollCtrl.hasClients) return;
+    final max = _homeScrollCtrl.position.maxScrollExtent;
+    final pos = _homeScrollCtrl.position.pixels;
+    if (max - pos < 600) { // pre-fetch threshold
+      _loadMoreFeed();
+    }
+  }
+
+  Future<void> _resolveFeedOwners() async {
+    final uc = UserContext.of(context, listen: false);
+    final viewerUid = uc.currentUid ?? uc.actorUid;
+    final owners = <String>{};
+
+    if (viewerUid != null && viewerUid.isNotEmpty) {
+      owners.add(viewerUid);
+    }
+
+    try {
+      final d = await FirebaseFirestore.instance
+          .collection('buddyAssignments')
+          .doc(viewerUid)
+          .get();
+
+      final data = d.data() ?? const {};
+      final athletesMap = (data['athletes'] is Map)
+          ? Map<String, dynamic>.from(data['athletes'])
+          : const <String, dynamic>{};
+
+      owners.addAll(athletesMap.keys);
+      debugPrint('[FEED] viewer=$viewerUid buddies=${athletesMap.keys.length} owners=${owners.length}');
+    } catch (e) {
+      debugPrint('[FEED] buddyAssignments read failed: $e');
+    }
+
+    setState(() {
+      _feedOwnerUids = owners.toList();
+      _feedOwnersResolved = true;
+    });
   }
 
 
@@ -802,6 +963,7 @@ class _HomeScreenState extends State<HomeScreen> {
           : errorMessage.isNotEmpty
               ? Center(child: Text(errorMessage))
               : SingleChildScrollView(
+                  controller: _homeScrollCtrl, // 👈 add this
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1301,6 +1463,77 @@ class _HomeScreenState extends State<HomeScreen> {
                             },
                           ),
                         ),
+                        const SizedBox(height: 2),
+                        // Simple grey background input
+
+                        // ── Home Feed ──────────────────────────────────────────────────────────
+                        const SizedBox(height: 2),
+                        Text('Just scroll through your feed you media-slut. we know you love this.', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 8),
+
+                        if (!_feedOwnersResolved)
+                          const Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)))
+                        else if (_feedOwnerUids.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 8),
+                            child: Text('No recent posts from you or your gym buddies yet.',
+                                style: TextStyle(color: Colors.white70)),
+                          )
+                        else
+                          Column(
+                            children: [
+                              // Cards
+                              ..._feedPosts.map((p) => FeedPostCard(
+                                post: p,
+                                onOpenDetail: () {
+                                  // Push your existing detail page, using PostService handlers
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) => PostDetailPage(
+                                        post: p,
+                                        onToggleLike: (pp) => PostService.instance.toggleLike(pp.id),
+                                        onToggleGoodLift: (pp) => PostService.instance.toggleGoodLift(pp.id, isVideo: pp.mediaType == 'video'),
+                                        onAddComment: (pp, text) => PostService.instance.addComment(pp.id, text, usernameFallback: 'user'),
+                                        canDelete: (UserContext.of(context, listen: false).actorUid == p.ownerUid),
+                                      ),
+                                    ),
+                                  );
+                                },
+                              )),
+
+                              // Loading / Error / Load more / Empty tail
+                              if (_feedLoading)
+                                const Padding(
+                                  padding: EdgeInsets.symmetric(vertical: 8),
+                                  child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)),
+                                )
+                              else if (_feedError)
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: 8),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      const Text('Couldn’t load feed.', style: TextStyle(color: Colors.white70)),
+                                      if (_feedErrorMsg.isNotEmpty)
+                                        Text(_feedErrorMsg, style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                                      TextButton(onPressed: _loadInitialFeed, child: const Text('Retry')),
+                                    ],
+                                  ),
+                                )
+                              else if (_feedHasMore)
+                                  TextButton(onPressed: _loadMoreFeed, child: const Text('Load more'))
+                                else if (_feedPosts.isEmpty)
+                                    const Padding(
+                                      padding: EdgeInsets.symmetric(vertical: 8),
+                                      child: Text('No recent posts from you or your gym buddies yet.',
+                                          style: TextStyle(color: Colors.white70)),
+                                    ),
+
+                              const SizedBox(height: 8),
+                            ],
+                          ),
+
+
                       ] else ...[
                         // Top Lifts
                         const SizedBox(height: 8),
