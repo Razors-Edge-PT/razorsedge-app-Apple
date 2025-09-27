@@ -17,58 +17,67 @@ class FeedPostCard extends StatelessWidget {
     final isVideo = post.mediaType == 'video';
     final mediaUrl = isVideo ? post.thumbUrl : post.smallUrl;
 
-    return Card(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header
-            PostHeader(
-              ownerUid: post.ownerUid,
-              createdAt: post.createdAt.toDate(),
-            ),
-            const SizedBox(height: 8),
+    return SizedBox(
+      width: double.infinity, // 👈 stretch card to full available width
+      child: Card(
+        color: Colors.blueGrey.shade600, // 👈 your background
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header
+              PostHeader(
+                ownerUid: post.ownerUid,
+                createdAt: post.createdAt.toDate(),
+              ),
+              const SizedBox(height: 8),
 
-            // Media (tap to open detail)
-            GestureDetector(
-              onTap: onOpenDetail,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: AspectRatio(
-                  aspectRatio: 1, // safe default; images will letterbox slightly if needed
-                  child: FutureBuilder<File>(
-                    future: DefaultCacheManager().getSingleFile(mediaUrl),
-                    builder: (ctx, snap) {
-                      if (snap.connectionState == ConnectionState.done && snap.hasData) {
-                        return Image.file(snap.data!, fit: BoxFit.cover);
-                      }
-                      return const ColoredBox(color: Color(0x11000000));
-                    },
+              // Media (tap to open detail)
+              GestureDetector(
+                onTap: onOpenDetail,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: AspectRatio(
+                    aspectRatio: 4 / 5, // 👈 taller image (was 1:1)
+                    child: FutureBuilder<File>(
+                      future: DefaultCacheManager().getSingleFile(mediaUrl),
+                      builder: (ctx, snap) {
+                        if (snap.connectionState == ConnectionState.done && snap.hasData) {
+                          return Image.file(
+                            snap.data!,
+                            fit: BoxFit.cover,
+                            width: double.infinity, // 👈 fill horizontally
+                          );
+                        }
+                        return const ColoredBox(color: Color(0x11000000));
+                      },
+                    ),
                   ),
                 ),
               ),
-            ),
 
-            // Actions row (snapshot counts)
-            const SizedBox(height: 8),
-            _ActionRow(post: post),
+              // Actions row (snapshot counts)
+              const SizedBox(height: 8),
+              _ActionRow(post: post),
 
-            // Caption (optional)
-            if ((post.caption ?? '').trim().isNotEmpty) ...[
-              const SizedBox(height: 6),
-              Text(post.caption!.trim()),
+              // Caption (optional)
+              if ((post.caption ?? '').trim().isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(post.caption!.trim()),
+              ],
+
+              // Last 2 comments + View all
+              const SizedBox(height: 8),
+              _LastTwoComments(postId: post.id, onViewAll: onOpenDetail),
             ],
-
-            // Last 2 comments + View all
-            const SizedBox(height: 8),
-            _LastTwoComments(postId: post.id, onViewAll: onOpenDetail),
-          ],
+          ),
         ),
       ),
     );
+
   }
 }
 

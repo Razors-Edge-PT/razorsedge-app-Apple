@@ -567,10 +567,8 @@ class _InAppVideoPlayerState extends State<_InAppVideoPlayer> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: AppBar(
-          backgroundColor: Colors.black, title: const Text('Lift Video')),
-      body: Container(                     // 👈 wrap body in black
-        color: Colors.black,               // 👈 force background black
+      body: Container(
+        color: Colors.black,
         child: Center(
           child: _ready
               ? AspectRatio(

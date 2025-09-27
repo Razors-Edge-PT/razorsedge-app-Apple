@@ -74,6 +74,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _feedError = false;
   String _feedErrorMsg = '';
   Timestamp? _lastCreatedAt; // simple, stable pagination
+  bool _loadMoreScheduled = false;
 
 
   @override
@@ -296,8 +297,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadMoreFeed() async {
     debugPrint('[FEED] >>> ENTER _loadMoreFeed, loading=$_feedLoading hasMore=$_feedHasMore owners=${_feedOwnerUids.length}');
-    if (_feedLoading && _feedPosts.isNotEmpty) return;
+    if (_feedLoading || !_feedHasMore || _feedOwnerUids.isEmpty) return;
 
+    // capture scroll metrics BEFORE we change state
+    final hadClients = _homeScrollCtrl.hasClients;
+    final prevOffset = hadClients ? _homeScrollCtrl.offset : 0.0;
 
     setState(() {
       _feedLoading = true;
@@ -308,19 +312,20 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       Query<Map<String, dynamic>> q = FirebaseFirestore.instance
           .collection('posts')
-          .where('ownerUid', whereIn: _feedOwnerUids) // <= works up to 10 UIDs
+          .where('ownerUid', whereIn: _feedOwnerUids)
           .orderBy('createdAt', descending: true)
           .limit(_kFeedPageSize);
 
-      // paginate by createdAt only (simple & robust)
       if (_lastCreatedAt != null) {
         q = q.startAfter([_lastCreatedAt]);
       }
 
       debugPrint('[FEED] issuing query owners=${_feedOwnerUids.length}, lastCreatedAt=$_lastCreatedAt');
 
+      // 👇 this was missing
       final qs = await q.get();
       final docs = qs.docs;
+
       debugPrint('[FEED] fetched=${docs.length} lastCreatedAt=${_lastCreatedAt?.toDate()}');
 
       final newPosts = <Post>[];
@@ -332,7 +337,6 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
 
-      // update pagination cursor
       if (docs.isNotEmpty) {
         final last = docs.last.data();
         final ts = (last['createdAt'] as Timestamp?);
@@ -344,6 +348,15 @@ class _HomeScreenState extends State<HomeScreen> {
         _feedHasMore = docs.length >= _kFeedPageSize;
         _feedLoading = false;
       });
+
+      // 👉 if nothing new, restore scroll offset so the view doesn’t “jump up”
+      if (hadClients && docs.isEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_homeScrollCtrl.hasClients) {
+            _homeScrollCtrl.jumpTo(prevOffset);
+          }
+        });
+      }
     } on FirebaseException catch (e) {
       debugPrint('[FEED] Firestore error: code=${e.code}, message=${e.message}');
       if (mounted) {
@@ -375,15 +388,26 @@ class _HomeScreenState extends State<HomeScreen> {
 
 
 
+
+
 // Trigger more when near bottom of outer scroll view
   void _onHomeScroll() {
     if (!_homeScrollCtrl.hasClients) return;
-    final max = _homeScrollCtrl.position.maxScrollExtent;
-    final pos = _homeScrollCtrl.position.pixels;
-    if (max - pos < 600) { // pre-fetch threshold
-      _loadMoreFeed();
+    final pos = _homeScrollCtrl.position;
+    final shouldPrefetch = pos.maxScrollExtent - pos.pixels < 600;
+
+    if (shouldPrefetch && !_feedLoading && _feedHasMore && !_loadMoreScheduled) {
+      _loadMoreScheduled = true;
+      Future.microtask(() async {
+        try {
+          await _loadMoreFeed();
+        } finally {
+          _loadMoreScheduled = false;
+        }
+      });
     }
   }
+
 
   Future<void> _resolveFeedOwners() async {
     final uc = UserContext.of(context, listen: false);
@@ -1468,7 +1492,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
                         // ── Home Feed ──────────────────────────────────────────────────────────
                         const SizedBox(height: 2),
-                        Text('Just scroll through your feed you media-slut. we know you love this.', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                        Text('Just scroll through your home feed, you media-slut. You love it 👇', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
                         const SizedBox(height: 8),
 
                         if (!_feedOwnersResolved)
@@ -1481,6 +1505,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           )
                         else
                           Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+
                             children: [
                               // Cards
                               ..._feedPosts.map((p) => FeedPostCard(
@@ -1501,33 +1527,29 @@ class _HomeScreenState extends State<HomeScreen> {
                                 },
                               )),
 
-                              // Loading / Error / Load more / Empty tail
-                              if (_feedLoading)
-                                const Padding(
-                                  padding: EdgeInsets.symmetric(vertical: 8),
-                                  child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)),
-                                )
-                              else if (_feedError)
-                                Padding(
-                                  padding: const EdgeInsets.symmetric(vertical: 8),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      const Text('Couldn’t load feed.', style: TextStyle(color: Colors.white70)),
-                                      if (_feedErrorMsg.isNotEmpty)
-                                        Text(_feedErrorMsg, style: const TextStyle(color: Colors.white38, fontSize: 12)),
-                                      TextButton(onPressed: _loadInitialFeed, child: const Text('Retry')),
-                                    ],
-                                  ),
-                                )
-                              else if (_feedHasMore)
-                                  TextButton(onPressed: _loadMoreFeed, child: const Text('Load more'))
-                                else if (_feedPosts.isEmpty)
-                                    const Padding(
-                                      padding: EdgeInsets.symmetric(vertical: 8),
-                                      child: Text('No recent posts from you or your gym buddies yet.',
-                                          style: TextStyle(color: Colors.white70)),
-                                    ),
+                              // Footer with fixed height to prevent jumps
+                              SizedBox(
+                                height: 52, // keep this constant
+                                child: Center(
+                                  child: () {
+                                    if (_feedLoading) {
+                                      return const SizedBox(
+                                        width: 24, height: 24,
+                                        child: CircularProgressIndicator(strokeWidth: 2),
+                                      );
+                                    }
+                                    if (_feedError) {
+                                      return TextButton(onPressed: _loadInitialFeed, child: const Text('Retry'));
+                                    }
+                                    if (_feedHasMore) {
+                                      return TextButton(onPressed: _loadMoreFeed, child: const Text('Load more'));
+                                    }
+                                    // No more posts — return an invisible placeholder with same height
+                                    return const SizedBox.shrink();
+                                  }(),
+                                ),
+                              ),
+
 
                               const SizedBox(height: 8),
                             ],
@@ -1538,6 +1560,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         // Top Lifts
                         const SizedBox(height: 8),
                         Card(
+
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(16)),
                           elevation: 2,
