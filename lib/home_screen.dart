@@ -23,6 +23,7 @@ import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:path_provider/path_provider.dart';
 import 'post_service.dart';
 import 'feed_post_card.dart';
+import 'main.dart';
 
 
 
@@ -37,7 +38,8 @@ class HomeScreen extends StatefulWidget {
 
 enum HomeSection { calendar, topLifts }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with RouteAware {
+
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   static const double kFeatureCardWidth = 150;
 
@@ -268,6 +270,10 @@ class _HomeScreenState extends State<HomeScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     _loadAthleteEmail(); // 👈 this line ensures _actingAsEmail is set
+    final ModalRoute<dynamic>? route = ModalRoute.of(context);
+    if (route != null) {
+      routeObserver.subscribe(this, route); // 👈 subscribe
+    }
   }
 
   @override
@@ -275,7 +281,14 @@ class _HomeScreenState extends State<HomeScreen> {
     Provider.of<UserContext>(context, listen: false).removeListener(_onUserContextChange);
     _homeScrollCtrl.removeListener(_onHomeScroll);
     _homeScrollCtrl.dispose();
+    routeObserver.unsubscribe(this); // 👈 unsubscribe
     super.dispose();
+  }
+
+  @override
+  void didPopNext() {
+    // Refresh the home feed when returning from ANY pushed page
+    _loadInitialFeed(); // or a lighter _refreshVisible() if you have one
   }
 
 //Home FEED functions
@@ -1511,21 +1524,26 @@ class _HomeScreenState extends State<HomeScreen> {
                               // Cards
                               ..._feedPosts.map((p) => FeedPostCard(
                                 post: p,
-                                onOpenDetail: () {
-                                  // Push your existing detail page, using PostService handlers
-                                  Navigator.of(context).push(
+                                onOpenDetail: () async {
+                                  await Navigator.of(context).push(
                                     MaterialPageRoute(
                                       builder: (_) => PostDetailPage(
                                         post: p,
                                         onToggleLike: (pp) => PostService.instance.toggleLike(pp.id),
-                                        onToggleGoodLift: (pp) => PostService.instance.toggleGoodLift(pp.id, isVideo: pp.mediaType == 'video'),
-                                        onAddComment: (pp, text) => PostService.instance.addComment(pp.id, text, usernameFallback: 'user'),
+                                        onToggleGoodLift: (pp) =>
+                                            PostService.instance.toggleGoodLift(pp.id, isVideo: pp.mediaType == 'video'),
+                                        onAddComment: (pp, text) =>
+                                            PostService.instance.addComment(pp.id, text, usernameFallback: 'user'),
                                         canDelete: (UserContext.of(context, listen: false).actorUid == p.ownerUid),
                                       ),
                                     ),
                                   );
+
+                                  if (!context.mounted) return;
+                                  _loadInitialFeed(); // 👈 refresh feed after coming back
                                 },
                               )),
+
 
                               // Footer with fixed height to prevent jumps
                               SizedBox(

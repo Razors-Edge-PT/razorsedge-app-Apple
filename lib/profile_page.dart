@@ -111,18 +111,76 @@ class PostDetailPage extends StatelessWidget {
           actions: [
             if (canDelete)
               IconButton(
+                tooltip: 'Edit caption',
+                icon: const Icon(Icons.edit_outlined),
+                onPressed: () async {
+                  final docRef = FirebaseFirestore.instance.collection('posts').doc(post.id);
+
+                  // Prefill with current caption (best-effort fetch to get latest)
+                  String current = post.caption ?? '';
+                  try {
+                    final snap = await docRef.get();
+                    final d = snap.data() as Map<String, dynamic>?;
+                    if (d != null && d['caption'] is String) {
+                      current = (d['caption'] as String).trim();
+                    }
+                  } catch (_) {}
+
+                  final ctrl = TextEditingController(text: current);
+                  final updated = await showDialog<String>(
+                    context: context,
+                    builder: (d) => AlertDialog(
+                      title: const Text('Edit caption'),
+                      content: TextField(
+                        controller: ctrl,
+                        keyboardType: TextInputType.multiline,
+                        textInputAction: TextInputAction.newline,
+                        maxLines: null,
+                        decoration: const InputDecoration(border: OutlineInputBorder()),
+                      ),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(d), child: const Text('Cancel')),
+                        TextButton(onPressed: () => Navigator.pop(d, ctrl.text.trim()), child: const Text('Save')),
+                      ],
+                    ),
+                  );
+                  if (updated == null) return;
+
+                  try {
+                    await docRef.update({'caption': updated});
+
+                    // Optional: update local list if you keep one in memory
+                    final state = context.findAncestorStateOfType<_ProfilePageState>();
+                    if (state != null) {
+                      final i = state._posts.indexWhere((p) => p.id == post.id);
+                      if (i != -1) {
+                        state.setState(() {
+                          state._posts[i] = state._posts[i].copyWith(caption: updated);
+                        });
+                      }
+                    }
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Caption update failed: $e')),
+                      );
+                    }
+                  }
+                },
+              ),
+
+            if (canDelete)
+              IconButton(
                 icon: const Icon(Icons.delete_outline),
                 onPressed: () async {
+                  // ... your existing delete code unchanged ...
                   final confirm = await showDialog<bool>(
                     context: context,
                     builder: (d) => AlertDialog(
                       title: const Text('Delete post?'),
                       content: const Text('This will permanently remove the post and its media.'),
                       actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(d, false),
-                          child: const Text('Cancel'),
-                        ),
+                        TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancel')),
                         TextButton(
                           onPressed: () => Navigator.pop(d, true),
                           child: const Text('Delete', style: TextStyle(color: Colors.red)),
@@ -132,7 +190,6 @@ class PostDetailPage extends StatelessWidget {
                   );
                   if (confirm != true) return;
 
-                  // Show progress
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text('Deleting post…')),
@@ -140,10 +197,7 @@ class PostDetailPage extends StatelessWidget {
                   }
 
                   try {
-                    // 1) Delete top-level post doc
                     await FirebaseFirestore.instance.collection('posts').doc(post.id).delete();
-
-                    // 2) Delete mirrored user doc (safe to ignore if not present)
                     try {
                       await FirebaseFirestore.instance
                           .collection('users')
@@ -152,8 +206,6 @@ class PostDetailPage extends StatelessWidget {
                           .doc(post.id)
                           .delete();
                     } catch (_) {}
-
-                    // 3) Delete storage files for this post
                     final folder = FirebaseStorage.instance.ref('users/${post.ownerUid}/posts/${post.id}');
                     try {
                       final listing = await folder.listAll();
@@ -167,7 +219,7 @@ class PostDetailPage extends StatelessWidget {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(content: Text('Post deleted')),
                       );
-                      Navigator.pop(context); // Close detail page
+                      Navigator.pop(context);
                     }
                   } catch (e) {
                     if (context.mounted) {
@@ -206,19 +258,32 @@ class PostDetailPage extends StatelessWidget {
                 }
                 final url = (snap.data ?? '').trim();
                 if (url.isEmpty) {
-                  return const Center(child: Text('Video unavailable'));
+                  return const Center(child: Text('Video unavailable', style: TextStyle(color: Colors.white70)));
                 }
                 return _InAppVideoPlayer.networkUrl(url: url);
               },
             ),
           ),
 
-          // --- Simple comments list (last 20) ---
+// --- Caption row (optional) ---
+          if ((post.caption ?? '').isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  post.caption ?? '',
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                ),
+              ),
+            ),
 
+// --- Simple comments list (last 20) ---
           SizedBox(
             height: 160,
             child: _CommentsList(postId: post.id),
           ),
+
 
         ],
       ),
@@ -2095,15 +2160,37 @@ class _ProfilePageState extends State<ProfilePage> {
     if (type != 'image' && type != 'video') return;
     final String mediaType = type!;
 
+// 1) Pick media first
     final XFile? picked = (mediaType == 'image')
         ? await _imagePicker.pickImage(source: ImageSource.gallery, imageQuality: 90)
         : await _imagePicker.pickVideo(source: ImageSource.gallery);
-
     if (picked == null) return;
 
-    final ownerUid = _ownerUid;
+// 2) Ask for caption *after* media is picked, before any upload
+    final captionInput = await showDialog<String>(
+      context: context,
+      builder: (d) {
+        final ctrl = TextEditingController();
+        return AlertDialog(
+          title: const Text('Say something about this post'),
+          content: TextField(
+            controller: ctrl,
+            autofocus: true,
+            maxLines: null,
+            textInputAction: TextInputAction.newline,
+            decoration: const InputDecoration(hintText: 'Write a caption...'),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(d), child: const Text('Skip')),
+            TextButton(onPressed: () => Navigator.pop(d, ctrl.text.trim()), child: const Text('Post')),
+          ],
+        );
+      },
+    );
+    final String finalCaption = (captionInput ?? '').trim();
 
-    // Generate optimistic Post with local thumb
+// 3) Create optimistic post (instant thumb) before starting uploads
+    final ownerUid = _ownerUid;
     final postId = FirebaseFirestore.instance.collection('_').doc().id;
 
     final optimistic = Post(
@@ -2113,17 +2200,14 @@ class _ProfilePageState extends State<ProfilePage> {
       thumbUrl: '',
       smallUrl: '',
       storagePathOriginal: '',
-      caption: '',
+      caption: finalCaption,            // use caption here
       likeCount: 0,
       goodLiftCount: 0,
       commentCount: 0,
       createdAt: Timestamp.now(),
-      localThumbPath: picked.path,
+      localThumbPath: picked.path,      // shows immediately in grid
     );
 
-
-
-// Insert at top of current posts list so it appears instantly
     setState(() {
       _posts.insert(0, optimistic);
     });
@@ -2212,7 +2296,7 @@ class _ProfilePageState extends State<ProfilePage> {
         'storagePathOriginal': storagePathOriginal,
         'thumbUrl': thumbUrl,
         'smallUrl': smallUrl,
-        'caption': null,
+        'caption': finalCaption,               // 👈 here
         'aspectRatio': null,
         'durationMs': null,
         'likeCount': 0,

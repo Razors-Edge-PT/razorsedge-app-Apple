@@ -26,6 +26,8 @@ import 'coach_home_screen.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 
+
+final RouteObserver<ModalRoute<void>> routeObserver = RouteObserver<ModalRoute<void>>();
 class AppRoot extends StatelessWidget {
   const AppRoot({super.key});
 
@@ -218,7 +220,7 @@ class MyApp extends StatelessWidget {
           labelLarge: TextStyle(color: Colors.white),
         ),
       ),
-
+      navigatorObservers: [routeObserver],
 
       // ✅ Provider< UserContext > is now already wrapping this via AppRoot
       home: const HomeScreen(),
