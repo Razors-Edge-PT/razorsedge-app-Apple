@@ -11,8 +11,15 @@ import 're_daily.dart'; // for ReDailyPostCard
 class FeedPostCard extends StatelessWidget {
   final Post post;
   final VoidCallback onOpenDetail;
+  final bool isHomeContext; // true when rendering in the Home tab
 
-  const FeedPostCard({super.key, required this.post, required this.onOpenDetail});
+  const FeedPostCard({
+    super.key,
+    required this.post,
+    required this.onOpenDetail,
+    this.isHomeContext = false,
+  });
+
 
   @override
   Widget build(BuildContext context) {
@@ -87,7 +94,16 @@ class FeedPostCard extends StatelessWidget {
                             ((d['badges'] as List?)?.map((e) => e.toString()).toList()) ?? const <String>[];
                         final String? caption = (d['caption'] as String?);
 
-                        // Use the existing pretty card
+                        final bool hasBadge = badges.isNotEmpty;
+                        final bool promoted = (d['promoteToHome'] as bool?) == true;
+
+// In the Home tab, only render RE cards that are promoted AND have ≥1 badge.
+// In the Points tab (isHomeContext == false), render all valid RE cards.
+                        if (isHomeContext && (!promoted || !hasBadge)) {
+                          return const SizedBox.shrink();
+                        }
+
+// Use the existing pretty card
                         return ReDailyPostCard(
                           dayKey: dayKey,
                           dailyTotal: dailyTotal,
@@ -96,6 +112,7 @@ class FeedPostCard extends StatelessWidget {
                           badges: badges,
                           caption: caption,
                         );
+
                       },
                     ),
                   ),
@@ -274,6 +291,10 @@ class ReDailyDetailPage extends StatelessWidget {
           final List<String> badges =
               ((d['badges'] as List?)?.map((e) => e.toString()).toList()) ?? const <String>[];
           final String? caption = (d['caption'] as String?);
+          final bool alreadyPromoted = (d['promoteToHome'] as bool?) == true;
+          final bool hasBadge = badges.isNotEmpty;
+          final bool canPromote = hasBadge && !alreadyPromoted;
+
 
           final dummyPost = Post(
             id: postId,
@@ -305,6 +326,47 @@ class ReDailyDetailPage extends StatelessWidget {
                       caption: caption,
                     ),
                     const SizedBox(height: 12),
+
+                    if (canPromote)
+                      Card(
+                        color: Colors.blueGrey.shade700,
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.campaign, color: Colors.white),
+                              const SizedBox(width: 8),
+                              const Expanded(
+                                child: Text('Nice! You earned a badge today. Share this to your Home feed?',
+                                    style: TextStyle(color: Colors.white)),
+                              ),
+                              TextButton(
+                                onPressed: () async {
+                                  try {
+                                    await FirebaseFirestore.instance.collection('posts').doc(postId).update({
+                                      'promoteToHome': true,
+                                      'promotedAt': FieldValue.serverTimestamp(),
+                                    });
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(content: Text('Shared to Home feed')),
+                                      );
+                                    }
+                                  } catch (e) {
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text('Share failed: $e')),
+                                      );
+                                    }
+                                  }
+                                },
+                                child: const Text('Share'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+
                     _ActionRow(post: dummyPost),
                     const SizedBox(height: 12),
                     _LastTwoComments(postId: postId, onViewAll: () {}),

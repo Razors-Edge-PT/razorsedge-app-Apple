@@ -25,10 +25,38 @@ import 'post_service.dart';
 import 'post_header.dart';
 import 'feed_post_card.dart';
 import 'main.dart';
+import 're_daily.dart';
+import 'dart:math';
 
 
+enum SelectedFeed { home, points }
+const String kUserPrefFeedTab = 'feedTab'; // 'home' | 'points'
 
 
+// Taglines to rotate
+const List<String> _kPointsTaglines = [
+  'Certified Gainz Accounting™ department',
+  'Chalk up—this feed counts.',
+  'Do you even metrics?',
+  'If you didnt log the workout, did it even count? your points say no',        // ← clout variant
+  'Literally your street cred',
+  'Woah take those points the bank, so you earn interest',
+  'Today’s gains: properly weighted.',
+  'My favorite function? Progressive overload - u a math nerd if u got it what u doing in the gym anyway'// ← street–cred variant
+];
+
+const List<String> _kHomeTaglines = [
+  'Go on, scroll your gains. We won’t tell.',
+  'Welcome to the scroll rack.',
+  'Swipe sets, not reps.',
+  'Your friends did 3×10 of content.',
+  'Warm up thumbs. It’s feed day.',
+  'PRs and PR photos, right this way.',
+  'Algorithm? Nah — just gym-orithms.',
+  'Lift your mood. Or at least your phone.',
+  'Recommended: friends, plates, drama.',
+  'Today’s workout: 4 sets of scrolling.',
+];
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -70,6 +98,25 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   List<Post> _feedPosts = [];
   bool _feedLoading = false;
   bool _feedHasMore = true;
+  SelectedFeed _selectedFeed = SelectedFeed.home;
+  final ScrollController _pointsScrollCtrl = ScrollController();
+  String _homeTagline = _kHomeTaglines.first;
+
+// Points feed state
+  List<Post> _pointsPosts = [];
+  bool _pointsLoading = false;
+  bool _pointsHasMore = true;
+  DocumentSnapshot<Map<String, dynamic>>? _lastPointsSnap;
+  Timestamp? _lastPointsCreatedAt;
+  String _pointsTagline = _kPointsTaglines.first;
+
+
+// Points month filter (yyyy-MM), default = current month
+  String _pointsMonthKey = () {
+    final now = DateTime.now();
+    return '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}';
+  }();
+
   DocumentSnapshot<Map<String, dynamic>>? _lastFeedSnap; // last doc for pagination
   List<String> _feedOwnerUids = []; // self + buddies
   bool _feedOwnersResolved = false;
@@ -78,6 +125,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   String _feedErrorMsg = '';
   Timestamp? _lastCreatedAt; // simple, stable pagination
   bool _loadMoreScheduled = false;
+
+
+
 
 
   @override
@@ -89,7 +139,25 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     print("🏠 Home loaded for ${userContext.actingAsUid} "
         "(actor: ${userContext.actorUid}, coach: ${userContext.isCoach})");
     _homeScrollCtrl.addListener(_onHomeScroll);
-    _resolveFeedOwners().then((_) => _loadInitialFeed());
+    _pointsScrollCtrl.addListener(_onPointsScroll);
+
+    _resolveFeedOwners().then((_) async {
+      await _restoreSelectedFeed(); // reads users/{uid}.prefs.feedTab
+      if (_selectedFeed == SelectedFeed.home) {
+        await _loadInitialHomeFeed();
+      } else {
+        await _loadInitialPointsFeed();
+      }
+    });
+
+    _restoreSelectedFeed().then((_) async {
+      if (_selectedFeed == SelectedFeed.home) {
+        await _loadInitialHomeFeed();
+      } else {
+        _pickPointsTagline(); // 👈
+        await _loadInitialPointsFeed();
+      }
+    });
 
     print('[Warmup] started for $actingUid');
 
@@ -163,6 +231,38 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     } finally {
       _avatarPersistInProgress = false;
     }
+  }
+
+  Future<void> _restoreSelectedFeed() async {
+    try {
+      final uid = UserContext.of(context, listen: false).actorUid;
+      final snap = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      final prefs = (snap.data()?['prefs'] as Map<String, dynamic>?) ?? const {};
+      final tab = (prefs[kUserPrefFeedTab] as String?) ?? 'home';
+      _selectedFeed = (tab == 'points') ? SelectedFeed.points : SelectedFeed.home;
+      setState(() {});
+    } catch (_) {
+      _selectedFeed = SelectedFeed.home;
+    }
+  }
+
+  Future<void> _persistSelectedFeed() async {
+    try {
+      final uid = UserContext.of(context, listen: false).actorUid;
+      await FirebaseFirestore.instance.collection('users').doc(uid).set({
+        'prefs': { kUserPrefFeedTab: _selectedFeed == SelectedFeed.points ? 'points' : 'home' }
+      }, SetOptions(merge: true));
+    } catch (_) {}
+  }
+
+  void _pickPointsTagline() {
+    final r = Random();
+    _pointsTagline = _kPointsTaglines[r.nextInt(_kPointsTaglines.length)];
+  }
+
+  void _pickHomeTagline() {
+    final r = Random();
+    _homeTagline = _kHomeTaglines[r.nextInt(_kHomeTaglines.length)];
   }
 
   Future<void> _ensureAtLeastOneBlockExists() async {
@@ -283,34 +383,45 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     _homeScrollCtrl.removeListener(_onHomeScroll);
     _homeScrollCtrl.dispose();
     routeObserver.unsubscribe(this); // 👈 unsubscribe
+    _homeScrollCtrl.removeListener(_onHomeScroll);
+    _homeScrollCtrl.dispose();
+    _pointsScrollCtrl.removeListener(_onPointsScroll);
+    _pointsScrollCtrl.dispose();
+
     super.dispose();
   }
 
   @override
   void didPopNext() {
-    // Refresh the home feed when returning from ANY pushed page
-    _loadInitialFeed(); // or a lighter _refreshVisible() if you have one
+    if (!_feedOwnersResolved) return;
+    if (_selectedFeed == SelectedFeed.home) {
+      _loadInitialHomeFeed();
+    } else {
+      _loadInitialPointsFeed();
+    }
   }
+
 
 //Home FEED functions
 
 
-  Future<void> _loadInitialFeed() async {
+  Future<void> _loadInitialHomeFeed() async {
     if (!_feedOwnersResolved) return;
     setState(() {
-      _feedLoading = false;   // 👈 reset here
+      _feedLoading = false;
       _feedHasMore = true;
       _feedError = false;
       _feedErrorMsg = '';
       _feedPosts = [];
       _lastCreatedAt = null;
     });
-    await _loadMoreFeed();
+    await _loadMoreHomeFeed();
   }
 
 
-  Future<void> _loadMoreFeed() async {
-    debugPrint('[FEED] >>> ENTER _loadMoreFeed, loading=$_feedLoading hasMore=$_feedHasMore owners=${_feedOwnerUids.length}');
+
+  Future<void> _loadMoreHomeFeed() async {
+    debugPrint('[HOME FEED] >>> ENTER _loadMoreHomeFeed, loading=$_feedLoading hasMore=$_feedHasMore owners=${_feedOwnerUids.length}');
     if (_feedLoading || !_feedHasMore || _feedOwnerUids.isEmpty) return;
 
     // capture scroll metrics BEFORE we change state
@@ -334,20 +445,15 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         q = q.startAfter([_lastCreatedAt]);
       }
 
-      debugPrint('[FEED] issuing query owners=${_feedOwnerUids.length}, lastCreatedAt=$_lastCreatedAt');
-
-      // 👇 this was missing
       final qs = await q.get();
       final docs = qs.docs;
-
-      debugPrint('[FEED] fetched=${docs.length} lastCreatedAt=${_lastCreatedAt?.toDate()}');
 
       final newPosts = <Post>[];
       for (final d in docs) {
         try {
           newPosts.add(Post.fromSnap(d));
         } catch (e) {
-          debugPrint('[FEED] Post.fromSnap error on ${d.id}: $e');
+          debugPrint('[HOME FEED] Post.fromSnap error on ${d.id}: $e');
         }
       }
 
@@ -363,7 +469,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         _feedLoading = false;
       });
 
-      // 👉 if nothing new, restore scroll offset so the view doesn’t “jump up”
+      // if nothing new, restore scroll offset so the view doesn’t “jump”
       if (hadClients && docs.isEmpty) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (_homeScrollCtrl.hasClients) {
@@ -372,7 +478,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         });
       }
     } on FirebaseException catch (e) {
-      debugPrint('[FEED] Firestore error: code=${e.code}, message=${e.message}');
+      debugPrint('[HOME FEED] Firestore error: code=${e.code}, message=${e.message}');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Feed error: ${e.code}')),
@@ -385,11 +491,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         _feedHasMore = false;
       });
     } catch (e) {
-      debugPrint('[FEED] Unknown error: $e');
+      debugPrint('[HOME FEED] Unknown error: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Feed failed to load: $e')),
-        );
+            SnackBar(content: Text('Feed failed to load: $e')));
       }
       setState(() {
         _feedError = true;
@@ -401,6 +506,107 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
 
+
+  Future<void> _loadInitialPointsFeed() async {
+    if (!_feedOwnersResolved) return;
+    setState(() {
+      _pointsLoading = false;
+      _pointsHasMore = true;
+      _pointsPosts = [];
+      _lastPointsCreatedAt = null;
+    });
+    await _loadMorePointsFeed();
+  }
+
+  Future<void> _loadMorePointsFeed() async {
+    if (_pointsLoading || !_pointsHasMore || _feedOwnerUids.isEmpty) return;
+    _pointsLoading = true;
+    try {
+      // Base query: owners + createdAt desc (no composite index requirements)
+      Query<Map<String, dynamic>> q = FirebaseFirestore.instance
+          .collection('posts')
+          .where('ownerUid', whereIn: _feedOwnerUids)
+          .orderBy('createdAt', descending: true)
+          .limit(_kFeedPageSize * 2); // slight overfetch to survive filtering
+
+      if (_lastPointsCreatedAt != null) {
+        q = q.startAfter([_lastPointsCreatedAt]);
+      }
+
+      final qs = await q.get();
+      final docs = qs.docs;
+
+      // Update cursor/hasMore from raw page
+      if (docs.isNotEmpty) {
+        _lastPointsCreatedAt =
+            (docs.last.data()['createdAt'] as Timestamp?) ?? _lastPointsCreatedAt;
+      }
+      _pointsHasMore = docs.length >= _kFeedPageSize * 2;
+
+      // Client-side filter: only re_daily, >0 points, and (optional) month window
+      DateTime? monthStart;
+      DateTime? monthEnd;
+      if ((_pointsMonthKey).isNotEmpty) {
+        final start = DateTime.parse('$_pointsMonthKey-01');
+        final end = (start.month == 12)
+            ? DateTime(start.year + 1, 1, 1)
+            : DateTime(start.year, start.month + 1, 1);
+        monthStart = start;
+        monthEnd = end;
+      }
+
+      final filtered = <Post>[];
+      for (final d in docs) {
+        Post? p;
+        try {
+          p = Post.fromSnap(d);
+        } catch (_) {}
+        if (p == null) continue;
+
+        if ((p.type ?? '') != 're_daily') continue;
+
+        // Cheap additional check: require positive dailyTotal to avoid empty cards
+        final m = d.data();
+        final total = (m['dailyTotal'] as num?)?.toDouble() ?? 0.0;
+        if (total <= 0.0) continue;
+
+        if (monthStart != null && monthEnd != null) {
+          final created = p.createdAt.toDate();
+          if (!(created.isAfter(monthStart.subtract(const Duration(milliseconds: 1))) &&
+              created.isBefore(monthEnd))) {
+            continue;
+          }
+        }
+
+        filtered.add(p);
+        if (filtered.length >= _kFeedPageSize) break; // cap to page size
+      }
+
+      setState(() {
+        _pointsPosts.addAll(filtered);
+      });
+
+      // If we filtered out everything but still have more raw docs, fetch next page
+      if (filtered.isEmpty && _pointsHasMore) {
+        await _loadMorePointsFeed();
+      }
+    } catch (e) {
+      debugPrint('[POINTS FEED] error: $e');
+      _pointsHasMore = false;
+    } finally {
+      _pointsLoading = false;
+    }
+  }
+
+
+
+  void _onPointsScroll() {
+    if (!_pointsScrollCtrl.hasClients || _pointsLoading || !_pointsHasMore) return;
+    final pos = _pointsScrollCtrl.position;
+    if (pos.pixels >= pos.maxScrollExtent - 400) {
+      _loadMorePointsFeed();
+    }
+  }
 
 
 
@@ -414,7 +620,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       _loadMoreScheduled = true;
       Future.microtask(() async {
         try {
-          await _loadMoreFeed();
+          await _loadMoreHomeFeed();
+
         } finally {
           _loadMoreScheduled = false;
         }
@@ -1504,90 +1711,230 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                         const SizedBox(height: 2),
                         // Simple grey background input
 
-                        // ── Home Feed ──────────────────────────────────────────────────────────
-                        const SizedBox(height: 2),
-                        Text('Go on, scroll through your home feed, you media-slut. You love it 👇', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 8),
-
-                        if (!_feedOwnersResolved)
-                          const Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)))
-                        else if (_feedOwnerUids.isEmpty)
-                          const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 8),
-                            child: Text('No recent posts from you or your gym buddies yet.',
-                                style: TextStyle(color: Colors.white70)),
-                          )
-                        else
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-
+                        // ── Feed Switcher ──────────────────────────────────────────────────────
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          child: Row(
                             children: [
-                              // Cards
-                              ... _feedPosts.map((p) {
-                                final isDaily = (p.type == 're_daily');
-                                return FeedPostCard(
-                                  post: p,
-                                  onOpenDetail: isDaily
-                                  // --- LIGHTWEIGHT DAILY DETAIL ---
-                                      ? () async {
-                                    await Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                        builder: (_) => ReDailyDetailPage(postId: p.id),
-                                      ),
-                                    );
-                                    if (!context.mounted) return;
-                                    _loadInitialFeed();
+                              SegmentedButton<SelectedFeed>(
+                                showSelectedIcon: false,
+                                segments: const [
+                                  ButtonSegment<SelectedFeed>(
+                                    value: SelectedFeed.home,
+                                    icon: Icon(Icons.photo_library_outlined, size: 16),
+                                    label: SizedBox.shrink(), // icon-only
+                                  ),
+                                  ButtonSegment<SelectedFeed>(
+                                    value: SelectedFeed.points,
+                                    icon: Icon(Icons.leaderboard_outlined, size: 16),
+                                    label: SizedBox.shrink(), // icon-only
+                                  ),
+                                ],
+                                selected: <SelectedFeed>{_selectedFeed},
+                                onSelectionChanged: (s) async {
+                                  final next = s.first;
+                                  if (_selectedFeed == next) return;
+
+                                  setState(() => _selectedFeed = next);
+                                  await _persistSelectedFeed();
+
+                                  if (next == SelectedFeed.home) {
+                                    if (_feedPosts.isEmpty && !_feedLoading) {
+                                      _loadInitialHomeFeed();
+                                    }
+                                  } else {
+                                    _pickPointsTagline(); // 👈 new: rotate the tagline
+                                    if (_pointsPosts.isEmpty && !_pointsLoading) {
+                                      _loadInitialPointsFeed();
+                                    }
                                   }
-                                  // --- ORIGINAL MEDIA DETAIL (unchanged) ---
-                                      : () async {
-                                    await Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                        builder: (_) => PostDetailPage(
-                                          post: p,
-                                          onToggleLike: (pp) => PostService.instance.toggleLike(pp.id),
-                                          onToggleGoodLift: (pp) =>
-                                              PostService.instance.toggleGoodLift(pp.id, isVideo: pp.mediaType == 'video'),
-                                          onAddComment: (pp, text) =>
-                                              PostService.instance.addComment(pp.id, text, usernameFallback: 'user'),
-                                          canDelete: (UserContext.of(context, listen: false).actorUid == p.ownerUid),
-                                        ),
-                                      ),
-                                    );
-                                    if (!context.mounted) return;
-                                    _loadInitialFeed();
-                                  },
-                                );
-                              }),
+                                },
 
-
-
-                              // Footer with fixed height to prevent jumps
-                              SizedBox(
-                                height: 52, // keep this constant
-                                child: Center(
-                                  child: () {
-                                    if (_feedLoading) {
-                                      return const SizedBox(
-                                        width: 24, height: 24,
-                                        child: CircularProgressIndicator(strokeWidth: 2),
-                                      );
-                                    }
-                                    if (_feedError) {
-                                      return TextButton(onPressed: _loadInitialFeed, child: const Text('Retry'));
-                                    }
-                                    if (_feedHasMore) {
-                                      return TextButton(onPressed: _loadMoreFeed, child: const Text('Load more'));
-                                    }
-                                    // No more posts — return an invisible placeholder with same height
-                                    return const SizedBox.shrink();
-                                  }(),
+                                style: ButtonStyle(
+                                  padding: MaterialStateProperty.all(const EdgeInsets.symmetric(horizontal: 6, vertical: 2)),
+                                  visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+                                  side: MaterialStateProperty.resolveWith((states) {
+                                    final selected = states.contains(MaterialState.selected);
+                                    return BorderSide(color: selected ? Colors.white70 : Colors.white24, width: 1);
+                                  }),
+                                  backgroundColor: MaterialStateProperty.resolveWith((states) {
+                                    final selected = states.contains(MaterialState.selected);
+                                    return selected ? Colors.white12 : Colors.transparent;
+                                  }),
+                                  shape: MaterialStateProperty.all(
+                                    RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  ),
+                                  foregroundColor: MaterialStateProperty.all(Colors.white),
                                 ),
                               ),
-
-
-                              const SizedBox(height: 8),
+                              if (_selectedFeed == SelectedFeed.points) ...[
+                                const SizedBox(width: 8),
+                                _MonthPickerChip(
+                                  monthKey: _pointsMonthKey,
+                                  onChanged: (mk) {
+                                    setState(() => _pointsMonthKey = mk);
+                                    _loadInitialPointsFeed();
+                                  },
+                                ),
+                              ],
                             ],
                           ),
+                        ),
+
+
+                        // ── Home Feed ──────────────────────────────────────────────────────────
+
+                        if (_selectedFeed == SelectedFeed.home) ...[
+                          const SizedBox(height: 2),
+                          const Text('Go on, scroll through your home feed, you love it 👇',
+                              style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 8),
+
+                          if (!_feedOwnersResolved)
+                            const Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)))
+                          else if (_feedOwnerUids.isEmpty)
+                            const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 8),
+                              child: Text('No recent posts from you or your gym buddies yet.', style: TextStyle(color: Colors.white70)),
+                            )
+                          else
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                // Cards (Home: media + RE posts that were explicitly shared to Home)
+                                ..._feedPosts.map((p) {
+                                  // Media: render immediately
+                                  if (p.type != 're_daily') {
+                                    return FeedPostCard(
+                                      post: p,
+                                      isHomeContext: true,
+                                      onOpenDetail: () async {
+                                        await Navigator.of(context).push(
+                                          MaterialPageRoute(
+                                            builder: (_) => PostDetailPage(
+                                              post: p,
+                                              onToggleLike: (pp) => PostService.instance.toggleLike(pp.id),
+                                              onToggleGoodLift: (pp) => PostService.instance.toggleGoodLift(pp.id, isVideo: pp.mediaType == 'video'),
+                                              onAddComment: (pp, text) => PostService.instance.addComment(pp.id, text, usernameFallback: 'user'),
+                                              canDelete: (UserContext.of(context, listen: false).actorUid == p.ownerUid),
+                                            ),
+                                          ),
+                                        );
+                                        if (!context.mounted) return;
+                                        _loadInitialHomeFeed();
+                                      },
+                                    );
+                                  }
+
+                                  // re_daily: check eligibility first (promoted + has badge + points > 0)
+                                  return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                                    stream: FirebaseFirestore.instance.collection('posts').doc(p.id).snapshots(),
+                                    builder: (context, snap) {
+                                      if (!snap.hasData) return const SizedBox.shrink();
+                                      final d = snap.data!.data() ?? const <String, dynamic>{};
+                                      final promoted = (d['promoteToHome'] as bool?) == true;
+                                      final badges = (d['badges'] as List?) ?? const [];
+                                      final hasBadge = badges.isNotEmpty;
+                                      final total = (d['dailyTotal'] as num?)?.toDouble() ?? 0.0;
+
+                                      if (!promoted || !hasBadge || total <= 0.0) {
+                                        return const SizedBox.shrink(); // 🚫 don’t render a card at all
+                                      }
+
+                                      return FeedPostCard(
+                                        post: p,
+                                        isHomeContext: true,
+                                        onOpenDetail: () async {
+                                          await Navigator.of(context).push(
+                                            MaterialPageRoute(builder: (_) => ReDailyDetailPage(postId: p.id)),
+                                          );
+                                          if (!context.mounted) return;
+                                          _loadInitialHomeFeed();
+                                        },
+                                      );
+                                    },
+                                  );
+                                }),
+
+
+
+                                // Footer (Home)
+                                SizedBox(
+                                  height: 52,
+                                  child: Center(
+                                    child: () {
+                                      if (_feedLoading) {
+                                        return const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2));
+                                      }
+                                      if (_feedError) {
+                                        return TextButton(onPressed: _loadInitialHomeFeed, child: const Text('Retry'));
+                                      }
+                                      if (_feedHasMore) {
+                                        return TextButton(onPressed: _loadMoreHomeFeed, child: const Text('Load more'));
+                                      }
+                                      return const SizedBox.shrink();
+                                    }(),
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                              ],
+                            ),
+                        ] else ...[
+                          // Points feed
+                          const SizedBox(height: 2),
+                          Text(_pointsTagline, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+
+                          const SizedBox(height: 8),
+
+                          if (_pointsLoading && _pointsPosts.isEmpty)
+                            const Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)))
+                          else if (_pointsPosts.isEmpty)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                              child: Column(
+                                children: [
+                                  const Text('No points posts for this month yet, brah do you even lift.', style: TextStyle(color: Colors.white70)),
+                                  TextButton.icon(
+                                    onPressed: () {
+                                      // CTA: jump to workout composer or calendar (hook to your nav)
+                                      // e.g., Navigator.pushNamed(context, '/log-workout');
+                                    },
+                                    icon: const Icon(Icons.fitness_center),
+                                    label: const Text('Log a workout'),
+                                  ),
+                                ],
+                              ),
+                            )
+                          else
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                ... _pointsPosts.map((p) => FeedPostCard(
+                                  post: p,
+                                  isHomeContext: false, // optional; default is false
+                                  onOpenDetail: () async { /* ReDailyDetailPage */ },
+                                )),
+
+
+                                // Footer (Points)
+                                SizedBox(
+                                  height: 52,
+                                  child: Center(
+                                    child: () {
+                                      if (_pointsLoading) {
+                                        return const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2));
+                                      }
+                                      if (_pointsHasMore) {
+                                        return TextButton(onPressed: _loadMorePointsFeed, child: const Text('Load more'));
+                                      }
+                                      return const SizedBox.shrink();
+                                    }(),
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                              ],
+                            ),
+                        ],
 
 
                       ] else ...[
@@ -1624,6 +1971,49 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     ],
                   ),
                 ),
+    );
+  }
+}
+class _MonthPickerChip extends StatelessWidget {
+  final String monthKey; // "yyyy-MM"
+  final ValueChanged<String> onChanged;
+  const _MonthPickerChip({required this.monthKey, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return ActionChip(
+      label: Text(monthKey),
+      onPressed: () async {
+        final now = DateTime.now();
+        final years = [for (int y = now.year; y >= now.year - 3; y--) y];
+        final months = [for (int m = 1; m <= 12; m++) m];
+        String? picked;
+        await showDialog<void>(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text('Select month'),
+            content: SizedBox(
+              width: 320,
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final y in years)
+                    for (final m in months)
+                      InkWell(
+                        onTap: () {
+                          picked = '${y.toString().padLeft(4, '0')}-${m.toString().padLeft(2, '0')}';
+                          Navigator.pop(context);
+                        },
+                        child: Chip(label: Text('$y-${m.toString().padLeft(2, '0')}')),
+                      ),
+                ],
+              ),
+            ),
+          ),
+        );
+        if (picked != null && picked != monthKey) onChanged(picked!);
+      },
     );
   }
 }
