@@ -8309,8 +8309,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         final uid2 = uid;           // capture
         final dayKey = docId;       // exactly "yyyy-MM-dd"
 
+        debugPrint('[RE] kickoff scheduling for dayKey=$docId uid=$uid');
+
         // run fully in the background
         () async {
+          debugPrint('[RE] kickoff ENTER for dayKey=$dayKey uid=$uid2');
           try {
             // Read biological sex from the user doc
             final userSnap = await FirebaseFirestore.instance
@@ -8320,14 +8323,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
             final sexRaw = (userSnap.data()?['sex'] as String?)?.trim().toLowerCase();
 
-            // Map to the enum in formula.dart (you import it as `formula`)
             final isFemale = sexRaw == 'female' || sexRaw == 'f' || sexRaw == 'woman' || sexRaw == 'w';
             final genderEnum = isFemale ? formula.Gender.female : formula.Gender.male;
 
             await DailyReCalculator().computeAndWrite(
               uid: uid2,
               dayKey: dayKey,
-              gender: genderEnum, // type from formula.dart; prefix is fine
+              gender: genderEnum,
             );
 
             debugPrint('✅ [RE Daily] compute+write done for $dayKey');
@@ -8338,6 +8340,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       } catch (e) {
         debugPrint('⚠️ [RE Daily] kickoff failed for $docId: $e');
       }
+
 
 
 

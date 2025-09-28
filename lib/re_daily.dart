@@ -65,18 +65,31 @@ class DailyReCalculator {
     ReWeights weights = ReWeights.defaults,
     bool write = true,
   }) async {
+    debugPrint('[RE] compute ENTER uid=$uid day=$dayKey');
+
     final monthKey = dayKey.substring(0, 7); // yyyy-MM
     final endOfDayTs = _endOfDayFromDayKey(dayKey);
 
-    // 1) Get BW nearest prior to end-of-day (single BW used for all five lifts)
-    final bw = await _fetchNearestPriorBodyweight(uid, endOfDayTs);
+// 1) Get BW nearest prior to end-of-day (single BW used for all five lifts)
+    final bw = await _fetchNearestPriorBodyweight(uid, endOfDayTs)
+        .timeout(const Duration(seconds: 8), onTimeout: () {
+      debugPrint('[RE] BW fetch TIMEOUT uid=$uid day=$dayKey');
+      return null;
+    });
+    debugPrint('[RE] BW fetch OK uid=$uid day=$dayKey bw=${bw?.toStringAsFixed(1) ?? 'null'}');
+
 
     // 2) Gather best-of-day stats per target lift (RIR-excluded e1RM, etc.)
     final dayStats = await _fetchMaxE1rmByLiftForDay(
       uid: uid,
       dayKey: dayKey,
       keys: keys,
-    );
+    ).timeout(const Duration(seconds: 8), onTimeout: () {
+      debugPrint('[RE] dayStats fetch TIMEOUT uid=$uid day=$dayKey');
+      return <String, LiftDayStat>{};
+    });
+    debugPrint('[RE] dayStats OK uid=$uid day=$dayKey lifts=${dayStats.length}');
+
 
     // 3) Points per lift, then sum
     final coeff = (bw != null && bw > 0)
@@ -118,6 +131,7 @@ class DailyReCalculator {
         'coeff': coeff,
       };
     }
+    debugPrint('[RE] points loop DONE uid=$uid day=$dayKey total=${total.toStringAsFixed(2)}');
 
     final missingBw = (bw == null || bw <= 0);
     final baseResult = DailyReResult(
@@ -129,15 +143,25 @@ class DailyReCalculator {
       badges: const [], // will fill below
     );
 
-    // 4) Compute badges (needs historical comparisons)
-    final badges = await _computeBadges(
-      uid: uid,
-      dayKey: dayKey,
-      monthKey: monthKey,
-      keys: keys,
-      dayStats: dayStats,
-      dailyTotal: baseResult.dailyTotal,
-    );
+    // 4) Compute badges (non-blocking; timeout + fallback)
+    List<String> badges = const [];
+    try {
+      badges = await _computeBadges(
+        uid: uid,
+        dayKey: dayKey,
+        monthKey: monthKey,
+        keys: keys,
+        dayStats: dayStats,
+        dailyTotal: baseResult.dailyTotal,
+      ).timeout(const Duration(seconds: 8), onTimeout: () {
+        debugPrint('[RE] badges TIMEOUT uid=$uid day=$dayKey — proceeding without badges');
+        return const <String>[];
+      });
+    } catch (e, st) {
+      debugPrint('[RE] badges ERROR uid=$uid day=$dayKey: $e');
+      // debugPrint('$st'); // uncomment if you want the stack
+    }
+
 
     final withBadges = DailyReResult(
       dailyTotal: baseResult.dailyTotal,
@@ -147,6 +171,8 @@ class DailyReCalculator {
       missingBw: baseResult.missingBw,
       badges: badges,
     );
+    debugPrint('[RE] compute DECIDE uid=$uid day=$dayKey total=${withBadges.dailyTotal} bw=${withBadges.bodyweightUsedKg} badges=${withBadges.badges.length}');
+
 
     if (!write) return withBadges;
 
@@ -413,34 +439,70 @@ class DailyReCalculator {
     required double? bodyweightUsedKg,
     required List<String> badges,
   }) async {
-    final postId = RePaths.postDocId(uid, dayKey);
+    debugPrint('[RE] upsert post ENTER uid=$uid day=$dayKey total=$dailyTotal');
+
+    // 1) Always write to the canonical id for that day
+    final postId = RePaths.postDocId(uid, dayKey); // e.g. uid_20250928
     final ref = db.collection('posts').doc(postId);
     final now = FieldValue.serverTimestamp();
+
     await db.runTransaction((tx) async {
       final snap = await tx.get(ref);
       final exists = snap.exists;
-      final base = {
+
+      final base = <String, dynamic>{
         'type': 're_daily',
         'ownerUid': uid,
         'dayKey': dayKey,
         'monthKey': monthKey,
         'dailyTotal': dailyTotal,
-        'perLift':
-        pointsByLift.map((k, v) => MapEntry(k, <String, dynamic>{'pts': v})),
+        'perLift': pointsByLift.map((k, v) => MapEntry(k, <String, dynamic>{'pts': v})),
         'bodyweightUsedKg': bodyweightUsedKg,
         'visibility': 'friends',
         'badges': badges,
       };
+
       tx.set(
-          ref,
-          {
-            ...base,
-            if (!exists) 'createdAt': now,
-            'updatedAt': now,
-          },
-          SetOptions(merge: true));
+        ref,
+        {
+          ...base,
+          if (!exists) 'createdAt': now,
+          'updatedAt': now,
+        },
+        SetOptions(merge: true),
+      );
     });
+    debugPrint('[RE] upsert post OK id=${ref.id} day=$dayKey total=$dailyTotal badges=${badges.length}');
+
+
+    // 2) Cleanup: delete any other re_daily posts for (uid, dayKey) with a different id
+    try {
+      final dupes = await db
+          .collection('posts')
+          .where('ownerUid', isEqualTo: uid)
+          .where('type', isEqualTo: 're_daily')
+          .where('dayKey', isEqualTo: dayKey)
+          .limit(20)
+          .get();
+
+      final keepId = ref.id;
+      int deletes = 0;
+      final batch = db.batch();
+      for (final d in dupes.docs) {
+        if (d.id != keepId) {
+          batch.delete(d.reference);
+          deletes++;
+        }
+      }
+      if (deletes > 0) {
+        await batch.commit();
+      }
+    } catch (e) {
+      // best-effort (e.g., composite index missing) — do not block the main write
+      debugPrint('⚠️ [RE Daily] dupe cleanup skipped: $e');
+    }
   }
+
 
   // ---------- Light cache helpers ----------
 
@@ -448,10 +510,22 @@ class DailyReCalculator {
     return db.collection('users').doc(uid).collection('re_cache').doc(docId);
   }
 
-  Future<Map<String, dynamic>> _getCacheMap(String uid, String docId) async {
-    final snap = await _cacheDoc(uid, docId).get();
-    return (snap.data() ?? const <String, dynamic>{});
+  Future<Map<String, dynamic>> _getCacheMap({
+    required String uid,
+    required String docId,
+  }) async {
+    final snap = await db
+        .collection('users')
+        .doc(uid)
+        .collection('re_cache')
+        .doc(docId)
+        .get();
+
+    final data = snap.data();
+    // Ensure we always return a MUTABLE map
+    return (data == null) ? <String, dynamic>{} : Map<String, dynamic>.from(data);
   }
+
 
   Future<void> _setCache(String uid, String docId, Map<String, dynamic> data) async {
     await _cacheDoc(uid, docId).set(data, SetOptions(merge: true));
@@ -586,8 +660,12 @@ class DailyReCalculator {
       ReExerciseKeys keys,
       Map<String, LiftDayStat> dayStats,
       ) async {
-    final cache = await _getCacheMap(uid, 'max_actual'); // { "SQUAT": 200.0, ... }
+    final raw = await _getCacheMap(uid: uid, docId: 'max_actual'); // Map<String, dynamic> (mutable)
+    final Map<String, double> cache = {
+      for (final e in raw.entries) e.key.toString(): (e.value as num).toDouble()
+    };
     final winners = <String>[];
+
 
     for (final entry in dayStats.entries) {
       final lift = entry.key;
@@ -614,8 +692,12 @@ class DailyReCalculator {
       ReExerciseKeys keys,
       Map<String, LiftDayStat> dayStats,
       ) async {
-    final cache = await _getCacheMap(uid, 'max_e1rm'); // { "BENCH": 145.0, ... }
+    final raw = await _getCacheMap(uid: uid, docId: 'max_e1rm'); // Map<String, dynamic> (mutable)
+    final Map<String, double> cache = {
+      for (final e in raw.entries) e.key.toString(): (e.value as num).toDouble()
+    };
     final winners = <String>[];
+
 
     for (final entry in dayStats.entries) {
       final lift = entry.key;
@@ -653,8 +735,19 @@ class DailyReCalculator {
     Future<void> handleLift(String lift) async {
       final short = _shortLift(lift, keys);            // e.g. "BENCH"
       final repDocId = 'rep_pr_$short';                // e.g. rep_pr_BENCH
-      final cache = await _getCacheMap(uid, repDocId); // { "r1": 100.0, "r5": 80.0, ... }
-      final todayByRep = todayMap[lift] ?? const <int, double>{};
+      // Mutable, typed cache from Firestore
+      final raw = await _getCacheMap(uid: uid, docId: repDocId); // Map<String, dynamic>
+      final Map<String, double> cache = {
+        for (final e in raw.entries) e.key.toString(): (e.value as num).toDouble()
+      };
+
+// Ensure a MUTABLE, typed map for today's reps (int->double)
+      final Map<int, double> todayByRep = (todayMap[lift] == null)
+          ? <int, double>{}
+          : Map<int, double>.from(
+        (todayMap[lift] as Map).map((k, v) => MapEntry(k as int, (v as num).toDouble())),
+      );
+
 
       // Only consider reps within configured window
       for (int r = kRepPrMin; r <= kRepPrMax; r++) {
@@ -686,8 +779,9 @@ class DailyReCalculator {
   Future<bool> _isDailyBestAllTime(String uid, double today) async {
     if (today <= 0) return false;
 
-    final cache = await _getCacheMap(uid, 'daily_best'); // { "maxDailyTotal": 1234.5, "maxDayKey": "yyyy-MM-dd" }
-    final prev = (cache['maxDailyTotal'] as num?)?.toDouble() ?? -1;
+    final rawDaily = await _getCacheMap(uid: uid, docId: 'daily_best'); // Map<String, dynamic>
+    final Map<String, dynamic> cache = Map<String, dynamic>.from(rawDaily); // make it mutable
+    final double prev = (cache['maxDailyTotal'] as num?)?.toDouble() ?? -1.0;
 
     if (_isStrictBetter(today, prev)) {
       await _setCache(uid, 'daily_best', {
