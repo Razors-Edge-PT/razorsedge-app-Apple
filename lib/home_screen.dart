@@ -38,7 +38,7 @@ const List<String> _kPointsTaglines = [
   'Certified Gainz Accounting™ department 🧮🏋️‍♂️📊',
   'Chalk up—this feed counts. 🧼📈',
   'Do you even metrics? 📏📐',
-  'If you didnt log the workout, did it even count? your points say no 📝❌',        // ← clout variant
+  'If you didnt log the workout, did it even count? your points say no ❌',        // ← clout variant
   'Literally your street cred 🏙️✅',
   'Woah take those points the bank, so you earn interest 🏦💰📈',
   'Today’s gains: properly weighted. ⚖️💪',

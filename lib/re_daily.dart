@@ -442,6 +442,97 @@ class DailyReCalculator {
     });
   }
 
+  // ---------- Light cache helpers ----------
+
+  DocumentReference<Map<String, dynamic>> _cacheDoc(String uid, String docId) {
+    return db.collection('users').doc(uid).collection('re_cache').doc(docId);
+  }
+
+  Future<Map<String, dynamic>> _getCacheMap(String uid, String docId) async {
+    final snap = await _cacheDoc(uid, docId).get();
+    return (snap.data() ?? const <String, dynamic>{});
+  }
+
+  Future<void> _setCache(String uid, String docId, Map<String, dynamic> data) async {
+    await _cacheDoc(uid, docId).set(data, SetOptions(merge: true));
+  }
+
+  bool _isStrictBetter(double a, double b) {
+    // Treat tiny float diffs as equal
+    return (a - b) > 1e-6;
+  }
+
+  String _shortLift(String lift, ReExerciseKeys keys) => _short(lift, keys);
+
+// For REP PRs we need today’s heaviest ACTUAL weight at each rep count.
+// We compute it on the fly from the workout doc for dayKey.
+// (Keeps _fetchMaxE1rmByLiftForDay lean; avoids schema changes.)
+  Future<Map<String, Map<int, double>>> _heaviestActualByRepForDay({
+    required String uid,
+    required String dayKey,
+    required ReExerciseKeys keys,
+  }) async {
+    final docRef = db.collection('users').doc(uid).collection('workouts').doc(dayKey);
+    final snap = await docRef.get();
+    final data = (snap.data() as Map<String, dynamic>?) ?? const {};
+
+    final exercises = (data['exercises'] is List)
+        ? List<Map<String, dynamic>>.from(data['exercises'] as List)
+        : const <Map<String, dynamic>>[];
+
+    final targetNames = <String>{keys.squat, keys.bench, keys.deadlift, keys.chinUp, keys.dbShoulder};
+
+    bool _isTargetByIdOrName({String? exId, required String? exName, required String targetName}) {
+      if (exId != null && exId.isNotEmpty) {
+        final canonicalTargetId = PeriodizationModelUtils.nameToId[targetName] ?? targetName;
+        return exId == canonicalTargetId;
+      }
+      final name = (exName ?? '').trim();
+      if (name.isEmpty) return false;
+      final incomingId = PeriodizationModelUtils.nameToId[name] ?? name;
+      final canonicalTargetId = PeriodizationModelUtils.nameToId[targetName] ?? targetName;
+      if (incomingId == canonicalTargetId) return true;
+      return name == targetName;
+    }
+
+    final Map<String, Map<int, double>> out = {
+      keys.squat: <int, double>{},
+      keys.bench: <int, double>{},
+      keys.deadlift: <int, double>{},
+      keys.chinUp: <int, double>{},
+      keys.dbShoulder: <int, double>{},
+    };
+
+    for (final ex in exercises) {
+      final rawName = (ex['name'] as String?)?.trim() ?? '';
+      final rawId = (ex['exerciseId'] as String?)?.trim();
+      if (rawName.isEmpty && (rawId == null || rawId.isEmpty)) continue;
+
+      String? target;
+      for (final t in targetNames) {
+        if (_isTargetByIdOrName(exId: rawId, exName: rawName, targetName: t)) {
+          target = t; break;
+        }
+      }
+      if (target == null) continue;
+
+      final sets = (ex['sets'] is List)
+          ? List<Map<String, dynamic>>.from(ex['sets'] as List)
+          : const <Map<String, dynamic>>[];
+
+      for (final s in sets) {
+        final w = (s['weight'] is num) ? (s['weight'] as num).toDouble() : 0.0;
+        final r = (s['reps'] is num) ? (s['reps'] as num).toInt() : 0;
+        if (w <= 0 || r <= 0) continue;
+        final cur = out[target]![r] ?? 0.0;
+        if (w > cur) out[target]![r] = w;
+      }
+    }
+
+    return out;
+  }
+
+
   /// ------- Badges (ranking already encoded by order below) -------
   Future<List<String>> _computeBadges({
     required String uid,
@@ -462,7 +553,8 @@ class DailyReCalculator {
     badges.addAll(newE1rmLifts.map((l) => 'NEW_E1RM_${_short(l, keys)}'));
 
     // 3) New Rep PRs (heaviest actual at rX, X in [1..60])
-    final repPrBadges = await _detectRepPrs(uid, keys, dayStats);
+    final repPrBadges = await _detectRepPrs(uid, dayKey, keys, dayStats);
+
     badges.addAll(repPrBadges);
 
     // 4) Daily best all-time
@@ -494,46 +586,187 @@ class DailyReCalculator {
       ReExerciseKeys keys,
       Map<String, LiftDayStat> dayStats,
       ) async {
-    // TODO: compare dayStats[lift].maxActualWeight to all-time heaviest actual weight for that lift
-    // Return the canonical lift names that achieved NEW 1RM today.
-    return <String>[];
+    final cache = await _getCacheMap(uid, 'max_actual'); // { "SQUAT": 200.0, ... }
+    final winners = <String>[];
+
+    for (final entry in dayStats.entries) {
+      final lift = entry.key;
+      final short = _shortLift(lift, keys);
+      final today = (entry.value.maxActualWeight ?? 0.0).toDouble();
+      if (today <= 0) continue;
+
+      final prev = (cache[short] as num?)?.toDouble() ?? 0.0;
+      if (_isStrictBetter(today, prev)) {
+        winners.add(lift);
+        cache[short] = today;
+      }
+    }
+
+    if (winners.isNotEmpty) {
+      await _setCache(uid, 'max_actual', cache);
+    }
+    return winners;
   }
+
 
   Future<List<String>> _detectNewE1rm(
       String uid,
       ReExerciseKeys keys,
       Map<String, LiftDayStat> dayStats,
       ) async {
-    // TODO: compare dayStats[lift].maxE1rm to all-time best e1RM per lift
-    // Return the canonical lift names that achieved NEW e1RM today.
-    return <String>[];
+    final cache = await _getCacheMap(uid, 'max_e1rm'); // { "BENCH": 145.0, ... }
+    final winners = <String>[];
+
+    for (final entry in dayStats.entries) {
+      final lift = entry.key;
+      final short = _shortLift(lift, keys);
+      final today = (entry.value.maxE1rm).toDouble();
+      if (today <= 0) continue;
+
+      final prev = (cache[short] as num?)?.toDouble() ?? 0.0;
+      if (_isStrictBetter(today, prev)) {
+        winners.add(lift);
+        cache[short] = today;
+      }
+    }
+
+    if (winners.isNotEmpty) {
+      await _setCache(uid, 'max_e1rm', cache);
+    }
+    return winners;
   }
+
 
   Future<List<String>> _detectRepPrs(
       String uid,
+      String dayKey,
       ReExerciseKeys keys,
       Map<String, LiftDayStat> dayStats,
       ) async {
-    // TODO: for each lift, for reps in [kRepPrMin..kRepPrMax], detect if today's heaviest-at-r is a new PR
-    // Return strings like 'REP_PR_BENCH_r6', 'REP_PR_SQUAT_r5', etc.
-    return <String>[];
+    final badges = <String>[];
+
+    // Build today’s heaviest actual by rep map per lift
+    final todayMap = await _heaviestActualByRepForDay(uid: uid, dayKey: dayKey, keys: keys);
+    // Note: dayKey is in scope of computeAndWrite → _computeBadges call chain. If not, thread it in.
+
+    // For each lift, load its per-rep cache doc and compare/update.
+    Future<void> handleLift(String lift) async {
+      final short = _shortLift(lift, keys);            // e.g. "BENCH"
+      final repDocId = 'rep_pr_$short';                // e.g. rep_pr_BENCH
+      final cache = await _getCacheMap(uid, repDocId); // { "r1": 100.0, "r5": 80.0, ... }
+      final todayByRep = todayMap[lift] ?? const <int, double>{};
+
+      // Only consider reps within configured window
+      for (int r = kRepPrMin; r <= kRepPrMax; r++) {
+        final today = (todayByRep[r] ?? 0.0).toDouble();
+        if (today <= 0) continue;
+
+        final prev = (cache['r$r'] as num?)?.toDouble() ?? 0.0;
+        if (_isStrictBetter(today, prev)) {
+          // badge token: REP_PR_<SHORT>_rX (e.g., REP_PR_BENCH_r6)
+          badges.add('REP_PR_${_shortLift(lift, keys)}_r$r');
+          cache['r$r'] = today;
+        }
+      }
+
+      if (cache.isNotEmpty) {
+        await _setCache(uid, repDocId, cache);
+      }
+    }
+
+    // Iterate all 5 canonical lifts we track (ignore others)
+    for (final lift in <String>[keys.squat, keys.bench, keys.deadlift, keys.chinUp, keys.dbShoulder]) {
+      await handleLift(lift);
+    }
+
+    return badges;
   }
+
 
   Future<bool> _isDailyBestAllTime(String uid, double today) async {
-    // TODO: scan or cached max over /users/{uid}/re_daily/*
+    if (today <= 0) return false;
+
+    final cache = await _getCacheMap(uid, 'daily_best'); // { "maxDailyTotal": 1234.5, "maxDayKey": "yyyy-MM-dd" }
+    final prev = (cache['maxDailyTotal'] as num?)?.toDouble() ?? -1;
+
+    if (_isStrictBetter(today, prev)) {
+      await _setCache(uid, 'daily_best', {
+        'maxDailyTotal': today,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      return true;
+    }
+
+    // If cache was empty (prev == -1), seed once from Firestore (cheap: top 1)
+    if (prev < 0) {
+      final qs = await db
+          .collection('users').doc(uid)
+          .collection('re_daily')
+          .orderBy('totalPoints', descending: true)
+          .limit(1)
+          .get();
+      final best = qs.docs.isNotEmpty ? ((qs.docs.first.data()['totalPoints'] as num?)?.toDouble() ?? 0) : 0.0;
+      await _setCache(uid, 'daily_best', {
+        'maxDailyTotal': best,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      return _isStrictBetter(today, best);
+    }
+
     return false;
   }
 
-  Future<bool> _isDailyBestThisMonth(
-      String uid, String monthKey, double today) async {
-    // TODO: compare vs /users/{uid}/re_monthly/{monthKey}.days values
-    return false;
+
+  Future<bool> _isDailyBestThisMonth(String uid, String monthKey, double today) async {
+    if (today <= 0) return false;
+
+    // Use the monthly rollup you already maintain
+    final snap = await db.doc(RePaths.monthlyDoc(uid, monthKey)).get();
+    final m = (snap.data() ?? const <String, dynamic>{});
+    final days = (m['days'] as Map<String, dynamic>? ?? const {});
+    double maxSoFar = 0.0;
+    for (final v in days.values) {
+      final d = (v as num?)?.toDouble() ?? 0.0;
+      if (d > maxSoFar) maxSoFar = d;
+    }
+    return _isStrictBetter(today, maxSoFar);
   }
+
 
   Future<int> _currentStreak(String uid) async {
-    // TODO: walk backwards from today across /re_daily where totalPoints > 0
-    return 0;
+    // Walk backward from the most recent available day in /re_daily with totalPoints > 0
+    // We’ll cap at ~400 iterations to avoid pathological scans.
+    int streak = 0;
+
+    // Find most recent day doc (in case user is computing an older day)
+    final newest = await db
+        .collection('users').doc(uid)
+        .collection('re_daily')
+        .orderBy('computedAt', descending: true)
+        .limit(1)
+        .get();
+
+    String startDayKey;
+    if (newest.docs.isNotEmpty) {
+      startDayKey = (newest.docs.first.id); // id == "yyyy-MM-dd"
+    } else {
+      return 0;
+    }
+
+    DateTime cur = DateTime.parse(startDayKey); // local date per your scheme
+
+    for (int i = 0; i < 400; i++) {
+      final key = '${cur.year.toString().padLeft(4, '0')}-${cur.month.toString().padLeft(2, '0')}-${cur.day.toString().padLeft(2, '0')}';
+      final snap = await db.doc(RePaths.dailyDoc(uid, key)).get();
+      final total = (snap.data()?['totalPoints'] as num?)?.toDouble() ?? 0.0;
+      if (total <= 0) break;
+      streak += 1;
+      cur = cur.subtract(const Duration(days: 1));
+    }
+
+    return streak;
   }
+
 
   int _daysInMonth(String dayKey) {
     final y = int.parse(dayKey.substring(0, 4));
