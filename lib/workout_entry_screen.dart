@@ -2414,9 +2414,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final cached = _cachedProgressedValues[key];
     if (cached != null && blockStartDate != null && blockEndDate != null) {
       final exName = _selectedExercisesWithCircuits[exerciseIndex]['name'];
-      print('🧳 [WES cache HIT] key=$key for "$exName" '
-          '→ cachedFor="${cached['exerciseName']}" '
-          'weight=${cached['weight']} reps=${cached['reps']}');
       return cached;
     }
 // 🔹 NEW: if we have seeded hints, use them for the very first paint
@@ -2451,8 +2448,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       };
 
       _cachedProgressedValues[_rowCacheKey(exerciseIndex)] = seeded;
-      print('⚡ [WES Seed] progressed primed from hints for "$exName" '
-          '= ${seeded['weight']} × ${seeded['reps']}');
       return seeded;
     }
 
@@ -2468,8 +2463,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       };
     }
 
-
-
     _debugPrintBlockDates();
     // Get exercise info.
     final exerciseName =
@@ -2479,7 +2472,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final uidForBw = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '';
 
     final weekIndex = _getApplicableWeekIndex(exerciseId);
-
 
     // Determine how many times this exercise appeared before.
     int plannedCountBefore = 0;
@@ -2493,18 +2485,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     double repTarget;
     final model =
     PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
-    print(
-        '🔎 [WES] Progression model for $exerciseId (${exerciseName}): $model');
 
     if (model == PeriodizationModelType.dailyUndulatingExposure) {
       // (Assuming your existing model-specific logic is used here)
       final fullDetails = _exerciseSettings[exerciseId];
       final week1 = fullDetails?['repTargets']?['week1'];
-
-
-
-      print('📦 repTargets = ${jsonEncode(fullDetails?['repTargets'])}');
-      print('📦 week1 = ${jsonEncode(week1)}');
 
       if (week1 is Map<String, dynamic>) {
         final sorted = week1.entries
@@ -2580,10 +2565,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
             }
 
             completedBeforeTodayInBlock = matchedDates.length;
-          } catch (e) {
-            print(
-                '⚠️ [WES DUP Exposure] completedBeforeTodayInBlock calc failed: $e');
-          }
+          } catch (e) {          }
 
           // AFTER you finish building `matchedDates` (and before plannedIndex/index):
           final countedDebug = <Map<String, String>>[];
@@ -2656,26 +2638,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 // Sort by date (ascending) so the cycle order is obvious
           countedDebug.sort((a, b) => a['date']!.compareTo(b['date']!));
 
-// Print the counted days with set details and cycle position
-          for (int i = 0; i < countedDebug.length; i++) {
-            final e = countedDebug[i];
-            // cyclePos is 1-based within the week1 instances list size
-            final cyclePos = sorted.isEmpty ? 'n/a' : ((i % sorted.length) + 1)
-                .toString();
-            final cycleDen = sorted.isEmpty ? 'n/a' : sorted.length.toString();
-
-          }
-
 // Now compute plannedIndex / index as before
           final plannedIndex = completedBeforeTodayInBlock + plannedCountBefore;
           final index = sorted.isEmpty ? 0 : plannedIndex % sorted.length;
-
-          print(
-              '🧮 [WES DUP Exposure] completedBeforeTodayInBlock=$completedBeforeTodayInBlock '
-                  'plannedBefore=$plannedCountBefore → plannedIndex=$plannedIndex '
-                  '→ instance=${sorted.isEmpty ? 'n/a' : (index + 1)}/${sorted
-                  .length}');
-
 
           final raw = sorted.isNotEmpty ? (sorted[index].value?.toString() ??
               '') : '';
@@ -2785,18 +2750,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
               completedEarlierThisWeek = matchedDates.length;
             } catch (e) {
-              print(
-                  '⚠️ [WES DUP Week] completedEarlierThisWeek calc failed: $e');
+
             }
 
             // 🔑 WES rule: planned rows don't affect DUP Weekly indexing
             final plannedIndex = completedEarlierThisWeek;
             final index = plannedIndex % sorted.length;
-
-            print(
-                '🧮 [WES DUP Week] completedEarlierThisWeek=$completedEarlierThisWeek '
-                    '→ plannedIndex=$plannedIndex → instance=${index +
-                    1}/${sorted.length}');
 
             final raw = sorted[index].value?.toString() ?? '';
             final match = RegExp(r'^(\d+)').firstMatch(raw);
@@ -2811,14 +2770,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         repTarget = 10.0;
       }
 
-      print(
-          '🎯 [WES] dailyUndulatingWeek → repTarget = $repTarget for $exerciseName (using week1 pattern)');
     } else if (model == PeriodizationModelType.linearClassic) {
       final repTargets = _exerciseSettings[exerciseId]?['repTargets'];
 
-      print('🧠 [WES] LinearClassic → exerciseId = $exerciseId');
-      print('📌 repTargets = $repTargets');
-      print('📆 weekIndex = $weekIndex');
 
       final weekStart = repTargets?['week1'];
       final week = PeriodizationModelUtils.getWeekIndexForDate(
@@ -2868,10 +2822,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         weekIndex: weekIndex,
       ).toDouble();
     }
-    // Get default weight using rep and RIR logic.
+
     // Get the progression model info.
     final String? progressionModelName = _exerciseSettings[exerciseId]?['progressionModel'];
-
 
     final progressionModel =
     PeriodizationModelUtils.parseProgressionModel(progressionModelName);
@@ -2889,22 +2842,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final incMap = PeriodizationModelUtils.incMapFromRaw(incRaw);
     final increments = PeriodizationModelUtils.expandIncrementOptions(incMap);
 
-
-
-
     final maxWeightMap = _exerciseSettings[exerciseId]?['maxWeightByReps'];
     final maxWeightKeys = (maxWeightMap is Map)
         ? maxWeightMap.keys.toList()
         : 'null';
-
-    print('⚙️ [PMU] inputs name=$exerciseName '
-        'model=$progressionModel '
-        'repTarget=$repTarget '
-        'incs=${increments ?? [2.5]} '
-        'bw=${PeriodizationModelUtils.bodyweightKgForDate(uid: uidForBw, asOf: _selectedDate)} '
-        'hasMaxByReps=${_exerciseSettings[exerciseId]?['maxWeightByReps'] != null} '
-        'week=${blockStartDate != null ? PeriodizationModelUtils.getWeekIndexForDate(_selectedDate, blockStartDate!) : -1}');
-
 
     final Map<String, dynamic> progressed =
     PeriodizationModelUtils.getWeightByProgressionModel(
@@ -2926,10 +2867,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
 
     );
-    print(
-        '🧾 [WES <- PMU] pre-overlay ${progressed['weight']} × ${progressed['reps']}');
-    print('✅ [PMU] progressed=${progressed['weight']}x${progressed['reps']} (pre-snap) ORIGIN='
-        '${_isLoadingData ? 'EARLY_DEFAULTS' : 'READY'}');
 
 // as-of date for BW lookups = the day being edited in WES
     final DateTime _asOfDate = _selectedDate ?? DateTime.now();
@@ -2990,7 +2927,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 // write back absolute weight as before
     progressed['weight'] = snapped;
 
-    print('🧾 [WES overlay] ${progressed['weight']} → $snapped');
 
     // Cache and return
 // Cache and return
@@ -5056,17 +4992,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         // best-effort; never block fast paint
       }
 
-      if (!mounted) return;
-      setState(() {
-        // ⚡ First frame: paint names only (controllers later)
-        _selectedExercisesWithCircuits
-          ..clear()
-          ..addAll(rows);
 
-        _isLoadingData = false;
-        _isInitialized = true;
-        _didFastPaint  = true;
-      });
 
       // 🔧 Seed sets + controllers to match the newly-painted rows (avoid 1-frame mismatch)
       for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
@@ -5207,7 +5133,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
             if (!hasRir && rir1 != null)     rirCtl.text    = rir1.toString();
           }
 
-          if (mounted) setState(() {});
+
         } catch (e) {
           print('⚠️ [WES Boot] hintsJson parse failed: $e');
         }
@@ -5268,6 +5194,18 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           }
         }
       }
+
+      if (!mounted) return;
+      setState(() {
+        // ⚡ First frame: paint names only (controllers later)
+        _selectedExercisesWithCircuits
+          ..clear()
+          ..addAll(rows);
+
+        _isLoadingData = false;
+        _isInitialized = true;
+        _didFastPaint  = true;
+      });
 
     } catch (e, st) {
       print(st);
@@ -5731,6 +5669,26 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           wesPlannedList = _wesPlannedCache;
           _usedFastPath = true;
 
+// INSERT: union wesPlanned placeholders into exList (dedup by name|ci)
+          String _keyOf(Map<String, dynamic> e) =>
+              '${(e['name'] ?? '').toString().trim()}|${(e['circuitIndex'] is int) ? e['circuitIndex'] as int : int.tryParse('${e['circuitIndex'] ?? 0}') ?? 0}';
+
+          final Map<String, Map<String, dynamic>> byKey = {
+            for (final e in (exList.cast<Map<String, dynamic>>())) _keyOf(e): Map<String, dynamic>.from(e),
+          };
+
+// coerce wesPlanned to placeholder rows with empty sets
+          for (final p in wesPlannedList) {
+            final name = (p['name'] ?? '').toString().trim();
+            if (name.isEmpty) continue;
+            final ci = (p['circuitIndex'] is int)
+                ? p['circuitIndex'] as int
+                : int.tryParse('${p['circuitIndex'] ?? 0}') ?? 0;
+            final k = '$name|$ci';
+            byKey.putIfAbsent(k, () => {'name': name, 'circuitIndex': ci, 'sets': const <Map<String, dynamic>>[]});
+          }
+
+          exList = byKey.values.toList();
 
           // Background reconcile (server): pull legacy-only rows forward into new-style
           // ignore: unawaited_futures
@@ -5884,10 +5842,25 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           }
           final wesPlannedCache = _wesPlannedFromDoc(newDocCache);
 
-          if (combinedCache.isNotEmpty || wesPlannedCache.isNotEmpty) {
-            // ⚡ Paint now from cache
-            exList = combinedCache;
-            wesPlannedList = wesPlannedCache;
+// INSERT: union wesPlanned placeholders into combinedCache
+          final Map<String, Map<String, dynamic>> cacheByKey = {
+            for (final e in combinedCache) _key(e): Map<String, dynamic>.from(e),
+          };
+          for (final p in wesPlannedCache) {
+            final name = (p['name'] ?? '').toString().trim();
+            if (name.isEmpty) continue;
+            final ci = (p['circuitIndex'] is int)
+                ? p['circuitIndex'] as int
+                : int.tryParse('${p['circuitIndex'] ?? 0}') ?? 0;
+            final k = '$name|$ci';
+            cacheByKey.putIfAbsent(k, () => {'name': name, 'circuitIndex': ci, 'sets': const <Map<String, dynamic>>[]});
+          }
+          final List<Map<String, dynamic>> combinedCacheWithWes = cacheByKey.values.toList();
+
+          if (combinedCacheWithWes.isNotEmpty) {
+            // ⚡ Paint now from cache (including WES placeholders)
+            exList = combinedCacheWithWes;
+            wesPlannedList = wesPlannedCache; // keep for reconcile compare
             paintedFromCache = true;
 
             // Background reconcile from SERVER (best-effort)
@@ -5942,22 +5915,20 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                         wesPlannedSrv.length != wesPlannedCache.length;
 
                 if (changed) {
-                  // mutate in-memory data structures as you already do (if any)
-                  // (If you assign combinedSrv/wesPlannedSrv back to state lists, do it here.)
+                  final __preStruct = _structureHash();
+                  final __preS1     = _s1ValueHash();
 
-                  // Guard the repaint: only if the *shape* actually changed
-                  final __pre = _structureHash();
-                  // If you actually apply combinedSrv/wesPlannedSrv to your UI lists here,
-                  // do that *before* computing __post.
-                  final __post = _structureHash();
+                  // ⤵️ Actually apply combinedSrv / wesPlannedSrv to your in-memory lists & controllers here
+                  // (If you already apply them, keep doing it; if not, delete this whole repaint block.)
 
-                  if (mounted && __post != __pre) {
+                  final __postStruct = _structureHash();
+                  final __postS1     = _s1ValueHash();
 
+                  if (mounted && (__postStruct != __preStruct || __postS1 != __preS1)) {
                     setState(() {});
-                  } else {
-
                   }
                 }
+
               } catch (_) {
                 /* best-effort */
               }
@@ -6057,8 +6028,23 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
             }
           }
 
-          exList = combined;
-          wesPlannedList = _wesPlannedFromDoc(newDoc);
+          // INSERT: union wesPlanned placeholders
+
+          final Map<String, Map<String, dynamic>> srvByKey = {
+            for (final e in combined) _key(e): Map<String, dynamic>.from(e),
+          };
+          final wesPlannedSrv = _wesPlannedFromDoc(newDoc);
+          for (final p in wesPlannedSrv) {
+            final name = (p['name'] ?? '').toString().trim();
+            if (name.isEmpty) continue;
+            final ci = (p['circuitIndex'] is int)
+                ? p['circuitIndex'] as int
+                : int.tryParse('${p['circuitIndex'] ?? 0}') ?? 0;
+            final k = '$name|$ci';
+            srvByKey.putIfAbsent(k, () => {'name': name, 'circuitIndex': ci, 'sets': const <Map<String, dynamic>>[]});
+          }
+          exList = srvByKey.values.toList();
+          wesPlannedList = wesPlannedSrv;
         }
       }
 
@@ -6118,6 +6104,34 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           .toList();
 
       plannedAdded = _selectedExercisesWithCircuits.length - beforeCount;
+
+      // INSERT: actually add missing WES-planned rows (placeholders) to UI shape
+      String _kRow(String n, int ci) => '${n.trim().toLowerCase()}|$ci';
+      final Set<String> _haveKeys = _selectedExercisesWithCircuits
+          .map((e) => _kRow(((e['name'] ?? '') as String), (e['circuitIndex'] ?? 0) as int))
+          .toSet();
+
+      for (final p in plannedOverlay) {
+        final n = (p['name'] ?? '').toString().trim();
+        final ci = (p['circuitIndex'] ?? 0) as int;
+        if (n.isEmpty) continue;
+        final k = _kRow(n, ci);
+        if (_haveKeys.contains(k)) continue;
+
+        // add row
+        _selectedExercisesWithCircuits.add({'name': n, 'circuitIndex': ci});
+
+        // seed sets & controllers (minimal, like your fast-paint init)
+        _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
+        _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+        _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+        _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+        _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+        _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+      }
+
+      plannedAdded = _selectedExercisesWithCircuits.length - beforeCount;
+
 
       // 7) Ensure listeners on any new controllers
       _attachDirtyListeners();
@@ -6516,8 +6530,18 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
             .difference(savedAt)
             .inHours < 2) {
           print('[WES] App resumed — refreshing draft with BB2 merge');
+          final __preStruct = _structureHash();
+          final __preS1     = _s1ValueHash();
+
           await _mergeNewBB2ExercisesIntoDraft();
-          if (mounted) setState(() {}); // Refresh UI if merged
+
+          final __postStruct = _structureHash();
+          final __postS1     = _s1ValueHash();
+
+          if (mounted && (__postStruct != __preStruct || __postS1 != __preS1)) {
+            setState(() {}); // only if something visible changed
+          }
+
         }
       }
       return; // nothing else to do on resumed
@@ -6796,6 +6820,21 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     for (final s in _workoutSets) { h = (h * 31) ^ s.length; }
     return h;
   }
+  int _s1ValueHash() {
+    int h = 17;
+    final n = _selectedExercisesWithCircuits.length;
+    for (int i = 0; i < n; i++) {
+      final reps   = (i < _repsControllers.length    && _repsControllers[i].isNotEmpty)    ? _repsControllers[i][0].text : '';
+      final weight = (i < _weightControllers.length  && _weightControllers[i].isNotEmpty)  ? _weightControllers[i][0].text : '';
+      final rir    = (i < _rirControllers.length     && _rirControllers[i].isNotEmpty)     ? _rirControllers[i][0].text : '';
+      // simple string-based hash; fast and good enough
+      h = (h * 31) ^ reps.hashCode;
+      h = (h * 31) ^ weight.hashCode;
+      h = (h * 31) ^ rir.hashCode;
+    }
+    return h;
+  }
+
 
   void _initializeControllers() {
     // ✅ Ensure controller lists are at least as long as the exercise list
@@ -8760,9 +8799,18 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
               if (srv.exists && srv.data()?['exercises'] != null) {
                 final srvList = List<Map<String, dynamic>>.from(
                     srv.data()!['exercises']);
-                if (srvList.length !=
-                    bb2Exercises.length /* (optional: deep diff) */) {
-                  if (mounted) setState(() {}); // minimal UI tick after server hydrate
+                if (srvList.length != bb2Exercises.length /* (optional: deep diff) */) {
+                  final __preStruct = _structureHash();
+                  final __preS1     = _s1ValueHash();
+
+                  // (Apply any in-memory updates you actually do here, if any)
+
+                  final __postStruct = _structureHash();
+                  final __postS1     = _s1ValueHash();
+
+                  if (mounted && (__postStruct != __preStruct || __postS1 != __preS1)) {
+                    setState(() {});
+                  }
                   print('[WES] BB2 day doc refreshed from SERVER');
 
                   // ✅ Refresh ISAR with server copy
@@ -8855,9 +8903,18 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                 if (srv.exists && srv.data()?['rows'] != null) {
                   final srvList = List<Map<String, dynamic>>.from(
                       srv.data()!['rows']);
-                  if (srvList.length !=
-                      bb2Exercises.length /* (optional: deep diff) */) {
-                    if (mounted) setState(() {}); // minimal repaint after server hydrate
+                  if (srvList.length != bb2Exercises.length /* (optional: deep diff) */) {
+                    final __preStruct = _structureHash();
+                    final __preS1     = _s1ValueHash();
+
+                    // (Apply any in-memory updates you actually do here, if any)
+
+                    final __postStruct = _structureHash();
+                    final __postS1     = _s1ValueHash();
+
+                    if (mounted && (__postStruct != __preStruct || __postS1 != __preS1)) {
+                      setState(() {});
+                    }
                     print('[WES] BB2 block_data refreshed from SERVER');
 
                     // ✅ Refresh ISAR with server copy
@@ -9590,9 +9647,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
   @override
   Widget build(BuildContext context) {
-
-
-
     // Non-blocking: always build the page; no spinner overlay.
     return _buildWesScaffold();
   }
@@ -10554,9 +10608,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                                                               hintText: !_isInitialized
                                                                   ? ''
                                                                   : (() {
-                                                                print("🐞 [Debug] set1SuggestedWeight($i) about to run, _isInitialized=$_isInitialized");
                                                                 final w = set1SuggestedWeight(i);
-                                                                print("🐞 [Debug] set1SuggestedWeight($i) returned $w");
                                                                 return formatWeight(w);
                                                               })(),
                                                               hintStyle: const TextStyle(
@@ -10691,10 +10743,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                                                               hintText: (_isLoadingData || !_isInitialized)
                                                                   ? ''
                                                                   : (() {
-                                                                print("🐞 [Debug] set1SuggestedReps($i) about to run, "
-                                                                    "_isInitialized=$_isInitialized _isLoadingData=$_isLoadingData");
                                                                 final r = set1SuggestedReps(i);
-                                                                print("🐞 [Debug] set1SuggestedReps($i) returned $r");
                                                                 return (r?.toInt().toString() ?? '');
                                                               })(),
 
