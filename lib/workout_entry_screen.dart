@@ -3764,9 +3764,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   double set8RIR(int i) => getRirFromPlanOrInput(i, 8);
 
   double set1SuggestedWeight(int exerciseIndex) {
-    print('🪫 [S1W] start i=$exerciseIndex '
-        'init=$_isInitialized load=$_isLoadingData '
-        'name=${_selectedExercisesWithCircuits[exerciseIndex]['name']}');
+
 
     // FAST-PATH: use precomputed hint if available
     final hintK = _rowKeyBy(exerciseIndex);
@@ -3840,8 +3838,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       }
       return userWeight; // unchanged for non-BW
     }
-
-
 
     // ✅ Step 4: Pull model progression values
     final progressed = _getProgressedValues(exerciseIndex);
@@ -3926,9 +3922,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     if (userReps != null || userRir != null) {
       final double repsToUse = userReps ?? set1SuggestedReps(exerciseIndex);
       final double rirToUse = userRir ?? modelRir;
-      print(
-          '⚙️ [WES S1Weight] override path → repsToUse=$repsToUse rirToUse=$rirToUse baseWeight=$baseWeight baseReps=$baseReps');
-
 
       final double derived = PeriodizationModelUtils.reverseCalculateWeight(
         targetE1RM: baseE1RM,
@@ -3945,10 +3938,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           .reduce((a, b) => (a - derived).abs() < (b - derived).abs() ? a : b);
 
 // NEW: compact summary of the override calc
-      print('⚙️ [WES OverrideCalc] reps=$repsToUse rir=$rirToUse '
-          'derivedAbs=${derived.toStringAsFixed(2)} roundedAbs=${rounded
-          .toStringAsFixed(2)}');
-
       print('🧲 [WES snap] $derived → $rounded (candidates=${_candidates.take(10)
           .toList()} …)');
 
@@ -3957,9 +3946,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         repsToUse,
         rirToUse,
       );
-      print(
-          '🔁 [WES] Derived weight = $rounded using reps = $repsToUse and RIR = $rirToUse '
-              '→ new E1RM = ${newE1RM.toStringAsFixed(2)}');
 
 // ✅ Single BW branch: log THEN return display-added
       if (PeriodizationModelUtils.isBodyweightExercise(
@@ -3977,8 +3963,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         return displayAdded;
       }
 
-// non-BW stays absolute
-      print('🟢 [WES S1Weight] non-BW override → abs=$rounded');
       return rounded;
     }
 
@@ -4176,7 +4160,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
           print("🧱 [WES] Selected blockId: $_selectedBlockId");
           // ⚡ Try exact-key fast paint now that blockId is known
-          unawaited(_paintFromSnapshotIfAny());
+
 
 
           // ✅ Pre-warm exact block doc for WES
@@ -4895,9 +4879,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       final bid = _selectedBlockId ?? _activeBlockId;
       final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
 
-      print('🟨 [WES Boot] _paintFromSnapshotIfAny enter uid=$uid bid=$bid ymd=$ymd');
       if (uid == null || bid == null) {
-        print('⚪ [WES Boot] Skip snapshot paint (uid or blockId missing)');
+
         return;
       }
 
@@ -4907,40 +4890,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         blockId: bid,
         dateYmd: ymd,
       );
-      print('🔎 [WES Boot] Exact snapshot lookup (uid=$uid, block=$bid, ymd=$ymd) → ${snap == null ? 'MISS' : 'HIT'}');
+
       if (snap == null) return;
-
-      // ── DEBUG: inspect raw JSON shapes before any cast ───────────────────────────
-      try {
-        print('🧩 [WES Boot] plannedExercisesJson len=${snap.plannedExercisesJson.length} '
-            'preview=${snap.plannedExercisesJson.substring(0, snap.plannedExercisesJson.length.clamp(0, 120))}');
-        final _plannedRaw = snap.plannedExercisesJson.isNotEmpty
-            ? jsonDecode(snap.plannedExercisesJson)
-            : [];
-        print('🧩 [WES Boot] planned runtimeType=${_plannedRaw.runtimeType}');
-
-        print('🧩 [WES Boot] previousWorkoutJson len=${snap.previousWorkoutJson.length} '
-            'preview=${snap.previousWorkoutJson.substring(0, snap.previousWorkoutJson.length.clamp(0, 120))}');
-        final _prevRaw = snap.previousWorkoutJson.isNotEmpty
-            ? jsonDecode(snap.previousWorkoutJson)
-            : [];
-        print('🧩 [WES Boot] prev runtimeType=${_prevRaw.runtimeType}');
-
-        final _hj = snap.hintsJson ?? '';
-        print('🧩 [WES Boot] hintsJson len=${_hj.length} '
-            'preview=${_hj.substring(0, _hj.length.clamp(0, 120))}');
-        if (_hj.isNotEmpty) {
-          final _hRaw = jsonDecode(_hj);
-          print('🧩 [WES Boot] hints runtimeType=${_hRaw.runtimeType}');
-        } else {
-          print('🧩 [WES Boot] hints runtimeType=<empty>');
-        }
-      } catch (e, st) {
-        print('❌ [WES Boot] JSON shape probe failed: $e');
-        print(st);
-      }
-// ─────────────────────────────────────────────────────────────────────────────
-
 
       // 🔐 Robust decode for planned / previous (handles legacy Map shapes)
       List<dynamic> _safeListFromJson(String raw, {String? fallbackKey}) {
@@ -4966,17 +4917,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       final planned = _safeListFromJson(snap.plannedExercisesJson, fallbackKey: 'planned');
       final prev    = _safeListFromJson(snap.previousWorkoutJson,   fallbackKey: 'exercises');
 
-      print('🧪 [WES Boot] plannedLen=${planned.length} prevLen=${prev.length}');
-
       final nowHash = _computeNowInputsHash();
-      print('🔔 [FAST-check] snapHash=${snap.hintsInputsHash} nowHash=$nowHash ready=${snap.hintsReady} sv=${snap.schemaVersion}');
-
 
       final bool hintsOk = (snap.schemaVersion != null && snap.schemaVersion! >= kWesSnapshotSchema)
           && (snap.hintsReady == true)
           && (snap.hintsJson != null && snap.hintsJson!.isNotEmpty)
           && (snap.hintsInputsHash != null && snap.hintsInputsHash!.isNotEmpty);
-
 
       if (hintsOk && snap.hintsInputsHash == nowHash) {
         try {
@@ -5023,17 +4969,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                 'absWeight'       : abs,
               };
             }
-            print('⚡ [FAST] seeded ${_seedHintsByKey.length} hint(s) from list');
+
           }
         } catch (e) {
           _seedHintsByKey.clear();
-          print('⚠️ [FAST] hints decode failed: $e');
         }
 
-        print('🟢 [FAST] hints accepted (sv=${snap.schemaVersion}, hash match)');
       } else {
-        print('🟠 [FAST] hints rejected (ready=${snap.hintsReady}, sv=${snap.schemaVersion}, '
-            'snapHash=${snap.hintsInputsHash}, nowHash=$nowHash)');
 
         unawaited(WarmupService.instance.warmWES(
           _cachedUid ?? '',
@@ -5041,7 +4983,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           selectedDate: _selectedDate ?? DateTime.now(),
         ));
       }
-
 
       // Choose rows to paint (prefer planned, else derive from prev)
       List<Map<String, dynamic>> rows = [];
@@ -5060,7 +5001,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       }
 
       if (rows.isEmpty) {
-        print('⚪ [WES Boot] Snapshot had no planned rows and no prev overlay — nothing to paint');
         return;
       }
 
@@ -5116,8 +5056,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         // best-effort; never block fast paint
       }
 
-
-
       if (!mounted) return;
       setState(() {
         // ⚡ First frame: paint names only (controllers later)
@@ -5128,11 +5066,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         _isLoadingData = false;
         _isInitialized = true;
         _didFastPaint  = true;
-      });
-      // 🔭 DEBUG: confirm the *frame after* setState actually presented the rows
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        print('🟢 [WES Boot] Fast-paint rows are now on-screen (frame complete). rows=${_selectedExercisesWithCircuits.length}');
       });
 
       // 🔧 Seed sets + controllers to match the newly-painted rows (avoid 1-frame mismatch)
@@ -5280,10 +5213,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         }
       }
 
-
-// ✅ At this point, builder won’t see mismatched lengths
-
-// 🔌 If snapshot had a previous overlay, prefill the first few set fields now (instant values)
       if (prev.isNotEmpty) {
         // Build quick lookup: "name|ci" -> sets[]
         String _k(String n, int ci) => '${n.trim().toLowerCase()}|$ci';
@@ -5340,21 +5269,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         }
       }
 
-
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        final b = _structureHash();
-        _ensureControllersForRowsLazily();  // may add/resize controller rows
-        final a = _structureHash();
-        if (mounted && a != b) {
-          setState(() {});   // only repaint if the shape actually changed
-        } else {
-          // controller.text-only updates don't need a rebuild
-        }
-      });
-
-      print('⚡ [WES Boot] Snapshot PAINTED ${rows.length} row(s) for $ymd (instant-visible)');
     } catch (e, st) {
-      print('⚠️ [WES Boot] Snapshot hydrate failed: $e');
       print(st);
     }
   }
@@ -5688,10 +5603,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final _tLoadExisting = Stopwatch()
       ..start();
     print('⏱️ [WES] _loadExistingWorkoutIfAny started');
-    bool _overlayChanged = false;
-    bool _plannedChanged = false;
 
-    final _beforeHash = _structureHash();
     try {
       final uid = UserContext
           .of(context, listen: false)
@@ -5705,11 +5617,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       final DateTime startOfDay = DateTime(
           _selectedDate.year, _selectedDate.month, _selectedDate.day);
       final DateTime nextDay = startOfDay.add(const Duration(days: 1));
-      bool _printedLoadBw = false;
 
-      print('🔎 [WES LoadExisting] Looking up workout for ${DateFormat(
-          'yyyy-MM-dd').format(_selectedDate)}');
-      print('   └─ primary docId = $newDocId');
 
       // ⬇️ SUPER-CACHE: try local Isar first for instant hydration
       try {
@@ -5723,12 +5631,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
               .inDays % 7,
         );
         if (isarList != null && isarList.isNotEmpty) {
-          print('[WES LoadExisting] Found ${isarList
-              .length} exercise(s) in ISAR super-cache');
           // TODO: hydrate state/controllers if you want ISAR data to render immediately
         }
       } catch (e) {
-        print('[WES LoadExisting] ISAR read failed (non-fatal): $e');
       }
 
       // 1) Primary: new-style doc keyed by date string
@@ -5789,9 +5694,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                 dynamic>.from(e as Map)).toList();
             _usedFastPath = true;
 
-            print('⚡ [WES LoadExisting] Snapshot fast-path: prev=${exList
-                .length}, planned=${wesPlannedList.length}');
-
             // Minimal UI tick now: we’ll reuse the normal overlay logic below.
             // (We still run server union in the background for reconciliation.)
             // ignore: unawaited_futures
@@ -5829,9 +5731,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           wesPlannedList = _wesPlannedCache;
           _usedFastPath = true;
 
-          print('⚡ [WES LoadExisting] Fast-path (cache) new-style: '
-              'ex=${_newExListCache.length}, wesPlanned=${_wesPlannedCache
-              .length}');
 
           // Background reconcile (server): pull legacy-only rows forward into new-style
           // ignore: unawaited_futures
@@ -5906,8 +5805,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                 await workoutsCol.doc(newDocId).set(
                     existing, SetOptions(merge: true));
                 if (mounted) setState(() {});
-                print('🧩 [WES Reconcile] Merged ${legacyOnly
-                    .length} legacy-only rows → new-style');
               }
             } catch (_) {
               // best-effort
@@ -5992,11 +5889,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
             exList = combinedCache;
             wesPlannedList = wesPlannedCache;
             paintedFromCache = true;
-            print('⚡ [WES LoadExisting] Cache-union path: ex=${combinedCache
-                .length}, wesPlanned=${wesPlannedCache.length}');
 
             // Background reconcile from SERVER (best-effort)
-            // ignore: unawaited_futures
             (() async {
               try {
                 DocumentSnapshot<Map<String, dynamic>>? newDocServer;
@@ -6058,12 +5952,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                   final __post = _structureHash();
 
                   if (mounted && __post != __pre) {
-                    print('🟢 [WES] Reconcile repaint (shape changed)');
+
                     setState(() {});
                   } else {
-                    print('⚪ [WES] Reconcile no repaint (values only)');
+
                   }
-                  print('🔄 [WES LoadExisting] Applied server-union refresh (background)');
                 }
               } catch (_) {
                 /* best-effort */
@@ -6148,15 +6041,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
             for (final d in _legacyDocsById.values) ..._exListFromDoc(d),
           ];
 
-          print('   ℹ️ legacy candidates: '
-              'eqLocal=${legacyStrLocal.docs.length}, eqUtcZ=${legacyStrUtc.docs
-              .length}, '
-              'eqDateOnly=${legacyStrDate.docs
-              .length}, strRange=${legacyStrRange.docs.length}, '
-              'tsRange=${legacyTsSnap.docs.length}, uniqueDocs=${_legacyDocsById
-              .length}, '
-              'legacyExList=${legacyExList.length}');
-
           String _key(Map<String, dynamic> e) =>
               '${(e['name'] ?? '').toString().trim()}|${(e['circuitIndex'] ??
                   0) as int}';
@@ -6175,11 +6059,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
           exList = combined;
           wesPlannedList = _wesPlannedFromDoc(newDoc);
-          print('   ℹ️ wesPlannedExercises count: ${wesPlannedList.length}');
-          print(
-              '   → wesPlanned: ${wesPlannedList.map((p) => "${(p['name'] ?? '')
-                  .toString()
-                  .trim()}|${(p['circuitIndex'] ?? 0)}").toList()}');
         }
       }
 
@@ -6202,7 +6081,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e))
           .toList();
 
-      final bool changedOverlay = _applyOverlayInPlace(overlayRows);
+
 
 
       // 6) Pass 2 (optional): add any saved exercises that aren’t in the plan/UI yet
@@ -6217,8 +6096,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       // 7.5) Pass 3 (NEW): merge WES-planned rows (placeholders) IN-PLACE (no clears, no dupes)
       int plannedAdded = 0;
 
-// Build a minimal overlay from wesPlannedList: name + circuitIndex, empty sets.
-// _applyOverlayInPlace will skip existing rows and append any missing ones.
       final int beforeCount = _selectedExercisesWithCircuits.length;
 
       final List<Map<String, dynamic>> plannedOverlay = wesPlannedList
@@ -6240,16 +6117,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           .where((e) => e.isNotEmpty)
           .toList();
 
-// 🔧 In-place merge (no UI teardown)
-      final changedPlanned = _applyOverlayInPlace(plannedOverlay);
-
-
-// Count how many were appended by the helper
       plannedAdded = _selectedExercisesWithCircuits.length - beforeCount;
-
-      print('🧩 [WES LoadExisting] Added $plannedAdded WES-planned placeholder row(s) (in-place)');
-
-
 
       // 7) Ensure listeners on any new controllers
       _attachDirtyListeners();
@@ -6259,12 +6127,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
       _pendingChanges = false;
       _lastSavedHash = null;
-
-      if (mounted && (changedOverlay || changedPlanned)) {
-        final afterHash = _structureHash();
-        print('🟢 [WES Overlay] repainting — changedOverlay=$changedOverlay changedPlanned=$changedPlanned newShape=$afterHash');
-        setState(() {});
-      }
 
       if (exList.isEmpty && plannedAdded == 0) {
         print('   ❌ no workout items (completed or WES-planned) for this date');
@@ -9728,7 +9590,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
   @override
   Widget build(BuildContext context) {
-    print('🧱 [WES build#${++_buildN}] shape=${_structureHash()} rows=${_selectedExercisesWithCircuits.length}/${_workoutSets.length} init=$_isInitialized load=$_isLoadingData');
+
 
 
     // Non-blocking: always build the page; no spinner overlay.
