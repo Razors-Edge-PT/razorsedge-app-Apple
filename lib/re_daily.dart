@@ -164,16 +164,12 @@ class DailyReCalculator {
         keys: keys,
         dayStats: dayStats,
         dailyTotal: baseResult.dailyTotal,
-      ).timeout(const Duration(seconds: 8), onTimeout: () {
-        debugPrint('[RE] badges TIMEOUT uid=$uid day=$dayKey — proceeding without badges');
-        return const <String>[];
-      });
-    } catch (e, st) {
+      );
+      _bdbg('[BADGES] $dayKey → ${badges.join(', ')}');
+    } catch (e) {
       debugPrint('[RE] badges ERROR uid=$uid day=$dayKey: $e');
-      // debugPrint('$st');
     }
 
-    _bdbg('EXIT uid=$uid day=$dayKey badges=${badges.join(',')}');
 
 
     final withBadges = DailyReResult(
@@ -216,6 +212,7 @@ class DailyReCalculator {
         bodyweightUsedKg: withBadges.bodyweightUsedKg,
         badges: withBadges.badges,
       );
+      _bdbg('[POST] wrote id=${RePaths.postDocId(uid, dayKey)} badges=${withBadges.badges.join(', ')}');
     }
 
     _bdbg('final badges=${badges.join(',')}');
@@ -548,10 +545,8 @@ class DailyReCalculator {
     await _cacheDoc(uid, docId).set(data, SetOptions(merge: true));
   }
 
-  bool _isStrictBetter(double a, double b) {
-    // Treat tiny float diffs as equal
-    return (a - b) > 1e-6;
-  }
+  bool _isStrictBetter(double a, double b) => a > b + _eps;      // use for NEW e1RM, NEW 1RM
+  bool _isEqualOrBetter(double a, double b) => a >= b - _eps;    // use for Rep PR (ties win)
 
   String _shortLift(String lift, ReExerciseKeys keys) => _short(lift, keys);
 
@@ -648,15 +643,40 @@ class DailyReCalculator {
 
     badges.addAll(repPrBadges);
 
-    // 4) Daily best all-time
-    if (await _isDailyBestAllTime(uid, dailyTotal)) {
-      badges.add('DAILY_BEST_ALLTIME');
+    // 4) Daily best all-time (retarget with oldest-day tie policy)
+    final bestAll = await _recomputeDailyBestAllTime(uid: uid);
+    if (bestAll['dayKey'] != null) {
+      final bestDay = bestAll['dayKey'] as String;
+      if (dayKey == bestDay) {
+        badges.add('DAILY_BEST_ALLTIME');
+      }
+      if (dayKey == bestDay) {
+        await _retargetBadge(
+          uid: uid,
+          newDayKey: dayKey,
+          oldDayKey: (dayKey == bestDay) ? null : bestDay,
+          badge: 'DAILY_BEST_ALLTIME',
+        );
+      }
     }
 
-    // 5) Daily best this month
-    if (await _isDailyBestThisMonth(uid, monthKey, dailyTotal)) {
-      badges.add('DAILY_BEST_MONTH');
+// 5) Daily best this month (retarget with oldest-day tie policy)
+    final bestMonth = await _recomputeDailyBestThisMonth(uid: uid, monthKey: monthKey);
+    if (bestMonth['dayKey'] != null) {
+      final bestDay = bestMonth['dayKey'] as String;
+      if (dayKey == bestDay) {
+        badges.add('DAILY_BEST_MONTH');
+      }
+      if (dayKey == bestDay) {
+        await _retargetBadge(
+          uid: uid,
+          newDayKey: dayKey,
+          oldDayKey: (dayKey == bestDay) ? null : bestDay,
+          badge: 'DAILY_BEST_MONTH',
+        );
+      }
     }
+
 
     // 6) Streaks (Iron Calendar > others)
     final streak = await _currentStreak(uid);
@@ -712,31 +732,54 @@ class DailyReCalculator {
       ReExerciseKeys keys,
       Map<String, LiftDayStat> dayStats,
       ) async {
-    final raw = await _getCacheMap(uid: uid, docId: 'max_e1rm'); // Map<String, dynamic> (mutable)
+    _bdbg('e1RM ENTER');
+
+    final raw = await _getCacheMap(uid: uid, docId: 'max_e1rm'); // Map<String, dynamic>
     final Map<String, double> cache = {
       for (final e in raw.entries) e.key.toString(): (e.value as num).toDouble()
     };
-    final winners = <String>[];
 
+    final winners = <String>[];
+    bool cacheMutated = false; // ← track any change (up or down)
 
     for (final entry in dayStats.entries) {
-      final lift = entry.key;
-      final short = _shortLift(lift, keys);
+      final lift  = entry.key;              // canonical name, e.g. "Bench Press, Barbell"
+      final short = _shortLift(lift, keys); // e.g. "BENCH"
       final today = (entry.value.maxE1rm).toDouble();
       if (today <= 0) continue;
 
-      final prev = (cache[short] as num?)?.toDouble() ?? 0.0;
+      final prev = (cache[short] as double?) ?? 0.0;
+
+      // ↓ Reconcile downward if cache is clearly higher than reality
+      if (today < prev - _eps) {
+        final fixed = await _recomputeMaxE1rmFromHistory(uid: uid, liftKey: lift);
+        if ((fixed - prev).abs() > _eps) {
+          cache[short] = fixed;
+          cacheMutated = true;
+          // optional, quiet log:
+          // _bdbg('reconcile e1RM $short cache ${prev.toStringAsFixed(1)} → ${fixed.toStringAsFixed(1)}');
+        }
+      }
+
+      // Award on true improvement
       if (_isStrictBetter(today, prev)) {
         winners.add(lift);
         cache[short] = today;
+        cacheMutated = true;
+        _bdbg('e1RM $short today=${today.toStringAsFixed(1)} prev=${prev.toStringAsFixed(1)} → WIN');
       }
     }
 
-    if (winners.isNotEmpty) {
-      await _setCache(uid, 'max_e1rm', cache);
+    // Persist if we changed anything (either reconciliation or a win)
+    if (cacheMutated) {
+      await _setCache(uid, 'max_e1rm', Map<String, dynamic>.from(cache));
     }
+
+    _bdbg('e1RM winners=${winners.map((l) => _shortLift(l, keys)).join(',')}');
     return winners;
   }
+
+
 
 
   Future<List<String>> _detectRepPrs(
@@ -747,47 +790,62 @@ class DailyReCalculator {
       ) async {
     final badges = <String>[];
 
-    // Build today’s heaviest actual by rep map per lift
+    // Build today’s heaviest actual-by-rep map per lift
     final todayMap = await _heaviestActualByRepForDay(uid: uid, dayKey: dayKey, keys: keys);
-    // Note: dayKey is in scope of computeAndWrite → _computeBadges call chain. If not, thread it in.
 
-    // For each lift, load its per-rep cache doc and compare/update.
     Future<void> handleLift(String lift) async {
-      final short = _shortLift(lift, keys);            // e.g. "BENCH"
-      final repDocId = 'rep_pr_$short';                // e.g. rep_pr_BENCH
-      // Mutable, typed cache from Firestore
+      final short = _shortLift(lift, keys);        // e.g., "BENCH"
+      final repDocId = 'rep_pr_$short';            // e.g., rep_pr_BENCH
+
+      // Load mutable cache
       final raw = await _getCacheMap(uid: uid, docId: repDocId); // Map<String, dynamic>
       final Map<String, double> cache = {
         for (final e in raw.entries) e.key.toString(): (e.value as num).toDouble()
       };
 
-// Ensure a MUTABLE, typed map for today's reps (int->double)
+      bool cacheMutated = false;
+
+      // today's reps map: int -> double
       final Map<int, double> todayByRep = (todayMap[lift] == null)
           ? <int, double>{}
           : Map<int, double>.from(
         (todayMap[lift] as Map).map((k, v) => MapEntry(k as int, (v as num).toDouble())),
       );
 
-
-      // Only consider reps within configured window
+      // Window
       for (int r = kRepPrMin; r <= kRepPrMax; r++) {
         final today = (todayByRep[r] ?? 0.0).toDouble();
         if (today <= 0) continue;
 
-        final prev = (cache['r$r'] as num?)?.toDouble() ?? 0.0;
-        if (_isStrictBetter(today, prev)) {
-          // badge token: REP_PR_<SHORT>_rX (e.g., REP_PR_BENCH_r6)
+        final keyR = 'r$r';
+        final prev = (cache[keyR] as num?)?.toDouble();
+
+        // ↓ Reconcile downward if cache is clearly higher than reality
+        if (prev != null && today < prev - _eps) {
+          final fixed = await _recomputeRepPrFromHistory(uid: uid, liftKey: lift, reps: r);
+          if (prev - fixed > _eps) {
+            cache[keyR] = fixed; // shrink inflated cache
+            cacheMutated = true;
+            // _bdbg('reconcile RepPR $short r=$r cache ${prev.toStringAsFixed(1)} → ${fixed.toStringAsFixed(1)}');
+          }
+        }
+
+        // Award on equal-or-better (within epsilon) so the PR-holding day keeps its badge on re-save
+        final basePrev = (prev ?? 0.0);
+        if (_isEqualOrBetter(today, basePrev)) {
           badges.add('REP_PR_${_shortLift(lift, keys)}_r$r');
-          cache['r$r'] = today;
+          cache[keyR] = today;
+          cacheMutated = true;
         }
       }
 
-      if (cache.isNotEmpty) {
-        await _setCache(uid, repDocId, cache);
+      // Persist only if something actually changed
+      if (cacheMutated) {
+        await _setCache(uid, repDocId, Map<String, dynamic>.from(cache));
       }
     }
 
-    // Iterate all 5 canonical lifts we track (ignore others)
+    // Iterate tracked lifts
     for (final lift in <String>[keys.squat, keys.bench, keys.deadlift, keys.chinUp, keys.dbShoulder]) {
       await handleLift(lift);
     }
@@ -796,39 +854,47 @@ class DailyReCalculator {
   }
 
 
+
   Future<bool> _isDailyBestAllTime(String uid, double today) async {
-    if (today <= 0) return false;
+    // Try cache first
+    final cache = await _getCacheMap(uid: uid, docId: 'daily_best'); // { maxDailyTotal, maxDayKey? }
+    final prev = (cache['maxDailyTotal'] as num?)?.toDouble();
 
-    final rawDaily = await _getCacheMap(uid: uid, docId: 'daily_best'); // Map<String, dynamic>
-    final Map<String, dynamic> cache = Map<String, dynamic>.from(rawDaily); // make it mutable
-    final double prev = (cache['maxDailyTotal'] as num?)?.toDouble() ?? -1.0;
+    if (prev == null) {
+      // No cache → compute once from history and seed
+      double maxTotal = 0.0;
+      String? maxDay;
+      final qs = await db.collection('users').doc(uid).collection('re_daily').get();
+      for (final d in qs.docs) {
+        final tot = (d.data()['totalPoints'] as num?)?.toDouble() ?? 0.0;
+        if (tot > maxTotal) {
+          maxTotal = tot;
+          maxDay = d.id; // "yyyy-MM-dd"
+        }
+      }
+      await _setCache(uid, 'daily_best', {
+        'maxDailyTotal': maxTotal,
+        'maxDayKey': maxDay,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      // Count tie as best
+      return _isEqualOrBetter(today, maxTotal);
+    }
 
+    // Strictly better → update cache and award
     if (_isStrictBetter(today, prev)) {
       await _setCache(uid, 'daily_best', {
         'maxDailyTotal': today,
+        // optionally include the day key if you thread it in
         'updatedAt': FieldValue.serverTimestamp(),
       });
       return true;
     }
 
-    // If cache was empty (prev == -1), seed once from Firestore (cheap: top 1)
-    if (prev < 0) {
-      final qs = await db
-          .collection('users').doc(uid)
-          .collection('re_daily')
-          .orderBy('totalPoints', descending: true)
-          .limit(1)
-          .get();
-      final best = qs.docs.isNotEmpty ? ((qs.docs.first.data()['totalPoints'] as num?)?.toDouble() ?? 0) : 0.0;
-      await _setCache(uid, 'daily_best', {
-        'maxDailyTotal': best,
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-      return _isStrictBetter(today, best);
-    }
-
-    return false;
+    // Tie (within epsilon) also counts as best
+    return _isEqualOrBetter(today, prev);
   }
+
 
 
   Future<bool> _isDailyBestThisMonth(String uid, String monthKey, double today) async {
@@ -890,6 +956,32 @@ class DailyReCalculator {
     return lastThis.day;
   }
 
+  Future<void> _retargetBadge({
+    required String uid,
+    required String newDayKey,
+    required String? oldDayKey,
+    required String badge,
+  }) async {
+    final postsCol = db.collection('posts');
+
+    // Add badge to new holder
+    final newId = RePaths.postDocId(uid, newDayKey);
+    final newRef = postsCol.doc(newId);
+    await newRef.set({
+      'badges': FieldValue.arrayUnion([badge])
+    }, SetOptions(merge: true));
+
+    // Remove badge from old holder (if any)
+    if (oldDayKey != null && oldDayKey.isNotEmpty) {
+      final oldId = RePaths.postDocId(uid, oldDayKey);
+      final oldRef = postsCol.doc(oldId);
+      await oldRef.set({
+        'badges': FieldValue.arrayRemove([badge])
+      }, SetOptions(merge: true));
+    }
+  }
+
+
   String _short(String lift, ReExerciseKeys keys) {
     if (lift == keys.squat) return 'SQUAT';
     if (lift == keys.bench) return 'BENCH';
@@ -898,7 +990,109 @@ class DailyReCalculator {
     if (lift == keys.dbShoulder) return 'DB_OHP';
     return lift.toUpperCase();
   }
+
+  static const double _eps = 0.05; // 50 g tolerance
+
+
+// Full rescan for a single lift's e1RM across all days
+  Future<double> _recomputeMaxE1rmFromHistory({
+    required String uid,
+    required String liftKey, // e.g. "Bench Press, Barbell"
+  }) async {
+    double maxVal = 0.0;
+    final col = db.collection('users').doc(uid).collection('re_daily');
+    // Scan all days client-side; if large history, paginate later
+    final qs = await col.get();
+    for (final d in qs.docs) {
+      final m = d.data();
+      final lifts = (m['lifts'] as Map<String, dynamic>?) ?? const {};
+      final liftMap = (lifts[liftKey] as Map<String, dynamic>?) ?? const {};
+      final e1 = (liftMap['e1rm'] as num?)?.toDouble() ?? 0.0;
+      if (e1 > maxVal) maxVal = e1;
+    }
+    return maxVal;
+  }
+
+// Full rescan for a single lift+rep PR (heaviest actual at r)
+  Future<double> _recomputeRepPrFromHistory({
+    required String uid,
+    required String liftKey,
+    required int reps, // r in [1..60]
+  }) async {
+    // We don’t store per-rep in re_daily, so approximate by using best actual at EXACT reps that day.
+    // If you saved that elsewhere, swap this logic to read it.
+    double bestAtR = 0.0;
+    final col = db.collection('users').doc(uid).collection('workouts');
+    final qs = await col.get();
+    for (final d in qs.docs) {
+      final m = d.data();
+      final exs = (m['exercises'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
+      for (final ex in exs) {
+        final name = (ex['name'] as String?)?.trim() ?? '';
+        if (name != liftKey) continue;
+        final sets = (ex['sets'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
+        for (final s in sets) {
+          final r = (s['reps'] as num?)?.toInt() ?? 0;
+          final w = (s['weight'] as num?)?.toDouble() ?? 0.0; // absolute
+          if (r == reps && w > bestAtR) bestAtR = w;
+        }
+      }
+    }
+    return bestAtR;
+  }
+
+  // Full rescan for daily best (all-time)
+  Future<Map<String, dynamic>> _recomputeDailyBestAllTime({
+    required String uid,
+  }) async {
+    double maxVal = 0.0;
+    String? bestDay;
+    final col = db.collection('users').doc(uid).collection('re_daily');
+    final qs = await col.get();
+    for (final d in qs.docs) {
+      final m = d.data();
+      final val = (m['totalPoints'] as num?)?.toDouble() ?? 0.0;
+      if (val > maxVal || (val == maxVal && (bestDay == null || d.id.compareTo(bestDay) < 0))) {
+        // oldest day wins tie
+        maxVal = val;
+        bestDay = d.id;
+      }
+    }
+    return {
+      'dayKey': bestDay,
+      'total': maxVal,
+    };
+  }
+
+// Full rescan for daily best (this month only)
+  Future<Map<String, dynamic>> _recomputeDailyBestThisMonth({
+    required String uid,
+    required String monthKey,
+  }) async {
+    double maxVal = 0.0;
+    String? bestDay;
+    final col = db.collection('users').doc(uid).collection('re_daily');
+    final qs = await col.where('dayKey', isGreaterThanOrEqualTo: '$monthKey-01')
+        .where('dayKey', isLessThanOrEqualTo: '$monthKey-31')
+        .get();
+    for (final d in qs.docs) {
+      final m = d.data();
+      final val = (m['totalPoints'] as num?)?.toDouble() ?? 0.0;
+      if (val > maxVal || (val == maxVal && (bestDay == null || d.id.compareTo(bestDay) < 0))) {
+        maxVal = val;
+        bestDay = d.id;
+      }
+    }
+    return {
+      'dayKey': bestDay,
+      'total': maxVal,
+    };
+  }
+
+
 }
+
+
 
 
 class ReDailyPostCard extends StatelessWidget {
