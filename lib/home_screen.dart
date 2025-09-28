@@ -35,27 +35,51 @@ const String kUserPrefFeedTab = 'feedTab'; // 'home' | 'points'
 
 // Taglines to rotate
 const List<String> _kPointsTaglines = [
-  'Certified Gainz Accounting™ department',
-  'Chalk up—this feed counts.',
-  'Do you even metrics?',
-  'If you didnt log the workout, did it even count? your points say no',        // ← clout variant
-  'Literally your street cred',
-  'Woah take those points the bank, so you earn interest',
-  'Today’s gains: properly weighted.',
-  'My favorite function? Progressive overload - u a math nerd if u got it what u doing in the gym anyway'// ← street–cred variant
+  'Certified Gainz Accounting™ department 🧮🏋️‍♂️📊',
+  'Chalk up—this feed counts. 🧼📈',
+  'Do you even metrics? 📏📐',
+  'If you didnt log the workout, did it even count? your points say no 📝❌',        // ← clout variant
+  'Literally your street cred 🏙️✅',
+  'Woah take those points the bank, so you earn interest 🏦💰📈',
+  'Today’s gains: properly weighted. ⚖️💪',
+  'My favorite function? Progressive overload - u a math nerd if u got it what u doing in the gym anyway 🤓➕📈🏋️‍♂️', // ← street–cred variant
+  'Scored and adored ❤️🧮',
+  'That e1RM? Extremely my type 😏📊',
+  'Swipe right on those metrics 👉❤️📈',
+  'Proof of effort, proof of allure ✅🔥',
+  'PRs + HRs = good chemistry 🧪❤️‍🔥',
+  'Points that slap 👋✨',
+  'You’re not just strong—you’re quantifiably tempting 📊😮‍💨',
+  'Big sets, big energy, big data 📦⚡💾',
+  'Clout compound interest: accruing daily 🏦📈⏱️',
 ];
 
 const List<String> _kHomeTaglines = [
-  'Go on, scroll your gains. We won’t tell.',
-  'Welcome to the scroll rack.',
-  'Swipe sets, not reps.',
-  'Your friends did 3×10 of content.',
-  'Warm up thumbs. It’s feed day.',
-  'PRs and PR photos, right this way.',
-  'Algorithm? Nah — just gym-orithms.',
-  'Lift your mood. Or at least your phone.',
-  'Recommended: friends, plates, drama.',
-  'Today’s workout: 4 sets of scrolling.',
+  'Go on, scroll your gains. We won’t tell 🤫💪📱',
+  'The feed is starving—serve a set 🍽️🏋️‍♂️',
+  'For the love of iron pls do not scroll instagram in the squat rack. scroll GoodLift instead 😎 🏋️️',
+  'Your friends did 3×10 of content 🔁📸',
+  'Don’t ghost the feed—post the set 👻📤',
+  'If it’s not posted, was it even a set? 📸❓',
+  'Go on, scroll through your home feed, you love it 👇 ❤️📲',
+  'Bench: racked. Gains: tracked. Content: lacked 🏋️‍♂️📈📭',
+  'Humblebrag optional. Upload mandatory 🙃📤✅',
+  'Your spotter can film. No excuses 🎥🤝🙅‍♂️',
+  'The grid needs iron. Contribute 🔩🟦➕',
+  'Pics or it was active recovery 📸🆚🧘‍♂️',
+  'Stop hoarding clout. Share the set 🏆➡️📤',
+  'Post-workout afterglow belongs on the feed ✨📲',
+  'Consent to clout: share the set ✅🏆📤',
+  'You + good lighting = public service 💡📸🫶',
+  'Give the timeline feed a little cardio 🫀🏃‍♂️📲',
+  'post something! do you even gen Z? 🤳📤🫡',
+  'The algorithm is blushing. Keep going 🤖😳➡️',
+  'Hit depth on that scroll ⬇️📱',
+  'Warning: side effects include inspiration ⚠️💡✨',
+  'A little lurk between sets 👀⏱️',
+  'Scroll like you mean it 💨📱',
+  'This is your sign to keep scrolling ➡️📱',
+  'Keep the algorithm company 🤖🫶',
 ];
 
 class HomeScreen extends StatefulWidget {
@@ -155,6 +179,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         await _loadInitialHomeFeed();
       } else {
         _pickPointsTagline(); // 👈
+        await _loadInitialPointsFeed();
+      }
+    });
+
+    _restoreSelectedFeed().then((_) async {
+      if (_selectedFeed == SelectedFeed.home) {
+        _pickHomeTagline();              // 👈 add
+        await _loadInitialHomeFeed();
+      } else {
+        _pickPointsTagline();
         await _loadInitialPointsFeed();
       }
     });
@@ -1739,16 +1773,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                   await _persistSelectedFeed();
 
                                   if (next == SelectedFeed.home) {
-                                    if (_feedPosts.isEmpty && !_feedLoading) {
-                                      _loadInitialHomeFeed();
-                                    }
+                                    _pickHomeTagline();                // 👈 add
+                                    if (_feedPosts.isEmpty && !_feedLoading) _loadInitialHomeFeed();
                                   } else {
-                                    _pickPointsTagline(); // 👈 new: rotate the tagline
-                                    if (_pointsPosts.isEmpty && !_pointsLoading) {
-                                      _loadInitialPointsFeed();
-                                    }
+                                    _pickPointsTagline();
+                                    if (_pointsPosts.isEmpty && !_pointsLoading) _loadInitialPointsFeed();
                                   }
                                 },
+
 
                                 style: ButtonStyle(
                                   padding: MaterialStateProperty.all(const EdgeInsets.symmetric(horizontal: 6, vertical: 2)),
@@ -1786,8 +1818,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
                         if (_selectedFeed == SelectedFeed.home) ...[
                           const SizedBox(height: 2),
-                          const Text('Go on, scroll through your home feed, you love it 👇',
-                              style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                          Text(_homeTagline,
+                              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+
                           const SizedBox(height: 8),
 
                           if (!_feedOwnersResolved)
