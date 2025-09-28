@@ -22,6 +22,7 @@ import 'directMessages.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:path_provider/path_provider.dart';
 import 'post_service.dart';
+import 'post_header.dart';
 import 'feed_post_card.dart';
 import 'main.dart';
 
@@ -1522,27 +1523,42 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
                             children: [
                               // Cards
-                              ..._feedPosts.map((p) => FeedPostCard(
-                                post: p,
-                                onOpenDetail: () async {
-                                  await Navigator.of(context).push(
-                                    MaterialPageRoute(
-                                      builder: (_) => PostDetailPage(
-                                        post: p,
-                                        onToggleLike: (pp) => PostService.instance.toggleLike(pp.id),
-                                        onToggleGoodLift: (pp) =>
-                                            PostService.instance.toggleGoodLift(pp.id, isVideo: pp.mediaType == 'video'),
-                                        onAddComment: (pp, text) =>
-                                            PostService.instance.addComment(pp.id, text, usernameFallback: 'user'),
-                                        canDelete: (UserContext.of(context, listen: false).actorUid == p.ownerUid),
+                              ... _feedPosts.map((p) {
+                                final isDaily = (p.type == 're_daily');
+                                return FeedPostCard(
+                                  post: p,
+                                  onOpenDetail: isDaily
+                                  // --- LIGHTWEIGHT DAILY DETAIL ---
+                                      ? () async {
+                                    await Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (_) => ReDailyDetailPage(postId: p.id),
                                       ),
-                                    ),
-                                  );
+                                    );
+                                    if (!context.mounted) return;
+                                    _loadInitialFeed();
+                                  }
+                                  // --- ORIGINAL MEDIA DETAIL (unchanged) ---
+                                      : () async {
+                                    await Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (_) => PostDetailPage(
+                                          post: p,
+                                          onToggleLike: (pp) => PostService.instance.toggleLike(pp.id),
+                                          onToggleGoodLift: (pp) =>
+                                              PostService.instance.toggleGoodLift(pp.id, isVideo: pp.mediaType == 'video'),
+                                          onAddComment: (pp, text) =>
+                                              PostService.instance.addComment(pp.id, text, usernameFallback: 'user'),
+                                          canDelete: (UserContext.of(context, listen: false).actorUid == p.ownerUid),
+                                        ),
+                                      ),
+                                    );
+                                    if (!context.mounted) return;
+                                    _loadInitialFeed();
+                                  },
+                                );
+                              }),
 
-                                  if (!context.mounted) return;
-                                  _loadInitialFeed(); // 👈 refresh feed after coming back
-                                },
-                              )),
 
 
                               // Footer with fixed height to prevent jumps

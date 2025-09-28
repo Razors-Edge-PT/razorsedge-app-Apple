@@ -684,6 +684,7 @@ class Post {
   final String id;
   final String ownerUid;
   final String mediaType; // "image" | "video"
+  final String? type; // e.g. "re_daily" for Daily RE posts
   final String storagePathOriginal; // path in Storage
   final String smallUrl;
   final String thumbUrl;
@@ -699,6 +700,7 @@ class Post {
     required this.id,
     required this.ownerUid,
     required this.mediaType,
+    this.type,
     required this.storagePathOriginal,
     required this.smallUrl,
     required this.thumbUrl,
@@ -716,6 +718,7 @@ class Post {
       id: s.id,
       ownerUid: (d['ownerUid'] ?? '') as String,
       mediaType: (d['mediaType'] ?? 'image') as String,
+      type: d['type'] as String?,
       storagePathOriginal: (d['storagePathOriginal'] ?? '') as String,
       smallUrl: (d['smallUrl'] ?? '') as String,
       thumbUrl: (d['thumbUrl'] ?? '') as String,
@@ -732,6 +735,7 @@ class Post {
     String? id,
     String? ownerUid,
     String? mediaType,
+    String? type,
     String? thumbUrl,
     String? smallUrl,
     String? storagePathOriginal,
@@ -747,6 +751,7 @@ class Post {
       id: id ?? this.id,
       ownerUid: ownerUid ?? this.ownerUid,
       mediaType: mediaType ?? this.mediaType,
+      type: type ?? this.type,
       thumbUrl: thumbUrl ?? this.thumbUrl,
       smallUrl: smallUrl ?? this.smallUrl,
       storagePathOriginal: storagePathOriginal ?? this.storagePathOriginal,

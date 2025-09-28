@@ -5,6 +5,8 @@ import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'profile_page.dart';
 import 'post_service.dart';
 import 'post_header.dart';
+import 're_daily.dart'; // for ReDailyPostCard
+
 
 class FeedPostCard extends StatelessWidget {
   final Post post;
@@ -16,6 +18,7 @@ class FeedPostCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final isVideo = post.mediaType == 'video';
     final mediaUrl = isVideo ? post.thumbUrl : post.smallUrl;
+    final isReDaily = (post.type == 're_daily');
 
     return SizedBox(
       width: double.infinity, // 👈 stretch card to full available width
@@ -35,29 +38,69 @@ class FeedPostCard extends StatelessWidget {
               ),
               const SizedBox(height: 8),
 
-              // Media (tap to open detail)
-              GestureDetector(
-                onTap: onOpenDetail,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
-                  child: AspectRatio(
-                    aspectRatio: 4 / 5, // 👈 taller image (was 1:1)
-                    child: FutureBuilder<File>(
-                      future: DefaultCacheManager().getSingleFile(mediaUrl),
-                      builder: (ctx, snap) {
-                        if (snap.connectionState == ConnectionState.done && snap.hasData) {
-                          return Image.file(
-                            snap.data!,
-                            fit: BoxFit.cover,
-                            width: double.infinity, // 👈 fill horizontally
+              // Media / Content (tap to open detail)
+              if (!isReDaily)
+                GestureDetector(
+                  onTap: onOpenDetail,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: AspectRatio(
+                      aspectRatio: 4 / 5, // keep image/video feed height
+                      child: FutureBuilder<File>(
+                        future: DefaultCacheManager().getSingleFile(mediaUrl),
+                        builder: (ctx, snap) {
+                          if (snap.connectionState == ConnectionState.done && snap.hasData) {
+                            return Image.file(
+                              snap.data!,
+                              fit: BoxFit.cover,
+                              width: double.infinity,
+                            );
+                          }
+                          return const ColoredBox(color: Color(0x11000000));
+                        },
+                      ),
+                    ),
+                  ),
+                )
+              else
+              // Render the RE Daily card in place of media
+                GestureDetector(
+                  onTap: onOpenDetail,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                      stream: FirebaseFirestore.instance.collection('posts').doc(post.id).snapshots(),
+                      builder: (context, snap) {
+                        if (snap.connectionState != ConnectionState.active && !snap.hasData) {
+                          return const SizedBox(
+                            height: 200,
+                            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
                           );
                         }
-                        return const ColoredBox(color: Color(0x11000000));
+                        final d = snap.data?.data() ?? const <String, dynamic>{};
+                        final String dayKey = (d['dayKey'] ?? '') as String;
+                        final double dailyTotal = (d['dailyTotal'] as num?)?.toDouble() ?? 0.0;
+                        final double? bodyweightUsedKg = (d['bodyweightUsedKg'] as num?)?.toDouble();
+                        final Map<String, dynamic> perLift =
+                            (d['perLift'] as Map<String, dynamic>?) ?? const <String, dynamic>{};
+                        final List<String> badges =
+                            ((d['badges'] as List?)?.map((e) => e.toString()).toList()) ?? const <String>[];
+                        final String? caption = (d['caption'] as String?);
+
+                        // Use the existing pretty card
+                        return ReDailyPostCard(
+                          dayKey: dayKey,
+                          dailyTotal: dailyTotal,
+                          perLift: perLift,
+                          bodyweightKg: bodyweightUsedKg,
+                          badges: badges,
+                          caption: caption,
+                        );
                       },
                     ),
                   ),
                 ),
-              ),
+
 
               // Actions row (snapshot counts)
               const SizedBox(height: 8),
@@ -199,6 +242,92 @@ class _LastTwoComments extends StatelessWidget {
 
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: children);
       },
+    );
+  }
+}
+
+
+class ReDailyDetailPage extends StatelessWidget {
+  final String postId;
+  const ReDailyDetailPage({super.key, required this.postId});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        title: const Text('Daily RE Points'),
+      ),
+      body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        stream: FirebaseFirestore.instance.collection('posts').doc(postId).snapshots(),
+        builder: (context, snap) {
+          if (snap.connectionState != ConnectionState.active && !snap.hasData) {
+            return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+          }
+          final d = snap.data?.data() ?? const <String, dynamic>{};
+          final String dayKey = (d['dayKey'] ?? '') as String;
+          final double dailyTotal = (d['dailyTotal'] as num?)?.toDouble() ?? 0.0;
+          final double? bodyweightUsedKg = (d['bodyweightUsedKg'] as num?)?.toDouble();
+          final Map<String, dynamic> perLift =
+              (d['perLift'] as Map<String, dynamic>?) ?? const <String, dynamic>{};
+          final List<String> badges =
+              ((d['badges'] as List?)?.map((e) => e.toString()).toList()) ?? const <String>[];
+          final String? caption = (d['caption'] as String?);
+
+          final dummyPost = Post(
+            id: postId,
+            ownerUid: (d['ownerUid'] ?? '') as String,
+            mediaType: (d['mediaType'] ?? 'image') as String, // ignored for daily
+            storagePathOriginal: (d['storagePathOriginal'] ?? '') as String,
+            smallUrl: (d['smallUrl'] ?? '') as String,
+            thumbUrl: (d['thumbUrl'] ?? '') as String,
+            caption: caption,
+            likeCount: (d['likeCount'] as num?)?.toInt() ?? 0,
+            goodLiftCount: (d['goodLiftCount'] as num?)?.toInt() ?? 0,
+            commentCount: (d['commentCount'] as num?)?.toInt() ?? 0,
+            createdAt: (d['createdAt'] as Timestamp?) ?? Timestamp.now(),
+            type: d['type'] as String?,
+          );
+
+          return Column(
+            children: [
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                  children: [
+                    ReDailyPostCard(
+                      dayKey: dayKey,
+                      dailyTotal: dailyTotal,
+                      perLift: perLift,
+                      bodyweightKg: bodyweightUsedKg,
+                      badges: badges,
+                      caption: caption,
+                    ),
+                    const SizedBox(height: 12),
+                    _ActionRow(post: dummyPost),
+                    const SizedBox(height: 12),
+                    _LastTwoComments(postId: postId, onViewAll: () {}),
+                  ],
+                ),
+              ),
+              const Divider(height: 1, color: Colors.white70),
+              // Optional: future action bar area
+              SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+                  child: Row(
+                    children: const [
+                      // Placeholder for future actions or share
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 }

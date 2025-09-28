@@ -150,10 +150,15 @@ class DailyReCalculator {
 
     if (!write) return withBadges;
 
-    // 5) Write /re_daily
+    // Decide if we should publish a feed post
+    final bool noPoints =
+        withBadges.dailyTotal <= 0.0 ||
+            withBadges.pointsByLift.values.every((v) => (v <= 0.0));
+
+    // 5) Write /re_daily (keep for calendars/streaks even if no points)
     await _writeDaily(uid: uid, dayKey: dayKey, res: withBadges);
 
-    // 6) Upsert monthly rollup
+    // 6) Upsert monthly rollup (also preserved)
     await _updateMonthly(
       uid: uid,
       monthKey: monthKey,
@@ -161,18 +166,21 @@ class DailyReCalculator {
       dayTotal: withBadges.dailyTotal,
     );
 
-    // 7) Upsert post (stable doc id for that day)
-    await _upsertDailyPost(
-      uid: uid,
-      dayKey: dayKey,
-      monthKey: monthKey,
-      dailyTotal: withBadges.dailyTotal,
-      pointsByLift: withBadges.pointsByLift,
-      bodyweightUsedKg: withBadges.bodyweightUsedKg,
-      badges: withBadges.badges,
-    );
+    // 7) Only create a feed post if points > 0
+    if (!noPoints) {
+      await _upsertDailyPost(
+        uid: uid,
+        dayKey: dayKey,
+        monthKey: monthKey,
+        dailyTotal: withBadges.dailyTotal,
+        pointsByLift: withBadges.pointsByLift,
+        bodyweightUsedKg: withBadges.bodyweightUsedKg,
+        badges: withBadges.badges,
+      );
+    }
 
     return withBadges;
+
   }
 
   /// ---------------- Internals ----------------
@@ -601,22 +609,31 @@ class ReDailyPostCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final lifts = _liftOrder.where((k) => perLift.containsKey(k)).toList();
-    // also include any extras (future-proof)
-    for (final k in perLift.keys) {
-      if (!lifts.contains(k)) lifts.add(k);
-    }
+    // Build full candidate list using canonical order, then any extras
+    final allKeys = <String>[
+      ..._liftOrder.where((k) => perLift.containsKey(k)),
+      ...perLift.keys.where((k) => !_liftOrder.contains(k)),
+    ];
 
-    final points = lifts.map((k) {
+    double _ptsFor(String k) {
       final v = perLift[k];
       if (v is Map<String, dynamic>) {
         return (v['pts'] is num) ? (v['pts'] as num).toDouble() : 0.0;
       }
       return (v is num) ? v.toDouble() : 0.0;
-    }).toList();
+    }
 
-    final maxPts = points.isEmpty ? 0.0 : (points.reduce((a, b) => a > b ? a : b));
+    // Only include lifts that contributed points (> 0)
+    // (If user only did Bench + Chin-Up, only those appear.)
+    final lifts = allKeys.where((k) => _ptsFor(k) > 0.0).toList();
+
+    // Max over included lifts only; if none, 0 (per-lift section will be empty)
+    final maxPts = lifts.isEmpty
+        ? 0.0
+        : lifts.map(_ptsFor).reduce((a, b) => a > b ? a : b);
+
     final hasBadges = badges.isNotEmpty;
+
 
     return Container(
       margin: const EdgeInsets.all(12),
