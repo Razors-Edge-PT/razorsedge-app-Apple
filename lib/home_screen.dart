@@ -1505,7 +1505,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
                         // ── Home Feed ──────────────────────────────────────────────────────────
                         const SizedBox(height: 2),
-                        Text('Just scroll through your home feed, you media-slut. You love it 👇', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                        Text('Go on, scroll through your home feed, you media-slut. You love it 👇', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
                         const SizedBox(height: 8),
 
                         if (!_feedOwnersResolved)

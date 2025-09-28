@@ -28,6 +28,8 @@ import 'local_cache/isar_block_plan.dart';
 import 'local_cache/isar_wes_init.dart';
 import 'local_cache/isar_db.dart';
 import 'package:isar/isar.dart';
+import 're_daily.dart';
+import 'formula.dart' as formula;
 
 
 Future<void> deleteAllUserWorkouts() async {
@@ -8301,6 +8303,45 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
       await docRef.set(payload, SetOptions(merge: false));
       print('✅ [WES upsert] Firestore write complete.');
+
+      // ✅ Kick off RE Daily compute/write in the background (don’t block save UI)
+      try {
+        final uid2 = uid;           // capture
+        final dayKey = docId;       // exactly "yyyy-MM-dd"
+
+        // run fully in the background
+        () async {
+          try {
+            // Read biological sex from the user doc
+            final userSnap = await FirebaseFirestore.instance
+                .collection('users')
+                .doc(uid2)
+                .get();
+
+            final sexRaw = (userSnap.data()?['sex'] as String?)?.trim().toLowerCase();
+
+            // Map to the enum in formula.dart (you import it as `formula`)
+            final isFemale = sexRaw == 'female' || sexRaw == 'f' || sexRaw == 'woman' || sexRaw == 'w';
+            final genderEnum = isFemale ? formula.Gender.female : formula.Gender.male;
+
+            await DailyReCalculator().computeAndWrite(
+              uid: uid2,
+              dayKey: dayKey,
+              gender: genderEnum, // type from formula.dart; prefix is fine
+            );
+
+            debugPrint('✅ [RE Daily] compute+write done for $dayKey');
+          } catch (e, st) {
+            debugPrint('⚠️ [RE Daily] compute failed for $dayKey: $e');
+          }
+        }();
+      } catch (e) {
+        debugPrint('⚠️ [RE Daily] kickoff failed for $docId: $e');
+      }
+
+
+
+
 
       // 🔁 Keep public profile stats fresh (only if there are completed sets)
       final hasExercises = ((payload['exercises'] as List?)?.isNotEmpty ??

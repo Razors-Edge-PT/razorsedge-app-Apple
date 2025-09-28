@@ -3889,7 +3889,7 @@ class _ProfilePageState extends State<ProfilePage> {
                       _StatChip(label: 'RE Points', value: _rePoints),
                       const SizedBox(height: 8),
                       _StatChip(
-                        label: 'Best Comp Total Kgs',
+                        label: 'Best Total Kgs',
                         value: _compMode == _CompMode.threeLift
                             ? _bestThreeLiftTotal
                             : _bestBenchOnly,
