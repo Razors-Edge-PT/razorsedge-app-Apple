@@ -10,6 +10,14 @@ import 'package:flutter/material.dart';
 const int kRepPrMin = 1;
 const int kRepPrMax = 60; // make it easy to change or expose in settings
 
+
+//debugs
+const bool kBadgeDebug = true;
+void _bdbg(String msg) {
+  if (kBadgeDebug) debugPrint('[BADGE] $msg');
+}
+
+
 /// Firestore paths helper
 class RePaths {
   static String dailyDoc(String uid, String dayKey) =>
@@ -143,6 +151,9 @@ class DailyReCalculator {
       badges: const [], // will fill below
     );
 
+    _bdbg('ENTER uid=$uid day=$dayKey total=${baseResult.dailyTotal.toStringAsFixed(2)} '
+        'e1rms=${dayStats.map((k,v)=>MapEntry(k,(v.maxE1rm).toStringAsFixed(1)))}');
+
     // 4) Compute badges (non-blocking; timeout + fallback)
     List<String> badges = const [];
     try {
@@ -159,8 +170,10 @@ class DailyReCalculator {
       });
     } catch (e, st) {
       debugPrint('[RE] badges ERROR uid=$uid day=$dayKey: $e');
-      // debugPrint('$st'); // uncomment if you want the stack
+      // debugPrint('$st');
     }
+
+    _bdbg('EXIT uid=$uid day=$dayKey badges=${badges.join(',')}');
 
 
     final withBadges = DailyReResult(
@@ -204,6 +217,8 @@ class DailyReCalculator {
         badges: withBadges.badges,
       );
     }
+
+    _bdbg('final badges=${badges.join(',')}');
 
     return withBadges;
 
@@ -496,6 +511,8 @@ class DailyReCalculator {
       }
       if (deletes > 0) {
         await batch.commit();
+        debugPrint('[RE] cleanup kept=${ref.id} deleted=$deletes for $dayKey');
+
       }
     } catch (e) {
       // best-effort (e.g., composite index missing) — do not block the main write
@@ -660,11 +677,14 @@ class DailyReCalculator {
       ReExerciseKeys keys,
       Map<String, LiftDayStat> dayStats,
       ) async {
+    _bdbg('1RM check ENTER');
+
     final raw = await _getCacheMap(uid: uid, docId: 'max_actual'); // Map<String, dynamic> (mutable)
     final Map<String, double> cache = {
       for (final e in raw.entries) e.key.toString(): (e.value as num).toDouble()
     };
     final winners = <String>[];
+    _bdbg('1RM cache keys=${cache.keys.join(',')}');
 
 
     for (final entry in dayStats.entries) {

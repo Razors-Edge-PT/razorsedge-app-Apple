@@ -33,6 +33,7 @@ enum SelectedFeed { home, points }
 const String kUserPrefFeedTab = 'feedTab'; // 'home' | 'points'
 
 
+
 // Taglines to rotate
 const List<String> _kPointsTaglines = [
   'Certified Gainz Accounting™ department 🧮🏋️‍♂️📊',
@@ -165,33 +166,32 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     _homeScrollCtrl.addListener(_onHomeScroll);
     _pointsScrollCtrl.addListener(_onPointsScroll);
 
-    _resolveFeedOwners().then((_) async {
-      await _restoreSelectedFeed(); // reads users/{uid}.prefs.feedTab
-      if (_selectedFeed == SelectedFeed.home) {
-        await _loadInitialHomeFeed();
-      } else {
-        await _loadInitialPointsFeed();
-      }
-    });
+    // 🔄 Replace the three separate blocks with this single kickoff
+    unawaited(() async {
+      // 1) Resolve owners once
+      await _resolveFeedOwners();
 
-    _restoreSelectedFeed().then((_) async {
-      if (_selectedFeed == SelectedFeed.home) {
-        await _loadInitialHomeFeed();
-      } else {
-        _pickPointsTagline(); // 👈
-        await _loadInitialPointsFeed();
-      }
-    });
+      // 2) Restore last selected tab once
+      await _restoreSelectedFeed();
+      if (!mounted) return;
 
-    _restoreSelectedFeed().then((_) async {
+      // 3) Pick the tagline once for the selected tab
+      setState(() {
+        if (_selectedFeed == SelectedFeed.home) {
+          _pickHomeTagline();
+        } else {
+          _pickPointsTagline();
+        }
+      });
+
+      // 4) Kick exactly one initial load for the selected tab
       if (_selectedFeed == SelectedFeed.home) {
-        _pickHomeTagline();              // 👈 add
         await _loadInitialHomeFeed();
       } else {
-        _pickPointsTagline();
         await _loadInitialPointsFeed();
       }
-    });
+    }());
+
 
     print('[Warmup] started for $actingUid');
 
