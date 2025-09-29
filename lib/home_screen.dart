@@ -158,6 +158,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   @override
   void initState() {
     super.initState();
+    final src = _selectedDay ?? _focusedDay;
+    final dateOnly = DateTime(src.year, src.month, src.day);
+
+    print('🏠 [Home:initState] warmup date → ${dateOnly.toIso8601String().substring(0,10)} '
+        '(selectedDay=$_selectedDay focusedDay=$_focusedDay)');
 
     final userContext = Provider.of<UserContext>(context, listen: false);
     final actingUid = userContext.actingAsUid ?? userContext.actorUid; // add this line
@@ -195,12 +200,21 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
     print('[Warmup] started for $actingUid');
 
+
+
 // Pass block + date so Warmup can precompute the exact WES snapshot you’ll need.
+    final _warmDateSrc = _selectedDay ?? _focusedDay; // use picked day, else the visible day
+    final _warmDate = DateTime(_warmDateSrc.year, _warmDateSrc.month, _warmDateSrc.day);
+
+    print('🔥 [Home→Warmup] date=${_warmDate.toIso8601String().substring(0,10)}  '
+        '(selectedDay=${_selectedDay?.toIso8601String()}, focusedDay=${_focusedDay.toIso8601String()})');
+
     unawaited(WarmupService.instance.warmWES(
       actingUid ?? '',
-      activeBlockId: userContext.activeBlockId,      // <-- ensure this is set in UserContext
-      selectedDate: DateTime.now(),                  // <-- or the date you intend to open in WES
+      activeBlockId: userContext.activeBlockId,
+      selectedDate: _warmDate,
     ));
+
 
 
     // Delay the email fetch until after build
