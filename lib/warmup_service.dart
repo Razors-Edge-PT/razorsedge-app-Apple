@@ -15,9 +15,10 @@ class WarmupService {
   WarmupService._();
   static final instance = WarmupService._();
 
-  static const _cooldown = Duration(hours: 3);
-  static const int _workoutWarmLimit = 150;
-  static const int _exerciseWarmLimit = 2000;
+  static const _cooldown = Duration(milliseconds: 100); // ~0.1 seconds
+  static const int _workoutWarmLimit = 15000;
+  static const int _exerciseWarmLimit = 200000;
+
 
   Future<void> warmWES(
       String uid, {
@@ -299,63 +300,47 @@ class WarmupService {
 
 
 // ──────────────────────────────────────────────────────────────
+// STEP 5: Build BB2 overrides map (id + lowercased name keys)
+// {weight?, addedWeight?, reps?, rir?}
 // ──────────────────────────────────────────────────────────────
-// STEP 5 (date-string only): Build BB2 overrides map (id + name keys)
-// Looks up the day by 'yyyy-MM-dd' string; if not found, falls back to day_$dayIndex.
+  // ──────────────────────────────────────────────────────────────
+// STEP 5 (no helper): scan the whole week, print it, then return
+// overrides for the selected day. Return shape unchanged:
+// Map<String, Map<String, dynamic>> keyed by exerciseId and
+// normalized name with {weight?, addedWeight?, reps?, rir?}.
 // ──────────────────────────────────────────────────────────────
   Future<Map<String, Map<String, dynamic>>> _buildResolvedBB2Overrides({
     required FirebaseFirestore fs,
     required String uid,
     required String blockId,
     required int weekIndex,
-    required int dayIndex,          // kept for fallback
-    required DateTime selectedDate, // normalized date-only
+    required int dayIndex,           // preferred microcycle index
+    required DateTime selectedDate,  // normalized (date-only)
     required List<Map<String, dynamic>> planned,
   }) async {
-    // 0) Build the exact y-m-d key we store and use in queries
-    final d   = DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
-    final ymd = '${d.year.toString().padLeft(4, '0')}-'
-        '${d.month.toString().padLeft(2, '0')}-'
-        '${d.day.toString().padLeft(2, '0')}';
+    // normalize selected date to yyyy-mm-dd
+    final dsel = DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
+    final ymdSel = '${dsel.year.toString().padLeft(4, '0')}-'
+        '${dsel.month.toString().padLeft(2, '0')}-'
+        '${dsel.day.toString().padLeft(2, '0')}';
 
-    print('[Warmup:5] resolve by date (string only) → $ymd (week_$weekIndex)');
-
-    final daysCol = fs
-        .collection('planned_blocks').doc(uid)
-        .collection('blocks').doc(blockId)
-        .collection('weeks').doc('week_$weekIndex')
-        .collection('days');
-
-    DocumentSnapshot<Map<String, dynamic>>? snap;
-
-    // 1) Primary: exact string match on 'date' == 'yyyy-MM-dd'
-    try {
-      final q = await daysCol
-          .where('date', isEqualTo: ymd)
-          .limit(1)
-          .get(const GetOptions(source: Source.server));
-      if (q.docs.isNotEmpty) snap = q.docs.first;
-    } catch (_) {}
-
-    // 2) Fallback: direct doc by day_$dayIndex
-    if (snap == null) {
-      try {
-        final direct = await daysCol.doc('day_$dayIndex').get(const GetOptions(source: Source.server));
-        if (direct.exists) snap = direct;
-      } catch (_) {}
+    String _dateStr(dynamic v) {
+      if (v == null) return '—';
+      if (v is Timestamp) {
+        final dt = v.toDate();
+        return '${dt.year.toString().padLeft(4, '0')}-'
+            '${dt.month.toString().padLeft(2, '0')}-'
+            '${dt.day.toString().padLeft(2, '0')}';
+      }
+      if (v is String && v.length >= 10) return v.substring(0, 10);
+      return v.toString();
     }
 
-    if (snap == null || !snap.exists) {
-      print('[Warmup:5] no day doc found for date=$ymd in week_$weekIndex → {}');
-      return const <String, Map<String, dynamic>>{};
-    }
-
-    final data = snap.data() ?? const <String, dynamic>{};
-    final raw  = data['exercises'];
-    final rows = (raw is List) ? raw : const <dynamic>[];
-    print('[Warmup:5] ✅ hit doc=${snap.id} date=${data['date']} rows=${rows.length}');
-    if (rows.isNotEmpty && rows.first is Map) {
-      print('[Warmup:5] sample row → ${jsonEncode(rows.first)}');
+    bool _dateMatches(dynamic v) {
+      if (v == null) return false;
+      if (v is Timestamp) return _dateStr(v) == ymdSel;
+      if (v is String)   return (v.length >= 10 ? v.substring(0, 10) : v) == ymdSel;
+      return false;
     }
 
     String _norm(String s) {
@@ -367,6 +352,7 @@ class WarmupService {
       t = t.replaceAll(RegExp(r'\bbb\b'), 'barbell');
       return t;
     }
+
     double? _num(dynamic v) {
       if (v == null) return null;
       if (v is num) return v.toDouble();
@@ -378,47 +364,86 @@ class WarmupService {
       return null;
     }
 
-    // Row-by-row, aligned with planned
+    final daysCol = fs
+        .collection('planned_blocks').doc(uid)
+        .collection('blocks').doc(blockId)
+        .collection('weeks').doc('week_$weekIndex')
+        .collection('days');
+
+    // 1) Load & print the entire week (day_0..day_6)
+    print('📅 [Warmup:5] week_$weekIndex plan snapshot:');
+    final weekDocs = <int, Map<String, dynamic>>{};
+    for (int di = 0; di < 7; di++) {
+      final snap = await daysCol.doc('day_$di').get(const GetOptions(source: Source.server));
+      if (!snap.exists) {
+        print('   • day_$di: (missing)');
+        weekDocs[di] = {'id': 'day_$di', 'date': null, 'rows': const <Map<String, dynamic>>[]};
+        continue;
+      }
+      final data = snap.data() ?? const <String, dynamic>{};
+      final raw  = data['exercises'];
+      final rows = (raw is List)
+          ? raw.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList()
+          : const <Map<String, dynamic>>[];
+      final dateStr = _dateStr(data['date']);
+      print('   • day_$di: id=${snap.id} date=$dateStr rows=${rows.length}');
+      if (rows.isNotEmpty) {
+        final first = rows.first;
+        final name = (first['name'] ?? first['exercise'] ?? '').toString();
+        final weight = first['weight'];
+        final reps = first['reps'];
+        print('     ↳ first: name="$name" weight=$weight reps=$reps');
+      }
+      weekDocs[di] = {'id': snap.id, 'date': data['date'], 'rows': rows};
+    }
+
+    // 2) Pick the day that matches the selected calendar date; fallback to dayIndex
+    int? matchDi;
+    for (int di = 0; di < 7; di++) {
+      final d = weekDocs[di];
+      if (d == null) continue;
+      if (_dateMatches(d['date'])) { matchDi = di; break; }
+    }
+    final useDi = matchDi ?? dayIndex;
+
+    final sel = weekDocs[useDi] ?? const <String, dynamic>{};
+    final selDateStr = _dateStr(sel['date']);
+    final selRows = (sel['rows'] is List) ? List<Map<String, dynamic>>.from(sel['rows'] as List) : const <Map<String, dynamic>>[];
+    print('🎯 [Warmup:5] selected → day_$useDi (wanted=$dayIndex date=$selDateStr) rows=${selRows.length}');
+
+    // 3) Build overrides for the selected day aligned to `planned` by index
     final byIndex = <int, Map<String, dynamic>>{};
-    for (int i = 0; i < rows.length && i < planned.length; i++) {
-      final r = rows[i];
-      if (r is! Map) continue;
-      final row = Map<String, dynamic>.from(r);
+    for (int i = 0; i < selRows.length && i < planned.length; i++) {
+      final row = Map<String, dynamic>.from(selRows[i]);
 
       final weight = _num(row['weight']);
       final reps   = _num(row['reps']);
       final rir    = _num(row['rir']);
       final added  = _num(row['addedWeight']);
 
+      // Only keep if at least one override present
       if ([weight, reps, rir, added].every((e) => e == null)) continue;
-
-      final rowId   = (row['exerciseId'] ?? row['id'] ?? row['exercise_id'])?.toString();
-      final rowName = (row['name'] ?? row['exercise'] ?? '').toString();
 
       final plannedRow = planned[i];
       final pName = (plannedRow['name'] ?? plannedRow['exercise'] ?? '').toString();
-      final pId   = (plannedRow['exerciseId'] ?? plannedRow['id'] ?? plannedRow['exercise_id'])?.toString()
+      final pId = (plannedRow['exerciseId'] ?? plannedRow['id'] ?? plannedRow['exercise_id'])?.toString()
           ?? (PeriodizationModelUtils.nameToId[pName] ?? pName).toString();
 
-      final idMatches   = (rowId != null && rowId == pId);
-      final nameMatches = rowName.isNotEmpty && _norm(rowName) == _norm(pName);
-      if (!(idMatches || nameMatches || (rowId == null && rowName.isEmpty))) {
-        print('   [Warmup:5] row#$i skipped (mismatch) planned="$pName"($pId) vs row="$rowName"($rowId)');
-        continue;
-      }
-
       byIndex[i] = {
-        'weight':      weight,
+        'weight': weight,
         'addedWeight': added,
-        'reps':        reps,
-        'rir':         rir,
+        'reps': reps,
+        'rir': rir,
+        // debug context (not returned to engine)
+        '_plannedName': pName,
+        '_plannedId': pId,
       };
 
-      print('   [Warmup:5] row#$i → overrides weight=$weight added=$added reps=$reps rir=$rir '
-          '(planned="$pName" id=$pId; bb2="$rowName" id=$rowId)');
+      print('   [Warmup:5] row#$i override → wt=$weight add=$added reps=$reps rir=$rir '
+          '(planned="$pName" id=$pId)');
     }
 
-    // Lift to keys the engine probes
+    // 4) Lift to engine keys (exerciseId + normalized name)
     final out = <String, Map<String, dynamic>>{};
     for (int i = 0; i < planned.length; i++) {
       final o = byIndex[i];
@@ -431,13 +456,20 @@ class WarmupService {
       final pId = (p['exerciseId'] ?? p['id'] ?? p['exercise_id'])?.toString()
           ?? (PeriodizationModelUtils.nameToId[pName] ?? pName).toString();
 
-      out[pId] = o;
-      out[_norm(pName)] = o;
+      out[pId] = {
+        'weight': o['weight'],
+        'addedWeight': o['addedWeight'],
+        'reps': o['reps'],
+        'rir': o['rir'],
+      };
+      out[_norm(pName)] = out[pId]!;
     }
 
-    print('[Warmup:5] BB2 overrides (by date $ymd) → $out');
+    print('[Warmup:5] overrides for selected day_$useDi → $out');
     return out;
   }
+
+
 
 
 
@@ -493,27 +525,68 @@ class WarmupService {
 // ──────────────────────────────────────────────────────────────
 // STEP 7: Prefetch bodyweight history (warm cache layer)
 // ──────────────────────────────────────────────────────────────
+  // STEP 7: bodyweight prefetch (print 4 most recent)
   Future<void> _prefetchBodyweight({
-  required FirebaseFirestore fs,
-  required String uid,
+    required FirebaseFirestore fs,
+    required String uid,
   }) async {
-  try {
-  final snap = await fs
-      .collection('users')
-      .doc(uid)
-      .collection('bodyweight')
-      .orderBy('date', descending: true)
-      .limit(90)
-      .get(const GetOptions(source: Source.server));
+    try {
+      final q = await fs
+          .collection('users')
+          .doc(uid)
+          .collection('weights')
+          .orderBy('timestamp', descending: true)
+          .limit(90)
+          .get(const GetOptions(source: Source.server));
 
-  final count = snap.docs.length;
-  // If PMU has setters, wire here; else read-through is fine for engine
-  print('⚖️ [Warmup:7] bodyweight samples (≤90d) → $count');
-  } catch (e) {
-  print('⚖️ [Warmup:7] bodyweight prefetch failed: $e');
-  }
-  }
+      // Normalize & convert
+      final samples = <Map<String, dynamic>>[];
+      for (final d in q.docs) {
+        final data = d.data();
+        final ts = data['timestamp'];
+        final unit = (data['unit'] ?? 'kg').toString().toLowerCase();
+        final wRaw = data['weight'];
 
+        DateTime? dt;
+        if (ts is Timestamp) dt = ts.toDate();
+        if (ts is String) dt = DateTime.tryParse(ts);
+        if (dt == null) continue;
+
+        double? w;
+        if (wRaw is num) w = wRaw.toDouble();
+        if (wRaw is String) w = double.tryParse(wRaw);
+        if (w == null) continue;
+
+        final kg = (unit == 'lb' || unit == 'lbs') ? (w * 0.45359237) : w;
+        samples.add({
+          'ts': dt,
+          'weightKg': kg,
+          'unit': unit,
+        });
+      }
+
+      String _ymd(DateTime d) {
+        final m = d.month.toString().padLeft(2, '0');
+        final da = d.day.toString().padLeft(2, '0');
+        return '${d.year}-$m-$da';
+      }
+
+      // Print summary + 4 most recent
+      print('⚖️ [Warmup:7] bodyweight samples (≤90d) → ${samples.length}');
+      final show = samples.take(4).toList();
+      for (final s in show) {
+        final dt = s['ts'] as DateTime;
+        final kg = (s['weightKg'] as double);
+        print('   • ${_ymd(dt)}  ${kg.toStringAsFixed(1)} kg');
+      }
+
+      // If later you want the engine to use these without read-through,
+      // you could stash them in a PMU static here (optional).
+      // PeriodizationModelUtils.bodyweights = samples;  // <-- if you add such a field
+    } catch (e) {
+      print('⚖️ [Warmup:7] bodyweight prefetch failed: $e');
+    }
+  }
 
   Future<void> doWarmWES(
       String uid, {
