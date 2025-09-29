@@ -16,6 +16,7 @@ class WESInitSnapshot {
 
   // Highest-impact blobs (add more later if you want)
   late String plannedExercisesJson;   // from loadPlannedExercisesFromFirestore()
+  late String wesPlannedExercisesJson;  // ← NEW
   late String previousWorkoutJson;    // from loadPreviousWorkoutData()
   late String topSetHistoryJson;      // from PeriodizationModelUtils.fetchFullTopSetHistory()
   // Pre-resolved S1 hints for instant first paint (JSON map: "name|ci" -> fields)

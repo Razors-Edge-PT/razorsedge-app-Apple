@@ -4232,6 +4232,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                   blockId: bid,
                   dateYmd: ymd,
                   plannedExercises: planned,
+                  wesPlannedExercises: const <Map<String, dynamic>>[],  // ← NEW (empty at boot is OK)
                   previousWorkout: previous,
                   topSetHistory: topSets,
                   hintsJson: '{}',             // empty at boot
@@ -4240,6 +4241,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                   schemaVersion: kWesSnapshotSchema,
                   updatedAt: DateTime.now(),
                 );
+
 
 
                 print('🟩 [WES Init] Snapshot PUT to Isar for $ymd (uid=$uid, block=$bid) '
@@ -4828,6 +4830,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       );
 
       if (snap == null) return;
+      _didFastPaint = true;
+      print(() {
+        final p = (snap?.plannedExercisesJson ?? '[]');
+        final w = (snap?.wesPlannedExercisesJson ?? '[]');
+        final v = (snap?.previousWorkoutJson ?? '[]');
+        return '🟪[WES Boot] snapshot uid=$uid bid=$bid ymd=$ymd → '
+            '${snap == null ? 'tNULL' : 'tOK'} '
+            '${snap == null ? '' : 'hintsReady=${snap!.hintsReady} ver=${snap!.schemaVersion} planned=${(jsonDecode(p) as List).length} wes=${(jsonDecode(w) as List).length} prev=${(jsonDecode(v) as List).length} hash=${snap!.hintsInputsHash}'}';
+      }());
+
 
       // 🔐 Robust decode for planned / previous (handles legacy Map shapes)
       List<dynamic> _safeListFromJson(String raw, {String? fallbackKey}) {
@@ -5497,12 +5509,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
             blockId: bid,
             dateYmd: ymd,
             plannedExercises: plannedCompact,
+            wesPlannedExercises: const <Map<String, dynamic>>[],   // ← NEW (or your real WES placeholders if available)
             previousWorkout: previousOverlay,
             topSetHistory: topSetHistoryList,
-            hintsJson: hintsJson,            // 👈 NEW
-            // hintsInputsHash: null,        // (optional, add later)
+            hintsJson: hintsJson,
+            hintsInputsHash: '',            // ← set to your computed hash if you have it here
+            hintsReady: hintsJson.isNotEmpty && hintsJson != '{}',
+            schemaVersion: kWesSnapshotSchema,  // ← keep consistent with Warmup
             updatedAt: DateTime.now(),
           );
+
           print('💾 [WES Init] Snapshot saved for $ymd (planned=$plannedCount, prev=$previousCount)');
         }
 

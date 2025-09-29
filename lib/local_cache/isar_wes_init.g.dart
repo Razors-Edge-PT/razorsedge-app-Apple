@@ -76,6 +76,11 @@ const WESInitSnapshotSchema = CollectionSchema(
       id: 11,
       name: r'updatedAt',
       type: IsarType.dateTime,
+    ),
+    r'wesPlannedExercisesJson': PropertySchema(
+      id: 12,
+      name: r'wesPlannedExercisesJson',
+      type: IsarType.string,
     )
   },
   estimateSize: _wESInitSnapshotEstimateSize,
@@ -111,6 +116,7 @@ int _wESInitSnapshotEstimateSize(
   bytesCount += 3 + object.previousWorkoutJson.length * 3;
   bytesCount += 3 + object.topSetHistoryJson.length * 3;
   bytesCount += 3 + object.uid.length * 3;
+  bytesCount += 3 + object.wesPlannedExercisesJson.length * 3;
   return bytesCount;
 }
 
@@ -132,6 +138,7 @@ void _wESInitSnapshotSerialize(
   writer.writeString(offsets[9], object.topSetHistoryJson);
   writer.writeString(offsets[10], object.uid);
   writer.writeDateTime(offsets[11], object.updatedAt);
+  writer.writeString(offsets[12], object.wesPlannedExercisesJson);
 }
 
 WESInitSnapshot _wESInitSnapshotDeserialize(
@@ -154,6 +161,7 @@ WESInitSnapshot _wESInitSnapshotDeserialize(
   object.topSetHistoryJson = reader.readString(offsets[9]);
   object.uid = reader.readString(offsets[10]);
   object.updatedAt = reader.readDateTimeOrNull(offsets[11]);
+  object.wesPlannedExercisesJson = reader.readString(offsets[12]);
   return object;
 }
 
@@ -188,6 +196,8 @@ P _wESInitSnapshotDeserializeProp<P>(
       return (reader.readString(offset)) as P;
     case 11:
       return (reader.readDateTimeOrNull(offset)) as P;
+    case 12:
+      return (reader.readString(offset)) as P;
     default:
       throw IsarError('Unknown property with id $propertyId');
   }
@@ -1681,6 +1691,144 @@ extension WESInitSnapshotQueryFilter
       ));
     });
   }
+
+  QueryBuilder<WESInitSnapshot, WESInitSnapshot, QAfterFilterCondition>
+      wesPlannedExercisesJsonEqualTo(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'wesPlannedExercisesJson',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<WESInitSnapshot, WESInitSnapshot, QAfterFilterCondition>
+      wesPlannedExercisesJsonGreaterThan(
+    String value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'wesPlannedExercisesJson',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<WESInitSnapshot, WESInitSnapshot, QAfterFilterCondition>
+      wesPlannedExercisesJsonLessThan(
+    String value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'wesPlannedExercisesJson',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<WESInitSnapshot, WESInitSnapshot, QAfterFilterCondition>
+      wesPlannedExercisesJsonBetween(
+    String lower,
+    String upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'wesPlannedExercisesJson',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<WESInitSnapshot, WESInitSnapshot, QAfterFilterCondition>
+      wesPlannedExercisesJsonStartsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.startsWith(
+        property: r'wesPlannedExercisesJson',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<WESInitSnapshot, WESInitSnapshot, QAfterFilterCondition>
+      wesPlannedExercisesJsonEndsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.endsWith(
+        property: r'wesPlannedExercisesJson',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<WESInitSnapshot, WESInitSnapshot, QAfterFilterCondition>
+      wesPlannedExercisesJsonContains(String value,
+          {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.contains(
+        property: r'wesPlannedExercisesJson',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<WESInitSnapshot, WESInitSnapshot, QAfterFilterCondition>
+      wesPlannedExercisesJsonMatches(String pattern,
+          {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.matches(
+        property: r'wesPlannedExercisesJson',
+        wildcard: pattern,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<WESInitSnapshot, WESInitSnapshot, QAfterFilterCondition>
+      wesPlannedExercisesJsonIsEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'wesPlannedExercisesJson',
+        value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<WESInitSnapshot, WESInitSnapshot, QAfterFilterCondition>
+      wesPlannedExercisesJsonIsNotEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        property: r'wesPlannedExercisesJson',
+        value: '',
+      ));
+    });
+  }
 }
 
 extension WESInitSnapshotQueryObject
@@ -1852,6 +2000,20 @@ extension WESInitSnapshotQuerySortBy
       sortByUpdatedAtDesc() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'updatedAt', Sort.desc);
+    });
+  }
+
+  QueryBuilder<WESInitSnapshot, WESInitSnapshot, QAfterSortBy>
+      sortByWesPlannedExercisesJson() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'wesPlannedExercisesJson', Sort.asc);
+    });
+  }
+
+  QueryBuilder<WESInitSnapshot, WESInitSnapshot, QAfterSortBy>
+      sortByWesPlannedExercisesJsonDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'wesPlannedExercisesJson', Sort.desc);
     });
   }
 }
@@ -2033,6 +2195,20 @@ extension WESInitSnapshotQuerySortThenBy
       return query.addSortBy(r'updatedAt', Sort.desc);
     });
   }
+
+  QueryBuilder<WESInitSnapshot, WESInitSnapshot, QAfterSortBy>
+      thenByWesPlannedExercisesJson() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'wesPlannedExercisesJson', Sort.asc);
+    });
+  }
+
+  QueryBuilder<WESInitSnapshot, WESInitSnapshot, QAfterSortBy>
+      thenByWesPlannedExercisesJsonDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'wesPlannedExercisesJson', Sort.desc);
+    });
+  }
 }
 
 extension WESInitSnapshotQueryWhereDistinct
@@ -2124,6 +2300,14 @@ extension WESInitSnapshotQueryWhereDistinct
       return query.addDistinctBy(r'updatedAt');
     });
   }
+
+  QueryBuilder<WESInitSnapshot, WESInitSnapshot, QDistinct>
+      distinctByWesPlannedExercisesJson({bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'wesPlannedExercisesJson',
+          caseSensitive: caseSensitive);
+    });
+  }
 }
 
 extension WESInitSnapshotQueryProperty
@@ -2209,6 +2393,13 @@ extension WESInitSnapshotQueryProperty
       updatedAtProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'updatedAt');
+    });
+  }
+
+  QueryBuilder<WESInitSnapshot, String, QQueryOperations>
+      wesPlannedExercisesJsonProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'wesPlannedExercisesJson');
     });
   }
 }

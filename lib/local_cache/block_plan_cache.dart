@@ -107,14 +107,16 @@ class BlockPlanCache {
     required String blockId,
     required String dateYmd,
     required List<Map<String, dynamic>> plannedExercises,
+    required List<Map<String, dynamic>> wesPlannedExercises,   // ← NEW
     required List<Map<String, dynamic>> previousWorkout,
     required List<Map<String, dynamic>> topSetHistory,
     String? hintsJson,
     String? hintsInputsHash,
-    bool? hintsReady,        // NEW
-    int? schemaVersion,      // NEW
+    bool? hintsReady,
+    int? schemaVersion,
     DateTime? updatedAt,
   }) async {
+
 
     final isar = await IsarDb.instance;
 
@@ -123,6 +125,7 @@ class BlockPlanCache {
       ..blockId = blockId
       ..dateYmd = dateYmd
       ..plannedExercisesJson = jsonEncode(plannedExercises)
+      ..wesPlannedExercisesJson = jsonEncode(wesPlannedExercises)  // ← NEW
       ..previousWorkoutJson  = jsonEncode(previousWorkout)
       ..topSetHistoryJson    = jsonEncode(topSetHistory)
       ..hintsJson            = (hintsJson == null || hintsJson.isEmpty) ? '{}' : hintsJson   // 👈 NEW
