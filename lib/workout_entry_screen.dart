@@ -29,6 +29,7 @@ import 'local_cache/isar_wes_init.dart';
 import 'local_cache/isar_db.dart';
 import 'package:isar/isar.dart';
 import 're_daily.dart';
+import 'progression_engine.dart';
 import 'formula.dart' as formula;
 
 
@@ -4133,6 +4134,50 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           _primeLatestBodyweightCache(_cachedUid!);
           await _primeBodyweightHistoryCache(_cachedUid!);
 
+// [A/B] Compare WES vs Engine for first few rows
+          for (int i = 0; i < (_selectedExercisesWithCircuits.length).clamp(0, 3); i++) {
+            final wes = _getProgressedValues(i);
+            final engine = ProgressionEngine.engineProgressedValues(
+              ProgressionEngineInputs(
+                blockStartDate: blockStartDate,
+                blockEndDate: blockEndDate,
+                selectedDate: _selectedDate,
+                cachedUid: _cachedUid,
+                selectedExercisesWithCircuits: _selectedExercisesWithCircuits,
+                exerciseSettings: _exerciseSettings,
+                cachedProgressedValues: _cachedProgressedValues,
+                seedHintsByKey: _seedHintsByKey,
+                resolvedBB2Values: _resolvedBB2Values,   // ✅ pass BB2 overrides
+                rowKeyBy: _rowKeyBy,
+                rowCacheKey: _rowCacheKey,
+                getApplicableWeekIndex: _getApplicableWeekIndex,
+                getRirFromPlanOrInput: getRirFromPlanOrInput,
+                weightTextAt: (exIdx, setIdx) => _weightControllers[exIdx][setIdx].text,
+                rirTextAt: (exIdx, setIdx) => _rirControllers[exIdx][setIdx].text,
+                debugPrintBlockDates: _debugPrintBlockDates,
+              ),
+              i,
+            );
+
+            // Compare outputs
+            debugPrint('[A/B] row=$i WES=${wes['weight']}kg/${wes['reps']} '
+                'ENGINE=${engine['weight']}kg/${engine['reps']} '
+                'ids: ${wes['exerciseId']} vs ${engine['exerciseId']}');
+
+            // Show BB2 overrides if present
+            final exName = _selectedExercisesWithCircuits[i]['name']?.trim() ?? '';
+            final exId = PeriodizationModelUtils.nameToId[exName] ?? exName;
+            final overrides = _resolvedBB2Values[exId];
+            if (overrides != null) {
+              debugPrint('[BB2] row=$i overrides → weight=${overrides['weight']} '
+                  'reps=${overrides['reps']} rir=${overrides['rir']}');
+            } else {
+              debugPrint('[BB2] row=$i overrides → none');
+            }
+          }
+
+
+
           if (widget.initialDate != null) {
             _selectedDate = widget.initialDate!;
             _workoutNameController.text = _formatWorkoutDate(_selectedDate);
@@ -4302,6 +4347,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     print('🧠 [WES] initState complete — awaiting _initialLoad...');
     _wesInitTimer.stop();
     print('⏱️ [WES] initState total = ${_wesInitTimer.elapsedMilliseconds}ms');
+
+
+
   }
 
 
