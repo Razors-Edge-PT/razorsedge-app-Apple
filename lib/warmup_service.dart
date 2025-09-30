@@ -116,61 +116,228 @@ class WarmupService {
 // returns the list WES paints: selectedExercisesWithCircuits
 // ──────────────────────────────────────────────────────────────
   Future<List<Map<String, dynamic>>> _loadPlannedDay({
-  required FirebaseFirestore fs,
-  required String uid,
-  required String blockId,
-  required int weekIndex,
-  required int dayIndex,
+    required FirebaseFirestore fs,
+    required String uid,
+    required String blockId,
+    required int weekIndex,
+    required int dayIndex,
+    required DateTime selectedDate, // ← pass _sel
   }) async {
-  // Try super-cache first
-  final cached = await BlockPlanCache.getDay(
-  uid: uid,
-  blockId: blockId,
-  weekIndex: weekIndex,
-  dayIndex: dayIndex,
-  );
-  if (cached != null) {
-  print('🗂️ [Warmup:3] planned day (Isar) → ${cached.length} exercises');
-  print('   • names=${cached.map((e) => (e['name'] ?? e['exercise'] ?? '').toString()).toList()}');
-  return cached;
+    print('🗓️ [Warmup:3] selectedDate → $selectedDate');
+
+
+
+    // Try super-cache first
+    final cached = await BlockPlanCache.getDay(
+      uid: uid,
+      blockId: blockId,
+      weekIndex: weekIndex,
+      dayIndex: dayIndex,
+    );
+
+    if (cached != null) {
+      print('🗂️ [Warmup:3] cache HIT → ${cached.length} exercises');
+
+      // merge wesPlannedExercises + exercises for selectedDate into the cached list
+      final merged = List<Map<String, dynamic>>.from(cached);
+
+      String _ymd(DateTime d) {
+        final m = d.month.toString().padLeft(2, '0');
+        final da = d.day.toString().padLeft(2, '0');
+        return '${d.year}-$m-$da';
+      }
+      String _norm(String s) {
+        var t = s.toLowerCase().trim();
+        t = t.replaceAll(RegExp(r'\([^)]*\)'), '');
+        t = t.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');
+        t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
+        t = t.replaceAll(RegExp(r'\bdb\b'), 'dumbbell');
+        t = t.replaceAll(RegExp(r'\bbb\b'), 'barbell');
+        return t;
+      }
+      bool _alreadyHas(Map<String, dynamic> cand) {
+        final cname = (cand['name'] ?? cand['exercise'] ?? '').toString();
+        final cid   = (cand['exerciseId'] ?? cand['id'] ?? cand['exercise_id'] ?? '').toString();
+        for (final p in merged) {
+          final pname = (p['name'] ?? p['exercise'] ?? '').toString();
+          final pid   = (p['exerciseId'] ?? p['id'] ?? p['exercise_id'] ?? '').toString();
+          if (cid.isNotEmpty && pid.isNotEmpty && cid == pid) return true;
+          if (cid.isEmpty && pid.isEmpty && _norm(cname) == _norm(pname)) return true;
+        }
+        return false;
+      }
+
+      try {
+        final ymd = _ymd(selectedDate);
+        final wesSnap = await fs
+            .collection('users').doc(uid)
+            .collection('workouts').doc(ymd)
+            .get(const GetOptions(source: Source.server));
+
+        int added = 0;
+        if (wesSnap.exists) {
+          final data = wesSnap.data() ?? const <String, dynamic>{};
+          final lists = <List<dynamic>>[
+            (data['wesPlannedExercises'] ?? []) as List<dynamic>,
+            (data['exercises'] ?? []) as List<dynamic>,
+          ];
+          for (final src in lists) {
+            for (final ex in src.whereType<Map>()) {
+              final name = (ex['name'] ?? ex['exercise'] ?? '').toString();
+              final id   = (ex['exerciseId'] ?? ex['id'] ?? ex['exercise_id'] ?? '').toString();
+              if (name.isEmpty && id.isEmpty) continue;
+              if (_alreadyHas(Map<String,dynamic>.from(ex))) continue;
+              merged.add({'name': name, 'exerciseId': id, 'circuitIndex': (ex['circuitIndex'] is num) ? (ex['circuitIndex'] as num).toInt() : 0});
+              added++;
+            }
+          }
+        }
+
+        if (added > 0) {
+          // write back so next boot hits updated Isar
+          await BlockPlanCache.putDay(
+            uid: uid,
+            blockId: blockId,
+            weekIndex: weekIndex,
+            dayIndex: dayIndex,
+            exercises: merged,
+            updatedAt: DateTime.now(),
+          );
+          print('➕ [Warmup:3] cache merged from WES (added=$added, total=${merged.length})');
+        }
+      } catch (e) {
+        print('⚠️ [Warmup:3] cache-merge failed: $e');
+      }
+
+      return merged;
+    }
+
+
+    // Fallback to Firestore day doc
+    final dayDoc = await fs
+        .collection('planned_blocks')
+        .doc(uid)
+        .collection('blocks')
+        .doc(blockId)
+        .collection('weeks')
+        .doc('week_$weekIndex')
+        .collection('days')
+        .doc('day_$dayIndex')
+        .get(const GetOptions(source: Source.server));
+
+    final exercises = <Map<String, dynamic>>[];
+    if (dayDoc.exists) {
+      final data = dayDoc.data()!;
+      final raw = (data['exercises'] ?? data['planned'] ?? data['rows']);
+      if (raw is List) {
+        for (final e in raw) {
+          if (e is Map) exercises.add(Map<String, dynamic>.from(e));
+        }
+      }
+    }
+
+    // 🔹 Merge from /users/{uid}/workouts/{ymd}
+    String _ymd(DateTime d) {
+      final m = d.month.toString().padLeft(2, '0');
+      final da = d.day.toString().padLeft(2, '0');
+      return '${d.year}-$m-$da';
+    }
+
+    String _norm(String s) {
+      var t = s.toLowerCase().trim();
+      t = t.replaceAll(RegExp(r'\([^)]*\)'), '');
+      t = t.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');
+      t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
+      t = t.replaceAll(RegExp(r'\bdb\b'), 'dumbbell');
+      t = t.replaceAll(RegExp(r'\bbb\b'), 'barbell');
+      return t;
+    }
+
+    bool _alreadyHas(Map<String, dynamic> cand) {
+      final cname = (cand['name'] ?? cand['exercise'] ?? '').toString();
+      final cid   = (cand['exerciseId'] ?? cand['id'] ?? cand['exercise_id'] ?? '').toString();
+      for (final p in exercises) {
+        final pname = (p['name'] ?? p['exercise'] ?? '').toString();
+        final pid   = (p['exerciseId'] ?? p['id'] ?? p['exercise_id'] ?? '').toString();
+        if (cid.isNotEmpty && pid.isNotEmpty && cid == pid) return true;
+        if (cid.isEmpty && pid.isEmpty && _norm(cname) == _norm(pname)) return true;
+      }
+      return false;
+    }
+
+    try {
+      final ymd = _ymd(selectedDate);
+      final wesSnap = await fs
+          .collection('users').doc(uid)
+          .collection('workouts').doc(ymd)
+          .get(const GetOptions(source: Source.server));
+
+      if (wesSnap.exists) {
+        final data = wesSnap.data() ?? const <String, dynamic>{};
+
+        // pull both branches
+        final fromPlanned = (data['wesPlannedExercises'] is List)
+            ? (data['wesPlannedExercises'] as List)
+            .whereType<Map>()
+            .map((m) => Map<String, dynamic>.from(m))
+            .toList()
+            : const <Map<String, dynamic>>[];
+
+        final fromCompleted = (data['exercises'] is List)
+            ? (data['exercises'] as List)
+            .whereType<Map>()
+            .map((m) => Map<String, dynamic>.from(m))
+            .toList()
+            : const <Map<String, dynamic>>[];
+
+        int added = 0;
+        for (final src in [fromPlanned, fromCompleted]) {
+          for (final ex in src) {
+            // map to minimal shape Step 4 expects
+            final name = (ex['name'] ?? ex['exercise'] ?? '').toString();
+            final id   = (ex['exerciseId'] ?? ex['id'] ?? ex['exercise_id'] ?? '').toString();
+            if (name.isEmpty && id.isEmpty) continue;
+            if (_alreadyHas(ex)) continue;
+
+            exercises.add({
+              'name': name,
+              'exerciseId': id,
+              'circuitIndex': (ex['circuitIndex'] is num) ? (ex['circuitIndex'] as num).toInt() : 0,
+            });
+            added++;
+          }
+        }
+
+        if (fromPlanned.isNotEmpty || fromCompleted.isNotEmpty) {
+          final srcMsg = [
+            if (fromPlanned.isNotEmpty) 'wesPlannedExercises=${fromPlanned.length}',
+            if (fromCompleted.isNotEmpty) 'exercises=${fromCompleted.length}',
+          ].join(', ');
+          print('➕ [Warmup:3b] merged /users/$uid/workouts/$ymd ($srcMsg) '
+              '(added=$added, total=${exercises.length})');
+          print('   • names=${exercises.map((e) => (e['name'] ?? e['exercise'] ?? '').toString()).toList()}');
+        }
+      }
+    } catch (e) {
+      print('⚠️ [Warmup:3b] merge failed: $e');
+    }
+
+    // Cache for next boot
+    await BlockPlanCache.putDay(
+      uid: uid,
+      blockId: blockId,
+      weekIndex: weekIndex,
+      dayIndex: dayIndex,
+      exercises: exercises,
+      updatedAt: DateTime.now(),
+    );
+
+    print('🗂️ [Warmup:3] planned day (FS) → ${exercises.length} exercises');
+    return exercises;
   }
 
-  // Fallback to Firestore day doc
-  final dayDoc = await fs
-      .collection('planned_blocks')
-      .doc(uid)
-      .collection('blocks')
-      .doc(blockId)
-      .collection('weeks')
-      .doc('week_$weekIndex')
-      .collection('days')
-      .doc('day_$dayIndex')
-      .get(const GetOptions(source: Source.server));
 
-  final exercises = <Map<String, dynamic>>[];
-  if (dayDoc.exists) {
-  final data = dayDoc.data()!;
-  final raw = (data['exercises'] ?? data['planned'] ?? data['rows']);
-  if (raw is List) {
-  for (final e in raw) {
-  if (e is Map) exercises.add(Map<String, dynamic>.from(e));
-  }
-  }
-  }
 
-  // Cache for next boot
-  await BlockPlanCache.putDay(
-  uid: uid,
-  blockId: blockId,
-  weekIndex: weekIndex,
-  dayIndex: dayIndex,
-  exercises: exercises,
-  updatedAt: DateTime.now(),
-  );
-
-  print('🗂️ [Warmup:3] planned day (FS) → ${exercises.length} exercises');
-  return exercises;
-  }
 
 // ──────────────────────────────────────────────────────────────
 // STEP 4: Build exerciseSettings map used by the engine
@@ -793,7 +960,9 @@ class WarmupService {
           blockId: activeBlockId,
           weekIndex: weekIndex,
           dayIndex: dayIndex,
+          selectedDate: _sel, // 🔹 added
         );
+
 
         // ── STEP 4: exercise settings (progressionModel/repTargets/increments/caps)
         final exerciseSettings = await _loadExerciseSettingsForPlanned(
