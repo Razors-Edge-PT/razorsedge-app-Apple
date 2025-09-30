@@ -1473,7 +1473,7 @@ class PeriodizationModelUtils {
 
     if (baseE1RMNullable == null) {
       print('🧭 [SmartProgression] Base source = $baseSource');
-      print('🚫 No viable E1RM source. Using default weight → $defaultWeight');
+
       return {
         'weight': defaultWeight,
         'reps': repTarget,
@@ -1495,8 +1495,6 @@ class PeriodizationModelUtils {
       exerciseName: exerciseName,
     );
 
-    print('🧰 [SP] validWeights count=${validWeights.length} '
-        'first=${validWeights.first} last=${validWeights.last}');
     // [ADD PRINT] —— are SP’s internal candidates consistent with router-provided increments near default?
     final bool _gridsDifferNearDefault = (() {
       if (validWeights.isEmpty || increments.isEmpty) return true;
@@ -1506,7 +1504,7 @@ class PeriodizationModelUtils {
       final rNear = nearest(increments,   defaultWeight);
       return (vNear - rNear).abs() > 0.01;
     })();
-    print('🧮 [SP] gridMismatchNearDefault=${_gridsDifferNearDefault} (default=${defaultWeight.toStringAsFixed(2)})');
+
 
 // 🎯 Center trials on the weight implied by baseE1RM at (repTarget, RIR),
 // then snap to the nearest valid increment.
@@ -1534,7 +1532,7 @@ class PeriodizationModelUtils {
         '(implied=${implied.toStringAsFixed(1)}, '
         'default=${defaultWeight.toStringAsFixed(1)})');
 
-    print('🔍 [SmartProgression] Valid weights for $exerciseName:\n$validWeights');
+
 
 
     final usedCombos = PeriodizationModelUtils.getUsedWeightRepsRirTripletsForExercise(
@@ -1612,7 +1610,7 @@ class PeriodizationModelUtils {
 
     for (final w in trialWeights) {
 
-      print('⚖️ Testing weight: $w');
+
 
 
       final Set<int> repTrials = {

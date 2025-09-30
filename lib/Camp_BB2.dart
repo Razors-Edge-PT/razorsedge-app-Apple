@@ -3012,7 +3012,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     };
 
     await prefs.setString('bb2_dayData_$dateKey', jsonEncode(dayData));
-    print('💾 [BB2 → SharedPrefs] Saved day $dateKey → ${jsonEncode(dayData)}');
   }
 
   void _trimEmptyExerciseRows(int weekIndex, int dayIndex) {

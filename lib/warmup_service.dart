@@ -572,12 +572,11 @@ class WarmupService {
       }
 
       // Print summary + 4 most recent
-      print('⚖️ [Warmup:7] bodyweight samples (≤90d) → ${samples.length}');
+
       final show = samples.take(4).toList();
       for (final s in show) {
         final dt = s['ts'] as DateTime;
         final kg = (s['weightKg'] as double);
-        print('   • ${_ymd(dt)}  ${kg.toStringAsFixed(1)} kg');
       }
 
       // If later you want the engine to use these without read-through,
@@ -807,7 +806,65 @@ class WarmupService {
         // ── STEP 7: bodyweight prefetch (engine BW conversions may read-through)
         await _prefetchBodyweight(fs: fs, uid: uid);
 
-        // NOTE: Steps 1–7 prepared all inputs. At this point, the engine can run.
+        // ── STEP 8: precompute WES hints with the progression engine (first-paint ready)
+            {
+          // Local engine caches/aliases
+          final Map<String, Map<String, dynamic>> _cache = <String, Map<String, dynamic>>{};
+          final Map<String, dynamic> _seedHintsByKey = <String, dynamic>{}; // optional seeding for instant paint
+
+          // Minimal adapters the engine expects
+          String _rowKeyBy(int idx) => 'wk${weekIndex}_d${dayIndex}_i${idx}';
+          String _rowCacheKey(int idx) => _rowKeyBy(idx);
+          int? _getApplicableWeekIndex(String exerciseId) => weekIndex;
+          double _getRirFromPlanOrInput(int exerciseIndex, int setNumber) {
+            // Warmup has no text controllers; fall back to static plan (RIR models are static for first set)
+            return 1.0; // safe default; engine may override per model
+          }
+          String _weightTextAt(int exIdx, int setIdx) => '';
+          String _rirTextAt(int exIdx, int setIdx) => '';
+
+          final List<Map<String, dynamic>> wesPlanned = <Map<String, dynamic>>[];
+
+          for (int iRow = 0; iRow < planned.length; iRow++) {
+            final res = ProgressionEngine.engineProgressedValues(
+              ProgressionEngineInputs(
+                blockStartDate: blockStart,
+                blockEndDate: blockEnd,
+                selectedDate: _sel,
+                cachedUid: uid,
+                selectedExercisesWithCircuits: planned,
+                exerciseSettings: exerciseSettings,
+                cachedProgressedValues: _cache,
+                seedHintsByKey: _seedHintsByKey,
+                rowKeyBy: _rowKeyBy,
+                rowCacheKey: _rowCacheKey,
+                getApplicableWeekIndex: _getApplicableWeekIndex,
+                getRirFromPlanOrInput: _getRirFromPlanOrInput,
+                weightTextAt: _weightTextAt,
+                rirTextAt: _rirTextAt,
+                debugPrintBlockDates: () {},
+                // ✅ make sure your ProgressionEngineInputs includes this field:
+                resolvedBB2Values: resolvedBB2Values,
+              ),
+              iRow,
+            );
+            wesPlanned.add(res);
+          }
+
+          // DEVBIG: verify we have everything and results look correct
+          print('🧪 [Warmup:8] engine results → ${wesPlanned.length} rows '
+              '(wk=$weekIndex day=$dayIndex date=${_sel.toIso8601String().substring(0,10)})');
+          for (int i = 0; i < wesPlanned.length && i < 4; i++) {
+            final r = wesPlanned[i];
+            print('   • #$i ${r['exerciseName']} → ${r['weight']}kg @ ${r['reps']} (rir=${r['rir']}) '
+                'id=${r['exerciseId']}');
+          }
+
+          // Keep in scope for Step 9 (persist to Isar)
+          // ⛳ anchor: Step 8 outputs
+          final _wesPlannedForPersist = wesPlanned;
+        }
+
         // (You said "no clamping" and we’ll run it in the next step when you’re ready.)
       }
 
