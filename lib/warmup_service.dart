@@ -831,9 +831,122 @@ class WarmupService {
           String _rowCacheKey(int idx) => _rowKeyBy(idx);
           int? _getApplicableWeekIndex(String exerciseId) => weekIndex;
           double _getRirFromPlanOrInput(int exerciseIndex, int setNumber) {
-            // Warmup has no text controllers; fall back to static plan (RIR models are static for first set)
-            return 1.0; // safe default; engine may override per model
+            // — resolve id/name like Step 4 —
+            final row  = planned[exerciseIndex];
+            final name = (row['name'] ?? row['exercise'] ?? '').toString();
+            final exId = (row['exerciseId'] ?? row['id'] ?? row['exercise_id'])?.toString()
+                ?? (PeriodizationModelUtils.nameToId[name] ?? name).toString();
+
+            String _norm(String s) {
+              var t = s.toLowerCase().trim();
+              t = t.replaceAll(RegExp(r'\([^)]*\)'), '');
+              t = t.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');
+              t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
+              t = t.replaceAll(RegExp(r'\bdb\b'), 'dumbbell');
+              t = t.replaceAll(RegExp(r'\bbb\b'), 'barbell');
+              return t;
+            }
+
+            // — locate the Step-4 plan node (id → name → normName) —
+            Map<String, dynamic>? _planNode() {
+              final byId  = exerciseSettings[exId];
+              if (byId is Map<String, dynamic>) return byId;
+              final byNm  = exerciseSettings[name];
+              if (byNm is Map<String, dynamic>) return byNm;
+              final byNNm = exerciseSettings[_norm(name)];
+              if (byNNm is Map<String, dynamic>) return byNNm;
+              return null;
+            }
+
+            final planNode = _planNode();
+            final rirPlan  = (planNode?['rirPlan'] is Map) ? Map<String, dynamic>.from(planNode!['rirPlan']) : null;
+
+            // If no plan at all, return default
+            if (rirPlan == null || rirPlan.isEmpty) {
+              final val = 1.0;
+              print('   • [RIR] wk=${weekIndex + 1} day=$dayIndex sess=? set=$setNumber id=$exId "$name" → $val (default:no-plan)');
+              return val;
+            }
+
+            // — pick week key (prefer exact, then first available) —
+            String? weekKey;
+            final candidateWeeks = [
+              'week_${weekIndex + 1}',
+              'week${weekIndex + 1}', // legacy tolerance
+            ];
+            for (final k in candidateWeeks) {
+              if (rirPlan.containsKey(k)) { weekKey = k; break; }
+            }
+            weekKey ??= (rirPlan.keys.firstWhere(
+                  (k) => k.toString().toLowerCase().startsWith('week'),
+              orElse: () => rirPlan.keys.first,
+            )).toString();
+
+            final weekMap = (rirPlan[weekKey] is Map) ? Map<String, dynamic>.from(rirPlan[weekKey]) : const <String, dynamic>{};
+            if (weekMap.isEmpty) {
+              final val = 1.0;
+              print('   • [RIR] wk=${weekIndex + 1} day=$dayIndex sess=? set=$setNumber id=$exId "$name" → $val (default:empty-week)');
+              return val;
+            }
+
+            // — choose session key robustly —
+            // try exact sessionX, then instanceX, then fallback to session1/instance1, then first session-like key
+            int sessIdx = 1; // by design: Step 4’s structure is 1-based; keep it simple & safe
+            String? sessionKey;
+            final sessCandidates = <String>[
+              'session$sessIdx',
+              'instance$sessIdx',
+              'session1',
+              'instance1',
+            ];
+            for (final k in sessCandidates) {
+              if (weekMap.containsKey(k)) { sessionKey = k; break; }
+            }
+            sessionKey ??= (weekMap.keys.firstWhere(
+                  (k) {
+                final s = k.toString().toLowerCase();
+                return s.startsWith('session') || s.startsWith('instance');
+              },
+              orElse: () => weekMap.keys.first,
+            )).toString();
+
+            final sessMap = (weekMap[sessionKey] is Map) ? Map<String, dynamic>.from(weekMap[sessionKey]) : const <String, dynamic>{};
+            if (sessMap.isEmpty) {
+              final val = 1.0;
+              print('   • [RIR] wk=${weekIndex + 1} day=$dayIndex sess=$sessIdx set=$setNumber id=$exId "$name" → $val (default:empty-session)');
+              return val;
+            }
+
+            // — choose set key robustly —
+            String? setKey;
+            final setCandidates = <String>['set$setNumber', 'set1'];
+            for (final k in setCandidates) {
+              if (sessMap.containsKey(k)) { setKey = k; break; }
+            }
+            setKey ??= (sessMap.keys.firstWhere(
+                  (k) => k.toString().toLowerCase().startsWith('set'),
+              orElse: () => sessMap.keys.first,
+            )).toString();
+
+            final setNode = sessMap[setKey];
+
+            // — read RIR value with tolerant shapes —
+            double? out;
+            if (setNode is Map) {
+              final raw = setNode['rir'] ?? setNode['RIR'];
+              if (raw is num) out = raw.toDouble();
+              if (raw is String) out = double.tryParse(raw);
+            } else if (setNode is num) {
+              out = setNode.toDouble(); // tolerate compact shape: set1: 2.0
+            } else if (setNode is String) {
+              out = double.tryParse(setNode);
+            }
+
+            final val = out ?? 1.0;
+            print('   • [RIR] wk=${weekIndex + 1} day=$dayIndex sess=$sessIdx set=$setNumber id=$exId "$name" → $val (plan)');
+            return val;
           }
+
           String _weightTextAt(int exIdx, int setIdx) => '';
           String _rirTextAt(int exIdx, int setIdx) => '';
 
@@ -945,14 +1058,23 @@ class WarmupService {
           // DEVBIG: verify we have everything and results look correct
           print('🧪 [Warmup:8] engine results → ${wesPlanned.length} rows '
               '(wk=$weekIndex day=$dayIndex date=${_sel.toIso8601String().substring(0,10)})');
+
           for (int i = 0; i < wesPlanned.length && i < 4; i++) {
             final r = wesPlanned[i];
-            print('   • #$i ${r['exerciseName']} → ${r['weight']}kg @ ${r['reps']} (rir=${r['rir']}) '
+            final usedRir = _getRirFromPlanOrInput(i, 1);              // RIR that actually fed the weight calc
+            final overlayRir = (r['rir'] as num?)?.toDouble();         // any BB2 override applied after
+            final rirInfo = (overlayRir == null || overlayRir == usedRir)
+                ? 'rir=$usedRir'
+                : 'rirUsed=$usedRir override=$overlayRir';
+
+            print('   • #$i ${r['exerciseName']} → ${r['weight']}kg @ ${r['reps']} ($rirInfo) '
                 'id=${r['exerciseId']}');
             print('   • [CTX] wk=$weekIndex day=$dayIndex date=${_sel.toIso8601String().substring(0,10)}');
 
 
-          }
+
+
+        }
 
           // Keep in scope for Step 9 (persist to Isar)
           // ⛳ anchor: Step 8 outputs
