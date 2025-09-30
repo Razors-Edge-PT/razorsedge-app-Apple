@@ -275,9 +275,23 @@ class WarmupService {
             (fromBlock?['maxWeightByReps'] is Map)
                 ? Map<String, dynamic>.from(fromBlock!['maxWeightByReps'])
                 : null),
+        'rirPlan': _pick<Map<String, dynamic>?>(
+            (rowSettings?['rirPlan'] is Map)
+                ? Map<String, dynamic>.from(rowSettings!['rirPlan'])
+                : null,
+            (rowMap['rirPlan'] is Map)
+                ? Map<String, dynamic>.from(rowMap['rirPlan'])
+                : null,
+            (fromBlock?['rirPlan'] is Map)
+                ? Map<String, dynamic>.from(fromBlock!['rirPlan'])
+                : null),
       };
 
       settings[id] = resolved;
+      final _peekRir = resolved['rirPlan']?['week1']?['session1']?['set1']?['rir'];
+      if (_peekRir != null) {
+        print('   • [$id] $name RIR peek set1=${_peekRir.toString()}');
+      }
     }
 
     // Summary + detailed per-row print
