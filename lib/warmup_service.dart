@@ -105,7 +105,7 @@ class WarmupService {
     final base = DateTime(blockStartDate.year, blockStartDate.month, blockStartDate.day);
     final deltaDays = d.difference(base).inDays;
     final weekIndex = (deltaDays ~/ 7).clamp(0, 9999);
-    final dayIndex  = (deltaDays % 7).clamp(0, 6);
+    final dayIndex  = ((deltaDays % 7) + 1).clamp(0, 6);
     print('🧮 [Warmup:2] indices → weekIndex=$weekIndex dayIndex=$dayIndex (delta=$deltaDays)');
     return {'weekIndex': weekIndex, 'dayIndex': dayIndex};
   }
@@ -839,6 +839,75 @@ class WarmupService {
 
           final List<Map<String, dynamic>> wesPlanned = <Map<String, dynamic>>[];
 
+          // ——— instance counting helpers (saved-workouts based) ———
+          String _normName(String s) {
+            var t = s.toLowerCase().trim();
+            t = t.replaceAll(RegExp(r'\([^)]*\)'), '');
+            t = t.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');
+            t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
+            t = t.replaceAll(RegExp(r'\bdb\b'), 'dumbbell');
+            t = t.replaceAll(RegExp(r'\bbb\b'), 'barbell');
+            return t;
+          }
+
+          DateTime? _parseAnyDate(dynamic v) {
+            if (v == null) return null;
+            if (v is Timestamp) return v.toDate();
+            if (v is int) return DateTime.fromMillisecondsSinceEpoch(v);
+            if (v is String) return DateTime.tryParse(v);
+            return null;
+          }
+
+// Count how many times this exercise appears in SAVED workouts for THIS WEEK up to selected date (inclusive)
+          int _priorSavedInstancesThisWeekFor(int rowIdx) {
+            final row = planned[rowIdx];
+            final name = (row['name'] ?? row['exercise'] ?? '').toString();
+            final norm = _normName(name);
+
+            final startOfBlock = DateTime(blockStart.year, blockStart.month, blockStart.day);
+            final weekStart = startOfBlock.add(Duration(days: weekIndex * 7));
+            final weekEndInclusive = DateTime(_sel.year, _sel.month, _sel.day);
+
+            int count = 0;
+            for (final w in PeriodizationModelUtils.savedWorkoutsList) {
+              final d = _parseAnyDate(w['date']);
+              if (d == null) continue;
+              final dt = DateTime(d.year, d.month, d.day);
+              if (dt.isBefore(weekStart) || dt.isAfter(weekEndInclusive)) continue;
+
+              final exs = w['exercises'];
+              if (exs is! List) continue;
+              for (final ex in exs) {
+                if (ex is! Map) continue;
+                final n = (ex['name'] ?? ex['exercise'] ?? '').toString();
+                if (n.isEmpty) continue;
+                if (_normName(n) == norm) count++; // count every occurrence recorded that day
+              }
+            }
+            return count;
+          }
+
+// Count today's *planned* occurrence index (1-based) up to this row
+          int _todayPlannedIndexFor(int rowIdx) {
+            final targetId = (planned[rowIdx]['exerciseId'] ??
+                planned[rowIdx]['id'] ??
+                planned[rowIdx]['exercise_id'])?.toString()
+                ?? (PeriodizationModelUtils.nameToId[
+                (planned[rowIdx]['name'] ?? planned[rowIdx]['exercise'] ?? '').toString()
+                ] ??
+                    (planned[rowIdx]['name'] ?? planned[rowIdx]['exercise'] ?? '').toString()).toString();
+            int seen = 0;
+            for (int i = 0; i <= rowIdx && i < planned.length; i++) {
+              final pid = (planned[i]['exerciseId'] ?? planned[i]['id'] ?? planned[i]['exercise_id'])?.toString()
+                  ?? (PeriodizationModelUtils.nameToId[
+                  (planned[i]['name'] ?? planned[i]['exercise'] ?? '').toString()
+                  ] ??
+                      (planned[i]['name'] ?? planned[i]['exercise'] ?? '').toString()).toString();
+              if (pid == targetId) seen++;
+            }
+            return seen; // 1,2,3...
+          }
+
           for (int iRow = 0; iRow < planned.length; iRow++) {
             final res = ProgressionEngine.engineProgressedValues(
               ProgressionEngineInputs(
@@ -863,6 +932,14 @@ class WarmupService {
               iRow,
             );
             wesPlanned.add(res);
+            print('   • #$iRow ${res['exerciseName']} → ${res['weight']}kg @ ${res['reps']} (rir=${res['rir']}) id=${res['exerciseId']}');
+
+            // 👇 add instance context print here
+            final priorSaved = _priorSavedInstancesThisWeekFor(iRow);
+            final todayIdx   = _todayPlannedIndexFor(iRow);
+            final instance   = priorSaved + todayIdx;
+            print('   • [INST] wk=$weekIndex day=$dayIndex date=${_sel.toIso8601String().substring(0,10)} priorSaved=$priorSaved todayIdx=$todayIdx instance=$instance');
+
           }
 
           // DEVBIG: verify we have everything and results look correct
@@ -872,6 +949,9 @@ class WarmupService {
             final r = wesPlanned[i];
             print('   • #$i ${r['exerciseName']} → ${r['weight']}kg @ ${r['reps']} (rir=${r['rir']}) '
                 'id=${r['exerciseId']}');
+            print('   • [CTX] wk=$weekIndex day=$dayIndex date=${_sel.toIso8601String().substring(0,10)}');
+
+
           }
 
           // Keep in scope for Step 9 (persist to Isar)
