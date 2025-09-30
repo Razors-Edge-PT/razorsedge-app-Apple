@@ -131,6 +131,7 @@ class WarmupService {
   );
   if (cached != null) {
   print('🗂️ [Warmup:3] planned day (Isar) → ${cached.length} exercises');
+  print('   • names=${cached.map((e) => (e['name'] ?? e['exercise'] ?? '').toString()).toList()}');
   return cached;
   }
 
@@ -1021,6 +1022,248 @@ class WarmupService {
             return seen; // 1,2,3...
           }
 
+          double _getRepsFromPlan(int exerciseIndex, int setNumber) {
+            // resolve id/name exactly like Step 4
+            final row  = planned[exerciseIndex];
+            final name = (row['name'] ?? row['exercise'] ?? '').toString();
+            final exId = (row['exerciseId'] ?? row['id'] ?? row['exercise_id'])?.toString()
+                ?? (PeriodizationModelUtils.nameToId[name] ?? name).toString();
+
+            // small locals
+            String _norm(String s) {
+              var t = s.toLowerCase().trim();
+              t = t.replaceAll(RegExp(r'\([^)]*\)'), '');
+              t = t.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');
+              t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
+              t = t.replaceAll(RegExp(r'\bdb\b'), 'dumbbell');
+              t = t.replaceAll(RegExp(r'\bbb\b'), 'barbell');
+              return t;
+            }
+            DateTime _dOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+            DateTime? _parseAnyDate(dynamic v) {
+              if (v == null) return null;
+              if (v is Timestamp) return v.toDate();
+              if (v is int) return DateTime.fromMillisecondsSinceEpoch(v);
+              if (v is String) return DateTime.tryParse(v);
+              return null;
+            }
+            bool _hasValidSet(dynamic setsRaw) {
+              final sets = (setsRaw is List) ? setsRaw.cast<Map>() : const <Map>[];
+              return sets.any((s) {
+                final w = (s['actualWeight'] ?? s['weight'] ?? '').toString().trim();
+                final r = (s['actualReps'] ?? s['reps'] ?? '').toString().trim();
+                return double.tryParse(w) != null && int.tryParse(r) != null;
+              });
+            }
+            int _safeParseInt(dynamic v, {int fallback = 10}) {
+              if (v is num) return v.toInt();
+              if (v is String) {
+                final m = RegExp(r'(-?\d+)').firstMatch(v.trim());
+                if (m != null) return int.tryParse(m.group(1)!) ?? fallback;
+              }
+              return fallback;
+            }
+
+            // get Step-4 exercise settings node (id → name → normName)
+            Map<String, dynamic>? _planNode() {
+              final byId  = exerciseSettings[exId];
+              if (byId is Map<String, dynamic>) return byId;
+              final byNm  = exerciseSettings[name];
+              if (byNm is Map<String, dynamic>) return byNm;
+              final byNNm = exerciseSettings[_norm(name)];
+              if (byNNm is Map<String, dynamic>) return byNNm;
+              return null;
+            }
+
+            // helper: today's planned index for this exercise (1-based up to this row)
+            int _todayPlannedIndex() {
+              int seen = 0;
+              for (int i = 0; i <= exerciseIndex && i < planned.length; i++) {
+                final pid = (planned[i]['exerciseId'] ?? planned[i]['id'] ?? planned[i]['exercise_id'])?.toString()
+                    ?? (PeriodizationModelUtils.nameToId[
+                    (planned[i]['name'] ?? planned[i]['exercise'] ?? '').toString()
+                    ] ??
+                        (planned[i]['name'] ?? planned[i]['exercise'] ?? '').toString()).toString();
+                if (pid == exId) seen++;
+              }
+              return seen;
+            }
+
+            // helper: completed instances across the block strictly before today (unique days with valid sets)
+            int _completedBeforeTodayInBlock() {
+              if (blockStart == null || _sel == null) return 0;
+              final base       = _dOnly(blockStart);
+              final todayStart = _dOnly(_sel);
+              final targetNameNorm = _norm(name);
+
+              final matchedDays = <String>{};
+              for (final w in PeriodizationModelUtils.savedWorkoutsList) {
+                final dt = _parseAnyDate(w['date']);
+                if (dt == null) continue;
+                final dayOnly = _dOnly(dt);
+                if (dayOnly.isBefore(base) || !dayOnly.isBefore(todayStart)) continue; // [base, today)
+
+                final exs = w['exercises'];
+                if (exs is! List) continue;
+
+                final matched = exs.any((ex) {
+                  if (!_hasValidSet(ex['sets'])) return false;
+
+                  // Prefer id match; fallback to name→id mapping or normalized name
+                  final rowId = (ex['exerciseId'] ?? ex['id'] ?? ex['exercise_id'] ?? '').toString().trim();
+                  if (rowId.isNotEmpty && rowId == exId) return true;
+
+                  final exName = (ex['name'] ?? ex['exercise'] ?? ex['title'] ?? '').toString().trim();
+                  if (exName.isEmpty) return false;
+
+                  final mapped = (PeriodizationModelUtils.nameToId[exName] ?? '').toString().trim();
+                  if (mapped == exId) return true;
+
+                  return _norm(exName) == targetNameNorm;
+                });
+
+                if (matched) {
+                  final key = '${dayOnly.year}-${dayOnly.month.toString().padLeft(2, '0')}-${dayOnly.day.toString().padLeft(2, '0')}';
+                  matchedDays.add(key);
+                }
+              }
+              return matchedDays.length;
+            }
+
+            // pull node + model name from Step 4
+            final plan = _planNode();
+            if (plan == null) return 10.0;
+
+            final periodization = (plan['periodizationModel'] ?? '').toString().toLowerCase();
+
+            // === CASE 1: DUP, By Exposure → global across the block ===
+            if (periodization.contains('exposure')) {
+              // instance list lives under repTargets.week1.instance{n}
+              final repTargets = (plan['repTargets'] is Map)
+                  ? Map<String, dynamic>.from(plan['repTargets'])
+                  : null;
+              if (repTargets == null || repTargets.isEmpty) return 10.0;
+
+              // pick week1 (or the first week-like map as a fallback)
+              String? weekKey;
+              for (final k in ['week1', 'week_1']) {
+                if (repTargets.containsKey(k)) { weekKey = k; break; }
+              }
+              weekKey ??= repTargets.keys.firstWhere(
+                    (k) => k.toString().toLowerCase().startsWith('week'),
+                orElse: () => repTargets.keys.first,
+              ).toString();
+
+              final wk = repTargets[weekKey];
+              if (wk is! Map) return 10.0;
+
+              // collect & sort instance keys
+              final instanceEntries = wk.entries
+                  .where((e) => e.key.toString().toLowerCase().startsWith('instance'))
+                  .toList()
+                ..sort((a, b) => a.key.compareTo(b.key));
+
+              if (instanceEntries.isEmpty) return 10.0;
+
+              final completedBefore = _completedBeforeTodayInBlock();
+              final todayIdx        = _todayPlannedIndex(); // 1-based
+              final globalIndex0    = (completedBefore + todayIdx - 1) % instanceEntries.length;
+
+              final raw = instanceEntries[globalIndex0].value?.toString() ?? '';
+              // formats like "9 x 3" → take the first integer as reps
+              final m = RegExp(r'^\s*(\d+)').firstMatch(raw);
+              return (m != null ? int.tryParse(m.group(1)!) ?? 10 : 10).toDouble();
+            }
+
+            // === CASE 2+: other models → keep your existing tolerant behavior ===
+            // 2a) try reps in rirPlan[week][session][set].reps (matches how you read RIR)
+            final rirPlan = (plan['rirPlan'] is Map)
+                ? Map<String, dynamic>.from(plan['rirPlan'])
+                : null;
+            if (rirPlan != null && rirPlan.isNotEmpty) {
+              // choose week key
+              String? wKey;
+              for (final k in ['week_${weekIndex + 1}', 'week${weekIndex + 1}', 'week1']) {
+                if (rirPlan.containsKey(k)) { wKey = k; break; }
+              }
+              wKey ??= rirPlan.keys.firstWhere(
+                    (k) => k.toString().toLowerCase().startsWith('week'),
+                orElse: () => rirPlan.keys.first,
+              ).toString();
+
+              final weekMap = (rirPlan[wKey] is Map)
+                  ? Map<String, dynamic>.from(rirPlan[wKey])
+                  : const <String, dynamic>{};
+
+              // prefer session1/instance1 and setN/set1 (same robust selection you used for RIR)
+              String? sessKey;
+              for (final k in ['session1','instance1']) {
+                if (weekMap.containsKey(k)) { sessKey = k; break; }
+              }
+              sessKey ??= weekMap.keys.firstWhere(
+                    (k) {
+                  final s = k.toString().toLowerCase();
+                  return s.startsWith('session') || s.startsWith('instance');
+                },
+                orElse: () => weekMap.keys.first,
+              ).toString();
+
+              final sessMap = (weekMap[sessKey] is Map)
+                  ? Map<String, dynamic>.from(weekMap[sessKey])
+                  : const <String, dynamic>{};
+
+              String? setKey;
+              for (final k in ['set$setNumber', 'set1']) {
+                if (sessMap.containsKey(k)) { setKey = k; break; }
+              }
+              setKey ??= sessMap.keys.firstWhere(
+                    (k) => k.toString().toLowerCase().startsWith('set'),
+                orElse: () => (sessMap.isNotEmpty ? sessMap.keys.first : 'set1'),
+              ).toString();
+
+              final node = sessMap[setKey];
+              if (node is Map) return _safeParseInt(node['reps']).toDouble();
+              if (node is num || node is String) return _safeParseInt(node).toDouble();
+            }
+
+            // 2b) fallback to repTargets[week].instanceX first number
+            final repTargets = (plan['repTargets'] is Map)
+                ? Map<String, dynamic>.from(plan['repTargets'])
+                : null;
+            if (repTargets != null && repTargets.isNotEmpty) {
+              String? weekKey;
+              for (final k in ['week_${weekIndex + 1}', 'week1', 'week${weekIndex + 1}']) {
+                if (repTargets.containsKey(k)) { weekKey = k; break; }
+              }
+              weekKey ??= repTargets.keys.firstWhere(
+                    (k) => k.toString().toLowerCase().startsWith('week'),
+                orElse: () => repTargets.keys.first,
+              ).toString();
+
+              final wk = repTargets[weekKey];
+              if (wk is Map) {
+                // prefer instance1; else first instance-like; else first
+                String? instKey;
+                for (final k in ['instance1']) {
+                  if (wk.containsKey(k)) { instKey = k; break; }
+                }
+                instKey ??= wk.keys.firstWhere(
+                      (k) => k.toString().toLowerCase().startsWith('instance'),
+                  orElse: () => wk.keys.first,
+                ).toString();
+
+                final raw = wk[instKey]?.toString() ?? '';
+                final m = RegExp(r'^\s*(\d+)').firstMatch(raw);
+                if (m != null) return (int.tryParse(m.group(1)!) ?? 10).toDouble();
+              }
+            }
+
+            // final fallback
+            return 10.0;
+          }
+
+
+
           for (int iRow = 0; iRow < planned.length; iRow++) {
             final res = ProgressionEngine.engineProgressedValues(
               ProgressionEngineInputs(
@@ -1061,15 +1304,18 @@ class WarmupService {
 
           for (int i = 0; i < wesPlanned.length && i < 4; i++) {
             final r = wesPlanned[i];
-            final usedRir = _getRirFromPlanOrInput(i, 1);              // RIR that actually fed the weight calc
-            final overlayRir = (r['rir'] as num?)?.toDouble();         // any BB2 override applied after
+            final usedRir  = _getRirFromPlanOrInput(i, 1);     // RIR used for calc
+            final planReps = _getRepsFromPlan(i, 1);           // Reps from Step-4 plan
+            final overlayRir = (r['rir'] as num?)?.toDouble(); // BB2 override after calc (if any)
             final rirInfo = (overlayRir == null || overlayRir == usedRir)
                 ? 'rir=$usedRir'
                 : 'rirUsed=$usedRir override=$overlayRir';
 
-            print('   • #$i ${r['exerciseName']} → ${r['weight']}kg @ ${r['reps']} ($rirInfo) '
+            print('   • #$i ${r['exerciseName']} → ${r['weight']}kg @ $planReps ($rirInfo) '
                 'id=${r['exerciseId']}');
             print('   • [CTX] wk=$weekIndex day=$dayIndex date=${_sel.toIso8601String().substring(0,10)}');
+
+
 
 
 
