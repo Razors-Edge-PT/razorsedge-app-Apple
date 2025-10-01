@@ -102,14 +102,26 @@ class WarmupService {
     required DateTime selectedDate,
     required DateTime blockStartDate,
   }) {
-    final d = DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
-    final base = DateTime(blockStartDate.year, blockStartDate.month, blockStartDate.day);
-    final deltaDays = d.difference(base).inDays;
+    print('🟡 [Step2] blockStartDate=$blockStartDate (${blockStartDate.weekday}) '
+        'selectedDate=$selectedDate (${selectedDate.weekday})');
+    // Normalize both to day ordinals (number of days since epoch, ignores TZ/DST)
+    int _toOrdinal(DateTime d) =>
+        DateTime(d.year, d.month, d.day).millisecondsSinceEpoch ~/
+            Duration.millisecondsPerDay;
+
+    final selOrdinal  = _toOrdinal(selectedDate);
+    final baseOrdinal = _toOrdinal(blockStartDate);
+    final deltaDays   = selOrdinal - baseOrdinal;
+
     final weekIndex = (deltaDays ~/ 7).clamp(0, 9999);
-    final dayIndex  = ((deltaDays % 7) + 7) % 7; // 0..6, handles negatives too
-    print('🧮 [Warmup:2] indices → weekIndex=$weekIndex dayIndex=$dayIndex (delta=$deltaDays)');
+    final dayIndex  = deltaDays % 7; // always 0..6, Mon=0, Tue=1, Thu=3 etc.
+
+    print('🧮 [Warmup:2] indices → weekIndex=$weekIndex dayIndex=$dayIndex (delta=$deltaDays) '
+        'blockStart=$blockStartDate selected=$selectedDate');
+
     return {'weekIndex': weekIndex, 'dayIndex': dayIndex};
   }
+
 
 
 // ──────────────────────────────────────────────────────────────
@@ -1544,6 +1556,7 @@ class WarmupService {
             final instance   = priorSaved + todayIdx;
             print('   • [INST] wk=$weekIndex day=$dayIndex date=${_sel.toIso8601String().substring(0,10)} priorSaved=$priorSaved todayIdx=$todayIdx instance=$instance');
 
+
           }
 
           // DEVBIG: verify we have everything and results look correct
@@ -1561,6 +1574,7 @@ class WarmupService {
 
             print('   • #$i ${r['exerciseName']} → ${r['weight']}kg @ $planReps ($rirInfo) '
                 'id=${r['exerciseId']}');
+
             print('   • [CTX] wk=$weekIndex day=$dayIndex date=${_sel.toIso8601String().substring(0,10)}');
 
 

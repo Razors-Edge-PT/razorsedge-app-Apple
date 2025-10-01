@@ -4880,422 +4880,208 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
   // Anchor A: add inside _WorkoutPageState
   Future<void> _paintFromSnapshotIfAny() async {
-    print('🚩 [WES Boot] _paintFromSnapshotIfAny CALLED');  // <── add here
-    try {
-      // 🔒 Make this strictly single-shot. Set BEFORE any awaits to avoid races.
-      if (_bootPaintDone) return;
-      _bootPaintDone = true;
+    if (_bootPaintDone) return;
+    _bootPaintDone = true;
 
+    try {
       final uid = _cachedUid ?? UserContext.of(context, listen: false).currentUid;
       final bid = _selectedBlockId ?? _activeBlockId;
-      final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+      final date = _selectedDate ?? DateTime.now();
+      if ((uid == null || uid.isEmpty) || bid == null) return;
 
-      if (uid == null || bid == null) {
+      final ymd = DateFormat('yyyy-MM-dd').format(date);
 
-        return;
-      }
-
-      // Use latest snapshot by cachedAt DESC (via helper)
+      // ⏩ Strictly local read (no network)
       final snap = await BlockPlanCache.getInitSnapshot(
         uid: uid,
         blockId: bid,
         dateYmd: ymd,
       );
 
-      if (snap == null) return;
-      _didFastPaint = true;
-      print(() {
-        final p = (snap?.plannedExercisesJson ?? '[]');
-        final w = (snap?.wesPlannedExercisesJson ?? '[]');
-        final v = (snap?.previousWorkoutJson ?? '[]');
-        return '🟪[WES Boot] snapshot uid=$uid bid=$bid ymd=$ymd → '
-            '${snap == null ? 'tNULL' : 'tOK'} '
-            '${snap == null ? '' : 'hintsReady=${snap!.hintsReady} ver=${snap!.schemaVersion} planned=${(jsonDecode(p) as List).length} wes=${(jsonDecode(w) as List).length} prev=${(jsonDecode(v) as List).length} hash=${snap!.hintsInputsHash}'}';
-      }());
-
-
-      // 🔐 Robust decode for planned / previous (handles legacy Map shapes)
-      List<dynamic> _safeListFromJson(String raw, {String? fallbackKey}) {
-        if (raw.isEmpty) return const [];
-        try {
-          final decoded = jsonDecode(raw);
-          if (decoded is List) return decoded;
-          if (decoded is Map) {
-            // Try common legacy keys
-            final keys = <String>[
-              if (fallbackKey != null) fallbackKey,
-              'rows', 'planned', 'exercises', 'list'
-            ];
-            for (final k in keys.where((k) => k != null)) {
-              final v = decoded[k];
-              if (v is List) return v;
-            }
-          }
-        } catch (_) {/* swallow */}
-        return const [];
-      }
-
-      final planned = _safeListFromJson(snap.plannedExercisesJson, fallbackKey: 'planned');
-      final prev    = _safeListFromJson(snap.previousWorkoutJson,   fallbackKey: 'exercises');
-
-      final nowHash = _computeNowInputsHash();
-
-      final bool hintsOk = (snap.schemaVersion != null && snap.schemaVersion! >= kWesSnapshotSchema)
-          && (snap.hintsReady == true)
-          && (snap.hintsJson != null && snap.hintsJson!.isNotEmpty)
-          && (snap.hintsInputsHash != null && snap.hintsInputsHash!.isNotEmpty);
-
-      if (hintsOk && snap.hintsInputsHash == nowHash) {
-        try {
-          final raw = snap.hintsJson!;
-          final decoded = (raw.trimLeft().startsWith('{') || raw.trimLeft().startsWith('['))
-              ? jsonDecode(raw)
-              : {};
-
-          _seedHintsByKey.clear();
-
-          if (decoded is Map) {
-            // Existing path (keep)
-            _seedHintsByKey.addAll(decoded.cast<String, Map<String, dynamic>>());
-
-          } else if (decoded is List) {
-            // NEW: seed from list-of-hints (as written by Warmup)
-            String _k(String n, int ci) => '${n.trim().toLowerCase()}|$ci';
-
-            for (final item in decoded) {
-              if (item is! Map) continue;
-              final m   = Map<String, dynamic>.from(item as Map);
-              final n   = (m['name'] ?? '').toString().trim();
-              if (n.isEmpty) continue;
-              final ci  = (m['circuitIndex'] is int)
-                  ? (m['circuitIndex'] as int)
-                  : int.tryParse('${m['circuitIndex'] ?? 0}') ?? 0;
-
-              // Warmup provides: weight (display), absWeight (absolute), reps, rir
-              final double? disp   = (m['weight']    is num) ? (m['weight']    as num).toDouble() : null;
-              final double? abs    = (m['absWeight'] is num) ? (m['absWeight'] as num).toDouble() : null;
-              final double? reps   = (m['reps']      is num) ? (m['reps']      as num).toDouble() : null;
-              final double? rir    = (m['rir']       is num) ? (m['rir']       as num).toDouble() : null;
-
-              _seedHintsByKey[_k(n, ci)] = <String, dynamic>{
-                // include both absolute and display-added so downstream can choose
-                's1_weight'       : abs,     // absolute kg (non-BW path)
-                's1_weight_added' : disp,    // display domain (BW path)
-                's1_reps'         : reps,
-                'rir'             : rir,
-                // keep originals too (handy for debugging)
-                'name'            : n,
-                'circuitIndex'    : ci,
-                'weight'          : disp,
-                'absWeight'       : abs,
-              };
-            }
-
-          }
-        } catch (e) {
-          _seedHintsByKey.clear();
-        }
-
+      if (snap != null) {
+        print('🟣 [FastPaint] Snapshot found for $ymd');
+        print('🟣 [FastPaint] plannedExercisesJson → ${snap.plannedExercisesJson}');
+        print('🟣 [FastPaint] previousWorkoutJson  → ${snap.previousWorkoutJson}');
+        print('🟣 [FastPaint] hintsJson preview    → ${snap.hintsJson.substring(0, snap.hintsJson.length.clamp(0, 300))}');
       } else {
-
-        unawaited(WarmupService.instance.warmWES(
-          _cachedUid ?? '',
-          activeBlockId: _selectedBlockId ?? _activeBlockId ?? '',
-          selectedDate: _selectedDate ?? DateTime.now(),
-        ));
+        print('🟣 [FastPaint] No snapshot found for $ymd');
       }
+      if (snap == null) return;
 
-      // Choose rows to paint (prefer planned, else derive from prev)
-      List<Map<String, dynamic>> rows = [];
+      // Decode planned rows (preferred) or previous overlay
+      final List planned = snap.plannedExercisesJson.isNotEmpty
+          ? (jsonDecode(snap.plannedExercisesJson) as List)
+          : const [];
+      final List prev = snap.previousWorkoutJson.isNotEmpty
+          ? (jsonDecode(snap.previousWorkoutJson) as List)
+          : const [];
+
+      // Build rows in memory (no setState yet)
+      final tmpRows = <Map<String, dynamic>>[];
       if (planned.isNotEmpty) {
-        rows = planned.map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map)).toList();
-      } else if (prev.isNotEmpty) {
-        rows = prev.map<Map<String, dynamic>>((e) {
+        for (final e in planned) {
           final m = Map<String, dynamic>.from(e as Map);
-          return {
-            'name': (m['name'] ?? '').toString().trim(),
-            'circuitIndex': (m['circuitIndex'] is int)
-                ? (m['circuitIndex'] as int)
-                : int.tryParse('${m['circuitIndex'] ?? 0}') ?? 0,
-          };
-        }).toList();
-      }
-
-      if (rows.isEmpty) {
-        return;
-      }
-
-      // 🟣 Seed velocity flags for the rows we're about to paint (first frame, no flicker)
-      try {
-        // Build quick lookup for previous sets by "name|ci" so we can detect velocity use
-        String _k(String n, int ci) => '${n.trim().toLowerCase()}|$ci';
-
-        final Map<String, List<Map<String, dynamic>>> _prevByKey = {};
-        try {
-          // Re-decode previous if you already have it above; otherwise reuse your parsed `prev`
-          // We’re inside _paintFromSnapshotIfAny and you already computed `prev`
-          for (final raw in prev) {
-            if (raw is! Map) continue;
-            final m = Map<String, dynamic>.from(raw as Map);
-            final name = (m['name'] ?? '').toString().trim();
-            final ci = (m['circuitIndex'] is int)
-                ? (m['circuitIndex'] as int)
-                : int.tryParse('${m['circuitIndex'] ?? 0}') ?? 0;
-            final sets = (m['sets'] as List?)?.whereType<Map>()
-                .map((s0) => Map<String, dynamic>.from(s0)).toList() ?? const [];
-            if (name.isNotEmpty && sets.isNotEmpty) {
-              _prevByKey[_k(name, ci)] = sets;
-            }
-          }
-        } catch (_) {}
-
-        for (final r in rows) {
-          final name = (r['name'] ?? '').toString().trim();
-          final ci   = (r['circuitIndex'] ?? 0) as int;
-          if (name.isEmpty) continue;
-          final key  = _k(name, ci);
-
-          // Resolve an id if possible (your mapping is warmed by exercises.load)
-          final exId = PeriodizationModelUtils.nameToId[name] ?? name;
-
-          // Heuristic 1: explicitly enabled on the plan/details
-          final bool enabledByPlan =
-              (PeriodizationModelUtils.plannedExerciseDetails[exId]?['velocityEnabled'] == true) ||
-                  (PeriodizationModelUtils.plannedExerciseDetails[name]?['velocityEnabled'] == true);
-
-          // Heuristic 2: velocity was used in previous overlay (same row)
-          final prevSets = _prevByKey[key] ?? const <Map<String, dynamic>>[];
-          final bool seenInPrev = prevSets.any((s) => s['velocity'] is num);
-
-          // Decide once, up front
-          final bool shouldShow = enabledByPlan || seenInPrev;
-
-          // Seed map only if not already present (prevents later flips)
-          _showVelocityByExercise.putIfAbsent(key, () => shouldShow);
-        }
-      } catch (_) {
-        // best-effort; never block fast paint
-      }
-
-
-
-      // 🔧 Seed sets + controllers to match the newly-painted rows (avoid 1-frame mismatch)
-      for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
-        // Ensure a SetDetails list exists for this row
-        if (i >= _workoutSets.length) {
-          _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
-        } else if (_workoutSets[i].isEmpty) {
-          _workoutSets[i] = List.generate(_defaultSets, (_) => SetDetails());
-        }
-
-        // Ensure controller matrix has a row for index i
-        void _ensureRow(List<List<TextEditingController>> m) {
-          while (m.length <= i) m.add(<TextEditingController>[]);
-          final need = _workoutSets[i].length;
-          if (m[i].length != need) {
-            m[i] = List.generate(need, (_) => TextEditingController());
-          }
-        }
-
-        _ensureRow(_repsControllers);
-        _ensureRow(_weightControllers);
-        _ensureRow(_rirControllers);
-        _ensureRow(_velocityControllers);
-        _ensureRow(_notesControllers);
-      }
-
-// (Optional) listeners
-      _attachDirtyListeners();
-// 🟣 NEW: Seed first-set fields from hintsJson (final targets) for instant, correct first paint.
-      if (hintsOk && snap.hintsInputsHash == nowHash && snap.hintsJson.isNotEmpty && snap.hintsJson != '{}') {
-        try {
-          final decoded = jsonDecode(snap.hintsJson);
-
-          // Build lookup by "name|ci" regardless of whether decoded is a Map or List
-          String _k(String n, int ci) => '${n.trim().toLowerCase()}|$ci';
-          final Map<String, Map<String, dynamic>> hintsByKey = {};
-
-          if (decoded is Map) {
-            decoded.forEach((k, v) {
-              if (v is Map) {
-                final m = Map<String, dynamic>.from(v);
-                final name = (m['name'] ?? '').toString().trim();
-                final ci = (m['circuitIndex'] is int)
-                    ? (m['circuitIndex'] as int)
-                    : int.tryParse('${m['circuitIndex'] ?? 0}') ?? 0;
-                if (name.isNotEmpty) {
-                  hintsByKey[_k(name, ci)] = m;
-                }
-              }
-            });
-          } else if (decoded is List) {
-            for (final raw in decoded) {
-              if (raw is! Map) continue;
-              final m = Map<String, dynamic>.from(raw as Map);
-              final name = (m['name'] ?? '').toString().trim();
-              final ci = (m['circuitIndex'] is int)
-                  ? (m['circuitIndex'] as int)
-                  : int.tryParse('${m['circuitIndex'] ?? 0}') ?? 0;
-              if (name.isNotEmpty) {
-                hintsByKey[_k(name, ci)] = m;
-              }
-            }
-          }
-
-          // Apply to rows we just painted
-          for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
-            final name = (_selectedExercisesWithCircuits[i]['name'] ?? '').toString();
-            final ci   = (_selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0) as int;
-            final key  = _k(name, ci);
-            final hint = hintsByKey[key];
-            if (hint == null) continue;
-
-            // Ensure at least one set + controllers
-            if (_workoutSets.length <= i || _workoutSets[i].isEmpty) {
-              if (_workoutSets.length <= i) {
-                _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
-              } else {
-                _workoutSets[i] = List.generate(_defaultSets, (_) => SetDetails());
-              }
-            }
-            void _ensureRow(List<List<TextEditingController>> m) {
-              while (m.length <= i) m.add(<TextEditingController>[]);
-              final need = _workoutSets[i].length;
-              if (m[i].length != need) {
-                m[i] = List.generate(need, (_) => TextEditingController());
-              }
-            }
-            _ensureRow(_repsControllers);
-            _ensureRow(_weightControllers);
-            _ensureRow(_rirControllers);
-            _ensureRow(_velocityControllers);
-            _ensureRow(_notesControllers);
-
-            // Pull set1 targets
-            final String exId = PeriodizationModelUtils.nameToId[name] ?? name;
-            final bool isBw   = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
-
-            double? dispWeight = (hint['weight'] is num) ? (hint['weight'] as num).toDouble() : null;
-            final  double? absWeight  = (hint['absWeight'] is num) ? (hint['absWeight'] as num).toDouble() : null;
-            final  double? reps1      = (hint['reps'] is num) ? (hint['reps'] as num).toDouble() : null;
-            final  double? rir1       = (hint['rir'] is num) ? (hint['rir'] as num).toDouble() : null;
-
-            if (dispWeight == null && isBw && absWeight != null) {
-              try {
-                dispWeight = PeriodizationModelUtils.toDisplayAddedWeight(
-                  uid: _cachedUid ?? '',
-                  absoluteKg: absWeight,
-                  exerciseId: exId,
-                  exerciseName: name,
-                  asOfDate: _selectedDate,
-                );
-              } catch (_) {}
-            }
-            if (dispWeight == null && !isBw && absWeight != null) {
-              dispWeight = absWeight;
-            }
-
-            final int j = 0;
-            final repsCtl   = _repsControllers[i][j];
-            final weightCtl = _weightControllers[i][j];
-            final rirCtl    = _rirControllers[i][j];
-
-            final bool hasReps   = repsCtl.text.trim().isNotEmpty;
-            final bool hasWeight = weightCtl.text.trim().isNotEmpty;
-            final bool hasRir    = rirCtl.text.trim().isNotEmpty;
-
-            final current = _workoutSets[i][j];
-            _workoutSets[i][j] = SetDetails(
-              reps:    current.reps    ?? (reps1?.toInt()),
-              weight:  current.weight  ?? dispWeight,
-              rir:     current.rir     ?? rir1,
-              velocity: current.velocity,
-              notes:    current.notes,
-            );
-
-            if (!hasReps && reps1 != null)   repsCtl.text   = reps1.toInt().toString();
-            if (!hasWeight && dispWeight != null) weightCtl.text = dispWeight.toString();
-            if (!hasRir && rir1 != null)     rirCtl.text    = rir1.toString();
-          }
-
-
-        } catch (e) {
-          print('⚠️ [WES Boot] hintsJson parse failed: $e');
-        }
-      }
-
-      if (prev.isNotEmpty) {
-        // Build quick lookup: "name|ci" -> sets[]
-        String _k(String n, int ci) => '${n.trim().toLowerCase()}|$ci';
-        final Map<String, List<Map<String, dynamic>>> prevByKey = {};
-        for (final raw in prev) {
-          if (raw is! Map) continue;
-          final m = Map<String, dynamic>.from(raw as Map);
           final name = (m['name'] ?? '').toString().trim();
+          if (name.isEmpty) continue;
           final ci = (m['circuitIndex'] is int)
-              ? (m['circuitIndex'] as int)
+              ? m['circuitIndex'] as int
               : int.tryParse('${m['circuitIndex'] ?? 0}') ?? 0;
-          final sets = (m['sets'] as List?)?.whereType<Map>().map((s0) => Map<String, dynamic>.from(s0)).toList() ?? const [];
-          if (name.isNotEmpty && sets.isNotEmpty) {
-            prevByKey[_k(name, ci)] = sets;
-          }
+          tmpRows.add({'name': name, 'circuitIndex': ci});
         }
+      } else {
+        for (final e in prev) {
+          final m = Map<String, dynamic>.from(e as Map);
+          final name = (m['name'] ?? '').toString().trim();
+          if (name.isEmpty) continue;
+          final ci = (m['circuitIndex'] ?? 0) as int;
+          tmpRows.add({'name': name, 'circuitIndex': ci});
+        }
+      }
+      if (tmpRows.isEmpty) return;
 
-        for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
-          final name = (_selectedExercisesWithCircuits[i]['name'] ?? '').toString();
-          final ci   = (_selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0) as int;
-          final sets = prevByKey[_k(name, ci)];
-          if (sets == null || sets.isEmpty) continue;
-
-          // Fill up to the number of seeded set rows
-          final limit = (_workoutSets[i].length < sets.length) ? _workoutSets[i].length : sets.length;
-          for (int j = 0; j < limit; j++) {
-            final s = sets[j];
-            // Normalize bodyweight “addedWeight” vs absolute weight
-            final reps = (s['reps'] is int) ? s['reps'] : int.tryParse('${s['reps'] ?? ''}');
-            final weight = (s['weight'] is num) ? (s['weight'] as num).toDouble()
-                : (s['addedWeight'] is num) ? (s['addedWeight'] as num).toDouble()
-                : (s['weightAdded'] is num) ? (s['weightAdded'] as num).toDouble()
-                : null;
-            final rir = (s['rir'] is num) ? (s['rir'] as num).toDouble() : null;
-            final vel = (s['velocity'] is num) ? (s['velocity'] as num).toDouble() : null;
-            final notes = (s['notes'] ?? '').toString();
-
-            // Update model
-            _workoutSets[i][j] = SetDetails(
-              reps: reps,
-              weight: weight,
-              rir: rir,
-              velocity: vel,
-              notes: notes.isEmpty ? null : notes,
-            );
-
-            // Update controllers
-            _repsControllers[i][j].text     = reps?.toString() ?? '';
-            _weightControllers[i][j].text   = weight?.toString() ?? '';
-            _rirControllers[i][j].text      = rir?.toString() ?? '';
-            _velocityControllers[i][j].text = vel?.toString() ?? '';
-            _notesControllers[i][j].text    = notes;
-          }
+      // Parse hints and map to a form WES expects
+      final Map<String, Map<String, dynamic>> hintsByKey = {};
+      if (snap.hintsJson.isNotEmpty && snap.hintsJson != '{}') {
+        final raw = Map<String, dynamic>.from(jsonDecode(snap.hintsJson));
+        for (final e in raw.entries) {
+          final v = Map<String, dynamic>.from(e.value as Map);
+          hintsByKey[e.key] = {
+            's1_weight'       : (v['s1_weight'] as num?)?.toDouble(),
+            's1_weight_added' : (v['s1_weight_added'] as num?)?.toDouble(),
+            's1_reps'         : (v['s1_reps'] as num?)?.toDouble(),
+            's1_rir'          : (v['s1_rir'] as num?)?.toDouble(),
+            'e1rm'            : (v['e1rm'] as num?)?.toDouble(),
+            // Aliases some code paths look for:
+            'weight'          : (v['s1_weight'] as num?)?.toDouble(),
+            'absWeight'       : (v['s1_weight'] as num?)?.toDouble(),
+            'reps'            : (v['s1_reps'] as num?)?.toDouble(),
+            'rir'             : (v['s1_rir'] as num?)?.toDouble(),
+          };
         }
       }
 
-      if (!mounted) return;
+      // Seed hints map now (used by other paths later)
+      _seedHintsByKey
+        ..clear()
+        ..addAll(hintsByKey);
+
+      // ⚙️ Build controllers and sets in locals and hydrate BEFORE setState
+      final tmpSets = List.generate(
+        tmpRows.length,
+            (_) => List.generate(_defaultSets, (_) => SetDetails()),
+      );
+      final tmpReps = List.generate(
+        tmpRows.length,
+            (_) => List.generate(_defaultSets, (_) => TextEditingController()),
+      );
+      final tmpWts = List.generate(
+        tmpRows.length,
+            (_) => List.generate(_defaultSets, (_) => TextEditingController()),
+      );
+      final tmpRir = List.generate(
+        tmpRows.length,
+            (_) => List.generate(_defaultSets, (_) => TextEditingController()),
+      );
+      final tmpVel = List.generate(
+        tmpRows.length,
+            (_) => List.generate(_defaultSets, (_) => TextEditingController()),
+      );
+      final tmpNotes = List.generate(
+        tmpRows.length,
+            (_) => List.generate(_defaultSets, (_) => TextEditingController()),
+      );
+
+      // Hydrate set-1 from hints (with BW conversion) directly into tmp controllers
+      for (var i = 0; i < tmpRows.length; i++) {
+        final name = (tmpRows[i]['name'] ?? '').toString().trim();
+        final ci   = (tmpRows[i]['circuitIndex'] ?? 0) as int;
+        if (name.isEmpty) continue;
+
+        final key = '${name.toLowerCase()}|$ci';
+        final h   = hintsByKey[key];
+        if (h == null) continue;
+
+        final exId = PeriodizationModelUtils.nameToId[name] ?? name;
+        final isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
+
+        final abs = (h['s1_weight'] as num?)?.toDouble();
+        final add = (h['s1_weight_added'] as num?)?.toDouble();
+
+        double? displayWeight;
+        if (isBw) {
+          if (add != null) {
+            displayWeight = add;
+          } else if (abs != null) {
+            displayWeight = PeriodizationModelUtils.toDisplayAddedWeight(
+              uid: uid,
+              absoluteKg: abs,
+              exerciseId: exId,
+              exerciseName: name,
+              asOfDate: _selectedDate,
+            );
+          }
+        } else {
+          displayWeight = abs;
+        }
+
+        final reps = (h['s1_reps'] as num?)?.toInt();
+        final rir  = (h['s1_rir'] as num?)?.toString();
+
+        // Controllers (Set 1)
+        tmpWts[i][0].text  = (displayWeight == null) ? '' : '${displayWeight}';
+        tmpReps[i][0].text = (reps == null) ? '' : '$reps';
+        tmpRir[i][0].text  = (rir ?? '');
+
+        // SetDetails for non-controller readers
+        tmpSets[i][0].weight = displayWeight;
+        tmpSets[i][0].reps   = reps;
+        tmpSets[i][0].rir    = double.tryParse(rir ?? '');
+      }
+
+      // ✅ One paint: assign fully hydrated state
       setState(() {
-        // ⚡ First frame: paint names only (controllers later)
         _selectedExercisesWithCircuits
           ..clear()
-          ..addAll(rows);
+          ..addAll(tmpRows);
 
-        _isLoadingData = false;
+        _workoutSets
+          ..clear()
+          ..addAll(tmpSets);
+        _repsControllers
+          ..clear()
+          ..addAll(tmpReps);
+        _weightControllers
+          ..clear()
+          ..addAll(tmpWts);
+        _rirControllers
+          ..clear()
+          ..addAll(tmpRir);
+        _velocityControllers
+          ..clear()
+          ..addAll(tmpVel);
+        _notesControllers
+          ..clear()
+          ..addAll(tmpNotes);
+
+        _didFastPaint = true;
         _isInitialized = true;
-        _didFastPaint  = true;
+        _isLoadingData = false;
       });
 
+      if (!_firstRowsLogged && _selectedExercisesWithCircuits.isNotEmpty) {
+        _firstRowsLogged = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          print('🟢 [WES UI] First frame painted from ISAR hints (no defaults).');
+        });
+      }
     } catch (e, st) {
+      print('⚠️ [_paintFromSnapshotIfAny] error: $e');
       print(st);
     }
   }
+
+
+
 
 
   Future<void> _loadInitialData() async {
@@ -10689,28 +10475,30 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
 
                                                         const SizedBox(
-                                                            width: 55,
-                                                            child: Text('E1RM',
-                                                                style: _headerStyle)),
-                                                        const SizedBox(
-                                                            width: 4),
+                                                          width: 55,
+                                                          child: Text('E1RM', style: _headerStyle),
+                                                        ),
+                                                        const SizedBox(width: 4),
 
-                                                        // ✅ Conditionally include Velocity (for this exercise only)
+// ✅ Conditionally include Velocity (header)
                                                         if (_showVelocityByExercise[
-                                                        (_selectedExercisesWithCircuits[i]['name'] as String)
-                                                            .toLowerCase()] == true) ...[
+                                                        '${(_selectedExercisesWithCircuits[i]['name'] as String).toLowerCase()}|${_selectedExercisesWithCircuits[i]['circuitIndex']}'
+                                                        ] == true ||
+                                                            _showVelocityByExercise[
+                                                            (_selectedExercisesWithCircuits[i]['name'] as String).toLowerCase()
+                                                            ] == true) ...[
                                                           const SizedBox(
-                                                              width: 45,
-                                                              child: Text(
-                                                                  'Vel.',
-                                                                  style: _headerStyle)),
+                                                            width: 45,
+                                                            child: Text('Vel.', style: _headerStyle),
+                                                          ),
                                                           const SizedBox(width: 4),
                                                         ],
 
                                                         const SizedBox(
-                                                            width: 120,
-                                                            child: Text('Notes',
-                                                                style: _headerStyle)),
+                                                          width: 120,
+                                                          child: Text('Notes', style: _headerStyle),
+                                                        ),
+
                                                       ],
                                                     ),
 
@@ -11091,46 +10879,39 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
                                                         // ✅ Conditionally show Velocity
                                                         if (_showVelocityByExercise[
-                                                        (_selectedExercisesWithCircuits[i]['name'] as String)
-                                                            .toLowerCase()] ==
-                                                            true) ...[
+                                                        '${(_selectedExercisesWithCircuits[i]['name'] as String).toLowerCase()}|${_selectedExercisesWithCircuits[i]['circuitIndex']}'
+                                                        ] == true ||
+                                                            _showVelocityByExercise[
+                                                            (_selectedExercisesWithCircuits[i]['name'] as String).toLowerCase()
+                                                            ] == true) ...[
                                                           SizedBox(
                                                             width: 45,
                                                             child: TextField(
                                                               controller: _velocityControllers[i][j],
-                                                              keyboardType: TextInputType
-                                                                  .number,
+                                                              keyboardType: TextInputType.number,
                                                               decoration: const InputDecoration(
                                                                 hintText: '',
                                                                 hintStyle: TextStyle(
-                                                                  color: Colors
-                                                                      .grey,
-                                                                  fontStyle: FontStyle
-                                                                      .italic,
+                                                                  color: Colors.grey,
+                                                                  fontStyle: FontStyle.italic,
                                                                   fontSize: 11,
                                                                 ),
                                                               ),
-                                                              onChanged: (
-                                                                  value) =>
-                                                                  setState(() {}),
+                                                              onChanged: (value) => setState(() {}),
                                                               style: TextStyle(
-                                                                color: _velocityControllers[i][j]
-                                                                    .text
-                                                                    .isEmpty
-                                                                    ? Colors
-                                                                    .grey
-                                                                    : Colors
-                                                                    .white,
+                                                                color: _velocityControllers[i][j].text.isEmpty
+                                                                    ? Colors.grey
+                                                                    : Colors.white,
                                                               ),
                                                             ),
                                                           ),
-                                                          const SizedBox(
-                                                              width: 4),
+                                                          const SizedBox(width: 4),
                                                         ],
 
-                                                        // Notes
+// Notes
                                                         SizedBox(
-                                                          width: 120,
+
+                                                        width: 120,
                                                           child: TextField(
                                                             controller: _notesControllers[i][j],
                                                             keyboardType: TextInputType
