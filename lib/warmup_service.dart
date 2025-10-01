@@ -7,7 +7,8 @@ import 'dart:convert'; // for jsonEncode / jsonDecode
 import 'dart:async' show unawaited; // if you use unawaited() here
 import 'progression_engine.dart';                // engine + inputs
 import 'package:intl/intl.dart';                 // for y-M-d convenience (optional)
-
+import 'package:crypto/crypto.dart';   // for sha1
+import 'dart:math' as math;
 
 import 'local_cache/block_plan_cache.dart'; // BlockPlanCache.putInitSnapshot()
 
@@ -1494,6 +1495,282 @@ class WarmupService {
           // Keep in scope for Step 9 (persist to Isar)
           // ⛳ anchor: Step 8 outputs
           final _wesPlannedForPersist = wesPlanned;
+
+          // ──────────────────────────────────────────────────────────────
+// STEP 9: Persist full first-paint snapshot to Isar (no compromises)
+// ──────────────────────────────────────────────────────────────
+          try {
+            // Helpers
+            String _ymd(DateTime d) {
+              final m = d.month.toString().padLeft(2, '0');
+              final da = d.day.toString().padLeft(2, '0');
+              return '${d.year}-$m-$da';
+            }
+
+            // 9.1 Build hintsJson (Map keyed by rowKey: wk{w}_d{d}_i{idx})
+            final Map<String, Map<String, dynamic>> hints = <String, Map<String, dynamic>>{};
+            for (int i = 0; i < _wesPlannedForPersist.length && i < planned.length; i++) {
+              final rowKey = 'wk${weekIndex}_d${dayIndex}_i$i';
+              final res    = _wesPlannedForPersist[i];
+
+              final name = (planned[i]['name'] ?? planned[i]['exercise'] ?? '').toString().trim();
+              final ci   = (planned[i]['circuitIndex'] is num)
+                  ? (planned[i]['circuitIndex'] as num).toInt()
+                  : 0;
+
+              // absolute weight from engine result
+              final double? absW = (res['weight'] as num?)?.toDouble();
+
+              // compute the SAME inputs the engine used
+              final double usedRir  = _getRirFromPlanOrInput(i, 1);
+              final double planReps = _getRepsFromPlan(i, 1);
+
+              // include display-added ONLY for BW
+              final String exId = (planned[i]['exerciseId'] ?? planned[i]['id'] ?? planned[i]['exercise_id'])?.toString()
+                  ?? (PeriodizationModelUtils.nameToId[name] ?? name).toString();
+              final bool isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
+              final double? addW = isBw
+                  ? (res['weightDisplayAdded'] as num?)?.toDouble()
+                  : null;
+
+              final double? e1rm = (res['e1rm'] as num?)?.toDouble();
+
+              hints[rowKey] = <String, dynamic>{
+                'name': name,
+                'circuitIndex': ci,
+                's1_weight': absW,
+                if (addW != null) 's1_weight_added': addW, // BW only
+                's1_reps': planReps,
+                's1_rir': usedRir,
+                if (e1rm != null) 'e1rm': e1rm,
+              };
+            }
+            final String hintsJson = jsonEncode(hints);
+
+
+            // 9.2 Compute inputs hash to match WES _computeNowInputsHash()
+            //     (Use PMU getters, not Step-4 map, to guarantee byte-for-byte intent)
+            int _getWeek(DateTime d, DateTime blockStart) =>
+                PeriodizationModelUtils.getWeekIndexForDate(d, blockStart);
+
+            // plannedExercises: [{id, circuitIndex}]
+            final List<Map<String, dynamic>> plannedForHash = planned.map<Map<String, dynamic>>((e) {
+              final name = (e['name'] ?? e['exercise'] ?? '').toString();
+              final id   = (PeriodizationModelUtils.nameToId[name] ??
+                  e['id'] ?? e['exerciseId'] ?? e['exercise_id'] ??
+                  name).toString();
+              final ci   = (e['circuitIndex'] is num) ? (e['circuitIndex'] as num).toInt() : 0;
+              return {'id': id, 'circuitIndex': ci};
+            }).toList();
+
+            // plannedExerciseDetails + exerciseSettings come from PMU
+            final Map<String, dynamic> plannedExerciseDetails =
+            Map<String, dynamic>.from(PeriodizationModelUtils.plannedExerciseDetails);
+            final Map<String, dynamic> exerciseSettingsPMU =
+            Map<String, dynamic>.from(PeriodizationModelUtils.getExerciseSettings());
+
+            // bodyweight, lastWorkoutDate, lastTopSetDate
+            String? _maxWorkoutDateYmd(List<Map<String, dynamic>> workouts) {
+              DateTime? maxD;
+              for (final w in workouts) {
+                final v = w['date'];
+                DateTime? dt;
+                if (v is Timestamp) dt = v.toDate();
+                if (dt == null && v is String) dt = DateTime.tryParse(v);
+                if (dt == null) continue;
+                final dOnly = DateTime(dt.year, dt.month, dt.day);
+                if (maxD == null || dOnly.isAfter(maxD)) maxD = dOnly;
+              }
+              return (maxD == null) ? null : _ymd(maxD);
+            }
+
+            String? _maxTopSetDateYmd(Map<String, List<Map<String, dynamic>>> topSets) {
+              DateTime? maxD;
+              for (final list in topSets.values) {
+                for (final s in list) {
+                  final v = s['date'];
+                  DateTime? dt;
+                  if (v is Timestamp) dt = v.toDate();
+                  if (dt == null && v is DateTime) dt = v;
+                  if (dt == null && v is String) dt = DateTime.tryParse(v);
+                  if (dt == null) continue;
+                  final dOnly = DateTime(dt.year, dt.month, dt.day);
+                  if (maxD == null || dOnly.isAfter(maxD)) maxD = dOnly;
+                }
+              }
+              return (maxD == null) ? null : _ymd(maxD);
+            }
+
+            final String uidForHash = uid;
+            final String blockForHash = activeBlockId;
+            final String dateYmd = _ymd(_sel);
+            final int weekIdx = _getWeek(_sel, blockStart);
+
+            final double? bodyweightAsOfDay = PeriodizationModelUtils.bodyweightKgForDate(
+              uid: uidForHash,
+              asOf: _sel,
+            );
+
+            final String? lastWorkoutDate = _maxWorkoutDateYmd(
+                List<Map<String, dynamic>>.from(PeriodizationModelUtils.savedWorkoutsList));
+
+            final String? lastTopSetDate = _maxTopSetDateYmd(
+                Map<String, List<Map<String, dynamic>>>.from(PeriodizationModelUtils.topSetsByExercise));
+
+            // Build payload in stable key order
+            final Map<String, dynamic> _payload = <String, dynamic>{
+              'uid': uidForHash,
+              'blockId': blockForHash,
+              'dateYmd': dateYmd,
+              'weekIndex': weekIdx,
+              'plannedExercises': plannedForHash,
+              'plannedExerciseDetails': plannedExerciseDetails,
+              'exerciseSettings': exerciseSettingsPMU,
+              'bodyweightAsOfDay': bodyweightAsOfDay,
+              'lastWorkoutDate': lastWorkoutDate,
+              'lastTopSetDate': lastTopSetDate,
+            };
+            // SHA1 of JSON string (stable order implied by insertion order)
+            final String hintsInputsHash = sha1.convert(utf8.encode(jsonEncode(_payload))).toString();
+
+            // 9.3 previousWorkoutJson (latest strictly BEFORE _sel)
+            Map<String, dynamic>? _pickPrevWorkout() {
+              DateTime? bestDate;
+              Map<String, dynamic>? best;
+              for (final w in PeriodizationModelUtils.savedWorkoutsList) {
+                final v = w['date'];
+                DateTime? dt;
+                if (v is Timestamp) dt = v.toDate();
+                if (dt == null && v is String) dt = DateTime.tryParse(v);
+                if (dt == null) continue;
+                final dOnly = DateTime(dt.year, dt.month, dt.day);
+                if (!dOnly.isBefore(DateTime(_sel.year, _sel.month, _sel.day))) continue; // strictly before selected day
+                if (bestDate == null || dOnly.isAfter(bestDate)) {
+                  bestDate = dOnly;
+                  best = w;
+                }
+              }
+              return best;
+            }
+
+            List<Map<String, dynamic>> _normalizePrevWorkoutSets(dynamic setsRaw) {
+              final out = <Map<String, dynamic>>[];
+              final sets = (setsRaw is List) ? setsRaw.whereType<Map>().map((m)=>Map<String,dynamic>.from(m)).toList() : const <Map<String,dynamic>>[];
+              for (final s in sets) {
+                final reps = (s['actualReps'] ?? s['reps']);
+                final weight = (s['actualWeight'] ?? s['weight']);
+                final added  = (s['weightAdded'] ?? s['addedWeight']);
+                final rir    = (s['actualRir'] ?? s['rir']);
+                final vel    = (s['velocity']);
+                final notes  = (s['notes']);
+                out.add({
+                  if (reps is num) 'reps': reps.toInt(),
+                  if (weight is num) 'weight': (weight as num).toDouble(),
+                  if (added is num) 'addedWeight': (added as num).toDouble(),
+                  if (rir is num) 'rir': (rir as num).toDouble(),
+                  if (vel is num) 'velocity': (vel as num).toDouble(),
+                  if (notes is String && notes.trim().isNotEmpty) 'notes': notes.trim(),
+                });
+              }
+              return out;
+            }
+
+            List<Map<String, dynamic>> _buildPreviousWorkoutJson() {
+              final prev = _pickPrevWorkout();
+              if (prev == null) return const <Map<String, dynamic>>[];
+              final exs = (prev['exercises'] is List)
+                  ? (prev['exercises'] as List).whereType<Map>().map((m)=>Map<String,dynamic>.from(m)).toList()
+                  : const <Map<String, dynamic>>[];
+              final out = <Map<String, dynamic>>[];
+              for (final e in exs) {
+                final name = (e['name'] ?? e['exercise'] ?? '').toString().trim();
+                if (name.isEmpty) continue;
+                final ci = (e['circuitIndex'] is num) ? (e['circuitIndex'] as num).toInt() : 0;
+                out.add({
+                  'name': name,
+                  'circuitIndex': ci,
+                  'sets': _normalizePrevWorkoutSets(e['sets']),
+                });
+              }
+              return out;
+            }
+
+            final String topSetHistoryJson = jsonEncode(
+              PeriodizationModelUtils.topSetsByExercise, // exact map from Step 6 (already reduced per PMU policy)
+            );
+
+            final List<Map<String, dynamic>> previousWorkout = _buildPreviousWorkoutJson();
+
+            // 9.4 Skip/Overwrite policy
+            final existing = await BlockPlanCache.getInitSnapshot(
+              uid: uid,
+              blockId: activeBlockId,
+              dateYmd: dateYmd,
+            );
+
+// Always show the hash we computed
+            print('[Warmup:9] computed hash for $dateYmd → $hintsInputsHash');
+
+            if (existing != null && existing.hintsInputsHash == hintsInputsHash) {
+              // SKIPPED: hash unchanged — dump what's already stored so you can inspect it
+              final plannedLen = () {
+                try { final d = jsonDecode(existing.plannedExercisesJson); return d is List ? d.length : 0; } catch (_) { return 0; }
+              }();
+              final wesLen = () {
+                try { final d = jsonDecode(existing.wesPlannedExercisesJson); return d is List ? d.length : 0; } catch (_) { return 0; }
+              }();
+              final prevLen = () {
+                try { final d = jsonDecode(existing.previousWorkoutJson); return d is List ? d.length : 0; } catch (_) { return 0; }
+              }();
+              final hintsLen = (existing.hintsJson?.length ?? 0);
+              final hintsPreview = (existing.hintsJson?.isNotEmpty ?? false)
+                  ? existing.hintsJson!.substring(0, (existing.hintsJson!.length).clamp(0, 400))
+                  : '{}';
+
+              print('[Warmup:9] skipped (hash unchanged) for $dateYmd '
+                  '→ planned=$plannedLen wes=$wesLen prev=$prevLen '
+                  'hintsLen=$hintsLen hintsReady=${existing.hintsReady} ver=${existing.schemaVersion}');
+              print('[Warmup:9] existing hintsJson preview → $hintsPreview');
+
+            } else {
+              print('[Warmup:9] about to put snapshot → hash=$hintsInputsHash hintsJsonLen=${hintsJson.length}');
+
+              await BlockPlanCache.putInitSnapshot(
+                uid: uid,
+                blockId: activeBlockId,
+                dateYmd: dateYmd,
+                plannedExercises: planned,
+                wesPlannedExercises: _wesPlannedForPersist,
+                previousWorkout: previousWorkout,
+                topSetHistory: PeriodizationModelUtils.topSetsByExercise.entries
+                    .map((e) => <String, dynamic>{'exercise': e.key, 'sets': e.value})
+                    .toList(),
+                hintsJson: hintsJson,
+                hintsInputsHash: hintsInputsHash,
+                hintsReady: true,
+                schemaVersion: 1,
+                updatedAt: DateTime.now(),
+              );
+
+              // Post-write summary + safe preview
+              final preview = (hintsJson.isNotEmpty)
+                  ? hintsJson.substring(0, hintsJson.length.clamp(0, 400))
+                  : '{}';
+              print('[Warmup:9] snapshot values → '
+                  'planned=${planned.length} '
+                  'wes=${_wesPlannedForPersist.length} '
+                  'prev=${previousWorkout.length} '
+                  'topSets=${PeriodizationModelUtils.topSetsByExercise.keys.length} '
+                  'hints=${hints.length}');
+              print('[Warmup:9] hintsJson → $preview');
+              print('[Warmup:9] snapshot saved for $dateYmd (hash: $hintsInputsHash, rows: ${planned.length})');
+            }
+
+          } catch (e, st) {
+            print('🟥 [Warmup:9] snapshot failed: $e');
+            // best-effort only
+          }
+
         }
 
         // (You said "no clamping" and we’ll run it in the next step when you’re ready.)
