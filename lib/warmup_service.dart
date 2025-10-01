@@ -660,45 +660,35 @@ class WarmupService {
 // ──────────────────────────────────────────────────────────────
 // STEP 6: Populate topSetsByExercise from savedWorkoutsList
 // Collapse to ONE sample per (exercise, date): the set with the HIGHEST e1RM
-// ──────────────────────────────────────────────────────────────
+// Dates are normalized to YYYY-MM-DD (strings) → JSON safe for Step 9
   void _populateTopSetsFromSavedWorkouts() {
     final list = PeriodizationModelUtils.savedWorkoutsList;
 
     // exerciseName -> (ymd -> bestSampleForThatDay)
     final Map<String, Map<String, Map<String, dynamic>>> bestPerDay = {};
 
-    String norm(String s) {
-      var t = s.toLowerCase().trim();
-      t = t.replaceAll(RegExp(r'\([^)]*\)'), '');
-      t = t.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');
-      t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
-      t = t.replaceAll(RegExp(r'\bdb\b'), 'dumbbell');
-      t = t.replaceAll(RegExp(r'\bbb\b'), 'barbell');
-      return t;
-    }
-
-    String ymd(DateTime d) {
+    String _ymd(DateTime d) {
       final m = d.month.toString().padLeft(2, '0');
       final da = d.day.toString().padLeft(2, '0');
       return '${d.year}-$m-$da';
     }
 
-    DateTime? parseAnyDate(dynamic v) {
+    DateTime? _parseAnyDate(dynamic v) {
       if (v == null) return null;
       if (v is DateTime) return v;
       if (v is String) return DateTime.tryParse(v);
+      // If you have Firestore Timestamps around, add:
+      // if (v is Timestamp) return v.toDate();
       return null;
     }
 
-    // Walk all saved workouts
     for (final w in list) {
       final exs = w['exercises'];
       if (exs is! List) continue;
 
-      final wDate = parseAnyDate(w['date']);
+      final wDate = _parseAnyDate(w['date']);
       if (wDate == null) continue; // skip undated workouts
-
-      final y = ymd(DateTime(wDate.year, wDate.month, wDate.day));
+      final y = _ymd(DateTime(wDate.year, wDate.month, wDate.day));
 
       for (final ex in exs) {
         if (ex is! Map) continue;
@@ -706,7 +696,6 @@ class WarmupService {
         final exName = (ex['name'] ?? ex['exercise'] ?? '').toString().trim();
         if (exName.isEmpty) continue;
 
-        // Only numeric-looking sets count
         final sets = (ex['sets'] is List)
             ? List<Map<String, dynamic>>.from(ex['sets'])
             : const <Map<String, dynamic>>[];
@@ -718,51 +707,41 @@ class WarmupService {
 
           if (weight is! num || reps is! num) continue;
 
-          final double wKg   = (weight as num).toDouble();
-          final int    rInt  = (reps as num).toInt();
-          final double rir   = (rirRaw is num) ? (rirRaw as num).toDouble()
-              : (rirRaw is String) ? (double.tryParse(rirRaw) ?? 0.0)
-              : 0.0;
+          final double wKg  = (weight as num).toDouble();
+          final int    rInt = (reps as num).toInt();
+          final double rir  = (rirRaw is num)
+              ? (rirRaw as num).toDouble()
+              : (rirRaw is String ? (double.tryParse(rirRaw) ?? 0.0) : 0.0);
 
-          // Compute e1RM exactly like PMU would
+          // e1RM exactly like PMU
           final double e1 = PeriodizationModelUtils.calculateE1RM(
             wKg, rInt.toDouble(), rir,
           );
 
-          // Keep the BEST (highest e1RM) for this (exercise, date)
           final dayMap = bestPerDay.putIfAbsent(exName, () => <String, Map<String, dynamic>>{});
           final current = dayMap[y];
 
           if (current == null || ((current['__e1rm'] as double) < e1)) {
             dayMap[y] = {
-              'date'  : wDate,     // keep DateTime if we have it
+              'date'  : y,     // <-- store normalized string (JSON-safe)
               'weight': wKg,
               'reps'  : rInt,
               'rir'   : rir,
-              '__e1rm': e1,        // internal debug field; we’ll strip before publishing
+              '__e1rm': e1,    // internal for sorting/print; stripped later
             };
           }
         }
       }
     }
 
-    // Publish into PMU.topSetsByExercise with debug print
+    // Publish into PMU.topSetsByExercise (newest → oldest by ymd string)
     PeriodizationModelUtils.topSetsByExercise.clear();
 
     int exCount = 0;
     bestPerDay.forEach((exerciseName, dayMap) {
-      // newest → oldest by date
       final values = dayMap.values.toList()
-        ..sort((a, b) {
-          final ad = a['date'] as DateTime?;
-          final bd = b['date'] as DateTime?;
-          if (ad == null && bd == null) return 0;
-          if (ad == null) return 1;
-          if (bd == null) return -1;
-          return bd.compareTo(ad);
-        });
+        ..sort((a, b) => (b['date'] as String).compareTo(a['date'] as String));
 
-      // strip __e1rm debug field when storing
       final cleaned = values.map((m) {
         final out = Map<String, dynamic>.from(m)..remove('__e1rm');
         return out;
@@ -771,19 +750,16 @@ class WarmupService {
       PeriodizationModelUtils.topSetsByExercise[exerciseName] = cleaned;
       exCount++;
 
-      // concise per-exercise debug line (date weight×reps@rir | …)
       final dbg = values.take(6).map((v) {
-        final d = v['date'] as DateTime?;
-        final ds = (d == null)
-            ? '—'
-            : '${d.year}-${d.month.toString().padLeft(2,'0')}-${d.day.toString().padLeft(2,'0')}';
+        final ds = v['date'] as String; // already YYYY-MM-DD
         return '$ds ${v['weight']}×${v['reps']}@${v['rir']} (e1=${(v['__e1rm'] as double).toStringAsFixed(1)})';
       }).join(', ');
       print('🔍 [Step6/topSets] $exerciseName → [$dbg]');
     });
 
-    print('📈 [Warmup:6] topSetsByExercise (best-per-day) → $exCount exercises');
+    print('📈 [Warmup:6] topSetsByExercise (best-per-day, JSON-safe) → $exCount exercises');
   }
+
 
 
 
@@ -1702,6 +1678,24 @@ class WarmupService {
               return '${d.year}-$m-$da';
             }
 
+            dynamic _jsonSafe(dynamic v) {
+              if (v == null) return null;
+              if (v is DateTime) {
+                return v.toIso8601String();
+              }
+              if (v is Timestamp) {
+                return v.toDate().toIso8601String();
+              }
+              if (v is Map) {
+                return v.map((k, val) => MapEntry(k.toString(), _jsonSafe(val)));
+              }
+              if (v is Iterable) {
+                return v.map(_jsonSafe).toList();
+              }
+              return v; // num, bool, String, etc.
+            }
+
+
             // 9.1 Build hintsJson (Map keyed by rowKey: wk{w}_d{d}_i{idx})
             final Map<String, Map<String, dynamic>> hints = <String, Map<String, dynamic>>{};
             for (int i = 0; i < _wesPlannedForPersist.length && i < planned.length; i++) {
@@ -1740,7 +1734,7 @@ class WarmupService {
                 if (e1rm != null) 'e1rm': e1rm,
               };
             }
-            final String hintsJson = jsonEncode(hints);
+            final String hintsJson = jsonEncode(_jsonSafe(hints));
 
 
             // 9.2 Compute inputs hash to match WES _computeNowInputsHash()
@@ -1826,7 +1820,8 @@ class WarmupService {
               'lastTopSetDate': lastTopSetDate,
             };
             // SHA1 of JSON string (stable order implied by insertion order)
-            final String hintsInputsHash = sha1.convert(utf8.encode(jsonEncode(_payload))).toString();
+            final String hintsInputsHash =
+            sha1.convert(utf8.encode(jsonEncode(_jsonSafe(_payload)))).toString();
 
             // 9.3 previousWorkoutJson (latest strictly BEFORE _sel)
             Map<String, dynamic>? _pickPrevWorkout() {
@@ -1890,9 +1885,6 @@ class WarmupService {
               return out;
             }
 
-            final String topSetHistoryJson = jsonEncode(
-              PeriodizationModelUtils.topSetsByExercise, // exact map from Step 6 (already reduced per PMU policy)
-            );
 
             final List<Map<String, dynamic>> previousWorkout = _buildPreviousWorkoutJson();
 
