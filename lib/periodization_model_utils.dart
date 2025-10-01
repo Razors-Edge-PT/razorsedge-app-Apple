@@ -134,7 +134,6 @@ class PeriodizationModelUtils {
     Map<String, dynamic>? maxWeightByReps,
     DateTime? now,
   }) {
-
     final DateTime _now = now ?? DateTime.now();
     final List<Map<String, dynamic>> raw =
         topSetHistory ?? topSetsByExercise[exerciseName] ?? const [];
@@ -175,12 +174,7 @@ class PeriodizationModelUtils {
 
     final double targetEff = repTarget + plannedRIR;
 
-
-    if (historyWithE1RM.isNotEmpty) {
-      for (final e in historyWithE1RM.take(5)) {
-
-      }
-    }
+    Map<String, dynamic> result;
 
     // A) Recent match
     final recentMatch = historyWithE1RM.firstWhere(
@@ -193,72 +187,80 @@ class PeriodizationModelUtils {
       },
       orElse: () => {},
     );
-
-
     if (recentMatch.isNotEmpty) {
-      return {
+      result = {
         'baseE1RM': recentMatch['e1rm'] as double,
         'baseSource': 'recent_match',
         'nUsed': 1,
+        'usedSamples': [recentMatch],
       };
-    }
-
-    // B) 2-week average
-    final recentTwoWeeks = historyWithE1RM.where((e) {
-      final DateTime? d = e['date'] as DateTime?;
-      return d != null && _now.difference(d).inDays <= 14;
-    }).toList();
-    if (recentTwoWeeks.isNotEmpty) {
-      final sum = recentTwoWeeks.fold<double>(0.0, (acc, e) => acc + (e['e1rm'] as double));
-      return {
-        'baseE1RM': sum / recentTwoWeeks.length,
-        'baseSource': 'two_week_avg',
-        'nUsed': recentTwoWeeks.length,
-      };
-    }
-
-    // C) Last-4 average
-    if (historyWithE1RM.length >= 4) {
-      final last4 = historyWithE1RM.take(4).toList();
-      final sum = last4.fold<double>(0.0, (acc, e) => acc + (e['e1rm'] as double));
-      return {
-        'baseE1RM': sum / 4.0,
-        'baseSource': 'last4_avg',
-        'nUsed': 4,
-      };
-    }
-
-    // D) 1–3 entries: average what we have
-    if (historyWithE1RM.isNotEmpty) {
-      final n = historyWithE1RM.length;
-      final takeN = historyWithE1RM.take(n).toList();
-      final sum = takeN.fold<double>(0.0, (acc, e) => acc + (e['e1rm'] as double));
-      return {
-        'baseE1RM': sum / n,
-        'baseSource': 'recent_any_avg',
-        'nUsed': n,
-      };
-    }
-
-    // E) Fallback to provided maxWeightByReps
-    if (maxWeightByReps != null) {
-      final double fallback = (maxWeightByReps['weight'] as num?)?.toDouble() ?? 0.0;
-      if (fallback > 0) {
-        return {
-          'baseE1RM': fallback,
-          'baseSource': 'maxWeightByReps',
-          'nUsed': 1,
+    } else {
+      // B) 2-week average
+      final recentTwoWeeks = historyWithE1RM.where((e) {
+        final DateTime? d = e['date'] as DateTime?;
+        return d != null && _now.difference(d).inDays <= 14;
+      }).toList();
+      if (recentTwoWeeks.isNotEmpty) {
+        final sum = recentTwoWeeks.fold<double>(0.0, (acc, e) => acc + (e['e1rm'] as double));
+        result = {
+          'baseE1RM': sum / recentTwoWeeks.length,
+          'baseSource': 'two_week_avg',
+          'nUsed': recentTwoWeeks.length,
+          'usedSamples': recentTwoWeeks,
+        };
+      }
+      // C) Last-4 average
+      else if (historyWithE1RM.length >= 4) {
+        final last4 = historyWithE1RM.take(4).toList();
+        final sum = last4.fold<double>(0.0, (acc, e) => acc + (e['e1rm'] as double));
+        result = {
+          'baseE1RM': sum / 4.0,
+          'baseSource': 'last4_avg',
+          'nUsed': 4,
+          'usedSamples': last4,
+        };
+      }
+      // D) 1–3 entries: average what we have
+      else if (historyWithE1RM.isNotEmpty) {
+        final n = historyWithE1RM.length;
+        final takeN = historyWithE1RM.take(n).toList();
+        final sum = takeN.fold<double>(0.0, (acc, e) => acc + (e['e1rm'] as double));
+        result = {
+          'baseE1RM': sum / n,
+          'baseSource': 'recent_any_avg',
+          'nUsed': n,
+          'usedSamples': takeN,
+        };
+      }
+      // E) Fallback
+      else if (maxWeightByReps != null) {
+        final double fallback = (maxWeightByReps['weight'] as num?)?.toDouble() ?? 0.0;
+        result = {
+          'baseE1RM': fallback > 0 ? fallback : null,
+          'baseSource': fallback > 0 ? 'maxWeightByReps' : 'no_history',
+          'nUsed': fallback > 0 ? 1 : 0,
+          'usedSamples': [],
+        };
+      } else {
+        result = {
+          'baseE1RM': null,
+          'baseSource': 'no_history',
+          'nUsed': 0,
+          'usedSamples': [],
         };
       }
     }
 
-    // No viable source
-    return {
-      'baseE1RM': null,
-      'baseSource': 'no_history',
-      'nUsed': 0,
-    };
+    // 🔍 Single final print
+    print('🔍 [BaseE1RM] ex=$exerciseName '
+        'targetEff=${targetEff.toStringAsFixed(1)} '
+        'branch=${result['baseSource']} nUsed=${result['nUsed']} '
+        'samples=${(result['usedSamples'] as List).map((e) => "${e['date']} ${e['weight']}×${e['reps']}@${e['rir']} e1rm=${(e['e1rm'] as double).toStringAsFixed(1)}").toList()} '
+        '→ final=${(result['baseE1RM'] as double?)?.toStringAsFixed(1)}');
+
+    return result;
   }
+
 
   static String resolveExerciseName(String key) {
     return idToName[key] ?? key;

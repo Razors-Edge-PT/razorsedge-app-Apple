@@ -657,12 +657,15 @@ class WarmupService {
 
 
 // ──────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────
 // STEP 6: Populate topSetsByExercise from savedWorkoutsList
-// (minimal derivation so engine has history context)
+// Collapse to ONE sample per (exercise, date): the set with the HIGHEST e1RM
 // ──────────────────────────────────────────────────────────────
   void _populateTopSetsFromSavedWorkouts() {
     final list = PeriodizationModelUtils.savedWorkoutsList;
-    final byName = <String, List<Map<String, dynamic>>>{};
+
+    // exerciseName -> (ymd -> bestSampleForThatDay)
+    final Map<String, Map<String, Map<String, dynamic>>> bestPerDay = {};
 
     String norm(String s) {
       var t = s.toLowerCase().trim();
@@ -674,35 +677,114 @@ class WarmupService {
       return t;
     }
 
+    String ymd(DateTime d) {
+      final m = d.month.toString().padLeft(2, '0');
+      final da = d.day.toString().padLeft(2, '0');
+      return '${d.year}-$m-$da';
+    }
+
+    DateTime? parseAnyDate(dynamic v) {
+      if (v == null) return null;
+      if (v is DateTime) return v;
+      if (v is String) return DateTime.tryParse(v);
+      return null;
+    }
+
+    // Walk all saved workouts
     for (final w in list) {
       final exs = w['exercises'];
       if (exs is! List) continue;
+
+      final wDate = parseAnyDate(w['date']);
+      if (wDate == null) continue; // skip undated workouts
+
+      final y = ymd(DateTime(wDate.year, wDate.month, wDate.day));
+
       for (final ex in exs) {
         if (ex is! Map) continue;
-        final name = (ex['name'] ?? ex['exercise'] ?? '').toString();
-        if (name.isEmpty) continue;
-        final sets = (ex['sets'] is List) ? List<Map<String, dynamic>>.from(ex['sets']) : const <Map<String, dynamic>>[];
+
+        final exName = (ex['name'] ?? ex['exercise'] ?? '').toString().trim();
+        if (exName.isEmpty) continue;
+
+        // Only numeric-looking sets count
+        final sets = (ex['sets'] is List)
+            ? List<Map<String, dynamic>>.from(ex['sets'])
+            : const <Map<String, dynamic>>[];
+
         for (final s in sets) {
           final weight = (s['actualWeight'] ?? s['weight']);
           final reps   = (s['actualReps'] ?? s['reps']);
-          if (weight is num && reps is num) {
-            byName.putIfAbsent(name, () => <Map<String, dynamic>>[]).add({
-              'date'  : w['date'],
-              'weight': weight.toDouble(),
-              'reps'  : reps.toInt(),
-              'rir'   : (s['actualRir'] ?? s['rir']),
-            });
+          final rirRaw = (s['actualRir'] ?? s['rir']);
+
+          if (weight is! num || reps is! num) continue;
+
+          final double wKg   = (weight as num).toDouble();
+          final int    rInt  = (reps as num).toInt();
+          final double rir   = (rirRaw is num) ? (rirRaw as num).toDouble()
+              : (rirRaw is String) ? (double.tryParse(rirRaw) ?? 0.0)
+              : 0.0;
+
+          // Compute e1RM exactly like PMU would
+          final double e1 = PeriodizationModelUtils.calculateE1RM(
+            wKg, rInt.toDouble(), rir,
+          );
+
+          // Keep the BEST (highest e1RM) for this (exercise, date)
+          final dayMap = bestPerDay.putIfAbsent(exName, () => <String, Map<String, dynamic>>{});
+          final current = dayMap[y];
+
+          if (current == null || ((current['__e1rm'] as double) < e1)) {
+            dayMap[y] = {
+              'date'  : wDate,     // keep DateTime if we have it
+              'weight': wKg,
+              'reps'  : rInt,
+              'rir'   : rir,
+              '__e1rm': e1,        // internal debug field; we’ll strip before publishing
+            };
           }
         }
       }
     }
 
-    // Instead of assigning, mutate the existing final map
+    // Publish into PMU.topSetsByExercise with debug print
     PeriodizationModelUtils.topSetsByExercise.clear();
-    PeriodizationModelUtils.topSetsByExercise.addAll(byName);
 
-    print('📈 [Warmup:6] topSetsByExercise → ${byName.length} exercises');
+    int exCount = 0;
+    bestPerDay.forEach((exerciseName, dayMap) {
+      // newest → oldest by date
+      final values = dayMap.values.toList()
+        ..sort((a, b) {
+          final ad = a['date'] as DateTime?;
+          final bd = b['date'] as DateTime?;
+          if (ad == null && bd == null) return 0;
+          if (ad == null) return 1;
+          if (bd == null) return -1;
+          return bd.compareTo(ad);
+        });
+
+      // strip __e1rm debug field when storing
+      final cleaned = values.map((m) {
+        final out = Map<String, dynamic>.from(m)..remove('__e1rm');
+        return out;
+      }).toList();
+
+      PeriodizationModelUtils.topSetsByExercise[exerciseName] = cleaned;
+      exCount++;
+
+      // concise per-exercise debug line (date weight×reps@rir | …)
+      final dbg = values.take(6).map((v) {
+        final d = v['date'] as DateTime?;
+        final ds = (d == null)
+            ? '—'
+            : '${d.year}-${d.month.toString().padLeft(2,'0')}-${d.day.toString().padLeft(2,'0')}';
+        return '$ds ${v['weight']}×${v['reps']}@${v['rir']} (e1=${(v['__e1rm'] as double).toStringAsFixed(1)})';
+      }).join(', ');
+      print('🔍 [Step6/topSets] $exerciseName → [$dbg]');
+    });
+
+    print('📈 [Warmup:6] topSetsByExercise (best-per-day) → $exCount exercises');
   }
+
 
 
 // ──────────────────────────────────────────────────────────────
