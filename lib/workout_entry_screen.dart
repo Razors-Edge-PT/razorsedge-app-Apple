@@ -5083,18 +5083,25 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         tmpSets[i][0].reps   = reps;
         tmpSets[i][0].rir    = double.tryParse(rir ?? '');
 
+
+
         // ✅ Also hydrate RIR for sets 2–8 from hints if present (as hints, not user input)
         for (var setNo = 2; setNo <= _defaultSets && setNo <= 8; setNo++) {
           final rirKey = 's${setNo}_rir';
-          final rirValNum = h[rirKey] as num?;
-          if (rirValNum != null) {
-            final setIdx = setNo - 1; // setNo=2 → index 1, etc.
-            if (setIdx < tmpSets[i].length) {
-              // keep SetDetails in sync for downstream logic
-              tmpSets[i][setIdx].rir = rirValNum.toDouble();
-            }
-          }
+          final num? rirValNum = h[rirKey] as num?;
+          if (rirValNum == null) continue;
+
+          final int setIdx = setNo - 1; // setNo=2 → index 1
+          if (setIdx >= tmpSets[i].length) break;
+
+          // keep SetDetails in sync for downstream logic
+          tmpSets[i][setIdx].rir = rirValNum.toDouble();
+
+          // ❌ Do NOT set tmpRir[i][setIdx].text here → we want it to show as hint
+          // tmpRir[i][setIdx].text = ...
         }
+
+
 
         // 🔎 Debug what we hydrated for RIR across sets
         final _rirDbg = List.generate(
@@ -10846,25 +10853,24 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                                                             keyboardType: TextInputType
                                                                 .number,
                                                             decoration: InputDecoration(
-                                                              contentPadding: const EdgeInsets
-                                                                  .only(
-                                                                  left: 2),
+                                                              contentPadding: const EdgeInsets.only(left: 2),
                                                               hintText: (j == 0)
-                                                                ? (_seedHintsByKey['${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i']?['rir']?.toString() ?? set1RIR(i).toString())
-                                                                : (j == 1)
-                                                                ? set2RIR(i).toString()
-                                                                : (j == 2)
-                                                                ? set3RIR(i).toString()
-                                                                : '1',
-
+                                                                  ? (_seedHintsByKey['${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i']?['rir']?.toString() ?? set1RIR(i).toString())
+                                                                  : (j >= 1 && j <= 7)
+                                                                  ? (_seedHintsByKey['${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i']?['s${j + 1}_rir']?.toString()
+                                                                  ?? (j == 1
+                                                                      ? set2RIR(i).toString()
+                                                                      : j == 2
+                                                                      ? set3RIR(i).toString()
+                                                                      : '1'))
+                                                                  : '1',
                                                               hintStyle: const TextStyle(
-                                                                color: Colors
-                                                                    .grey,
-                                                                fontStyle: FontStyle
-                                                                    .italic,
+                                                                color: Colors.grey,
+                                                                fontStyle: FontStyle.italic,
                                                                 fontSize: 12,
                                                               ),
                                                             ),
+
                                                             onChanged: (
                                                                 value) =>
                                                                 setState(() {}),
