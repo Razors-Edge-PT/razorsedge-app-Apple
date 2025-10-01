@@ -1122,6 +1122,11 @@ class WarmupService {
           String _rirTextAt(int exIdx, int setIdx) => '';
 
           final List<Map<String, dynamic>> wesPlanned = <Map<String, dynamic>>[];
+          // capture exactly what the engine used so we don't re-derive later
+          final List<double?> _rirUsedByRow = <double?>[];
+          final List<double?> _planRepsByRow = <double?>[];
+          final List<bool>    _isBwByRow     = <bool>[];
+
 
           // ——— instance counting helpers (saved-workouts based) ———
           String _normName(String s) {
@@ -1458,6 +1463,21 @@ class WarmupService {
               iRow,
             );
             wesPlanned.add(res);
+
+            // capture the exact plan inputs the engine used for its calc
+            final usedRir  = _getRirFromPlanOrInput(iRow, 1);
+            final planReps = _getRepsFromPlan(iRow, 1);
+
+// record them in order, aligned to iRow
+            _rirUsedByRow.add(usedRir);
+            _planRepsByRow.add(planReps);
+
+// also record BW vs non-BW for the row (to control s1_weight_added output)
+            final exName = (res['exerciseName'] ?? '').toString();
+            final exId   = (res['exerciseId'] ?? PeriodizationModelUtils.nameToId[exName] ?? exName).toString();
+            final isBw   = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: exName);
+            _isBwByRow.add(isBw);
+
             print('   • #$iRow ${res['exerciseName']} → ${res['weight']}kg @ ${res['reps']} (rir=${res['rir']}) id=${res['exerciseId']}');
 
             // 👇 add instance context print here
@@ -1492,9 +1512,102 @@ class WarmupService {
 
         }
 
-          // Keep in scope for Step 9 (persist to Isar)
-          // ⛳ anchor: Step 8 outputs
+          // Build final hints directly from ENGINE outputs (post-progression)
+          final Map<String, Map<String, dynamic>> hints = <String, Map<String, dynamic>>{};
+          for (int i = 0; i < wesPlanned.length; i++) {
+            final res  = wesPlanned[i];  // progressed row from the engine
+            final name = (res['exerciseName'] ?? '').toString();
+            final ci   = (planned[i]['circuitIndex'] is num) ? (planned[i]['circuitIndex'] as num).toInt() : 0;
+
+            // absolute weight from engine
+            final double? wAbs   = (res['weight'] as num?)?.toDouble();
+            // display-added only exists (and only makes sense) on BW rows
+            final double? wAdded = (res['weightDisplayAdded'] as num?)?.toDouble();
+
+            // reps from engine (includes DUPE/linear resolution)
+            final double? reps   = (res['reps'] as num?)?.toDouble();
+
+            // RIR: prefer an explicit override in engine output when it’s intentional;
+            // otherwise fall back to plan-based RIR used by calc
+            final double? rirOverlay = (res['rir'] as num?)?.toDouble();
+            final double planRir = _getRirFromPlanOrInput(i, 1);
+
+            bool _isMeaningfulOverride(num? v) => v != null && v != 0; // 0 is valid but must be intentional upstream
+            final double? rirFinal = _isMeaningfulOverride(rirOverlay) ? rirOverlay : planRir;
+
+            final key = _rowKeyBy(i);
+            final entry = <String, dynamic>{
+              'name'        : name,
+              'circuitIndex': ci,
+              if (wAbs   != null) 's1_weight'       : wAbs,
+              if (wAdded != null) 's1_weight_added' : wAdded, // only present for BW
+              if (reps   != null) 's1_reps'         : reps,
+              if (rirFinal != null) 's1_rir'        : rirFinal,
+            };
+
+            hints[key] = entry;
+          }
+
+// quick sanity peek
+          hints.entries.take(2).forEach((e) {
+            print('🟣 [Warmup:8→9] hint ${e.key} → ${e.value}');
+          });
+
+// JSON for Step 9 snapshot
+
+
+/// Build final hints directly from ENGINE outputs (post-progression) + the exact plan RIR it used
+          hints.clear(); // ← reuse the existing map instead of redeclaring
+
+          for (int i = 0; i < wesPlanned.length; i++) {
+            final res  = wesPlanned[i];  // progressed row from the engine
+            final name = (res['exerciseName'] ?? '').toString();
+            final ci   = (planned[i]['circuitIndex'] is num)
+                ? (planned[i]['circuitIndex'] as num).toInt()
+                : 0;
+
+            // absolute weight from engine
+            final double? wAbs   = (res['weight'] as num?)?.toDouble();
+            // display-added only makes sense on BW rows → computed by engine as 'weightDisplayAdded'
+            final double? wAdded = (res['weightDisplayAdded'] as num?)?.toDouble();
+
+            // the reps the engine settled on for set 1 (already model-aware)
+            final double? reps   = (res['reps'] as num?)?.toDouble() ?? _planRepsByRow[i];
+
+            // RIR: prefer explicit overlay if non-null; else use the exact plan RIR the engine used
+            final double? rirOverlay = (res['rir'] as num?)?.toDouble(); // may be null
+            final double? planRir    = _rirUsedByRow[i];                 // captured earlier
+            final bool hasIntentionalOverride = (rirOverlay != null);    // 0.0 is valid override
+            final double? rirFinal = hasIntentionalOverride ? rirOverlay : planRir;
+
+            // BW/non-BW check we captured during the engine pass
+            final bool isBw = _isBwByRow[i];
+
+            final key = _rowKeyBy(i);
+            final entry = <String, dynamic>{
+              'name'        : name,
+              'circuitIndex': ci,
+              if (wAbs   != null) 's1_weight'       : wAbs,
+              if (isBw && wAdded != null) 's1_weight_added' : wAdded, // only for BW
+              if (reps   != null) 's1_reps'         : reps,
+              if (rirFinal != null) 's1_rir'        : rirFinal,
+            };
+
+            hints[key] = entry;
+          }
+
+// (Optional) peek a couple for sanity
+          hints.entries.take(2).forEach((e) {
+            print('🟣 [Warmup:8→9] hint ${e.key} → ${e.value}');
+          });
+
+// JSON for Step 9 snapshot — compute AFTER filling `hints`
+          final String hintsJson = jsonEncode(hints);
+
+// Keep in scope for Step 9 (persist to Isar)
+// ⛳ anchor: Step 8 outputs
           final _wesPlannedForPersist = wesPlanned;
+
 
           // ──────────────────────────────────────────────────────────────
 // STEP 9: Persist full first-paint snapshot to Isar (no compromises)

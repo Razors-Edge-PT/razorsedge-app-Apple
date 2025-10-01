@@ -2858,6 +2858,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       increments: increments ?? [2.5],
       // ✅ fallback
       maxWeightByReps: _exerciseSettings[exerciseId]?['maxWeightByReps'],
+      debugOrigin: 'WES',
 
       topSetHistory: PeriodizationModelUtils.topSetsByExercise[exerciseName],
       weekIndex: (blockStartDate == null || _selectedDate == null)
@@ -2865,9 +2866,32 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           : PeriodizationModelUtils.getWeekIndexForDate(
         _selectedDate, blockStartDate!,
       ),
-
-
     );
+
+    // --- DEBUG: exact e1RM used by the model (if PMU exposes it) ---
+    final debugE1 = progressed['__debug_e1rm'];
+    if (debugE1 is num) {
+      final wk = (blockStartDate == null || _selectedDate == null)
+          ? 0
+          : PeriodizationModelUtils.getWeekIndexForDate(_selectedDate!, blockStartDate!);
+      print('🧪 [WES/e1RM] $exerciseName → e1RM=${debugE1.toStringAsFixed(2)} '
+          '(repTarget=${repTarget.toInt()}, RIR=${rir.toStringAsFixed(2)}, wk=$wk)');
+    } else {
+      // Fallback: approximate from the returned working weight + current repTarget/RIR
+      final w = (progressed['weight'] as num?)?.toDouble();
+      if (w != null) {
+        try {
+          final approx = PeriodizationModelUtils.calculateE1RM(
+            w,
+            repTarget.toDouble(),
+            rir,
+          );
+          print('🧪 [WES/e1RM≈] $exerciseName → approx=${approx.toStringAsFixed(2)} '
+              '(repTarget=${repTarget.toInt()}, RIR=${rir.toStringAsFixed(2)})');
+        } catch (_) {/* ignore */}
+      }
+    }
+
 
 // as-of date for BW lookups = the day being edited in WES
     final DateTime _asOfDate = _selectedDate ?? DateTime.now();
@@ -2942,6 +2966,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
     print(
         '🧮 [WES] Progressed for ${exerciseName} = ${progressed['weight']} kg @ ${repTarget} reps, RIR $rir');
+    print('✅ [WES/out] ${exerciseName} → ${progressed['weight']} × ${progressed['reps']} (rir=${rir})');
 
     return progressed;
   }

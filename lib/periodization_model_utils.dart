@@ -1924,8 +1924,35 @@ class PeriodizationModelUtils {
     int weekIndex = 0,
     // 👇 You need to add this:
     double rirValue = 0,
+    String debugOrigin = 'unknown', // 👈 add thi
   })
   {
+// 🔎 Input snapshot (common to WES + Engine)
+    final int _tsLen = topSetHistory?.length ?? 0;
+    String _tsHead;
+    if (_tsLen == 0) {
+      _tsHead = '∅';
+    } else {
+      try {
+        _tsHead = topSetHistory!
+            .take(3)
+            .map((s) => '${s['weight']}×${s['reps']}@${s['rir']}'
+            '(${(s['date'] ?? '').toString().substring(0, 10)})')
+            .join(', ');
+      } catch (_) {
+        _tsHead = '…';
+      }
+    }
+
+// (Optional) add an origin tag; see step 2 below
+    final _origin = (const bool.hasEnvironment('pmu_origin')) ? const String.fromEnvironment('pmu_origin') : 'unknown';
+
+    print('🧪 [PMU Router/in] origin=$_origin '
+        'ex="$exerciseName" wk=$weekIndex '
+        'repTarget=$repTarget rir=$rirValue '
+        'default=${defaultWeight.toStringAsFixed(2)} '
+        'incs=${increments.length} head=${increments.take(6).toList()} '
+        'topSets=$_tsLen [$_tsHead]');
 
 
     print('🧪 [PMU Router] model=$model repTarget=$repTarget '

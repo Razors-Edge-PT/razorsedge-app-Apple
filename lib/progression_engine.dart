@@ -592,6 +592,8 @@ class ProgressionEngine {
         defaultWeight: defaultWeight,
         rirValue: rir,
         increments: increments ?? [2.5],
+        debugOrigin: 'ENGINE',
+
         // ✅ fallback
         maxWeightByReps: _exerciseSettings[exerciseId]?['maxWeightByReps'],
         topSetHistory: PeriodizationModelUtils.topSetsByExercise[exerciseName],
@@ -603,7 +605,32 @@ class ProgressionEngine {
         ),
       );
 
-      // as-of date for BW lookups = the day being edited in WES
+    // --- DEBUG: show the exact e1RM used by the model ---
+    final debugE1 = progressed['__debug_e1rm'];
+    if (debugE1 is num) {
+      final wk = (blockStartDate == null || _selectedDate == null)
+          ? 0
+          : PeriodizationModelUtils.getWeekIndexForDate(_selectedDate!, blockStartDate!);
+      print('🧪 [ENGINE/e1RM] $exerciseName → e1RM=${debugE1.toStringAsFixed(2)} '
+          '(repTarget=${repTarget.toInt()}, RIR=${rir.toStringAsFixed(2)}, wk=$wk)');
+    } else {
+      // Fallback: approximate from returned working weight if PMU didn’t surface e1RM
+      final w = (progressed['weight'] as num?)?.toDouble();
+      if (w != null) {
+        try {
+          final approx = PeriodizationModelUtils.calculateE1RM(
+            w,
+            repTarget.toDouble(),
+            rir,
+          );
+          print('🧪 [ENGINE/e1RM≈] $exerciseName → approx=${approx.toStringAsFixed(2)} '
+              '(repTarget=${repTarget.toInt()}, RIR=${rir.toStringAsFixed(2)})');
+        } catch (_) {/* silent */}
+      }
+    }
+
+
+    // as-of date for BW lookups = the day being edited in WES
       final DateTime _asOfDate = _selectedDate ?? DateTime.now();
 
       final target = (progressed['weight'] as num).toDouble();
@@ -714,6 +741,7 @@ class ProgressionEngine {
     print(
         '🧮 [ENGINE] Final for $exerciseName = ${progressed['weight']} kg '
             '@ ${progressed['reps']} reps, RIR ${progressed['rir']}');
+    print('✅ [ENGINE/out] ${progressed['exerciseName']} → ${progressed['weight']} × ${progressed['reps']} (rir=${progressed['rir']})');
 
     return progressed;
   }
