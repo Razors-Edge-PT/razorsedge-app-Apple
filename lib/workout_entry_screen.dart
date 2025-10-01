@@ -5733,6 +5733,41 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
               } catch (_) {}
             })();
           }
+          // 🔁 HINTS NORMALIZATION (Warmup → WES expected keys)
+// Warmup: s1_weight, s1_weight_added, s1_reps, s1_rir
+// WES expects (when seeding first-frame fields): weight, absWeight, reps, rir
+          try {
+            if ((snap.hintsJson ?? '').isNotEmpty) {
+              final Map<String, dynamic> rawHints = Map<String, dynamic>.from(jsonDecode(snap.hintsJson));
+              _seedHintsByKey.clear();
+              rawHints.forEach((rowKey, v) {
+                final m = Map<String, dynamic>.from(v as Map);
+                final abs = (m['s1_weight'] ?? m['absWeight']);
+                final added = (m['s1_weight_added'] ?? m['displayAdded']);
+                final reps = (m['s1_reps'] ?? m['reps']);
+                final rir  = (m['s1_rir'] ?? m['rir']);
+
+                // Store both naming schemes so all callers are happy.
+                _seedHintsByKey[rowKey] = {
+                  // WES-expected generic names:
+                  'weight'     : abs,
+                  'absWeight'  : abs,
+                  'reps'       : reps,
+                  'rir'        : rir,
+
+                  // Warmup (S1) names kept for _getProgressedValues() fast path:
+                  's1_weight'        : m['s1_weight'],
+                  's1_weight_added'  : m['s1_weight_added'],
+                  's1_reps'          : m['s1_reps'],
+                  's1_rir'           : m['s1_rir'],
+                };
+              });
+              print('🟢 [WES Hints] Seeded ${_seedHintsByKey.length} hint rows from snapshot.');
+            }
+          } catch (e) {
+            print('⚠️ [WES Hints] Failed to parse/normalize hintsJson: $e');
+          }
+
         }
       } catch (e) {
         print('⚠️ [WES LoadExisting] Snapshot fast-path failed: $e');
@@ -10123,7 +10158,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
                                 return Card(
 
-                                  key: ValueKey("card_$i"),
+                                  key: ValueKey('card_$rowKey'),
+
                                   // 👈 Unique per exercise
                                   color: Colors.blueGrey.shade700,
                                   shape: RoundedRectangleBorder(
@@ -10133,9 +10169,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                                       left: 0, top: 2, right: 0, bottom: 0),
 
                                   child: ExpansionTile(
-                                    key: ValueKey('wes_ex_tile_${i}_${isSaved
-                                        ? 'saved'
-                                        : 'live'}'),
+                                    key: ValueKey('wes_ex_tile_$rowKey'),
+
                                     // force rebuild when state flips
                                     initiallyExpanded: !isSaved,
                                     // saved → collapsed by default
