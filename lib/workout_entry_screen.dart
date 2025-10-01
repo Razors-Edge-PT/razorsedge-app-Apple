@@ -4939,26 +4939,45 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       }
       if (tmpRows.isEmpty) return;
 
-      // Parse hints and map to a form WES expects
+      // Parse hints and map to a form WES expects (re-key to name|ci)
       final Map<String, Map<String, dynamic>> hintsByKey = {};
       if (snap.hintsJson.isNotEmpty && snap.hintsJson != '{}') {
         final raw = Map<String, dynamic>.from(jsonDecode(snap.hintsJson));
+
         for (final e in raw.entries) {
           final v = Map<String, dynamic>.from(e.value as Map);
-          hintsByKey[e.key] = {
-            's1_weight'       : (v['s1_weight'] as num?)?.toDouble(),
-            's1_weight_added' : (v['s1_weight_added'] as num?)?.toDouble(),
-            's1_reps'         : (v['s1_reps'] as num?)?.toDouble(),
-            's1_rir'          : (v['s1_rir'] as num?)?.toDouble(),
-            'e1rm'            : (v['e1rm'] as num?)?.toDouble(),
+          final name = (v['name'] ?? '').toString().trim();
+          final ci   = (v['circuitIndex'] is num) ? (v['circuitIndex'] as num).toInt() : 0;
+
+          if (name.isEmpty) continue;
+
+          final rowKey = '${name.toLowerCase()}|$ci';
+
+          final s1W   = (v['s1_weight'] as num?)?.toDouble();
+          final s1WA  = (v['s1_weight_added'] as num?)?.toDouble();
+          final s1R   = (v['s1_reps'] as num?)?.toDouble();
+          final s1Ri  = (v['s1_rir'] as num?)?.toDouble();
+          final e1    = (v['e1rm'] as num?)?.toDouble();
+
+          hintsByKey[rowKey] = {
+            's1_weight'       : s1W,
+            's1_weight_added' : s1WA,
+            's1_reps'         : s1R,
+            's1_rir'          : s1Ri,
+            'e1rm'            : e1,
+
             // Aliases some code paths look for:
-            'weight'          : (v['s1_weight'] as num?)?.toDouble(),
-            'absWeight'       : (v['s1_weight'] as num?)?.toDouble(),
-            'reps'            : (v['s1_reps'] as num?)?.toDouble(),
-            'rir'             : (v['s1_rir'] as num?)?.toDouble(),
+            'weight'          : s1W,
+            'absWeight'       : s1W,
+            'reps'            : s1R,
+            'rir'             : s1Ri,
           };
+
+          print('🟣 [FastPaint→Hints] $rowKey → '
+              'weight=${s1W ?? '—'} added=${s1WA ?? '—'} reps=${s1R ?? '—'} rir=${s1Ri ?? '—'}');
         }
       }
+
 
       // Seed hints map now (used by other paths later)
       _seedHintsByKey
@@ -5027,10 +5046,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         final reps = (h['s1_reps'] as num?)?.toInt();
         final rir  = (h['s1_rir'] as num?)?.toString();
 
-        // Controllers (Set 1)
-        tmpWts[i][0].text  = (displayWeight == null) ? '' : '${displayWeight}';
-        tmpReps[i][0].text = (reps == null) ? '' : '$reps';
-        tmpRir[i][0].text  = (rir ?? '');
+        // Controllers (Set 1): leave EMPTY so UI shows hintText instead of “user input”
+        tmpWts[i][0].text  = '';
+        tmpReps[i][0].text = '';
+        tmpRir[i][0].text  = '';
+
+        print('🟢 [FastPaint Row $i] ${name}|$ci '
+            '→ HINT weight=${displayWeight ?? '—'} reps=${reps ?? '—'} rir=${rir ?? '—'} '
+            '(isBW=$isBw)');
 
         // SetDetails for non-controller readers
         tmpSets[i][0].weight = displayWeight;
@@ -10781,15 +10804,13 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                                                                   .only(
                                                                   left: 2),
                                                               hintText: (j == 0)
-                                                                  ? set1RIR(i)
-                                                                  .toString()
+                                                                  ? (_seedHintsByKey['${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i']?['rir']?.toString() ?? set1RIR(i).toString())
                                                                   : (j == 1)
-                                                                  ? set2RIR(i)
-                                                                  .toString()
+                                                                  ? set2RIR(i).toString()
                                                                   : (j == 2)
-                                                                  ? set3RIR(i)
-                                                                  .toString()
+                                                                  ? set3RIR(i).toString()
                                                                   : '1',
+
                                                               hintStyle: const TextStyle(
                                                                 color: Colors
                                                                     .grey,
