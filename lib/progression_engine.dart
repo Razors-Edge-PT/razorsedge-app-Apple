@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:core';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'periodization_model_utils.dart'; // your existing utils
+import 'dart:convert'; // for jsonEncode in debug logs
 
 
 /// Simple getter callbacks for values WES used to read from controllers/state.
@@ -93,6 +94,11 @@ class ProgressionEngine {
     void _debugPrintBlockDates() => i.debugPrintBlockDates?.call();
     print('[ENGINE] resolvedBB2Values dump = '
         '${i.resolvedBB2Values.map((k,v) => MapEntry(k, v.toString()))}');
+// DEBUG: show the seed hint that came from Isar → WES → _seedHintsByKey for this row
+    final _seedKeyDbg = _rowKeyBy(exerciseIndex);
+    final _seedDbg = _seedHintsByKey[_seedKeyDbg];
+    print('[ENGINE][seed] row=$exerciseIndex key=$_seedKeyDbg → '
+        '${_seedDbg == null ? '∅' : jsonEncode(_seedDbg)}');
 
 
     // -------------------- BEGIN: original function body --------------------
@@ -151,12 +157,22 @@ class ProgressionEngine {
       }
       absW ??= 20.0;
 
+      final double? seedRir = (seed['s1_rir'] as num?)?.toDouble();
+
       final seeded = <String, dynamic>{
         'exerciseName': exName,
         'exerciseId': exId,
-        'weight': absW,
+        'weight': absW,                                   // absolute kg
         'reps': (seed['s1_reps'] as num?)?.toDouble() ?? 10.0,
+        'rir': seedRir ?? 1.0,                            // add this line
       };
+
+      print('[ENGINE][seed→use] row=$exerciseIndex '
+          'name=$exName id=$exId abs=${absW?.toStringAsFixed(2)} '
+          'disp=${(seed['s1_weight_added'] as num?)?.toString()} '
+          'reps=${(seed['s1_reps'] as num?)?.toString()} '
+          'rir=${(seed['s1_rir'] as num?)?.toString()}');
+
 
       _cachedProgressedValues[_rowCacheKey(exerciseIndex)] = seeded;
       return seeded;
@@ -546,7 +562,12 @@ class ProgressionEngine {
       PeriodizationModelUtils.parseProgressionModel(progressionModelName);
       final double rir = getRirFromPlanOrInput(exerciseIndex, 1);
 
-      final double defaultWeight =
+    print('[ENGINE][plan] row=$exerciseIndex name=$exerciseName '
+        'repTarget=${repTarget.toStringAsFixed(1)} '
+        'rir=${rir.toStringAsFixed(2)} model=$progressionModelName');
+
+
+    final double defaultWeight =
       PeriodizationModelUtils.getSuggestedWeightFromRep(
         exerciseName,
         repTarget.toInt(),
@@ -638,7 +659,12 @@ class ProgressionEngine {
       }
 
       // write back absolute weight as before
+// write back absolute weight as before
     progressed['weight'] = snapped;
+
+// ✅ also persist the plan-derived reps & rir so they exist even without overrides
+    progressed['reps'] = repTarget.toInt();
+    progressed['rir']  = rir;
 
     // Cache and return
     progressed['exerciseName'] = exerciseName;
@@ -652,8 +678,6 @@ class ProgressionEngine {
 
     // === Overlay with BB2 / user-entered values if available ===
     var overrides = i.resolvedBB2Values[exerciseId];
-
-// 🔁 Fallback: also check by name (lowercased) if id lookup fails
     if (overrides == null) {
       final lowerName = exerciseName.toLowerCase().trim();
       overrides = i.resolvedBB2Values[lowerName];
@@ -662,14 +686,26 @@ class ProgressionEngine {
     if (overrides != null) {
       print('[ENGINE] applying overrides for $exerciseName → $overrides');
 
-      if (overrides['weight'] != null) {
-        progressed['weight'] = (overrides['weight'] as num).toDouble();
+      // Weight: only apply if a positive number was supplied (never allow 0 here)
+      final ow = overrides['weight'];
+      if (ow is num && ow > 0) {
+        progressed['weight'] = ow.toDouble();
       }
-      if (overrides['reps'] != null) {
-        progressed['reps'] = (overrides['reps'] as num).toDouble();
+
+      // Reps: only apply if a positive integer was supplied (never allow 0 here)
+      final orp = overrides['reps'];
+      if (orp is num && orp > 0) {
+        progressed['reps'] = orp.toDouble(); // keep as double for consistency with elsewhere
       }
-      if (overrides['rir'] != null) {
-        progressed['rir'] = (overrides['rir'] as num).toDouble();
+
+      // RIR: apply whenever it is present (0.0 is valid and intentional)
+      if (overrides.containsKey('rir')) {
+        final orir = overrides['rir'];
+        if (orir == null) {
+          // explicit null → do NOT override (leave planned rir)
+        } else if (orir is num) {
+          progressed['rir'] = orir.toDouble();
+        }
       }
     }
 

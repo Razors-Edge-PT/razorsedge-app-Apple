@@ -2874,57 +2874,67 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       final String exId = PeriodizationModelUtils.nameToId[name] ?? name;
       final bool isBw   = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
 
-      final double typed = double.tryParse(row.weightController.text) ?? 0.0; // what user typed in the weight box
-      final int reps     = int.tryParse(row.repsController.text) ?? 0;
-      final double rir   = double.tryParse(row.rirController.text) ?? 0.0;
+      final String wTxt  = row.weightController.text.trim();
+      final String rTxt  = row.repsController.text.trim();
+      final String rirTxt = row.rirController.text.trim();
 
-      double saveWeight = typed;           // default (normal exercises)
-      double? saveAdded;                   // only set for BW
+      final double typed = double.tryParse(wTxt) ?? 0.0; // what user typed in the weight box
+      final int reps     = int.tryParse(rTxt) ?? 0;
+      final double rir   = double.tryParse(rirTxt) ?? 0.0;
+
+      final bool hasWeightInput = wTxt.isNotEmpty;   // user typed something (even "0")
+      final bool hasRepsInput   = rTxt.isNotEmpty;   // user typed something (even "0", which we won't save)
+      final bool hasRirInput    = rirTxt.isNotEmpty; // user typed something (even "0")
+
+      double saveWeight = typed;   // default (normal exercises)
+      double? saveAdded;           // only set for BW
 
       if (isBw) {
-        // Only convert to ABSOLUTE if the user actually typed a positive ADDED kg.
-        if (typed > 0) {
+        // For BW, treat any typed value (including 0.0) as intentional.
+        if (hasWeightInput) {
           final date = blockStartDate.add(Duration(days: weekIndex * 7 + dayIndex));
           final asOfDate = DateTime(date.year, date.month, date.day, 12);
 
           final double absolute = PeriodizationModelUtils.toAbsoluteWeight(
             uid: _cachedUid,
-            displayAddedKg: typed,         // user-typed ADDED
+            displayAddedKg: typed, // ADDED (may be 0.0)
             exerciseId: exId,
             exerciseName: name,
             asOfDate: asOfDate,
           );
-          saveWeight = absolute;           // ABSOLUTE = BW + ADDED
-          saveAdded  = typed;              // preserve typed ADDED alongside
+          saveWeight = absolute;   // ABSOLUTE = BW + ADDED
+          saveAdded  = typed;      // keep ADDED exactly as typed (0.0 allowed)
         } else {
           // No user entry for BW → do not persist weight at all.
-          saveWeight = 0.0;                // will be omitted from the map below
-          saveAdded  = null;
+          saveAdded = null;
         }
       }
 
-// Build the exercise map, only including 'weight' when meaningful
+// Build the exercise map; include only intentional fields
       final exMap = <String, dynamic>{
         'name': name,
-        'reps': reps,
-        'rir': rir,
+        // reps: save only if user entered > 0
+        if (hasRepsInput && reps > 0) 'reps': reps,
+        // rir: save even if 0.0; omit only when no input
+        if (hasRirInput) 'rir': rir,
         'velocity': row.velocityController.text.trim(),
         'notes': row.notesController.text.trim(),
         'circuitIndex': row.circuitIndex,
       };
 
-// Non-BW: store typed weight only if > 0
-      if (!isBw && typed > 0) {
-        exMap['weight'] = saveWeight;      // (== typed)
+// Non-BW: store typed weight only if user typed AND > 0
+      if (!isBw && hasWeightInput && typed > 0) {
+        exMap['weight'] = saveWeight; // (== typed)
       }
 
-// BW: store ABSOLUTE only if user typed an added value; also store addedWeight
-      if (isBw && saveAdded != null && saveAdded > 0) {
-        exMap['weight'] = saveWeight;      // ABSOLUTE (BW + added)
-        exMap['addedWeight'] = saveAdded;  // typed ADDED kg
+// BW: store ABSOLUTE & ADDED when the user typed (including 0.0)
+      if (isBw && hasWeightInput) {
+        exMap['weight'] = saveWeight;         // ABSOLUTE (BW + added)
+        exMap['addedWeight'] = saveAdded;     // ADDED (can be 0.0)
       }
 
       exercises.add(exMap);
+
 
     }
 

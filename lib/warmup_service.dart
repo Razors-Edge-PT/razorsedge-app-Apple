@@ -1752,7 +1752,7 @@ class WarmupService {
                 updatedAt: DateTime.now(),
               );
 
-              // Post-write summary + safe preview
+              // Post-write summary + safe preview (save branch)
               final preview = (hintsJson.isNotEmpty)
                   ? hintsJson.substring(0, hintsJson.length.clamp(0, 400))
                   : '{}';
@@ -1766,16 +1766,49 @@ class WarmupService {
               print('[Warmup:9] snapshot saved for $dateYmd (hash: $hintsInputsHash, rows: ${planned.length})');
             }
 
+// 🔎 ALWAYS re-read from Isar to verify current stored row (skip or save)
+            try {
+              final snapCheck = await BlockPlanCache.getInitSnapshot(
+                uid: uid,
+                blockId: activeBlockId,
+                dateYmd: dateYmd,
+              );
+
+              if (snapCheck == null) {
+                print('🟥 [Warmup:9][Isar] re-read FAILED for $dateYmd (no row found)');
+              } else {
+                String _cut(String s, int n) => s.substring(0, s.length.clamp(0, n));
+
+                final plannedLen2 = (() {
+                  try { final d = jsonDecode(snapCheck.plannedExercisesJson); return d is List ? d.length : 0; } catch (_) { return 0; }
+                })();
+                final wesLen2 = (() {
+                  try { final d = jsonDecode(snapCheck.wesPlannedExercisesJson); return d is List ? d.length : 0; } catch (_) { return 0; }
+                })();
+                final prevLen2 = (() {
+                  try { final d = jsonDecode(snapCheck.previousWorkoutJson); return d is List ? d.length : 0; } catch (_) { return 0; }
+                })();
+
+                print('[Warmup:9][Isar] re-read ok → '
+                    'uid=${snapCheck.uid} bid=${snapCheck.blockId} ymd=${snapCheck.dateYmd} '
+                    'hash=${snapCheck.hintsInputsHash} '
+                    'hintsReady=${snapCheck.hintsReady} ver=${snapCheck.schemaVersion} '
+                    'planned=$plannedLen2 wes=$wesLen2 prev=$prevLen2 '
+                    'updatedAt=${snapCheck.updatedAt} cachedAt=${snapCheck.cachedAt}');
+                final hintsPreview2 = (snapCheck.hintsJson?.isNotEmpty ?? false)
+                    ? _cut(snapCheck.hintsJson!, 200)
+                    : '{}';
+                print('[Warmup:9][Isar] hintsJson preview → $hintsPreview2');
+              }
+            } catch (e) {
+              print('🟧 [Warmup:9][Isar] re-read threw: $e');
+            }
           } catch (e, st) {
             print('🟥 [Warmup:9] snapshot failed: $e');
             // best-effort only
           }
-
         }
-
-        // (You said "no clamping" and we’ll run it in the next step when you’re ready.)
       }
-
     } catch (_) {
       // best-effort
     }
