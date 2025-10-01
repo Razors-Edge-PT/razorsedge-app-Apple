@@ -354,6 +354,17 @@ class WarmupService {
 
 // ──────────────────────────────────────────────────────────────
 // STEP 4: Build exerciseSettings map used by the engine
+
+  double? _rirFromPlan(String exerciseId, int weekIndex, int sessionIndex, int setNumber) {
+    final plan = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['rirPlan'] as Map?;
+    if (plan == null) return null;
+    final wkKey  = 'week${weekIndex + 1}';
+    final sesKey = 'session${sessionIndex + 1}';
+    final setKey = 'set$setNumber';
+    final raw = (plan[wkKey]?[sesKey]?[setKey]?['rir'])?.toString();
+    return (raw == null || raw.trim().isEmpty) ? null : double.tryParse(raw);
+  }
+
 // sources: row.settings OR /exercises/{id}
 // ──────────────────────────────────────────────────────────────
   Future<Map<String, dynamic>> _loadExerciseSettingsForPlanned({
@@ -672,7 +683,7 @@ class WarmupService {
 // ──────────────────────────────────────────────────────────────
 // STEP 6: Populate topSetsByExercise from savedWorkoutsList
 // Collapse to ONE sample per (exercise, date): the set with the HIGHEST e1RM
-// Dates are normalized to YYYY-MM-DD (strings) → JSON safe for Step 9
+// Dates are normalized to YYYY-MM-DD (strings)
   void _populateTopSetsFromSavedWorkouts() {
     final list = PeriodizationModelUtils.savedWorkoutsList;
 
@@ -1548,6 +1559,8 @@ class WarmupService {
             final isBw   = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: exName);
             _isBwByRow.add(isBw);
 
+
+
             print('   • #$iRow ${res['exerciseName']} → ${res['weight']}kg @ ${res['reps']} (rir=${res['rir']}) id=${res['exerciseId']}');
 
             // 👇 add instance context print here
@@ -1615,6 +1628,7 @@ class WarmupService {
               if (wAdded != null) 's1_weight_added' : wAdded, // only present for BW
               if (reps   != null) 's1_reps'         : reps,
               if (rirFinal != null) 's1_rir'        : rirFinal,
+
             };
 
             hints[key] = entry;
@@ -1656,6 +1670,32 @@ class WarmupService {
             final bool isBw = _isBwByRow[i];
 
             final key = _rowKeyBy(i);
+            final exId = PeriodizationModelUtils.nameToId[name] ?? name;
+            final exerciseId = exId.toString();   // normalised id
+                // you already calculated this earlier in Step 2
+            final sessionIndex = ci;              // circuitIndex doubles as session index
+
+            // pull all planned RIRs from rirPlan (sets 2–8)
+            final rir2 = _rirFromPlan(exerciseId, weekIndex, sessionIndex, 2);
+            final rir3 = _rirFromPlan(exerciseId, weekIndex, sessionIndex, 3);
+            final rir4 = _rirFromPlan(exerciseId, weekIndex, sessionIndex, 4);
+            final rir5 = _rirFromPlan(exerciseId, weekIndex, sessionIndex, 5);
+            final rir6 = _rirFromPlan(exerciseId, weekIndex, sessionIndex, 6);
+            final rir7 = _rirFromPlan(exerciseId, weekIndex, sessionIndex, 7);
+            final rir8 = _rirFromPlan(exerciseId, weekIndex, sessionIndex, 8);
+// 🔎 Pretty-print whatever RIRs exist for sets 1–8
+            final _allRirs = <String>[];
+            if (rirFinal != null) _allRirs.add('s1=${rirFinal.toStringAsFixed(2)}');
+            if (rir2     != null) _allRirs.add('s2=${rir2!.toStringAsFixed(2)}');
+            if (rir3     != null) _allRirs.add('s3=${rir3!.toStringAsFixed(2)}');
+            if (rir4     != null) _allRirs.add('s4=${rir4!.toStringAsFixed(2)}');
+            if (rir5     != null) _allRirs.add('s5=${rir5!.toStringAsFixed(2)}');
+            if (rir6     != null) _allRirs.add('s6=${rir6!.toStringAsFixed(2)}');
+            if (rir7     != null) _allRirs.add('s7=${rir7!.toStringAsFixed(2)}');
+            if (rir8     != null) _allRirs.add('s8=${rir8!.toStringAsFixed(2)}');
+
+            print('   • [RIR-Plan] ${res['exerciseName']} → ${_allRirs.join(' ')}');
+
             final entry = <String, dynamic>{
               'name'        : name,
               'circuitIndex': ci,
@@ -1663,7 +1703,15 @@ class WarmupService {
               if (isBw && wAdded != null) 's1_weight_added' : wAdded, // only for BW
               if (reps   != null) 's1_reps'         : reps,
               if (rirFinal != null) 's1_rir'        : rirFinal,
+              if (rir2    != null) 's2_rir'         : rir2,
+              if (rir3    != null) 's3_rir'         : rir3,
+              if (rir4    != null) 's4_rir'         : rir4,
+              if (rir5    != null) 's5_rir'         : rir5,
+              if (rir6    != null) 's6_rir'         : rir6,
+              if (rir7    != null) 's7_rir'         : rir7,
+              if (rir8    != null) 's8_rir'         : rir8,
             };
+
 
             hints[key] = entry;
           }
@@ -1712,43 +1760,78 @@ class WarmupService {
 
             // 9.1 Build hintsJson (Map keyed by rowKey: wk{w}_d{d}_i{idx})
             final Map<String, Map<String, dynamic>> hints = <String, Map<String, dynamic>>{};
-            for (int i = 0; i < _wesPlannedForPersist.length && i < planned.length; i++) {
-              final rowKey = 'wk${weekIndex}_d${dayIndex}_i$i';
-              final res    = _wesPlannedForPersist[i];
 
-              final name = (planned[i]['name'] ?? planned[i]['exercise'] ?? '').toString().trim();
+            for (int i = 0; i < wesPlanned.length; i++) {
+              final res  = wesPlanned[i];  // progressed row from the engine
+              final name = (res['exerciseName'] ?? '').toString();
               final ci   = (planned[i]['circuitIndex'] is num)
                   ? (planned[i]['circuitIndex'] as num).toInt()
                   : 0;
 
-              // absolute weight from engine result
-              final double? absW = (res['weight'] as num?)?.toDouble();
+              // absolute weight from engine
+              final double? wAbs   = (res['weight'] as num?)?.toDouble();
+              // display-added only makes sense on BW rows → computed by engine as 'weightDisplayAdded'
+              final double? wAdded = (res['weightDisplayAdded'] as num?)?.toDouble();
 
-              // compute the SAME inputs the engine used
-              final double usedRir  = _getRirFromPlanOrInput(i, 1);
-              final double planReps = _getRepsFromPlan(i, 1);
+              // the reps the engine settled on for set 1 (already model-aware)
+              final double? reps   = (res['reps'] as num?)?.toDouble() ?? _planRepsByRow[i];
 
-              // include display-added ONLY for BW
-              final String exId = (planned[i]['exerciseId'] ?? planned[i]['id'] ?? planned[i]['exercise_id'])?.toString()
-                  ?? (PeriodizationModelUtils.nameToId[name] ?? name).toString();
-              final bool isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
-              final double? addW = isBw
-                  ? (res['weightDisplayAdded'] as num?)?.toDouble()
-                  : null;
+              // RIR: prefer explicit overlay if non-null; else use the exact plan RIR the engine used
+              final double? rirOverlay = (res['rir'] as num?)?.toDouble(); // may be null
+              final double? planRir    = _rirUsedByRow[i];                  // captured earlier
+              final bool hasIntentionalOverride = (rirOverlay != null);     // 0.0 is valid override
+              final double? rirFinal = hasIntentionalOverride ? rirOverlay : planRir;
 
-              final double? e1rm = (res['e1rm'] as num?)?.toDouble();
+              final key = _rowKeyBy(i);
+              final isBw = _isBwByRow[i];
 
-              hints[rowKey] = <String, dynamic>{
-                'name': name,
+              // pull planned RIRs for sets 2–8 from rirPlan
+              final exId = (PeriodizationModelUtils.nameToId[name] ?? name).toString();
+
+              final int sessionIndex = ci;             // circuit index doubles as session index
+              final double? rir2 = _rirFromPlan(exId, weekIndex, sessionIndex, 2);
+              final double? rir3 = _rirFromPlan(exId, weekIndex, sessionIndex, 3);
+              final double? rir4 = _rirFromPlan(exId, weekIndex, sessionIndex, 4);
+              final double? rir5 = _rirFromPlan(exId, weekIndex, sessionIndex, 5);
+              final double? rir6 = _rirFromPlan(exId, weekIndex, sessionIndex, 6);
+              final double? rir7 = _rirFromPlan(exId, weekIndex, sessionIndex, 7);
+              final double? rir8 = _rirFromPlan(exId, weekIndex, sessionIndex, 8);
+
+              // pretty-print so you can see what we’re about to persist
+              final _allRirs = <String>[];
+              if (rirFinal != null) _allRirs.add('s1=${rirFinal.toStringAsFixed(2)}');
+              if (rir2     != null) _allRirs.add('s2=${rir2.toStringAsFixed(2)}');
+              if (rir3     != null) _allRirs.add('s3=${rir3.toStringAsFixed(2)}');
+              if (rir4     != null) _allRirs.add('s4=${rir4.toStringAsFixed(2)}');
+              if (rir5     != null) _allRirs.add('s5=${rir5.toStringAsFixed(2)}');
+              if (rir6     != null) _allRirs.add('s6=${rir6.toStringAsFixed(2)}');
+              if (rir7     != null) _allRirs.add('s7=${rir7.toStringAsFixed(2)}');
+              if (rir8     != null) _allRirs.add('s8=${rir8.toStringAsFixed(2)}');
+              print('   • [RIR-Plan] $name → ${_allRirs.join(' ')}');
+
+              final entry = <String, dynamic>{
+                'name'        : name,
                 'circuitIndex': ci,
-                's1_weight': absW,
-                if (addW != null) 's1_weight_added': addW, // BW only
-                's1_reps': planReps,
-                's1_rir': usedRir,
-                if (e1rm != null) 'e1rm': e1rm,
+                if (wAbs   != null) 's1_weight'       : wAbs,
+                if (isBw && wAdded != null) 's1_weight_added' : wAdded, // only for BW
+                if (reps   != null) 's1_reps'         : reps,
+                if (rirFinal != null) 's1_rir'        : rirFinal,
+                if (rir2    != null) 's2_rir'         : rir2,
+                if (rir3    != null) 's3_rir'         : rir3,
+                if (rir4    != null) 's4_rir'         : rir4,
+                if (rir5    != null) 's5_rir'         : rir5,
+                if (rir6    != null) 's6_rir'         : rir6,
+                if (rir7    != null) 's7_rir'         : rir7,
+                if (rir8    != null) 's8_rir'         : rir8,
               };
+
+              hints[key] = entry;
+              print('🟣 [Warmup:8→9] hint $key → $entry'); // now shows s2..s8 if present
             }
+
+// JSON for Step 9 snapshot — compute AFTER filling `hints`
             final String hintsJson = jsonEncode(_jsonSafe(hints));
+
 
 
             // 9.2 Compute inputs hash to match WES _computeNowInputsHash()
@@ -1902,18 +1985,39 @@ class WarmupService {
 
             final List<Map<String, dynamic>> previousWorkout = _buildPreviousWorkoutJson();
 
-            // 9.4 Skip/Overwrite policy
+            // --- Skip/Overwrite policy ---
             final existing = await BlockPlanCache.getInitSnapshot(
               uid: uid,
               blockId: activeBlockId,
               dateYmd: dateYmd,
             );
 
-// Always show the hash we computed
-            print('[Warmup:9] computed hash for $dateYmd → $hintsInputsHash');
+// old vs new multi-set detection
+            final oldHintsStr = existing?.hintsJson ?? '';
+            final bool oldHasMulti =
+                oldHintsStr.contains('"s2_rir"') || oldHintsStr.contains('"s3_rir"') ||
+                    oldHintsStr.contains('"s4_rir"') || oldHintsStr.contains('"s5_rir"') ||
+                    oldHintsStr.contains('"s6_rir"') || oldHintsStr.contains('"s7_rir"') ||
+                    oldHintsStr.contains('"s8_rir"');
 
-            if (existing != null && existing.hintsInputsHash == hintsInputsHash) {
-              // SKIPPED: hash unchanged — dump what's already stored so you can inspect it
+            final bool newHasMulti = hints.values.any((row) =>
+                row.keys.any((k) => k == 's2_rir' || k == 's3_rir' || k == 's4_rir' ||
+                    k == 's5_rir' || k == 's6_rir' || k == 's7_rir' || k == 's8_rir'));
+
+            final bool needsUpgradeToMultiSetRir = (existing != null && !oldHasMulti && newHasMulti);
+
+// also overwrite if the hints JSON text changed (even if inputs hash didn’t)
+            final bool contentChanged = oldHintsStr != hintsJson;
+
+            print('[Warmup:9] computed hash for $dateYmd → $hintsInputsHash '
+                '(upgrade=$needsUpgradeToMultiSetRir contentChanged=$contentChanged newHasMulti=$newHasMulti)');
+
+            if (existing != null &&
+                existing.hintsInputsHash == hintsInputsHash &&
+                !needsUpgradeToMultiSetRir &&
+                !contentChanged) {
+
+              // Skip write — nothing to upgrade or change
               final plannedLen = () {
                 try { final d = jsonDecode(existing.plannedExercisesJson); return d is List ? d.length : 0; } catch (_) { return 0; }
               }();
@@ -1934,7 +2038,27 @@ class WarmupService {
               print('[Warmup:9] existing hintsJson preview → $hintsPreview');
 
             } else {
-              print('[Warmup:9] about to put snapshot → hash=$hintsInputsHash hintsJsonLen=${hintsJson.length}');
+              if (needsUpgradeToMultiSetRir) {
+                print('[Warmup:9] upgrading snapshot to include multi-set RIR (s2–s8) for $dateYmd');
+              } else if (contentChanged) {
+                print('[Warmup:9] overwriting snapshot (hints content changed) for $dateYmd');
+              } else {
+                print('[Warmup:9] about to put snapshot → hash=$hintsInputsHash hintsJsonLen=${hintsJson.length}');
+              }
+
+              // OPTIONAL: quick debug of the RIR we will persist (now definitely multi-set when available)
+              for (final e in hints.entries) {
+                final m = e.value;
+                String r = '';
+                for (int s = 1; s <= 8; s++) {
+                  final k = 's${s}_rir';
+                  if (m.containsKey(k)) {
+                    final v = m[k];
+                    r += '$k=$v ';
+                  }
+                }
+                print('   • [9→persist] ${m['name']}|${m['circuitIndex']} → ${r.trim()}');
+              }
 
               await BlockPlanCache.putInitSnapshot(
                 uid: uid,
@@ -1946,14 +2070,16 @@ class WarmupService {
                 topSetHistory: PeriodizationModelUtils.topSetsByExercise.entries
                     .map((e) => <String, dynamic>{'exercise': e.key, 'sets': e.value})
                     .toList(),
-                hintsJson: hintsJson,
-                hintsInputsHash: hintsInputsHash,
+                hintsJson: hintsJson,              // ← includes s2_rir…s8_rir now
+                hintsInputsHash: hintsInputsHash,  // unchanged logic
                 hintsReady: true,
-                schemaVersion: 1,
+                schemaVersion: (existing?.schemaVersion ?? 1) < 2 ? 2 : existing!.schemaVersion,
                 updatedAt: DateTime.now(),
               );
 
-              // Post-write summary + safe preview (save branch)
+
+
+            // Post-write summary + safe preview (save branch)
               final preview = (hintsJson.isNotEmpty)
                   ? hintsJson.substring(0, hintsJson.length.clamp(0, 400))
                   : '{}';
@@ -1966,6 +2092,7 @@ class WarmupService {
               print('[Warmup:9] hintsJson → $preview');
               print('[Warmup:9] snapshot saved for $dateYmd (hash: $hintsInputsHash, rows: ${planned.length})');
             }
+
 
 // 🔎 ALWAYS re-read from Isar to verify current stored row (skip or save)
             try {

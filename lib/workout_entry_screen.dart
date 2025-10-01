@@ -4959,12 +4959,30 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           final s1Ri  = (v['s1_rir'] as num?)?.toDouble();
           final e1    = (v['e1rm'] as num?)?.toDouble();
 
+          // NEW: pull planned RIRs for sets 2–8 if present
+          final s2Ri = (v['s2_rir'] as num?)?.toDouble();
+          final s3Ri = (v['s3_rir'] as num?)?.toDouble();
+          final s4Ri = (v['s4_rir'] as num?)?.toDouble();
+          final s5Ri = (v['s5_rir'] as num?)?.toDouble();
+          final s6Ri = (v['s6_rir'] as num?)?.toDouble();
+          final s7Ri = (v['s7_rir'] as num?)?.toDouble();
+          final s8Ri = (v['s8_rir'] as num?)?.toDouble();
+
           hintsByKey[rowKey] = {
             's1_weight'       : s1W,
             's1_weight_added' : s1WA,
             's1_reps'         : s1R,
             's1_rir'          : s1Ri,
             'e1rm'            : e1,
+
+            // expose planned RIRs for 2–8
+            if (s2Ri != null) 's2_rir': s2Ri,
+            if (s3Ri != null) 's3_rir': s3Ri,
+            if (s4Ri != null) 's4_rir': s4Ri,
+            if (s5Ri != null) 's5_rir': s5Ri,
+            if (s6Ri != null) 's6_rir': s6Ri,
+            if (s7Ri != null) 's7_rir': s7Ri,
+            if (s8Ri != null) 's8_rir': s8Ri,
 
             // Aliases some code paths look for:
             'weight'          : s1W,
@@ -4973,11 +4991,16 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
             'rir'             : s1Ri,
           };
 
+          // Short debug
+          final rirs = [
+            if (s1Ri != null) 's1=$s1Ri',
+            if (s2Ri != null) 's2=$s2Ri',
+            if (s3Ri != null) 's3=$s3Ri',
+          ].join(' ');
           print('🟣 [FastPaint→Hints] $rowKey → '
-              'weight=${s1W ?? '—'} added=${s1WA ?? '—'} reps=${s1R ?? '—'} rir=${s1Ri ?? '—'}');
+              'weight=${s1W ?? '—'} added=${s1WA ?? '—'} reps=${s1R ?? '—'} rir: $rirs');
         }
       }
-
 
       // Seed hints map now (used by other paths later)
       _seedHintsByKey
@@ -5055,10 +5078,32 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
             '→ HINT weight=${displayWeight ?? '—'} reps=${reps ?? '—'} rir=${rir ?? '—'} '
             '(isBW=$isBw)');
 
-        // SetDetails for non-controller readers
+        // SetDetails for non-controller readers (Set 1)
         tmpSets[i][0].weight = displayWeight;
         tmpSets[i][0].reps   = reps;
         tmpSets[i][0].rir    = double.tryParse(rir ?? '');
+
+        // ✅ Also hydrate RIR for sets 2–8 from hints if present (as hints, not user input)
+        for (var setNo = 2; setNo <= _defaultSets && setNo <= 8; setNo++) {
+          final rirKey = 's${setNo}_rir';
+          final rirValNum = h[rirKey] as num?;
+          if (rirValNum != null) {
+            final setIdx = setNo - 1; // setNo=2 → index 1, etc.
+            if (setIdx < tmpSets[i].length) {
+              // keep SetDetails in sync for downstream logic
+              tmpSets[i][setIdx].rir = rirValNum.toDouble();
+            }
+          }
+        }
+
+        // 🔎 Debug what we hydrated for RIR across sets
+        final _rirDbg = List.generate(
+          (_defaultSets <= 8 ? _defaultSets : 8),
+              (k) => (h['s${k+1}_rir'] != null) ? 's${k+1}=${h['s${k+1}_rir']}' : null,
+        ).whereType<String>().join(' ');
+        if (_rirDbg.isNotEmpty) {
+          print('🟪 [FastPaint RIR] $name|$ci → $_rirDbg');
+        }
       }
 
       // ✅ One paint: assign fully hydrated state
@@ -5102,6 +5147,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       print(st);
     }
   }
+
 
 
 
@@ -10804,12 +10850,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                                                                   .only(
                                                                   left: 2),
                                                               hintText: (j == 0)
-                                                                  ? (_seedHintsByKey['${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i']?['rir']?.toString() ?? set1RIR(i).toString())
-                                                                  : (j == 1)
-                                                                  ? set2RIR(i).toString()
-                                                                  : (j == 2)
-                                                                  ? set3RIR(i).toString()
-                                                                  : '1',
+                                                                ? (_seedHintsByKey['${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i']?['rir']?.toString() ?? set1RIR(i).toString())
+                                                                : (j == 1)
+                                                                ? set2RIR(i).toString()
+                                                                : (j == 2)
+                                                                ? set3RIR(i).toString()
+                                                                : '1',
 
                                                               hintStyle: const TextStyle(
                                                                 color: Colors
