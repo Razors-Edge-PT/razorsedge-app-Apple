@@ -127,11 +127,6 @@ class ProgressionEngine {
     }
 
 
-
-    if (cached != null && blockStartDate != null && blockEndDate != null) {
-      return cached;
-    }
-
     // 🔹 NEW: if we have seeded hints, use them for the very first paint
     final seedKey = _rowKeyBy(exerciseIndex);
     final seed = _seedHintsByKey[seedKey];
@@ -185,12 +180,18 @@ class ProgressionEngine {
 
     // Avoid caching placeholders before core meta/history land
     if (blockStartDate == null || _selectedDate == null || PeriodizationModelUtils.savedWorkoutsList.isEmpty) {
+      final exName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.toString().trim() ?? '';
+      final exId   = PeriodizationModelUtils.nameToId[exName] ?? exName;
+      print('⏳ [ENGINE] delaying progressed calc; meta/history not ready');
       return {
-        'exerciseName': _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '',
-        'weight': 20.0,
-        'reps': 10,
+        'exerciseName': exName,
+        'exerciseId'  : exId,
+        'weight'      : 20.0,
+        'reps'        : 10.0,
+        'rir'         : 17.9,
       };
     }
+
 
     _debugPrintBlockDates();
       // Get exercise info.
@@ -575,9 +576,14 @@ class ProgressionEngine {
       );
 
       // Call the progression model (which contains its internal logic).
-      final incRaw = _exerciseSettings[exerciseId]?['increments'];
-      final incMap = PeriodizationModelUtils.incMapFromRaw(incRaw);
-      final increments = PeriodizationModelUtils.expandIncrementOptions(incMap);
+    final incRaw = _exerciseSettings[exerciseId]?['increments'];
+    final incMap = PeriodizationModelUtils.incMapFromRaw(incRaw);
+    final increments = PeriodizationModelUtils.expandIncrementOptions(incMap);
+
+// 🔒 PATCH: normalize increments for snapping everywhere
+
+    final List<double> _incOpts =
+    (increments == null || increments.isEmpty) ? <double>[2.5] : increments;
 
       final maxWeightMap = _exerciseSettings[exerciseId]?['maxWeightByReps'];
       final maxWeightKeys = (maxWeightMap is Map)
@@ -643,49 +649,42 @@ class ProgressionEngine {
         name: exerciseName,
       );
 
-      if (_isBwEx) {
-        // convert ABS → ADDED
-        final double _targetAdded =
-        PeriodizationModelUtils.toDisplayAddedWeight(
-          uid: uidForBw,
-          absoluteKg: target,
-          exerciseId: exerciseId,
-          exerciseName: exerciseName,
-          asOfDate: _asOfDate, // ⬅️ add this
-        );
+    if (_isBwEx) {
+      // convert ABS → ADDED
+      final double _targetAdded = PeriodizationModelUtils.toDisplayAddedWeight(
+        uid: uidForBw,
+        absoluteKg: target,
+        exerciseId: exerciseId,
+        exerciseName: exerciseName,
+        asOfDate: _asOfDate,
+      );
 
-        // snap on ADDED (use your expanded increments)
-        final List<double> _opts = (increments == null || increments.isEmpty)
-            ? <double>[2.5]
-            : increments;
-        double _snappedAdded = _opts.reduce(
-              (a, b) =>
-          (a - _targetAdded).abs() < (b - _targetAdded).abs() ? a : b,
-        );
+      // snap on ADDED
+      double _snappedAdded = _incOpts.reduce(
+            (a, b) => (a - _targetAdded).abs() < (b - _targetAdded).abs() ? a : b,
+      );
+      if (_snappedAdded < 0) _snappedAdded = 0.0;
 
-        // cap min at 0 for display semantics
-        if (_snappedAdded < 0) _snappedAdded = 0.0;
+      // ADDED → ABS
+      snapped = PeriodizationModelUtils.toAbsoluteWeight(
+        uid: uidForBw,
+        displayAddedKg: _snappedAdded,
+        exerciseId: exerciseId,
+        exerciseName: exerciseName,
+      );
 
-        // convert back to ABS for storage/math and assign to your usual `snapped`
-        snapped = PeriodizationModelUtils.toAbsoluteWeight(
-          uid: uidForBw,
-          displayAddedKg: _snappedAdded,
-          exerciseId: exerciseId,
-          exerciseName: exerciseName,
-        );
+      progressed['weightDisplayAdded'] = _snappedAdded;
+    } else {
+      // non-BW: snap absolute
+      snapped = _incOpts.reduce(
+            (a, b) => (a - target).abs() < (b - target).abs() ? a : b,
+      );
+      // (leaving your displayAdded mirror as-is)
+      progressed['weightDisplayAdded'] = snapped;
+    }
 
-        // optional: expose display-only value for your hint UI (no impact to normal exercises)
-        progressed['weightDisplayAdded'] = _snappedAdded;
-      } else {
-        // 🔁 NORMAL EXERCISES: unchanged behavior and names
-        snapped = increments.reduce(
-              (a, b) => (a - target).abs() < (b - target).abs() ? a : b,
-        );
-        // for non-BW, display == absolute (this key is optional; omit if you prefer)
-        progressed['weightDisplayAdded'] = snapped;
-      }
 
-      // write back absolute weight as before
+    // write back absolute weight as before
 // write back absolute weight as before
     progressed['weight'] = snapped;
 

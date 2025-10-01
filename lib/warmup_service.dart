@@ -106,7 +106,7 @@ class WarmupService {
     final base = DateTime(blockStartDate.year, blockStartDate.month, blockStartDate.day);
     final deltaDays = d.difference(base).inDays;
     final weekIndex = (deltaDays ~/ 7).clamp(0, 9999);
-    final dayIndex  = ((deltaDays % 7) + 1).clamp(0, 6);
+    final dayIndex  = ((deltaDays % 7) + 7) % 7; // 0..6, handles negatives too
     print('🧮 [Warmup:2] indices → weekIndex=$weekIndex dayIndex=$dayIndex (delta=$deltaDays)');
     return {'weekIndex': weekIndex, 'dayIndex': dayIndex};
   }
