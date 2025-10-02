@@ -4916,28 +4916,75 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           ? (jsonDecode(snap.previousWorkoutJson) as List)
           : const [];
 
-      // Build rows in memory (no setState yet)
+      // Build rows in memory (no setState yet) — de-dupe by NAME ONLY
       final tmpRows = <Map<String, dynamic>>[];
+      final Set<String> _seenNames = <String>{};
+      int _plannedIdx = 0;
+      int _prevIdx = 0;
+
+      String _kName(String n) {
+        var t = n.toLowerCase().trim();
+        t = t.replaceAll(RegExp(r'\([^)]*\)'), '');       // strip parentheses text
+        t = t.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');    // punctuation → space
+        t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
+        t = t.replaceAll(RegExp(r'\bdb\b'), 'dumbbell');  // common abbrev norms
+        t = t.replaceAll(RegExp(r'\bbb\b'), 'barbell');
+        return t;
+      }
+
       if (planned.isNotEmpty) {
         for (final e in planned) {
           final m = Map<String, dynamic>.from(e as Map);
           final name = (m['name'] ?? '').toString().trim();
           if (name.isEmpty) continue;
+
+          // keep whichever circuitIndex the first occurrence has; ignore later ones
           final ci = (m['circuitIndex'] is int)
               ? m['circuitIndex'] as int
               : int.tryParse('${m['circuitIndex'] ?? 0}') ?? 0;
-          tmpRows.add({'name': name, 'circuitIndex': ci});
+
+          final kn = _kName(name);
+          if (_seenNames.contains(kn)) {
+            // print('🧹 [FastPaint] skipped duplicate by name: $kn');
+            continue;
+          }
+          _seenNames.add(kn);
+
+          tmpRows.add({
+            'name': name,
+            'circuitIndex': ci,
+            // stable per-snapshot, per-date id
+            'cardId': '$ymd|plan|$_plannedIdx|$kn',
+          });
+          _plannedIdx++;
         }
       } else {
         for (final e in prev) {
           final m = Map<String, dynamic>.from(e as Map);
           final name = (m['name'] ?? '').toString().trim();
           if (name.isEmpty) continue;
-          final ci = (m['circuitIndex'] ?? 0) as int;
-          tmpRows.add({'name': name, 'circuitIndex': ci});
+
+          final ci = (m['circuitIndex'] is int)
+              ? (m['circuitIndex'] as num).toInt()
+              : 0;
+
+          final kn = _kName(name);
+          if (_seenNames.contains(kn)) {
+            // print('🧹 [FastPaint] skipped duplicate prev by name: $kn');
+            continue;
+          }
+          _seenNames.add(kn);
+
+          tmpRows.add({
+            'name': name,
+            'circuitIndex': ci,
+            'cardId': '$ymd|prev|$_prevIdx|$kn',
+          });
+          _prevIdx++;
         }
       }
       if (tmpRows.isEmpty) return;
+
 
       // Parse hints and map to a form WES expects (re-key to name|ci)
       final Map<String, Map<String, dynamic>> hintsByKey = {};
@@ -6075,11 +6122,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           .toSet();
 
 
-      // 7.5) Pass 3 (NEW): merge WES-planned rows (placeholders) IN-PLACE (no clears, no dupes)
+      // 7.5) Pass 3 (NEW): merge WES-planned rows (placeholders) IN-PLACE, counting instances
       int plannedAdded = 0;
-
       final int beforeCount = _selectedExercisesWithCircuits.length;
 
+// Normalize WES planned list into (name, ci) tuples (one per instance)
       final List<Map<String, dynamic>> plannedOverlay = wesPlannedList
           .whereType<Map>()
           .map<Map<String, dynamic>>((m0) {
@@ -6089,44 +6136,76 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         final ci = (m['circuitIndex'] is int)
             ? m['circuitIndex'] as int
             : int.tryParse('${m['circuitIndex'] ?? 0}') ?? 0;
-        return {
-          'name': name,
-          'circuitIndex': ci,
-          // empty sets → acts as a placeholder; overlay helper will not wipe existing sets
-          'sets': const <Map<String, dynamic>>[],
-        };
+        return {'name': name, 'circuitIndex': ci};
       })
           .where((e) => e.isNotEmpty)
           .toList();
 
-      plannedAdded = _selectedExercisesWithCircuits.length - beforeCount;
-
-      // INSERT: actually add missing WES-planned rows (placeholders) to UI shape
       String _kRow(String n, int ci) => '${n.trim().toLowerCase()}|$ci';
-      final Set<String> _haveKeys = _selectedExercisesWithCircuits
-          .map((e) => _kRow(((e['name'] ?? '') as String), (e['circuitIndex'] ?? 0) as int))
-          .toSet();
 
+// Count existing instances by (name|ci)
+      final Map<String, int> existingCounts = <String, int>{};
+      for (final row in _selectedExercisesWithCircuits) {
+        final n = ((row['name'] ?? '') as String).trim();
+        final ci = (row['circuitIndex'] ?? 0) as int;
+        final k = _kRow(n, ci);
+        existingCounts[k] = (existingCounts[k] ?? 0) + 1;
+      }
+
+// Count planned instances by (name|ci)
+      final Map<String, int> plannedCounts = <String, int>{};
       for (final p in plannedOverlay) {
         final n = (p['name'] ?? '').toString().trim();
         final ci = (p['circuitIndex'] ?? 0) as int;
-        if (n.isEmpty) continue;
         final k = _kRow(n, ci);
-        if (_haveKeys.contains(k)) continue;
+        plannedCounts[k] = (plannedCounts[k] ?? 0) + 1;
+      }
 
-        // add row
-        _selectedExercisesWithCircuits.add({'name': n, 'circuitIndex': ci});
+// Date key for stable cardIds we add here
+      final String _ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
 
-        // seed sets & controllers (minimal, like your fast-paint init)
-        _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
-        _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-        _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-        _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-        _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-        _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+// For each (name|ci), add only the shortfall: plannedCount - existingCount
+      for (final entry in plannedCounts.entries) {
+        final k = entry.key;
+        final want = entry.value;
+        final have = existingCounts[k] ?? 0;
+        final deficit = want - have;
+        if (deficit <= 0) continue;
+
+        // Parse key back to (name, ci)
+        final sep = k.lastIndexOf('|');
+        final normName = k.substring(0, sep);
+        final ci = int.tryParse(k.substring(sep + 1)) ?? 0;
+
+        // Reconstruct display name by scanning plannedOverlay (first match)
+        final dispName = plannedOverlay.firstWhere(
+              (m) => _kRow((m['name'] ?? '').toString(), (m['circuitIndex'] ?? 0) as int) == k,
+          orElse: () => const <String, dynamic>{},
+        )['name']?.toString() ?? normName;
+
+        // Add exactly `deficit` placeholder rows with unique cardIds
+        for (int occ = 0; occ < deficit; occ++) {
+          final cardId = '$_ymd|wes|${have + occ}|$normName|$ci';
+
+          _selectedExercisesWithCircuits.add({
+            'name': dispName,
+            'circuitIndex': ci,
+            'cardId': cardId, // 🔑 stable per-instance id
+          });
+
+          _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
+          _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+          _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+          _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+          _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+          _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+        }
+
+        existingCounts[k] = have + (deficit > 0 ? deficit : 0); // keep counts in-sync within this pass
       }
 
       plannedAdded = _selectedExercisesWithCircuits.length - beforeCount;
+
 
 
       // 7) Ensure listeners on any new controllers
@@ -9196,7 +9275,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
             _selectedExercisesWithCircuits.add({
               'name': name,
               'circuitIndex': circuitIndex,
+              // unique per insert; prevents clashes with fast-paint rows
+              'cardId': newEx['cardId'] ?? 'bb2|${DateTime.now().microsecondsSinceEpoch}|$name|$circuitIndex',
             });
+
 
             _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
             _repsControllers.add(
@@ -10177,12 +10259,14 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                         current['circuitIndex'] != prev?['circuitIndex'];
 
 // 🔑 stable key for this row
+                    // 🔑 stable key for this row (per-card unique)
                     final name = (current['name'] ?? '').toString().trim();
                     final ci   = (current['circuitIndex'] ?? 0) as int;
-                    final rowKey = '${name.toLowerCase()}|$ci';
+                    final cardId = (current['cardId'] ?? current['_runtimeId'] ?? '${name.toLowerCase()}|$ci|$i').toString();
+
 
                     return Column(
-                      key: ValueKey('col_$rowKey'),
+                      key: ValueKey('col_$cardId'),
 
 
 
@@ -10220,7 +10304,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
 
                         Dismissible(
-                          key: ValueKey(rowKey),
+                          key: ValueKey('dismiss_$cardId'),
                           direction: DismissDirection.endToStart,
                           background: Container(
                             color: Colors.red,
@@ -10280,7 +10364,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
                                 return Card(
 
-                                  key: ValueKey('card_$rowKey'),
+                                  key: ValueKey('card_$cardId'),
 
                                   // 👈 Unique per exercise
                                   color: Colors.blueGrey.shade700,
@@ -10291,7 +10375,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                                       left: 0, top: 2, right: 0, bottom: 0),
 
                                   child: ExpansionTile(
-                                    key: ValueKey('wes_ex_tile_$rowKey'),
+                                    key: ValueKey('wes_ex_tile_$cardId'),
 
                                     // force rebuild when state flips
                                     initiallyExpanded: !isSaved,
