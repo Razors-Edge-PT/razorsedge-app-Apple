@@ -4225,7 +4225,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
             _resolvedBB2Values.clear();
           }
 
-          await _loadDraftLocallyIfAvailable();
+          //await _loadDraftLocallyIfAvailable();
           _populateVelocityFlags();
           print("🔀 [WES] Merged BB2 into draft");
 
@@ -5143,6 +5143,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         _isLoadingData = false;
       });
 
+      print('👀 [FastPaint Post] rows=${_selectedExercisesWithCircuits.length} '
+          'sets=${_workoutSets.length} repsCtr=${_repsControllers.length} '
+          'wtsCtr=${_weightControllers.length} rirCtr=${_rirControllers.length} '
+          'init=$_isInitialized load=$_isLoadingData didFast=$_didFastPaint');
+
+
       if (!_firstRowsLogged && _selectedExercisesWithCircuits.isNotEmpty) {
         _firstRowsLogged = true;
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -5492,6 +5498,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final _tLoadExisting = Stopwatch()
       ..start();
     print('⏱️ [WES] _loadExistingWorkoutIfAny started');
+    print('👀 [LoadExisting Pre] rows=${_selectedExercisesWithCircuits.length} '
+        'sets=${_workoutSets.length} repsCtr=${_repsControllers.length} '
+        'wtsCtr=${_weightControllers.length} rirCtr=${_rirControllers.length} '
+        'init=$_isInitialized load=$_isLoadingData didFast=$_didFastPaint');
 
     try {
       final uid = UserContext
@@ -6134,6 +6144,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
     } finally {
       _tLoadExisting.stop();
+      print('👀 [LoadExisting Exit] rows=${_selectedExercisesWithCircuits.length} '
+          'sets=${_workoutSets.length} repsCtr=${_repsControllers.length} '
+          'wtsCtr=${_weightControllers.length} rirCtr=${_rirControllers.length} '
+          'plannedAdded=(ignored if not printed above)');
+
       print('⏱️ [WES] _loadExistingWorkoutIfAny took ${_tLoadExisting
           .elapsedMilliseconds}ms');
     }
@@ -6935,59 +6950,217 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     return 'workout_draft_${_cachedUid}_$dateKey';
   }
 
-
   Future<void> _loadDraftLocallyIfAvailable() async {
+    final _tDraft = Stopwatch()..start();
+    print('⏱️ [WES Draft] _loadDraftLocallyIfAvailable started');
+
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final key = _getDraftKey(); // 👈 use your helper
-      final jsonStr = prefs.getString(key);
-      print('📥 [WES] Loading draft using key: $key');
-
-      if (jsonStr == null) return;
-
-      final decoded = jsonDecode(jsonStr);
-      final List exercises = decoded['exercises'] ?? [];
-
-      _selectedExercisesWithCircuits.clear();
-      _workoutSets.clear();
-      _repsControllers.clear();
-      _weightControllers.clear();
-      _rirControllers.clear();
-      _velocityControllers.clear();
-      _notesControllers.clear();
-
-      _workoutNameController.text =
-          decoded['workoutName'] ?? _formatWorkoutDate(_selectedDate);
-
-      for (final e in exercises) {
-        _selectedExercisesWithCircuits.add({
-          'name': e['name'],
-          'circuitIndex': e['circuitIndex'] ?? 0,
-        });
-
-        final List<Map<String, dynamic>> setMaps = List<
-            Map<String, dynamic>>.from(e['sets'] ?? []);
-        final sets = setMaps.map((s) =>
-            SetDetails(
-              reps: (s['reps'] is int) ? s['reps'] : int.tryParse(
-                  s['reps']?.toString() ?? ''),
-              weight: (s['weight'] is num)
-                  ? (s['weight'] as num).toDouble()
-                  : null,
-              rir: (s['rir'] is num) ? (s['rir'] as num).toDouble() : null,
-              velocity: (s['velocity'] is num) ? (s['velocity'] as num)
-                  .toDouble() : null,
-              notes: s['notes']?.toString(),
-            )).toList();
-
-        _workoutSets.add(sets);
+      // Preconditions: this should run AFTER fast paint and before/alongside merges
+      if (_selectedExercisesWithCircuits.isEmpty) {
+        print('🛑 [WES Draft] Skipping: no painted rows yet');
+        return;
       }
 
-      _initializeControllers();
-    } catch (e) {
-      print('❌ Failed to load WES draft: $e');
+      final prefs = await SharedPreferences.getInstance();
+      final key = _getDraftKey();
+      final jsonStr = prefs.getString(key);
+      print('📥 [WES Draft] Read key: $key → ${jsonStr == null ? 'none' : '${jsonStr.length} bytes'}');
+      if (jsonStr == null || jsonStr.isEmpty) return;
+
+      // Parse draft
+      Map<String, dynamic> decoded;
+      try {
+        decoded = Map<String, dynamic>.from(jsonDecode(jsonStr) as Map);
+      } catch (e) {
+        print('⚠️ [WES Draft] JSON decode failed: $e');
+        return;
+      }
+
+      // Compare draft freshness vs WES snapshot for this date
+      DateTime? _parseTs(dynamic v) {
+        if (v == null) return null;
+        if (v is DateTime) return v;
+        if (v is String) return DateTime.tryParse(v);
+        if (v is int) return DateTime.fromMillisecondsSinceEpoch(v);
+        return null;
+      }
+
+      final draftUpdatedAt = _parseTs(decoded['updatedAt'] ?? decoded['savedAt']);
+      DateTime? baselineUpdatedAt;
+      try {
+        final uid = _cachedUid ?? UserContext.of(context, listen: false).currentUid;
+        final bid = _selectedBlockId ?? _activeBlockId;
+        if ((uid != null && uid.isNotEmpty) && bid != null) {
+          final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+          final snap = await BlockPlanCache.getInitSnapshot(uid: uid, blockId: bid, dateYmd: ymd);
+          baselineUpdatedAt = snap?.updatedAt ?? snap?.cachedAt;
+        }
+      } catch (_) {
+        /* best-effort */
+      }
+
+      if (draftUpdatedAt != null && baselineUpdatedAt != null && !draftUpdatedAt.isAfter(baselineUpdatedAt)) {
+        print('↩️ [WES Draft] Draft is not newer (draft=$draftUpdatedAt <= snap=$baselineUpdatedAt) → skip overlay');
+        return;
+      }
+
+      // Non-destructive overlay
+      final List draftExercises = (decoded['exercises'] is List) ? (decoded['exercises'] as List) : const [];
+      if (draftExercises.isEmpty) {
+        print('ℹ️ [WES Draft] Draft has no exercises → nothing to overlay');
+        return;
+      }
+
+      // Build a quick lookup of painted rows by name|circuitIndex (case-insensitive name)
+      String _keyOf(String name, int ci) => '${name.trim().toLowerCase()}|$ci';
+      final Map<String, int> paintedIndexByKey = {
+        for (int i = 0; i < _selectedExercisesWithCircuits.length; i++)
+          _keyOf(
+            ((_selectedExercisesWithCircuits[i]['name'] ?? '') as String),
+            ((_selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0) as int),
+          ): i
+      };
+
+      bool changed = false;
+      int rowsTouched = 0;
+      int fieldsFilled = 0;
+
+      for (final e in draftExercises) {
+        if (e is! Map) continue;
+        final m = Map<String, dynamic>.from(e);
+        final name = (m['name'] ?? m['exercise'] ?? '').toString().trim();
+        if (name.isEmpty) continue;
+
+        final ci = (m['circuitIndex'] is num)
+            ? (m['circuitIndex'] as num).toInt()
+            : int.tryParse('${m['circuitIndex'] ?? 0}') ?? 0;
+
+        final k = _keyOf(name, ci);
+        final idx = paintedIndexByKey[k];
+        if (idx == null) {
+          // Non-destructive: do NOT add structural rows
+          continue;
+        }
+
+        // Draft sets
+        final List<Map<String, dynamic>> setMaps = (m['sets'] is List)
+            ? (m['sets'] as List).whereType<Map>().map((x) => Map<String, dynamic>.from(x)).toList()
+            : const <Map<String, dynamic>>[];
+
+        // Overlay set-by-set up to UI capacity
+        final int maxSets = (_defaultSets <= 0) ? 0 : _defaultSets;
+        for (int s = 0; s < setMaps.length && s < maxSets; s++) {
+          final ds = setMaps[s];
+          final SetDetails sd = _workoutSets[idx][s];
+
+          // Resolve BW vs non-BW weight display
+          final exName = (_selectedExercisesWithCircuits[idx]['name'] as String).trim();
+          final exId = PeriodizationModelUtils.nameToId[exName] ?? exName;
+          final isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: exName);
+
+          double? draftAbs = (ds['weight'] is num) ? (ds['weight'] as num).toDouble() : null;
+          double? draftAdded = (ds['addedWeight'] as num?)?.toDouble() ?? (ds['weightAdded'] as num?)?.toDouble();
+          double? displayWeight;
+          if (isBw) {
+            displayWeight = draftAdded ??
+                (draftAbs != null
+                    ? PeriodizationModelUtils.toDisplayAddedWeight(
+                  uid: _cachedUid ?? UserContext.of(context, listen: false).currentUid ?? '',
+                  absoluteKg: draftAbs,
+                  exerciseId: exId,
+                  exerciseName: exName,
+                  asOfDate: _selectedDate,
+                )
+                    : null);
+          } else {
+            displayWeight = draftAbs;
+          }
+
+          // Only fill EMPTY controller fields / null SetDetails
+          // reps
+          if ((_repsControllers[idx][s].text.trim().isEmpty) && ds['reps'] != null) {
+            final String repText = (ds['reps'] is num)
+                ? (ds['reps'] as num).toInt().toString()
+                : (ds['reps'] is String ? (ds['reps'] as String) : '');
+            _repsControllers[idx][s].text = repText;
+
+
+            fieldsFilled++; changed = true;
+          }
+          if (sd.reps == null && ds['reps'] != null) {
+            sd.reps = (ds['reps'] as num?)?.toInt();
+            fieldsFilled++; changed = true;
+          }
+
+          // weight (display)
+          if ((_weightControllers[idx][s].text.trim().isEmpty) && displayWeight != null) {
+            _weightControllers[idx][s].text = (displayWeight != null) ? displayWeight.toString() : '';
+
+            fieldsFilled++; changed = true;
+          }
+          if (sd.weight == null && displayWeight != null) {
+            sd.weight = displayWeight;
+            fieldsFilled++; changed = true;
+          }
+
+          // rir
+          final double? draftRir = (ds['rir'] is num)
+              ? (ds['rir'] as num).toDouble()
+              : (ds['rir'] is String ? double.tryParse(ds['rir']) : null);
+          if ((_rirControllers[idx][s].text.trim().isEmpty) && draftRir != null) {
+            final String rirText = (draftRir != null) ? draftRir.toString() : '';
+            _rirControllers[idx][s].text = rirText;
+
+            fieldsFilled++; changed = true;
+          }
+          if (sd.rir == null && draftRir != null) {
+            sd.rir = draftRir;
+            fieldsFilled++; changed = true;
+          }
+
+          // velocity
+          final double? draftVel = (ds['velocity'] is num)
+              ? (ds['velocity'] as num).toDouble()
+              : (ds['velocity'] is String ? double.tryParse(ds['velocity']) : null);
+          if (sd.velocity == null && draftVel != null) {
+            sd.velocity = draftVel;
+            fieldsFilled++; changed = true;
+          }
+
+          // notes (don’t touch controller text; SetDetails only if null)
+          final String? draftNotes = (ds['notes'] is String) ? (ds['notes'] as String).trim() : null;
+          if ((sd.notes == null || sd.notes!.isEmpty) && draftNotes != null && draftNotes.isNotEmpty) {
+            sd.notes = draftNotes;
+            fieldsFilled++; changed = true;
+          }
+        }
+
+        rowsTouched++;
+      }
+
+      // Optionally restore workout name if empty (non-destructive)
+      if ((_workoutNameController.text.trim().isEmpty) && (decoded['workoutName'] is String)) {
+        _workoutNameController.text = (decoded['workoutName'] as String).trim();
+        changed = true;
+      }
+
+      // Ensure listeners are attached for any controllers we might have touched
+      _attachDirtyListeners();
+
+      if (changed && mounted) {
+        setState(() {});
+      }
+
+      print('✅ [WES Draft] Overlay done → rowsTouched=$rowsTouched fieldsFilled=$fieldsFilled changed=$changed');
+    } catch (e, st) {
+      print('❌ [WES Draft] Overlay failed: $e');
+      print(st);
+    } finally {
+      _tDraft.stop();
+      print('⏱️ [WES Draft] total=${_tDraft.elapsedMilliseconds}ms');
     }
   }
+
 
   void _showExercisePickerDialog() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -8670,6 +8843,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final _tMergeBB2 = Stopwatch()
       ..start();
     print('⏱️ [WES] _mergeNewBB2ExercisesIntoDraft started');
+    print('👀 [Merge Pre] rows=${_selectedExercisesWithCircuits.length} '
+        'sets=${_workoutSets.length} repsCtr=${_repsControllers.length} '
+        'wtsCtr=${_weightControllers.length} rirCtr=${_rirControllers.length} '
+        'init=$_isInitialized load=$_isLoadingData didFast=$_didFastPaint');
+
     // 👇 NEW: fast gate to avoid double-running for the same (uid, date)
     final uidGate = UserContext
         .of(context, listen: false)
@@ -8702,20 +8880,28 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         print('🔁 [WES] Triggering BB2 merge due to athlete/date switch (deferred repaint)');
         __preStructMergeReset = _structureHash();
 
-        // Mutate without setState; we’ll batch the repaint later only if needed.
-        _selectedExercisesWithCircuits.clear();
-        _workoutSets.clear();
-        _repsControllers.clear();
-        _weightControllers.clear();
-        _rirControllers.clear();
-        _velocityControllers.clear();
-        _notesControllers.clear();
-        _resolvedBB2Values.clear();
+        // 🚫 Do NOT wipe the freshly fast-painted lists; just union BB2 on top.
+        // Only clear if we did NOT fast-paint this date.
+        if (!_didFastPaint) {
+          // Mutate without setState; we’ll batch the repaint later only if needed.
+          _selectedExercisesWithCircuits.clear();
+          _workoutSets.clear();
+          _repsControllers.clear();
+          _weightControllers.clear();
+          _rirControllers.clear();
+          _velocityControllers.clear();
+          _notesControllers.clear();
+          _resolvedBB2Values.clear();
 
-        __didResetStruct = true;
+          __didResetStruct = true;
+        } else {
+          print('🟢 [WES] Preserving FastPaint rows; will union BB2 without reset');
+        }
+
         _lastMergedUid = uid;
         _lastMergedDate = _selectedDate;
       }
+
 
       // insert under this line
       _hasCompletedInitialMergeForThisDate =
@@ -9473,7 +9659,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     // 3️⃣ Load locally saved draft (if available) — now that rows exist
     //    (This fills any locally drafted sets/notes for the picked date.)
     print('📂 [WES] Attempting to load local draft for new date...');
-    await _loadDraftLocallyIfAvailable();
+    //await _loadDraftLocallyIfAvailable();
 
     // 4️⃣ Kick the heavy hitters in PARALLEL (both are cache/isar-first now)
     print('🔁 [WES] Kicking BB2 merge + existing overlay in parallel...');
