@@ -9339,6 +9339,28 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       })();
     }
 
+    // 🔓 Allow fast-paint to run for the new date
+    _bootPaintDone = false;
+    _didFastPaint = false;
+
+// 🔁 Warm the picked date so WESInitSnapshot + day cache exist locally
+    try {
+      final uid = _cachedUid;
+      final bid = _selectedBlockId ?? _activeBlockId;
+      if (uid != null && bid != null) {
+        WarmupService.instance.warmWES(
+          uid,
+          activeBlockId: bid,
+          selectedDate: _selectedDate,
+        );
+        // (optional) warm neighbors:
+        // unawaited(WarmupService.instance.warmWES(uid, activeBlockId: bid, selectedDate: _selectedDate.add(const Duration(days: -1))));
+        // unawaited(WarmupService.instance.warmWES(uid, activeBlockId: bid, selectedDate: _selectedDate.add(const Duration(days:  1))));
+      }
+    } catch (_) {/* best-effort */}
+
+
+
     // 2️⃣ Update selected date and clear UI state
     print('🧼 [WES] Clearing UI and updating selected date...');
     setState(() {
@@ -9359,6 +9381,44 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       _pendingChanges = false;
       _lastSavedHash = null;
     });
+
+    // 🔁 Warm the picked date so WESInitSnapshot + day cache exist locally
+    try {
+      final uid = _cachedUid;
+      final bid = _selectedBlockId ?? _activeBlockId;
+      if (uid != null && bid != null) {
+        // fire-and-forget; warms exactly the same (uid, blockId, ymd) you read below
+        WarmupService.instance.warmWES(
+          uid,
+          activeBlockId: bid,
+          selectedDate: _selectedDate,
+        );
+
+        // (Optional, non-intrusive): warm surrounding days for snappier arrows
+        // unawaited(WarmupService.instance.warmWES(uid, activeBlockId: bid, selectedDate: _selectedDate.add(const Duration(days: -1))));
+        // unawaited(WarmupService.instance.warmWES(uid, activeBlockId: bid, selectedDate: _selectedDate.add(const Duration(days:  1))));
+      }
+    } catch (_) {/* best-effort */}
+
+    // ⏩ If a snapshot for the picked date already exists, do one fast-paint now.
+// IMPORTANT: Peek first so we don't trip _bootPaintDone on a miss.
+    try {
+      final uid = _cachedUid;
+      final bid = _selectedBlockId ?? _activeBlockId;
+      if (uid != null && bid != null) {
+        final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+        final snap = await BlockPlanCache.getInitSnapshot(
+          uid: uid,
+          blockId: bid,
+          dateYmd: ymd,
+        );
+        if (snap != null) {
+          // We just reset the gate above; now actually run fast-paint.
+          await _paintFromSnapshotIfAny(); // will log 🟣 [FastPaint] ...
+        }
+      }
+    } catch (_) {/* best-effort */}
+
 
     // ⚡ SUPER-CACHE FIRST PAINT: try WESInitSnapshot for the picked date
     try {
