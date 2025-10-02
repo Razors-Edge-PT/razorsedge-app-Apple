@@ -9670,22 +9670,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
     // ⏩ If a snapshot for the picked date already exists, do one fast-paint now.
 // IMPORTANT: Peek first so we don't trip _bootPaintDone on a miss.
+    // ⛳ SD-SEQ-1: always attempt fast paint (no pre-check; it self-gates)
     try {
-      final uid = _cachedUid;
-      final bid = _selectedBlockId ?? _activeBlockId;
-      if (uid != null && bid != null) {
-        final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
-        final snap = await BlockPlanCache.getInitSnapshot(
-          uid: uid,
-          blockId: bid,
-          dateYmd: ymd,
-        );
-        if (snap != null) {
-          // We just reset the gate above; now actually run fast-paint.
-          await _paintFromSnapshotIfAny(); // will log 🟣 [FastPaint] ...
-        }
-      }
+      await _paintFromSnapshotIfAny(); // will log 🟣 [FastPaint] ... if a snapshot exists
     } catch (_) {/* best-effort */}
+
 
 
     // ⚡ SUPER-CACHE FIRST PAINT: try WESInitSnapshot for the picked date
@@ -9744,14 +9733,100 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     //await _loadDraftLocallyIfAvailable();
 
     // 4️⃣ Kick the heavy hitters in PARALLEL (both are cache/isar-first now)
-    print('🔁 [WES] Kicking BB2 merge + existing overlay in parallel...');
-    await Future.wait([
-      _mergeNewBB2ExercisesIntoDraft(),
-      _loadExistingWorkoutIfAny(),
-    ]);
+    print('🔁 [WES] Phase A: existing workout overlay (await)…');
+    await _loadExistingWorkoutIfAny();
+
+    print('🔁 [WES] Phase B: BB2 planned merge (await)…');
+    await _mergeNewBB2ExercisesIntoDraft();
+
+    // 🧼 Post-merge normalize & dedupe (name-based; prefer rows that already have a cardId)
+    try {
+      final String ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+      final Map<String, int> firstByName = <String, int>{}; // normName -> first index kept
+      final Set<int> toRemove = <int>{};
+      int seq = 0;
+
+      String _norm(String s) {
+        var t = s.toLowerCase().trim();
+        t = t.replaceAll(RegExp(r'\([^)]*\)'), '');       // drop (...) variants
+        t = t.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');    // punctuation -> space
+        t = t.replaceAll(RegExp(r'\s+'), ' ').trim();     // collapse spaces
+        return t;
+      }
+
+      for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+        final r  = _selectedExercisesWithCircuits[i];
+        final nm = ((r['name'] ?? '') as String).trim();
+        final ci = (r['circuitIndex'] is num) ? (r['circuitIndex'] as num).toInt() : 0;
+        if (nm.isEmpty) { toRemove.add(i); continue; }
+
+        // ensure cardId exists
+        if (r['cardId'] == null || (r['cardId'] as String).isEmpty) {
+          final norm = _norm(nm);
+          // label rows added by merge/loadExisting distinctly to avoid colliding with fast-paint ids
+          r['cardId'] = '$ymd|merge|${seq++}|$norm';
+        }
+
+        // dedupe by NAME only (business rule): keep the first occurrence
+        final key = _norm(nm); // ignore circuit for dedupe
+        final existing = firstByName[key];
+        if (existing == null) {
+          firstByName[key] = i; // keep this one
+        } else {
+          // Prefer the one that already had a cardId from fast paint (plan/…),
+          // otherwise just keep the very first.
+          final hasCardExisting = ((_selectedExercisesWithCircuits[existing]['cardId'] ?? '') as String).isNotEmpty;
+          final hasCardThis     = ((r['cardId'] ?? '') as String).isNotEmpty;
+
+          if (hasCardExisting && !hasCardThis) {
+            toRemove.add(i); // drop the newcomer
+          } else if (!hasCardExisting && hasCardThis) {
+            // swap preference: keep this, drop the earlier one
+            toRemove.add(existing);
+            firstByName[key] = i;
+          } else {
+            toRemove.add(i); // both have/don't have cardId → keep first
+          }
+        }
+      }
+
+      if (toRemove.isNotEmpty) {
+        // Remove from all parallel structures consistently (descending indices)
+        final idxs = toRemove.toList()..sort((a,b)=>b.compareTo(a));
+        for (final idx in idxs) {
+          if (idx >= 0 && idx < _selectedExercisesWithCircuits.length) {
+            _selectedExercisesWithCircuits.removeAt(idx);
+            if (idx < _workoutSets.length)          _workoutSets.removeAt(idx);
+            if (idx < _repsControllers.length)      _repsControllers.removeAt(idx);
+            if (idx < _weightControllers.length)    _weightControllers.removeAt(idx);
+            if (idx < _rirControllers.length)       _rirControllers.removeAt(idx);
+            if (idx < _velocityControllers.length)  _velocityControllers.removeAt(idx);
+            if (idx < _notesControllers.length)     _notesControllers.removeAt(idx);
+          }
+        }
+        // One cheap repaint so the UI reflects the cleaned list
+        if (mounted) setState(() {});
+      }
+    } catch (e) {
+      print('⚠️ [SelectDate] normalize/dedupe pass failed: $e');
+    }
+
 
     // 5️⃣ Ensure listeners are attached in case controllers resized
     _attachDirtyListeners();
+
+    // 🔍 Debug: list every rendered card (order, name, cardId, circuitIndex)
+    try {
+      final ymdDbg = DateFormat('yyyy-MM-dd').format(_selectedDate);
+      for (var i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+        final r   = _selectedExercisesWithCircuits[i];
+        final nm  = ((r['name'] ?? '') as String).trim();
+        final ci  = (r['circuitIndex'] is num) ? (r['circuitIndex'] as num).toInt() : 0;
+        final cid = (r['cardId'] ?? '—').toString();
+        print('🧾 [SelectDate Cards] $ymdDbg  #$i  name="$nm"  ci=$ci  cardId="$cid"');
+      }
+    } catch (_) { /* best-effort debug */ }
+
 
     print('✅ [WES] Date switch complete.');
     _tSelect.stop();
