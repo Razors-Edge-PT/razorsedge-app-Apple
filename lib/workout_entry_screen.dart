@@ -8695,21 +8695,28 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       // ✅ Clear state only if the selected athlete or date has changed
       final shouldForceMerge = _lastMergedUid != uid ||
           _lastMergedDate != _selectedDate;
+      // REPLACE: force-merge repaint with deferred, hash-guarded reset (no immediate setState)
+      int? __preStructMergeReset;
+      bool __didResetStruct = false;
       if (shouldForceMerge) {
-        print('🔁 [WES] Triggering BB2 merge due to athlete/date switch');
-        setState(() {
-          _selectedExercisesWithCircuits.clear();
-          _workoutSets.clear();
-          _repsControllers.clear();
-          _weightControllers.clear();
-          _rirControllers.clear();
-          _velocityControllers.clear();
-          _notesControllers.clear();
-          _resolvedBB2Values.clear();
-        });
+        print('🔁 [WES] Triggering BB2 merge due to athlete/date switch (deferred repaint)');
+        __preStructMergeReset = _structureHash();
+
+        // Mutate without setState; we’ll batch the repaint later only if needed.
+        _selectedExercisesWithCircuits.clear();
+        _workoutSets.clear();
+        _repsControllers.clear();
+        _weightControllers.clear();
+        _rirControllers.clear();
+        _velocityControllers.clear();
+        _notesControllers.clear();
+        _resolvedBB2Values.clear();
+
+        __didResetStruct = true;
         _lastMergedUid = uid;
         _lastMergedDate = _selectedDate;
       }
+
       // insert under this line
       _hasCompletedInitialMergeForThisDate =
       false; // allow one merge for new uid/date
@@ -9170,8 +9177,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         }
 
         print('[WES] Merged ${newOnes.length} exercise(s) into draft');
-        _hasCompletedInitialMergeForThisDate =
-        true; // ✅ gate further same-session calls
+        _hasCompletedInitialMergeForThisDate = true; // ✅ gate further same-session calls
+        // ANCHOR: [WES Merge] Finalize deferred reset repaint if nothing added
+        if (__didResetStruct == true && mounted && newOnes.isEmpty) {
+          final __postStructMergeReset = _structureHash();
+          if (__preStructMergeReset != null && __postStructMergeReset != __preStructMergeReset) {
+            setState(() {}); // one minimal repaint
+          }
+        }
+
         await _saveWorkoutDraftToCache();
       }
     } finally {
