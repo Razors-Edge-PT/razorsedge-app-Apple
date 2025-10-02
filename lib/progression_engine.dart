@@ -566,6 +566,14 @@ class ProgressionEngine {
     print('[ENGINE][plan] row=$exerciseIndex name=$exerciseName '
         'repTarget=${repTarget.toStringAsFixed(1)} '
         'rir=${rir.toStringAsFixed(2)} model=$progressionModelName');
+// ——— apply reps/RIR overrides BEFORE computing weight ———
+    var _ovr = i.resolvedBB2Values[exerciseId] ?? i.resolvedBB2Values[exerciseName.toLowerCase().trim()];
+    final double repTargetEff = (_ovr?['reps'] is num && (_ovr!['reps'] as num) > 0)
+        ? (_ovr['reps'] as num).toDouble()
+        : repTarget;
+    final double rirEff = (_ovr != null && _ovr.containsKey('rir') && _ovr['rir'] is num)
+        ? (_ovr['rir'] as num).toDouble()
+        : rir;
 
 
     final double defaultWeight =
@@ -640,8 +648,18 @@ class ProgressionEngine {
       final DateTime _asOfDate = _selectedDate ?? DateTime.now();
 
       final target = (progressed['weight'] as num).toDouble();
+    // Baseline e1RM from the pre-override plan calc (keep this constant for reps/RIR overrides)
+    final double _baselineE1rm =
+    (progressed['__debug_e1rm'] is num)
+        ? (progressed['__debug_e1rm'] as num).toDouble()
+        : PeriodizationModelUtils.calculateE1RM(
+      target,
+      repTarget.toDouble(),
+      rir,
+    );
 
-      // keep variable name `snapped` so nothing else downstream changes
+
+    // keep variable name `snapped` so nothing else downstream changes
       double snapped;
 
       final bool _isBwEx = PeriodizationModelUtils.isBodyweightExercise(
@@ -698,9 +716,7 @@ class ProgressionEngine {
     final canCache = (blockStartDate != null) &&
         (_selectedDate != null) &&
         (PeriodizationModelUtils.savedWorkoutsList.isNotEmpty);
-    if (canCache) {
-      _cachedProgressedValues[_rowCacheKey(exerciseIndex)] = progressed;
-    }
+
 
     // === Overlay with BB2 / user-entered values if available ===
     var overrides = i.resolvedBB2Values[exerciseId];
@@ -733,9 +749,124 @@ class ProgressionEngine {
           progressed['rir'] = orir.toDouble();
         }
       }
+      // If reps/RIR changed but no explicit weight, solve weight to keep baseline e1RM
+
+      final bool _repsChanged = (orp is num && orp > 0);
+      final bool _rirChanged = overrides.containsKey('rir') && (overrides['rir'] is num);
+      final bool _needSolve = !(ow is num && ow > 0) && (_repsChanged || _rirChanged);
+
+      if (_needSolve) {
+        final double _repsFor = _repsChanged
+            ? (orp as num).toDouble()
+            : (progressed['reps'] as num).toDouble();
+        final double _rirFor = _rirChanged
+            ? (overrides['rir'] as num).toDouble()
+            : (progressed['rir'] as num).toDouble();
+
+        // Invert calculateE1RM by a tiny bisection (monotonic in weight)
+        double _low = 0.0;
+        double _high = ((progressed['weight'] as num?)?.toDouble() ?? 20.0) * 3.0;
+        for (int it = 0; it < 24; it++) {
+          final mid = (_low + _high) / 2.0;
+          final e = PeriodizationModelUtils.calculateE1RM(mid, _repsFor, _rirFor);
+          if (e < _baselineE1rm) {
+            _low = mid;
+          } else {
+            _high = mid;
+          }
+        }
+        double _solvedAbs = (_low + _high) / 2.0;
+
+        // Snap exactly like the base path
+        if (_isBwEx) {
+          final double _targetAdded = PeriodizationModelUtils.toDisplayAddedWeight(
+            uid: uidForBw,
+            absoluteKg: _solvedAbs,
+            exerciseId: exerciseId,
+            exerciseName: exerciseName,
+            asOfDate: _asOfDate,
+          );
+          double _snappedAdded = _incOpts.reduce(
+                (a, b) => (a - _targetAdded).abs() < (b - _targetAdded).abs() ? a : b,
+          );
+          if (_snappedAdded < 0) _snappedAdded = 0.0;
+          final double _snappedAbs = PeriodizationModelUtils.toAbsoluteWeight(
+            uid: uidForBw,
+            displayAddedKg: _snappedAdded,
+            exerciseId: exerciseId,
+            exerciseName: exerciseName,
+          );
+          progressed['weightDisplayAdded'] = _snappedAdded;
+          progressed['weight'] = _snappedAbs;
+        } else {
+          final double _snapped = _incOpts.reduce(
+                (a, b) => (a - _solvedAbs).abs() < (b - _solvedAbs).abs() ? a : b,
+          );
+          progressed['weightDisplayAdded'] = _snapped;
+          progressed['weight'] = _snapped;
+        }
+
+        // Optional: quick sanity log
+        try {
+          final eCheck = PeriodizationModelUtils.calculateE1RM(
+            (progressed['weight'] as num).toDouble(),
+            _repsFor,
+            _rirFor,
+          );
+          print('🧪 [ENGINE/hold-e1RM] target=${_baselineE1rm.toStringAsFixed(1)} '
+              '→ newW=${(progressed['weight'] as num).toStringAsFixed(1)} '
+              '@$_repsFor (rir=$_rirFor) e1rm≈${eCheck.toStringAsFixed(1)}');
+        } catch (_) {}
+      }
+
+      // If WEIGHT provided but no REPS, solve reps to preserve baseline e1RM (RIR stays as-is or overridden)
+      final bool _hasWeightOnly = (ow is num && ow > 0) && !(orp is num && orp > 0);
+
+      if (_hasWeightOnly) {
+        // absolute weight to use (non-BW direct; BW uses the same absolute field here)
+        final double _wAbs = (ow as num).toDouble();
+
+        // use current rir (after any override already applied above)
+        final double _rirHold = (progressed['rir'] as num).toDouble();
+
+        // brute-force reps 1..30, pick the one that keeps e1RM closest to baseline
+        int bestReps = (progressed['reps'] as num).toInt();
+        double bestGap = double.infinity;
+
+        for (int r = 1; r <= 30; r++) {
+          final e = PeriodizationModelUtils.calculateE1RM(_wAbs, r.toDouble(), _rirHold);
+          final gap = (e - _baselineE1rm).abs();
+          if (gap < bestGap) {
+            bestGap = gap;
+            bestReps = r;
+          }
+        }
+
+        progressed['reps'] = bestReps.toDouble();
+        progressed['weight'] = _wAbs; // honor the user-specified weight
+        // keep weightDisplayAdded mirror consistent for non-BW (already set to snapped abs elsewhere)
+        progressed['weightDisplayAdded'] = _wAbs;
+
+        // optional quick check
+        try {
+          final eCheck = PeriodizationModelUtils.calculateE1RM(
+            _wAbs,
+            bestReps.toDouble(),
+            _rirHold,
+          );
+          print('🧪 [ENGINE/hold-e1RM←weight] base≈${_baselineE1rm.toStringAsFixed(1)} '
+              '→ weight=${_wAbs.toStringAsFixed(1)} reps=$bestReps (rir=${_rirHold.toStringAsFixed(2)}) '
+              'e1rm≈${eCheck.toStringAsFixed(1)}');
+        } catch (_) {}
+      }
+
+
+
     }
 
-
+    if (canCache) {
+      _cachedProgressedValues[_rowCacheKey(exerciseIndex)] = progressed;
+    }
     // Print final resolved values
     print(
         '🧮 [ENGINE] Final for $exerciseName = ${progressed['weight']} kg '
