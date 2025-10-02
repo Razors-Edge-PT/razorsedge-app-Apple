@@ -1623,11 +1623,16 @@ class WarmupService {
             final double? rirFinal = _isMeaningfulOverride(rirOverlay) ? rirOverlay : planRir;
 
             final key = _rowKeyBy(i);
+            final exId = (PeriodizationModelUtils.nameToId[name] ?? name).toString();
+            final bool isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
+
             final entry = <String, dynamic>{
+
               'name'        : name,
               'circuitIndex': ci,
-              if (wAbs   != null) 's1_weight'       : wAbs,
-              if (wAdded != null) 's1_weight_added' : wAdded, // only present for BW
+              if (!isBw && wAbs != null) 's1_weight' : wAbs,
+              if (isBw  && wAdded != null) 's1_weight_added' : wAdded,
+
               if (reps   != null) 's1_reps'         : reps,
               if (rirFinal != null) 's1_rir'        : rirFinal,
 
@@ -1701,8 +1706,9 @@ class WarmupService {
             final entry = <String, dynamic>{
               'name'        : name,
               'circuitIndex': ci,
-              if (wAbs   != null) 's1_weight'       : wAbs,
-              if (isBw && wAdded != null) 's1_weight_added' : wAdded, // only for BW
+              if (!isBw && wAbs != null) 's1_weight' : wAbs,
+              if (isBw  && wAdded != null) 's1_weight_added' : wAdded,
+
               if (reps   != null) 's1_reps'         : reps,
               if (rirFinal != null) 's1_rir'        : rirFinal,
               if (rir2    != null) 's2_rir'         : rir2,
@@ -1814,8 +1820,8 @@ class WarmupService {
               final entry = <String, dynamic>{
                 'name'        : name,
                 'circuitIndex': ci,
-                if (wAbs   != null) 's1_weight'       : wAbs,
-                if (isBw && wAdded != null) 's1_weight_added' : wAdded, // only for BW
+                if (!isBw && wAbs != null) 's1_weight' : wAbs,
+                if (isBw  && wAdded != null) 's1_weight_added' : wAdded,
                 if (reps   != null) 's1_reps'         : reps,
                 if (rirFinal != null) 's1_rir'        : rirFinal,
                 if (rir2    != null) 's2_rir'         : rir2,

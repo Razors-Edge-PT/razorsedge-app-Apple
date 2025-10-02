@@ -728,14 +728,77 @@ class ProgressionEngine {
     if (overrides != null) {
       print('[ENGINE] applying overrides for $exerciseName → $overrides');
 
+
+      // BW: prefer addedWeight override → convert to absolute and snap on ADDED
+      double? _overrideAbsFromAdded;
+      if (_isBwEx && overrides['addedWeight'] is num) {
+        double _added = (overrides['addedWeight'] as num).toDouble();
+        if (_added < 0) _added = 0.0;
+
+        // snap on ADDED using increments
+        double _snappedAdded = _incOpts.reduce(
+              (a, b) => (a - _added).abs() < (b - _added).abs() ? a : b,
+        );
+        if (_snappedAdded < 0) _snappedAdded = 0.0;
+
+        // ADDED → ABS
+        final double _abs = PeriodizationModelUtils.toAbsoluteWeight(
+          uid: uidForBw,
+          displayAddedKg: _snappedAdded,
+          exerciseId: exerciseId,
+          exerciseName: exerciseName,
+          asOfDate: _asOfDate,
+        );
+
+        progressed['weightDisplayAdded'] = _snappedAdded;
+        progressed['weight'] = _abs;
+        _overrideAbsFromAdded = _abs;
+      }
+
       // Weight: only apply if a positive number was supplied (never allow 0 here)
       final ow = overrides['weight'];
-      if (ow is num && ow > 0) {
+
+      // If BW exercise and user typed into the weight box, treat it as ADDED kg
+      double? _bwAbsFromWeightAsAdded;
+      double? _bwSnappedAddedFromWeight;
+      if (_isBwEx && ow is num && ow > 0 && !(overrides['addedWeight'] is num)) {
+        double _added = ow.toDouble();
+        // snap on ADDED
+        double _snappedAdded = _incOpts.reduce(
+              (a, b) => (a - _added).abs() < (b - _added).abs() ? a : b,
+        );
+        if (_snappedAdded < 0) _snappedAdded = 0.0;
+        // ADDED → ABS with bodyweight as-of date
+        final double _abs = PeriodizationModelUtils.toAbsoluteWeight(
+          uid: uidForBw,
+          displayAddedKg: _snappedAdded,
+          exerciseId: exerciseId,
+          exerciseName: exerciseName,
+          asOfDate: _asOfDate,
+        );
+        _bwSnappedAddedFromWeight = _snappedAdded;
+        _bwAbsFromWeightAsAdded   = _abs;
+        // mirror to progressed
+        progressed['weightDisplayAdded'] = _snappedAdded;
+        progressed['weight']             = _abs;
+      }
+
+
+      final orp = overrides['reps'];
+      final bool _repsChanged = (orp is num && orp > 0);
+      final bool _rirChanged = overrides.containsKey('rir') && (overrides['rir'] is num);
+      final bool _hasUserWeight = (ow is num && ow > 0) || (_bwAbsFromWeightAsAdded != null);
+      final bool _needSolve = !_hasUserWeight && (_repsChanged || _rirChanged);
+
+
+
+      if (ow is num && ow > 0 && !_isBwEx) {
         progressed['weight'] = ow.toDouble();
       }
 
+
       // Reps: only apply if a positive integer was supplied (never allow 0 here)
-      final orp = overrides['reps'];
+
       if (orp is num && orp > 0) {
         progressed['reps'] = orp.toDouble(); // keep as double for consistency with elsewhere
       }
@@ -751,9 +814,7 @@ class ProgressionEngine {
       }
       // If reps/RIR changed but no explicit weight, solve weight to keep baseline e1RM
 
-      final bool _repsChanged = (orp is num && orp > 0);
-      final bool _rirChanged = overrides.containsKey('rir') && (overrides['rir'] is num);
-      final bool _needSolve = !(ow is num && ow > 0) && (_repsChanged || _rirChanged);
+
 
       if (_needSolve) {
         final double _repsFor = _repsChanged
@@ -820,11 +881,12 @@ class ProgressionEngine {
       }
 
       // If WEIGHT provided but no REPS, solve reps to preserve baseline e1RM (RIR stays as-is or overridden)
-      final bool _hasWeightOnly = (ow is num && ow > 0) && !(orp is num && orp > 0);
+      final bool _hasWeightOnly = _hasUserWeight && !(orp is num && orp > 0);
 
       if (_hasWeightOnly) {
         // absolute weight to use (non-BW direct; BW uses the same absolute field here)
-        final double _wAbs = (ow as num).toDouble();
+        final double _wAbs = _bwAbsFromWeightAsAdded ?? (ow as num).toDouble();
+
 
         // use current rir (after any override already applied above)
         final double _rirHold = (progressed['rir'] as num).toDouble();
@@ -844,8 +906,34 @@ class ProgressionEngine {
 
         progressed['reps'] = bestReps.toDouble();
         progressed['weight'] = _wAbs; // honor the user-specified weight
-        // keep weightDisplayAdded mirror consistent for non-BW (already set to snapped abs elsewhere)
-        progressed['weightDisplayAdded'] = _wAbs;
+
+        if (_isBwEx) {
+          // derive ADDED mirror from absolute, snap on ADDED, then regenerate ABS from snapped ADDED
+          final _disp = PeriodizationModelUtils.toDisplayAddedWeight(
+            uid: uidForBw,
+            absoluteKg: _wAbs,
+            exerciseId: exerciseId,
+            exerciseName: exerciseName,
+            asOfDate: _asOfDate,
+          );
+          double _snappedAdded = _incOpts.reduce(
+                (a, b) => (a - _disp).abs() < (b - _disp).abs() ? a : b,
+          );
+          if (_snappedAdded < 0) _snappedAdded = 0.0;
+          final _snappedAbs = PeriodizationModelUtils.toAbsoluteWeight(
+            uid: uidForBw,
+            displayAddedKg: _snappedAdded,
+            exerciseId: exerciseId,
+            exerciseName: exerciseName,
+            asOfDate: _asOfDate,
+          );
+          progressed['weightDisplayAdded'] = _snappedAdded;
+          progressed['weight']             = _snappedAbs;  // keep ABS aligned to snapped ADDED
+        } else {
+          // non-BW unchanged: mirror ABS into the display field
+          progressed['weightDisplayAdded'] = _wAbs;
+        }
+
 
         // optional quick check
         try {
