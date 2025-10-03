@@ -246,6 +246,396 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     return null;
   }
 
+  void _debugLogCardsForSelectedDate(String tag) {
+    try {
+      final String ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+      print('📋 [$tag Summary] date=$ymd');
+
+      int found = 0;
+      for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+        final row = _selectedExercisesWithCircuits[i];
+        final String card = (row['cardId'] ?? '').toString();
+        final String name = ((row['name'] ?? '') as String).trim();
+
+        // classify
+        final bool isBB2Today  = card.startsWith('bb2|$ymd|');
+        final bool isPlanToday = card.startsWith('$ymd|plan|');
+
+        // Only show rows for the selected date. If you want literally all rows, remove the two checks below.
+        if (!isBB2Today && !isPlanToday) continue;
+
+        final s0 = (_workoutSets.length > i && _workoutSets[i].isNotEmpty)
+            ? _workoutSets[i][0]
+            : null;
+
+        // prefer SetDetails; fall back to controller texts
+        final repsVal = s0?.reps ?? (
+            (_repsControllers.length > i && _repsControllers[i].isNotEmpty)
+                ? int.tryParse(_repsControllers[i][0].text)
+                : null
+        );
+
+        final weightVal = s0?.weight ?? (
+            (_weightControllers.length > i && _weightControllers[i].isNotEmpty)
+                ? double.tryParse(_weightControllers[i][0].text)
+                : null
+        );
+
+        final rirVal = s0?.rir ?? (
+            (_rirControllers.length > i && _rirControllers[i].isNotEmpty)
+                ? double.tryParse(_rirControllers[i][0].text)
+                : null
+        );
+
+        found++;
+        print(
+            '${isBB2Today ? "✅ [BB2→UI]" : "🟣 [PLAN→UI]"} '
+                'name="$name"  card="$card"  '
+                'S1(reps=${repsVal ?? '—'}, weight=${weightVal ?? '—'}, rir=${rirVal ?? '—'})'
+        );
+      }
+      if (found == 0) {
+        print('∅ [$tag Summary] no BB2/PLAN rows in UI for date=$ymd');
+      }
+    } catch (e) {
+      print('⚠️ [$tag Summary] logging failed: $e');
+    }
+  }
+  Future<void> debugPrintWesDayCache(String uid, DateTime date) async {
+    final dateKey = DateFormat('yyyy-MM-dd').format(date);
+    final isar = await IsarDb.instance;
+
+    final rec = await isar.workoutDayCaches
+        .where()
+        .filter()
+        .uidEqualTo(uid)
+        .and()
+        .dateKeyEqualTo(dateKey)
+        .findFirst();
+
+    if (rec == null) {
+      print('🗃️ [WES LocalCache] No record for $dateKey (uid=$uid)');
+      return;
+    }
+
+    final exList = jsonDecode(rec.exListJson) as List<dynamic>;
+    final wesPlanned = jsonDecode(rec.wesPlannedJson) as List<dynamic>;
+
+    print('🗃️ [WES LocalCache] $dateKey (uid=$uid)');
+    print('   • exList (${exList.length}):');
+    for (final ex in exList) {
+      final m = Map<String, dynamic>.from(ex as Map);
+      print('     - ${m['name']} (wt=${m['weight']} reps=${m['reps']} rir=${m['rir']} ci=${m['circuitIndex']})');
+    }
+    print('   • wesPlanned (${wesPlanned.length}):');
+    for (final ex in wesPlanned) {
+      final m = Map<String, dynamic>.from(ex as Map);
+      print('     - ${m['name']} (ci=${m['circuitIndex']})');
+    }
+  }
+
+  Future<void> debugPrintWesInitSnapshot({
+    required String uid,
+    required String blockId,
+    required DateTime date,
+  }) async {
+    final ymd = DateFormat('yyyy-MM-dd').format(date);
+    final snap = await BlockPlanCache.getInitSnapshot(
+      uid: uid,
+      blockId: blockId,
+      dateYmd: ymd,
+    );
+
+    if (snap == null) {
+      print('🗃️ [WESInit] No snapshot for $ymd (uid=$uid block=$blockId)');
+      return;
+    }
+
+    List<Map<String, dynamic>> _parse(String s) {
+      if (s.isEmpty) return const [];
+      final raw = jsonDecode(s);
+      if (raw is! List) return const [];
+      return raw.map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map)).toList();
+    }
+
+    final planned        = _parse(snap.plannedExercisesJson);
+    final wesPlanned     = _parse(snap.wesPlannedExercisesJson);
+    final previous       = _parse(snap.previousWorkoutJson);
+
+    print('🗃️ [WESInit] $ymd  planned=${planned.length}  wesPlanned=${wesPlanned.length}  previous=${previous.length}');
+    if (planned.isNotEmpty) {
+      print('   • planned:');
+      for (final m in planned) {
+        print('     - ${m['name']} (ci=${m['circuitIndex']})');
+      }
+    }
+    if (wesPlanned.isNotEmpty) {
+      print('   • wesPlanned:');
+      for (final m in wesPlanned) {
+        print('     - ${m['name']} (ci=${m['circuitIndex']})');
+      }
+    }
+  }
+
+  /// Provide [getWesDraftKeyForDate] if you want the function to also remove your WES draft.
+  Future<void> nukeLocalWorkoutsForDay({
+    required String uid,
+    required String blockId,
+    required DateTime date,
+    DateTime? blockStartDate,
+    String Function(DateTime date)? getWesDraftKeyForDate,
+  }) async {
+    final ymd = DateFormat('yyyy-MM-dd').format(date);
+    print('🧨 [NUKE] Begin local wipe → uid=$uid block=$blockId date=$ymd');
+
+    // ---------- ISAR: open once ----------
+    final isar = await IsarDb.instance;
+
+    // ---------- 1) WESInitSnapshot (FastPaint super-cache) ----------
+    try {
+      final toDelete = await isar.wESInitSnapshots
+          .filter()
+          .uidEqualTo(uid)
+          .and()
+          .blockIdEqualTo(blockId)
+          .and()
+          .dateYmdEqualTo(ymd)
+          .findAll();
+
+      if (toDelete.isNotEmpty) {
+        await isar.writeTxn(() async {
+          await isar.wESInitSnapshots.deleteAll(toDelete.map((e) => e.id).toList());
+        });
+        print('🗑️ [NUKE→WESInit] removed ${toDelete.length} snapshot(s) for $ymd');
+      } else {
+        print('ℹ️ [NUKE→WESInit] none for $ymd');
+      }
+    } catch (e) {
+      print('⚠️ [NUKE→WESInit] failed: $e');
+    }
+
+    // ---------- 2) WorkoutDayCache (WES local day cache: exList/wesPlanned) ----------
+    try {
+      final recs = await isar.workoutDayCaches
+          .filter()
+          .uidEqualTo(uid)
+          .and()
+          .dateKeyEqualTo(ymd)
+          .findAll();
+
+      if (recs.isNotEmpty) {
+        await isar.writeTxn(() async {
+          await isar.workoutDayCaches.deleteAll(recs.map((e) => e.id).toList());
+        });
+        print('🗑️ [NUKE→WorkoutDayCache] removed ${recs.length} record(s) for $ymd');
+      } else {
+        print('ℹ️ [NUKE→WorkoutDayCache] none for $ymd');
+      }
+    } catch (e) {
+      print('⚠️ [NUKE→WorkoutDayCache] failed: $e');
+    }
+
+    // ---------- 3) BB2 BlockDay (super-cache used by Warmup/FastPaint) ----------
+    try {
+      if (blockStartDate == null) {
+        print('🚧 [NUKE→BB2] skipped (blockStartDate is null)');
+      } else {
+        final days = date.difference(blockStartDate).inDays;
+        if (days < 0) {
+          print('🚧 [NUKE→BB2] skipped (date < blockStartDate)');
+        } else {
+          final weekIndex = days ~/ 7;
+          final dayIndex  = days % 7;
+          final id = blockDayId(uid, blockId, weekIndex, dayIndex);
+
+          final existed = await isar.blockDays.get(id) != null;
+          await isar.writeTxn(() async {
+            await isar.blockDays.delete(id);
+          });
+          if (existed) {
+            print('🗑️ [NUKE→BB2] removed BlockDay w$weekIndex d$dayIndex (id=$id)');
+          } else {
+            print('ℹ️ [NUKE→BB2] no BlockDay for w$weekIndex d$dayIndex');
+          }
+        }
+      }
+    } catch (e) {
+      print('⚠️ [NUKE→BB2] failed: $e');
+    }
+
+    // ---------- 4) SharedPreferences ----------
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      // 4a) WES draft for this date (if caller provides a key resolver)
+      if (getWesDraftKeyForDate != null) {
+        final k = getWesDraftKeyForDate(date);
+        final had = prefs.containsKey(k);
+        if (had) {
+          await prefs.remove(k);
+          print('🗑️ [NUKE→Prefs] removed WES draft "$k"');
+        } else {
+          print('ℹ️ [NUKE→Prefs] no WES draft "$k"');
+        }
+      } else {
+        print('ℹ️ [NUKE→Prefs] WES draft skipped (no key resolver provided)');
+      }
+
+      // 4b) BB2 per-day JSON (your BB2 saver uses this key)
+      final bb2Key = 'bb2_dayData_$ymd';
+      final hadBb2 = prefs.containsKey(bb2Key);
+      if (hadBb2) {
+        await prefs.remove(bb2Key);
+        print('🗑️ [NUKE→Prefs] removed "$bb2Key"');
+      } else {
+        print('ℹ️ [NUKE→Prefs] no "$bb2Key"');
+      }
+    } catch (e) {
+      print('⚠️ [NUKE→Prefs] failed: $e');
+    }
+
+    print('✅ [NUKE] local wipe complete for $ymd');
+  }
+
+  String _getDraftKeyFor(DateTime d) {
+    // if your _getDraftKey() currently uses _selectedDate internally,
+    // copy its logic here but base it on `d` instead.
+    final uid = _cachedUid ?? UserContext.of(context, listen:false).currentUid!;
+    final ymd = DateFormat('yyyy-MM-dd').format(d);
+    return 'wes_draft_${uid}_$ymd'; // <-- replace with your actual convention
+  }
+
+
+
+  String _normNameBB2(String s) {
+    var t = s.toLowerCase().trim();
+    t = t.replaceAll(RegExp(r'\([^)]*\)'), '');
+    t = t.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');
+    t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
+    t = t.replaceAll(RegExp(r'\bdb\b'), 'dumbbell');
+    t = t.replaceAll(RegExp(r'\bbb\b'), 'barbell');
+    return t;
+  }
+
+  /// Remove a single exercise from the **BB2 day cache** (Isar BlockDay) for the currently selected date.
+  /// Matches by exerciseId (if provided) OR by normalized name + circuitIndex.
+  Future<void> _pruneBb2DayCacheForSelectedDate({
+    required String name,
+    required int circuitIndex,
+    String? exerciseId,
+  }) async {
+    try {
+      final uid = _cachedUid ?? UserContext.of(context, listen: false).currentUid;
+      final blockId = _selectedBlockId ?? _activeBlockId;
+      final bs = blockStartDate;
+      if (uid == null || uid.isEmpty || blockId == null || bs == null) {
+        print('🚧 [WES→BB2 Cache] skip prune (uid/blockId/blockStartDate missing)');
+        return;
+      }
+
+      final daysSinceStart = _selectedDate.difference(bs).inDays;
+      if (daysSinceStart < 0) {
+        print('🚧 [WES→BB2 Cache] skip prune (selectedDate before blockStartDate)');
+        return;
+      }
+      final weekIndex = daysSinceStart ~/ 7;
+      final dayIndex = daysSinceStart % 7;
+
+      final list = await BlockPlanCache.getDay(
+        uid: uid,
+        blockId: blockId,
+        weekIndex: weekIndex,
+        dayIndex: dayIndex,
+      ) ?? const <Map<String, dynamic>>[];
+
+      final before = list.length;
+      if (before == 0) {
+        print('ℹ️ [WES→BB2 Cache] nothing to prune (empty day cache) w$weekIndex d$dayIndex');
+        return;
+      }
+
+      bool _matches(Map<String, dynamic> m) {
+        final id = ((m['exerciseId'] ?? m['id'] ?? '') as String).trim();
+        final nm = ((m['name'] ?? m['exercise'] ?? '') as String).trim();
+        final ci = (m['circuitIndex'] is num) ? (m['circuitIndex'] as num).toInt() : 0;
+
+        if (exerciseId != null && exerciseId.isNotEmpty) {
+          if (id == exerciseId) return true;
+        }
+        return _normNameBB2(nm) == _normNameBB2(name) && ci == circuitIndex;
+      }
+
+      final filtered = <Map<String, dynamic>>[];
+      for (final m in list) {
+        final mm = Map<String, dynamic>.from(m);
+        if (!_matches(mm)) filtered.add(mm);
+      }
+      final after = filtered.length;
+
+      if (after != before) {
+        await BlockPlanCache.putDay(
+          uid: uid,
+          blockId: blockId,
+          weekIndex: weekIndex,
+          dayIndex: dayIndex,
+          exercises: filtered,
+        );
+        print('🗑️ [WES→BB2 Cache] pruned "$name"|ci=$circuitIndex w$weekIndex d$dayIndex: $before → $after (−${before - after})');
+      } else {
+        print('ℹ️ [WES→BB2 Cache] no match to prune for "$name"|ci=$circuitIndex (w$weekIndex d$dayIndex)');
+      }
+    } catch (e) {
+      print('⚠️ [WES→BB2 Cache] prune failed: $e');
+    }
+  }
+
+  /// Restore the exercise back into the **BB2 day cache** (used by Undo).
+  Future<void> _restoreBb2DayCacheForSelectedDate({
+    required Map<String, dynamic> exerciseRow, // expects 'name' and 'circuitIndex' at minimum
+  }) async {
+    try {
+      final uid = _cachedUid ?? UserContext.of(context, listen: false).currentUid;
+      final blockId = _selectedBlockId ?? _activeBlockId;
+      final bs = blockStartDate;
+      if (uid == null || uid.isEmpty || blockId == null || bs == null) return;
+
+      final daysSinceStart = _selectedDate.difference(bs).inDays;
+      if (daysSinceStart < 0) return;
+      final weekIndex = daysSinceStart ~/ 7;
+      final dayIndex = daysSinceStart % 7;
+
+      final list = await BlockPlanCache.getDay(
+        uid: uid,
+        blockId: blockId,
+        weekIndex: weekIndex,
+        dayIndex: dayIndex,
+      ) ?? <Map<String, dynamic>>[];
+
+      // Make a minimal BB2 map; keep any id if present.
+      final restored = <String, dynamic>{
+        'name': (exerciseRow['name'] ?? '').toString().trim(),
+        'circuitIndex': (exerciseRow['circuitIndex'] is num)
+            ? (exerciseRow['circuitIndex'] as num).toInt()
+            : 0,
+      };
+      final exId = (exerciseRow['exerciseId'] ?? exerciseRow['id'])?.toString();
+      if (exId != null && exId.isNotEmpty) restored['exerciseId'] = exId;
+
+      list.add(restored);
+      await BlockPlanCache.putDay(
+        uid: uid,
+        blockId: blockId,
+        weekIndex: weekIndex,
+        dayIndex: dayIndex,
+        exercises: list,
+      );
+      print('↩️ [WES→BB2 Cache] restored "${restored['name']}"|ci=${restored['circuitIndex']} to w$weekIndex d$dayIndex (count=${list.length})');
+    } catch (e) {
+      print('⚠️ [WES→BB2 Cache] restore failed: $e');
+    }
+  }
+
+
   // Map exercise → Group A/B/C/D
   Future<String> _resolveGroupForExercise(String name) async {
     final n = name.trim();
@@ -1777,6 +2167,73 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final daysSinceStart = _selectedDate!.difference(blockStartDate!).inDays;
     final weekIndex = (daysSinceStart / 7).floor();
     final dayIndex = daysSinceStart % 7;
+
+    // --- PRUNE: keep only rows for the selected date before merging BB2 ---
+    final String _ymdSel = DateFormat('yyyy-MM-dd').format(_selectedDate);
+
+    bool _rowMatchesSelectedDate(Map<String, dynamic> row) {
+      final String cardId = (row['cardId'] ?? '') as String;
+      if (cardId.isEmpty) {
+        // Legacy/ambiguous rows (from existing workout overlay) are treated as current-date scoped.
+        return true;
+      }
+      // Warmup/plan snapshot rows: "YYYY-MM-DD|plan|..."
+      if (cardId.startsWith('$_ymdSel|plan|')) return true;
+      // BB2-inserted rows: "bb2|YYYY-MM-DD|..."
+      if (cardId.startsWith('bb2|$_ymdSel|')) return true;
+
+      // Anything else belongs to a different date → drop.
+      return false;
+    }
+
+// Collect indices to keep
+    final List<int> _keepIdx = <int>[];
+    for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+      final row = _selectedExercisesWithCircuits[i];
+      if (_rowMatchesSelectedDate(row)) _keepIdx.add(i);
+    }
+
+    if (_keepIdx.length != _selectedExercisesWithCircuits.length) {
+      print('🧹 [WES Merge] Pruning ${_selectedExercisesWithCircuits.length - _keepIdx.length} row(s) not for date=$_ymdSel');
+
+      // Helper to slice by index list
+      List<T> _slice<T>(List<T> src) =>
+          [for (int i = 0; i < src.length; i++) if (_keepIdx.contains(i)) src[i]];
+
+      // Mutate in place (don’t reassign the list variables)
+      setState(() {
+        final sel = _slice(_selectedExercisesWithCircuits);
+        final sets = _slice(_workoutSets);
+        final reps = _slice(_repsControllers);
+        final wts  = _slice(_weightControllers);
+        final rir  = _slice(_rirControllers);
+        final vel  = _slice(_velocityControllers);
+        final notes= _slice(_notesControllers);
+
+        _selectedExercisesWithCircuits
+          ..clear()
+          ..addAll(sel);
+        _workoutSets
+          ..clear()
+          ..addAll(sets);
+        _repsControllers
+          ..clear()
+          ..addAll(reps);
+        _weightControllers
+          ..clear()
+          ..addAll(wts);
+        _rirControllers
+          ..clear()
+          ..addAll(rir);
+        _velocityControllers
+          ..clear()
+          ..addAll(vel);
+        _notesControllers
+          ..clear()
+          ..addAll(notes);
+      });
+    }
+
 
     final blocksCol = FirebaseFirestore.instance
         .collection('planned_blocks')
@@ -5195,6 +5652,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           'wtsCtr=${_weightControllers.length} rirCtr=${_rirControllers.length} '
           'init=$_isInitialized load=$_isLoadingData didFast=$_didFastPaint');
 
+      _debugLogCardsForSelectedDate('FastPaint');
+
 
       if (!_firstRowsLogged && _selectedExercisesWithCircuits.isNotEmpty) {
         _firstRowsLogged = true;
@@ -5517,6 +5976,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       print('🟥 [WES Init] WESInitSnapshot save failed: $e');
     }
 
+    _debugLogCardsForSelectedDate('LoadExisting');
 
     print('✅ [WES Init] _loadInitialData complete');
     _loadInitialDataTimer.stop();
@@ -5962,7 +6422,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                   final __preS1     = _s1ValueHash();
 
                   // ⤵️ Actually apply combinedSrv / wesPlannedSrv to your in-memory lists & controllers here
-                  // (If you already apply them, keep doing it; if not, delete this whole repaint block.)
 
                   final __postStruct = _structureHash();
                   final __postS1     = _s1ValueHash();
@@ -6126,7 +6585,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       int plannedAdded = 0;
       final int beforeCount = _selectedExercisesWithCircuits.length;
 
-// Normalize WES planned list into (name, ci) tuples (one per instance)
+// Build a NAME-only overlay of WES-planned (placeholders)
       final List<Map<String, dynamic>> plannedOverlay = wesPlannedList
           .whereType<Map>()
           .map<Map<String, dynamic>>((m0) {
@@ -6136,75 +6595,67 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         final ci = (m['circuitIndex'] is int)
             ? m['circuitIndex'] as int
             : int.tryParse('${m['circuitIndex'] ?? 0}') ?? 0;
-        return {'name': name, 'circuitIndex': ci};
+        return {
+          'name': name,
+          'circuitIndex': ci,
+          'sets': const <Map<String, dynamic>>[], // placeholder only
+        };
       })
           .where((e) => e.isNotEmpty)
           .toList();
 
-      String _kRow(String n, int ci) => '${n.trim().toLowerCase()}|$ci';
-
-// Count existing instances by (name|ci)
-      final Map<String, int> existingCounts = <String, int>{};
-      for (final row in _selectedExercisesWithCircuits) {
-        final n = ((row['name'] ?? '') as String).trim();
-        final ci = (row['circuitIndex'] ?? 0) as int;
-        final k = _kRow(n, ci);
-        existingCounts[k] = (existingCounts[k] ?? 0) + 1;
+// ---- NAME-ONLY de-dupe guard for adding planned placeholders ----
+      String _ymd(DateTime d) {
+        final m = d.month.toString().padLeft(2, '0');
+        final day = d.day.toString().padLeft(2, '0');
+        return '${d.year}-$m-$day';
+      }
+      String _normName(String s) {
+        var t = s.toLowerCase().trim();
+        t = t.replaceAll(RegExp(r'\([^)]*\)'), '');
+        t = t.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');
+        t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
+        t = t.replaceAll(RegExp(r'\bdb\b'), 'dumbbell');
+        t = t.replaceAll(RegExp(r'\bbb\b'), 'barbell');
+        return t;
       }
 
-// Count planned instances by (name|ci)
-      final Map<String, int> plannedCounts = <String, int>{};
-      for (final p in plannedOverlay) {
-        final n = (p['name'] ?? '').toString().trim();
-        final ci = (p['circuitIndex'] ?? 0) as int;
-        final k = _kRow(n, ci);
-        plannedCounts[k] = (plannedCounts[k] ?? 0) + 1;
-      }
+      final String _dateKey = _ymd(_selectedDate);
 
-// Date key for stable cardIds we add here
-      final String _ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+// What names do we already have on the UI right now?
+      final Set<String> _haveNames = _selectedExercisesWithCircuits
+          .map((e) => _normName(((e['name'] ?? '') as String)))
+          .toSet();
 
-// For each (name|ci), add only the shortfall: plannedCount - existingCount
-      for (final entry in plannedCounts.entries) {
-        final k = entry.key;
-        final want = entry.value;
-        final have = existingCounts[k] ?? 0;
-        final deficit = want - have;
-        if (deficit <= 0) continue;
+// Only add a planned row if that exercise NAME is not already present
+      for (int j = 0; j < plannedOverlay.length; j++) {
+        final n = (plannedOverlay[j]['name'] ?? '').toString().trim();
+        if (n.isEmpty) continue;
 
-        // Parse key back to (name, ci)
-        final sep = k.lastIndexOf('|');
-        final normName = k.substring(0, sep);
-        final ci = int.tryParse(k.substring(sep + 1)) ?? 0;
+        final nKey = _normName(n);
+        if (_haveNames.contains(nKey)) continue; // already have a card for this exercise
 
-        // Reconstruct display name by scanning plannedOverlay (first match)
-        final dispName = plannedOverlay.firstWhere(
-              (m) => _kRow((m['name'] ?? '').toString(), (m['circuitIndex'] ?? 0) as int) == k,
-          orElse: () => const <String, dynamic>{},
-        )['name']?.toString() ?? normName;
+        final int ci = (plannedOverlay[j]['circuitIndex'] ?? 0) as int;
+        final String cardId = '$_dateKey|plan|$j|$nKey';
 
-        // Add exactly `deficit` placeholder rows with unique cardIds
-        for (int occ = 0; occ < deficit; occ++) {
-          final cardId = '$_ymd|wes|${have + occ}|$normName|$ci';
+        _selectedExercisesWithCircuits.add({
+          'name': n,
+          'circuitIndex': ci,
+          'cardId': cardId,
+        });
 
-          _selectedExercisesWithCircuits.add({
-            'name': dispName,
-            'circuitIndex': ci,
-            'cardId': cardId, // 🔑 stable per-instance id
-          });
+        _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
+        _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+        _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+        _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+        _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+        _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
 
-          _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
-          _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-          _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-          _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-          _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-          _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-        }
-
-        existingCounts[k] = have + (deficit > 0 ? deficit : 0); // keep counts in-sync within this pass
+        _haveNames.add(nKey); // avoid any later duplicates in this pass
       }
 
       plannedAdded = _selectedExercisesWithCircuits.length - beforeCount;
+
 
 
 
@@ -8952,16 +9403,20 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       // ✅ Clear state only if the selected athlete or date has changed
       final shouldForceMerge = _lastMergedUid != uid ||
           _lastMergedDate != _selectedDate;
+      _lastMergedUid = uid;
+      _lastMergedDate = _selectedDate;
       // REPLACE: force-merge repaint with deferred, hash-guarded reset (no immediate setState)
       int? __preStructMergeReset;
       bool __didResetStruct = false;
       if (shouldForceMerge) {
         print('🔁 [WES] Triggering BB2 merge due to athlete/date switch (deferred repaint)');
-        __preStructMergeReset = _structureHash();
 
-        // 🚫 Do NOT wipe the freshly fast-painted lists; just union BB2 on top.
-        // Only clear if we did NOT fast-paint this date.
+// Only clear if we did NOT fast-paint this date.
         if (!_didFastPaint) {
+          __preStructMergeReset = _structureHash();   // ← move here
+
+          // Mutate without setState…
+
           // Mutate without setState; we’ll batch the repaint later only if needed.
           _selectedExercisesWithCircuits.clear();
           _workoutSets.clear();
@@ -8996,8 +9451,95 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       if (daysSinceStart < 0) return;
       print('[WES Merge] daysSinceStart = $daysSinceStart');
 
+// 👇 ADD THIS BLOCK
+      final String _ymdSelected = DateFormat('yyyy-MM-dd').format(_selectedDate);
+// Purge BB2 rows that belong to other days (tagged as bb2|<ymd>|...)
+      for (int idx = _selectedExercisesWithCircuits.length - 1; idx >= 0; idx--) {
+        final String? cardId = _selectedExercisesWithCircuits[idx]['cardId'] as String?;
+        if (cardId == null) continue;
+
+        final bool isBB2 = cardId.startsWith('bb2|');
+        final bool forOtherDay = isBB2 && !cardId.startsWith('bb2|$_ymdSelected|');
+        if (forOtherDay) {
+          _selectedExercisesWithCircuits.removeAt(idx);
+          if (idx < _workoutSets.length) _workoutSets.removeAt(idx);
+          if (idx < _repsControllers.length) _repsControllers.removeAt(idx);
+          if (idx < _weightControllers.length) _weightControllers.removeAt(idx);
+          if (idx < _rirControllers.length) _rirControllers.removeAt(idx);
+          if (idx < _velocityControllers.length) _velocityControllers.removeAt(idx);
+          if (idx < _notesControllers.length) _notesControllers.removeAt(idx);
+        }
+      }
       final weekIndex = (daysSinceStart / 7).floor();
       final dayIndex = daysSinceStart % 7;
+
+      // --- PRUNE: keep only rows for the selected date before merging BB2 ---
+      final String _ymdSel = DateFormat('yyyy-MM-dd').format(_selectedDate);
+
+      bool _rowMatchesSelectedDate(Map<String, dynamic> row) {
+        final String cardId = (row['cardId'] ?? '') as String;
+
+        // ⛔️ Ambiguous/legacy rows (no cardId) must NOT be carried across days
+        if (cardId.isEmpty) return false;
+
+        // ✅ Warmup/plan snapshot rows are date-scoped like: "YYYY-MM-DD|plan|..."
+        if (cardId.startsWith('$_ymdSel|plan|')) return true;
+
+        // ✅ BB2 inserts are date-scoped like: "bb2|YYYY-MM-DD|..."
+        if (cardId.startsWith('bb2|$_ymdSel|')) return true;
+
+        // Anything else belongs to a different date → drop.
+        return false;
+      }
+
+// Collect indices to keep for this date
+      final List<int> _keepIdx = <int>[];
+      for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+        final row = _selectedExercisesWithCircuits[i];
+        if (_rowMatchesSelectedDate(row)) _keepIdx.add(i);
+      }
+
+      if (_keepIdx.length != _selectedExercisesWithCircuits.length) {
+        print('🧹 [WES Merge] Pruning ${_selectedExercisesWithCircuits.length - _keepIdx.length} row(s) not for date=$_ymdSel');
+
+        // Helper to slice by index list
+        List<T> _slice<T>(List<T> src) =>
+            [for (int i = 0; i < src.length; i++) if (_keepIdx.contains(i)) src[i]];
+
+        // Mutate in place (don’t reassign the list variables)
+        setState(() {
+          final sel  = _slice(_selectedExercisesWithCircuits);
+          final sets = _slice(_workoutSets);
+          final reps = _slice(_repsControllers);
+          final wts  = _slice(_weightControllers);
+          final rir  = _slice(_rirControllers);
+          final vel  = _slice(_velocityControllers);
+          final notes= _slice(_notesControllers);
+
+          _selectedExercisesWithCircuits
+            ..clear()
+            ..addAll(sel);
+          _workoutSets
+            ..clear()
+            ..addAll(sets);
+          _repsControllers
+            ..clear()
+            ..addAll(reps);
+          _weightControllers
+            ..clear()
+            ..addAll(wts);
+          _rirControllers
+            ..clear()
+            ..addAll(rir);
+          _velocityControllers
+            ..clear()
+            ..addAll(vel);
+          _notesControllers
+            ..clear()
+            ..addAll(notes);
+        });
+      }
+
 
 // 1) Primary: planned_blocks weeks/days
 // ── CACHE FIRST; then refresh from SERVER in the background ──
@@ -9254,45 +9796,74 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         return _exerciseKey(n, c);
       }
 
-      final existingKeys = _selectedExercisesWithCircuits
-          .map<String>((e) =>
-          _exerciseKey(
-            ((e['name'] ?? '') as String).trim(),
-            (e['circuitIndex'] ?? 0) as int,
-          ))
+      String _normName(String s) {
+        var t = s.toLowerCase().trim();
+        t = t.replaceAll(RegExp(r'\([^)]*\)'), '');
+        t = t.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');
+        t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
+        t = t.replaceAll(RegExp(r'\bdb\b'), 'dumbbell');
+        t = t.replaceAll(RegExp(r'\bbb\b'), 'barbell');
+        return t;
+      }
+
+      final Set<String> haveNames = _selectedExercisesWithCircuits
+          .map((e) => _normName(((e['name'] ?? '') as String)))
           .toSet();
 
-      final newOnes = bb2Exercises.where((ex) => !existingKeys.contains(_k(ex)))
+      String _nameOf(Map<String, dynamic> ex) =>
+          _normName(((ex['name'] ?? '') as String));
+
+      final List<Map<String, dynamic>> newOnes = bb2Exercises
+          .where((ex) => _nameOf(ex).isNotEmpty && !haveNames.contains(_nameOf(ex)))
           .toList();
-      print('[WES] Found ${newOnes.length} new exercises to merge');
+
+      print('[WES] Found ${newOnes.length} new exercises to merge (name-only)');
+
 
       if (newOnes.isNotEmpty) {
+        // Tag every BB2 insert with the currently selected date to avoid bleed
+        final String ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+
+        // Guard: don't add a BB2 card if a card with the same exercise NAME already exists
+        final Set<String> existingNamesLower = _selectedExercisesWithCircuits
+            .map((e) => ((e['name'] ?? '') as String).trim().toLowerCase())
+            .toSet();
+
         setState(() {
           for (final newEx in newOnes) {
             final name = (newEx['name'] ?? '').toString().trim();
+            if (name.isEmpty) continue;
+
+            final lower = name.toLowerCase();
+            if (existingNamesLower.contains(lower)) {
+              // Already have this exercise (by name) on the page → skip adding a duplicate card
+              continue;
+            }
+
             final circuitIndex = (newEx['circuitIndex'] ?? 0) as int;
+
+            // Ensure each inserted BB2 row has a unique, date-scoped key
+            final String cardId = (newEx['cardId'] as String?) ??
+                'bb2|$ymd|${DateTime.now().microsecondsSinceEpoch}|$lower|$circuitIndex';
 
             _selectedExercisesWithCircuits.add({
               'name': name,
               'circuitIndex': circuitIndex,
-              // unique per insert; prevents clashes with fast-paint rows
-              'cardId': newEx['cardId'] ?? 'bb2|${DateTime.now().microsecondsSinceEpoch}|$name|$circuitIndex',
+              'cardId': cardId,
             });
 
-
             _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
-            _repsControllers.add(
-                List.generate(_defaultSets, (_) => TextEditingController()));
-            _weightControllers.add(
-                List.generate(_defaultSets, (_) => TextEditingController()));
-            _rirControllers.add(
-                List.generate(_defaultSets, (_) => TextEditingController()));
-            _velocityControllers.add(
-                List.generate(_defaultSets, (_) => TextEditingController()));
-            _notesControllers.add(
-                List.generate(_defaultSets, (_) => TextEditingController()));
+            _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+            _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+            _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+            _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+            _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+
+            // keep the guard updated within this batch so multiple newOnes of the same name don't slip in
+            existingNamesLower.add(lower);
           }
         });
+
 
         // Seed initial values for newly added rows (prefer flat; else sets[0])
         for (final newEx in newOnes) {
@@ -9445,6 +10016,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         }
 
         print('[WES] Merged ${newOnes.length} exercise(s) into draft');
+
+
         _hasCompletedInitialMergeForThisDate = true; // ✅ gate further same-session calls
         // ANCHOR: [WES Merge] Finalize deferred reset repaint if nothing added
         if (__didResetStruct == true && mounted && newOnes.isEmpty) {
@@ -9455,6 +10028,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         }
 
         await _saveWorkoutDraftToCache();
+        _debugLogCardsForSelectedDate('BB2 Merge');
+
       }
     } finally {
       _tMergeBB2.stop();
@@ -9570,33 +10145,80 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   }
 
   Future<void> _selectDate(BuildContext context) async {
-    final _tSelect = Stopwatch()
-      ..start(); // ⏱️ start total timer
+    final sw = Stopwatch()..start();
     print('⏱️ [WES] _selectDate started');
 
-    final DateTime? pickedDate = await showDatePicker(
+    final picked = await showDatePicker(
       context: context,
       initialDate: _selectedDate,
       firstDate: DateTime(2000),
       lastDate: DateTime(2101),
     );
-
-    if (pickedDate == null || pickedDate == _selectedDate) {
+    if (picked == null || picked == _selectedDate) {
       print('⛔️ [WES] Date selection cancelled or unchanged');
       return;
     }
+    final ymdPicked = DateFormat('yyyy-MM-dd').format(picked);
+    print('📆 [WES] Date changed → $ymdPicked');
 
-    print('📆 [WES] Date changed to: ${DateFormat('yyyy-MM-dd').format(
-        pickedDate)}');
+    /* —— Provenance helpers (local to this call) —— */
+    String _normNameForProv(String s) {
+      var t = s.toLowerCase().trim();
+      t = t.replaceAll(RegExp(r'\([^)]*\)'), '');
+      t = t.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');
+      t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
+      t = t.replaceAll(RegExp(r'\bdb\b'), 'dumbbell');
+      t = t.replaceAll(RegExp(r'\bbb\b'), 'barbell');
+      return t;
+    }
 
+    List<Map<String, dynamic>> _snapshotRows() =>
+        _selectedExercisesWithCircuits
+            .map((e) => {
+          'name': ((e['name'] ?? '') as String).trim(),
+          'ci': (e['circuitIndex'] is num)
+              ? (e['circuitIndex'] as num).toInt()
+              : 0,
+          'cardId': (e['cardId'] ?? '').toString(),
+        })
+            .toList();
+
+    List<Map<String, dynamic>> _diffAdded(
+        List<Map<String, dynamic>> before,
+        List<Map<String, dynamic>> after,
+        ) {
+      final beforeKeys = {
+        for (final e in before)
+          '${_normNameForProv(e['name'] ?? '')}|${e['ci']}'
+      };
+      final added = <Map<String, dynamic>>[];
+      for (final e in after) {
+        final k = '${_normNameForProv(e['name'] ?? '')}|${e['ci']}';
+        if (!beforeKeys.contains(k)) added.add(e);
+      }
+      return added;
+    }
+
+    // nameKey → list of sources (order preserved)
+    final Map<String, List<String>> _provenance = {};
+    void _record(String source, List<Map<String, dynamic>> added) {
+      for (final e in added) {
+        final k = '${_normNameForProv((e['name'] ?? '') as String)}|${e['ci']}';
+        (_provenance[k] ??= <String>[]).add(source);
+      }
+    }
+
+    // Clear per-date caches (keep it light)
     _cachedProgressedValues.clear();
+    _resolvedBB2Values.clear();
+    _savedExerciseKeysForDate.clear();
 
-    // 💾 Do NOT block the UI: best-effort autosave previous day in background
+    // Best-effort autosave the current page in the background
     if (mounted) {
       // ignore: unawaited_futures
       (() async {
         try {
-          print('💾 [WES] Autosaving current date in background…');
+          print('💾 [WES] Autosaving previous date in background…');
           await _upsertWorkoutToFirestore(
               alsoPushToBB2: true, markAllSaved: false);
           await _persistDraftLocally();
@@ -9607,32 +10229,24 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       })();
     }
 
-    // 🔓 Allow fast-paint to run for the new date
+    // Allow FastPaint to run for the new date
     _bootPaintDone = false;
     _didFastPaint = false;
 
-// 🔁 Warm the picked date so WESInitSnapshot + day cache exist locally
+    // Pre-warm ISAR + caches for the picked date (best-effort)
     try {
       final uid = _cachedUid;
       final bid = _selectedBlockId ?? _activeBlockId;
       if (uid != null && bid != null) {
-        WarmupService.instance.warmWES(
-          uid,
-          activeBlockId: bid,
-          selectedDate: _selectedDate,
-        );
-        // (optional) warm neighbors:
-        // unawaited(WarmupService.instance.warmWES(uid, activeBlockId: bid, selectedDate: _selectedDate.add(const Duration(days: -1))));
-        // unawaited(WarmupService.instance.warmWES(uid, activeBlockId: bid, selectedDate: _selectedDate.add(const Duration(days:  1))));
+        WarmupService.instance
+            .warmWES(uid, activeBlockId: bid, selectedDate: picked);
       }
-    } catch (_) {/* best-effort */}
+    } catch (_) {/* best-effort */ }
 
-
-
-    // 2️⃣ Update selected date and clear UI state
-    print('🧼 [WES] Clearing UI and updating selected date...');
+    // Switch date & clear UI structure in one setState
+    print('🧼 [WES] Reset UI for new date…');
     setState(() {
-      _selectedDate = pickedDate;
+      _selectedDate = picked;
       _workoutNameController.text = _formatWorkoutDate(_selectedDate);
 
       _selectedExercisesWithCircuits.clear();
@@ -9643,195 +10257,88 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       _velocityControllers.clear();
       _notesControllers.clear();
 
-      _resolvedBB2Values.clear();
-
-      _savedExerciseKeysForDate.clear();
       _pendingChanges = false;
       _lastSavedHash = null;
     });
 
-    // 🔁 Warm the picked date so WESInitSnapshot + day cache exist locally
+    // 1) Fast paint from snapshot if present (instant rows + hints)
+    final _snapBeforePaint = _snapshotRows();
     try {
-      final uid = _cachedUid;
-      final bid = _selectedBlockId ?? _activeBlockId;
-      if (uid != null && bid != null) {
-        // fire-and-forget; warms exactly the same (uid, blockId, ymd) you read below
-        WarmupService.instance.warmWES(
-          uid,
-          activeBlockId: bid,
-          selectedDate: _selectedDate,
-        );
+      await _paintFromSnapshotIfAny();
+    } catch (_) {}
+    _record('FastPaint/ISAR',
+        _diffAdded(_snapBeforePaint, _snapshotRows()));
 
-        // (Optional, non-intrusive): warm surrounding days for snappier arrows
-        // unawaited(WarmupService.instance.warmWES(uid, activeBlockId: bid, selectedDate: _selectedDate.add(const Duration(days: -1))));
-        // unawaited(WarmupService.instance.warmWES(uid, activeBlockId: bid, selectedDate: _selectedDate.add(const Duration(days:  1))));
-      }
-    } catch (_) {/* best-effort */}
-
-    // ⏩ If a snapshot for the picked date already exists, do one fast-paint now.
-// IMPORTANT: Peek first so we don't trip _bootPaintDone on a miss.
-    // ⛳ SD-SEQ-1: always attempt fast paint (no pre-check; it self-gates)
-    try {
-      await _paintFromSnapshotIfAny(); // will log 🟣 [FastPaint] ... if a snapshot exists
-    } catch (_) {/* best-effort */}
-
-
-
-    // ⚡ SUPER-CACHE FIRST PAINT: try WESInitSnapshot for the picked date
-    try {
-      final uid = _cachedUid;
-      final bid = _selectedBlockId;
-      if (uid != null && bid != null) {
-        final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
-        final snap = await BlockPlanCache.getInitSnapshot(
-          uid: uid, blockId: bid, dateYmd: ymd,
-        );
-        if (snap != null) {
-          final plannedList = snap.plannedExercisesJson.isNotEmpty
-              ? (jsonDecode(snap.plannedExercisesJson) as List)
-              : const [];
-
-          if (plannedList.isNotEmpty) {
-            setState(() {
-              for (final raw in plannedList) {
-                final m = Map<String, dynamic>.from(raw as Map);
-                final name = (m['name'] ?? '').toString().trim();
-                final ci = (m['circuitIndex'] ?? 0) as int;
-                if (name.isEmpty) continue;
-
-                _selectedExercisesWithCircuits.add(
-                    {'name': name, 'circuitIndex': ci});
-                _workoutSets.add(
-                    List.generate(_defaultSets, (_) => SetDetails()));
-                _repsControllers.add(List.generate(
-                    _defaultSets, (_) => TextEditingController()));
-                _weightControllers.add(List.generate(
-                    _defaultSets, (_) => TextEditingController()));
-                _rirControllers.add(List.generate(
-                    _defaultSets, (_) => TextEditingController()));
-                _velocityControllers.add(List.generate(
-                    _defaultSets, (_) => TextEditingController()));
-                _notesControllers.add(List.generate(
-                    _defaultSets, (_) => TextEditingController()));
-              }
-            });
-            print('⚡ [WES] Snapshot planned rows painted for $ymd (${plannedList
-                .length})');
-          }
-
-          // (Optional) You can also hydrate previous sets from snap.previousWorkoutJson here
-          // if you want the controllers populated instantly too.
-        }
-      }
-    } catch (e) {
-      print('⚠️ [WES] Snapshot hydrate on date switch failed: $e');
+    // 2) Merge BB2 planned for this exact calendar date (guard block meta)
+    final _snapBeforeBB2 = _snapshotRows();
+    if (blockStartDate == null) {
+      print('🚧 [WES] No block meta yet → skipping BB2 merge for $ymdPicked');
+    } else {
+      try {
+        await _mergeNewBB2ExercisesIntoDraft();
+      } catch (_) {}
     }
+    _record('BB2 planned', _diffAdded(_snapBeforeBB2, _snapshotRows()));
 
-    // 3️⃣ Load locally saved draft (if available) — now that rows exist
-    //    (This fills any locally drafted sets/notes for the picked date.)
-    print('📂 [WES] Attempting to load local draft for new date...');
-    //await _loadDraftLocallyIfAvailable();
-
-    // 4️⃣ Kick the heavy hitters in PARALLEL (both are cache/isar-first now)
-    print('🔁 [WES] Phase A: existing workout overlay (await)…');
-    await _loadExistingWorkoutIfAny();
-
-    print('🔁 [WES] Phase B: BB2 planned merge (await)…');
-    await _mergeNewBB2ExercisesIntoDraft();
-
-    // 🧼 Post-merge normalize & dedupe (name-based; prefer rows that already have a cardId)
+    // 3) Overlay any saved WES workout (completed + wesPlanned placeholders)
+    final _snapBeforeWES = _snapshotRows();
     try {
-      final String ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
-      final Map<String, int> firstByName = <String, int>{}; // normName -> first index kept
-      final Set<int> toRemove = <int>{};
-      int seq = 0;
+      await _loadExistingWorkoutIfAny();
+    } catch (_) {}
+    _record(
+        'WES (completed/plan)', _diffAdded(_snapBeforeWES, _snapshotRows()));
 
-      String _norm(String s) {
-        var t = s.toLowerCase().trim();
-        t = t.replaceAll(RegExp(r'\([^)]*\)'), '');       // drop (...) variants
-        t = t.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');    // punctuation -> space
-        t = t.replaceAll(RegExp(r'\s+'), ' ').trim();     // collapse spaces
-        return t;
+    // 4) Non-destructive local draft overlay (fill only empty fields)
+    final _snapBeforeDraft = _snapshotRows();
+    try {
+      print('📂 [WES] Attempting local draft overlay…');
+      await _loadDraftLocallyIfAvailable();
+    } catch (_) {}
+    _record('Local Draft', _diffAdded(_snapBeforeDraft, _snapshotRows()));
+
+    // Provenance summary print (once, after all sources applied)
+    try {
+      final byName = <String, Map<String, dynamic>>{};
+      for (final r in _selectedExercisesWithCircuits) {
+        final name = ((r['name'] ?? '') as String).trim();
+        final ci = (r['circuitIndex'] is num)
+            ? (r['circuitIndex'] as num).toInt()
+            : 0;
+        final key = '${_normNameForProv(name)}|$ci';
+        byName[key] = {'name': name, 'ci': ci};
       }
 
-      for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
-        final r  = _selectedExercisesWithCircuits[i];
-        final nm = ((r['name'] ?? '') as String).trim();
-        final ci = (r['circuitIndex'] is num) ? (r['circuitIndex'] as num).toInt() : 0;
-        if (nm.isEmpty) { toRemove.add(i); continue; }
+      print('🧭 [WES SelectDate Provenance] $ymdPicked → ${byName.length} exercise(s)');
+      int i = 0;
+      byName.forEach((k, v) {
+        final sources = _provenance[k]?.join(' → ') ?? 'unknown';
+        print('   • #${i++} "${v['name']}" (ci=${v['ci']})  from: $sources');
+      });
+    } catch (_) {/* best-effort */ }
 
-        // ensure cardId exists
-        if (r['cardId'] == null || (r['cardId'] as String).isEmpty) {
-          final norm = _norm(nm);
-          // label rows added by merge/loadExisting distinctly to avoid colliding with fast-paint ids
-          r['cardId'] = '$ymd|merge|${seq++}|$norm';
-        }
-
-        // dedupe by NAME only (business rule): keep the first occurrence
-        final key = _norm(nm); // ignore circuit for dedupe
-        final existing = firstByName[key];
-        if (existing == null) {
-          firstByName[key] = i; // keep this one
-        } else {
-          // Prefer the one that already had a cardId from fast paint (plan/…),
-          // otherwise just keep the very first.
-          final hasCardExisting = ((_selectedExercisesWithCircuits[existing]['cardId'] ?? '') as String).isNotEmpty;
-          final hasCardThis     = ((r['cardId'] ?? '') as String).isNotEmpty;
-
-          if (hasCardExisting && !hasCardThis) {
-            toRemove.add(i); // drop the newcomer
-          } else if (!hasCardExisting && hasCardThis) {
-            // swap preference: keep this, drop the earlier one
-            toRemove.add(existing);
-            firstByName[key] = i;
-          } else {
-            toRemove.add(i); // both have/don't have cardId → keep first
-          }
-        }
-      }
-
-      if (toRemove.isNotEmpty) {
-        // Remove from all parallel structures consistently (descending indices)
-        final idxs = toRemove.toList()..sort((a,b)=>b.compareTo(a));
-        for (final idx in idxs) {
-          if (idx >= 0 && idx < _selectedExercisesWithCircuits.length) {
-            _selectedExercisesWithCircuits.removeAt(idx);
-            if (idx < _workoutSets.length)          _workoutSets.removeAt(idx);
-            if (idx < _repsControllers.length)      _repsControllers.removeAt(idx);
-            if (idx < _weightControllers.length)    _weightControllers.removeAt(idx);
-            if (idx < _rirControllers.length)       _rirControllers.removeAt(idx);
-            if (idx < _velocityControllers.length)  _velocityControllers.removeAt(idx);
-            if (idx < _notesControllers.length)     _notesControllers.removeAt(idx);
-          }
-        }
-        // One cheap repaint so the UI reflects the cleaned list
-        if (mounted) setState(() {});
-      }
-    } catch (e) {
-      print('⚠️ [SelectDate] normalize/dedupe pass failed: $e');
-    }
-
-
-    // 5️⃣ Ensure listeners are attached in case controllers resized
+    // Final wiring & debug
     _attachDirtyListeners();
-
-    // 🔍 Debug: list every rendered card (order, name, cardId, circuitIndex)
     try {
-      final ymdDbg = DateFormat('yyyy-MM-dd').format(_selectedDate);
-      for (var i = 0; i < _selectedExercisesWithCircuits.length; i++) {
-        final r   = _selectedExercisesWithCircuits[i];
-        final nm  = ((r['name'] ?? '') as String).trim();
-        final ci  = (r['circuitIndex'] is num) ? (r['circuitIndex'] as num).toInt() : 0;
-        final cid = (r['cardId'] ?? '—').toString();
-        print('🧾 [SelectDate Cards] $ymdDbg  #$i  name="$nm"  ci=$ci  cardId="$cid"');
-      }
-    } catch (_) { /* best-effort debug */ }
+      _debugLogCardsForSelectedDate('SelectDate');
+    } catch (_) {}
+
+    print('✅ [WES] Date switch complete for $ymdPicked');
+    sw.stop();
+    print('⏱️ [WES] _selectDate total = ${sw.elapsedMilliseconds}ms');
+    await debugPrintWesDayCache(
+      UserContext.of(context, listen: false).currentUid,
+      _selectedDate,
+    );
+    await debugPrintWesInitSnapshot(
+      uid: _cachedUid ?? UserContext.of(context, listen:false).currentUid!,
+      blockId: _selectedBlockId ?? _activeBlockId!,
+      date: _selectedDate,
+    );
 
 
-    print('✅ [WES] Date switch complete.');
-    _tSelect.stop();
-    print('⏱️ [WES] _selectDate total = ${_tSelect.elapsedMilliseconds}ms');
   }
+
+
 
 
   String _formatWorkoutDate(DateTime date) {
@@ -10137,6 +10644,52 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
               }
                   : null,
             ),
+
+            IconButton(
+              icon: const Icon(Icons.bolt, color: Colors.orange), // 💥 closest stock icon; swap if you add custom nuclear icon
+              onPressed: () {
+                showDialog(
+                  context: context,
+                  builder: (BuildContext context) {
+                    return AlertDialog(
+                      backgroundColor: Colors.blueGrey.shade900,
+                      title: const Text(
+                        'NUKE Local Cache',
+                        style: TextStyle(fontFamily: 'Verdana', color: Colors.white),
+                      ),
+                      content: Text(
+                        'Delete ALL locally stored data for ${DateFormat('yyyy-MM-dd').format(_selectedDate)}?\n\n'
+                            'This will wipe WESInit, WorkoutDayCache, BB2 BlockDay, SharedPrefs (drafts) for this date.',
+                        style: const TextStyle(fontFamily: 'Verdana', color: Colors.white),
+                      ),
+                      actions: <Widget>[
+                        TextButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: const Text('Cancel'),
+                        ),
+                        TextButton(
+                          onPressed: () async {
+                            Navigator.of(context).pop();
+                            await nukeLocalWorkoutsForDay(
+                              uid: _cachedUid ?? UserContext.of(context, listen: false).currentUid!,
+                              blockId: _selectedBlockId ?? _activeBlockId!,
+                              date: _selectedDate,
+                              blockStartDate: blockStartDate,
+                              getWesDraftKeyForDate: (d) => _getDraftKeyFor(d),
+                            );
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('💥 Local cache nuked')),
+                            );
+                          },
+                          child: const Text('NUKE', style: TextStyle(color: Colors.red)),
+                        ),
+                      ],
+                    );
+                  },
+                );
+              },
+            ),
+
             IconButton(
               icon: const Icon(Icons.delete),
               onPressed: () {
@@ -10388,14 +10941,21 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                             child: const Icon(
                                 Icons.delete, color: Colors.white),
                           ),
-                          onDismissed: (_) {
-                            final removedExercise =
-                            _selectedExercisesWithCircuits[i];
-                            final removedSets = _workoutSets[i];
-                            final removedReps = _repsControllers[i];
-                            final removedWeight = _weightControllers[i];
-                            final removedRIR = _rirControllers[i];
+                          onDismissed: (_) async {
+                            final removedExercise = _selectedExercisesWithCircuits[i];
+                            final removedSets     = _workoutSets[i];
+                            final removedReps     = _repsControllers[i];
+                            final removedWeight   = _weightControllers[i];
+                            final removedRIR      = _rirControllers[i];
 
+                            // Extract keys for deletes
+                            final String removedName = ((removedExercise['name'] ?? '') as String).trim();
+                            final int removedCi = (removedExercise['circuitIndex'] is num)
+                                ? (removedExercise['circuitIndex'] as num).toInt()
+                                : 0;
+                            final String? removedExId = (removedExercise['exerciseId'] ?? removedExercise['id'])?.toString();
+
+                            // 1) UI remove (your existing code)
                             setState(() {
                               _selectedExercisesWithCircuits.removeAt(i);
                               _workoutSets.removeAt(i);
@@ -10404,21 +10964,33 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                               _rirControllers.removeAt(i);
                             });
 
-                            _lastUndoAction = () {
+                            // 2) NEW: prune BB2 day cache (Isar BlockDay) for the selected date
+                            await _pruneBb2DayCacheForSelectedDate(
+                              name: removedName,
+                              circuitIndex: removedCi,
+                              exerciseId: removedExId,
+                            );
+
+                            // 3) Your existing deletes (keep whatever you already do):
+                            //    - remove from WES Firestore wesPlannedExercises for this date
+                            //    - prune WESInitSnapshot planned/wesPlanned for this date
+                            // (Call your existing methods right here.)
+
+                            // 4) Undo restores everything (UI + BB2 cache)
+                            _lastUndoAction = () async {
                               setState(() {
-                                _selectedExercisesWithCircuits.insert(
-                                    i, removedExercise);
+                                _selectedExercisesWithCircuits.insert(i, removedExercise);
                                 _workoutSets.insert(i, removedSets);
                                 _repsControllers.insert(i, removedReps);
                                 _weightControllers.insert(i, removedWeight);
                                 _rirControllers.insert(i, removedRIR);
                               });
+                              await _restoreBb2DayCacheForSelectedDate(exerciseRow: removedExercise);
                             };
 
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
-                                content:
-                                Text('Deleted "${removedExercise['name']}"'),
+                                content: Text('Deleted "$removedName"'),
                                 action: SnackBarAction(
                                   label: 'Undo',
                                   textColor: Colors.blueGrey.shade700,
@@ -10430,6 +11002,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                               ),
                             );
                           },
+
+
+
                           child: FutureBuilder<void>(
                               future: _initialLoad,
                               // ✅ Keep the wrapper, but do NOT gate rendering on snapshot

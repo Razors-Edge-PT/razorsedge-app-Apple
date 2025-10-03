@@ -22,6 +22,8 @@ import 'user_context.dart';
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'dart:convert'; // (top of file if not already)
+import 'local_cache/block_plan_cache.dart';
+
 
 part 'block_data_loader.dart';
 
@@ -5058,83 +5060,125 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                             child: const Icon(Icons.delete, color: Colors.white),
                           ),
                           confirmDismiss: (_) async => true,
-                          onDismissed: (_) {
-                            final removedRow = row;
-                            final removedExerciseName = removedRow.exercise?.trim() ?? '';
-                            final List<Map<String, dynamic>> futureRemovedRows = [];
+            onDismissed: (_) async {
+              final removedRow = row;
+              final removedExerciseName = (removedRow.exercise ?? '').trim();
+              final List<Map<String, dynamic>> futureRemovedRows = [];
 
-                            WidgetsBinding.instance.addPostFrameCallback((_) {
-                              setState(() {
-                                exerciseRows[weekIndex][dayIndex].removeAt(rowIndex);
+              // 1️⃣ Update UI state first
+              setState(() {
+                exerciseRows[weekIndex][dayIndex].removeAt(rowIndex);
 
-                                final starts = circuitStartIndices[weekIndex][dayIndex];
-                                starts.removeWhere((start) => start >= exerciseRows[weekIndex][dayIndex].length);
-                                if (starts.isEmpty || starts.first != 0) starts.insert(0, 0);
-                                circuitStartIndices[weekIndex][dayIndex] = starts.toSet().toList()..sort();
+                final starts = circuitStartIndices[weekIndex][dayIndex];
+                starts.removeWhere((start) => start >= exerciseRows[weekIndex][dayIndex].length);
+                if (starts.isEmpty || starts.first != 0) starts.insert(0, 0);
+                circuitStartIndices[weekIndex][dayIndex] = starts.toSet().toList()..sort();
 
-                                for (int futureWeek = weekIndex + 1; futureWeek < exerciseRows.length; futureWeek++) {
-                                  if (dayIndex >= exerciseRows[futureWeek].length) continue;
-                                  final futureRows = exerciseRows[futureWeek][dayIndex];
-                                  for (int i = futureRows.length - 1; i >= 0; i--) {
-                                    if ((futureRows[i].exercise ?? '').trim() == removedExerciseName) {
-                                      futureRemovedRows.add({
-                                        'weekIndex': futureWeek,
-                                        'dayIndex': dayIndex,
-                                        'row': futureRows[i],
-                                        'rowIndex': i,
-                                      });
-                                      futureRows.removeAt(i);
-                                    }
-                                  }
+                // Remove across future weeks
+                for (int futureWeek = weekIndex + 1; futureWeek < exerciseRows.length; futureWeek++) {
+                  if (dayIndex >= exerciseRows[futureWeek].length) continue;
+                  final futureRows = exerciseRows[futureWeek][dayIndex];
+                  for (int i = futureRows.length - 1; i >= 0; i--) {
+                    if ((futureRows[i].exercise ?? '').trim() == removedExerciseName) {
+                      futureRemovedRows.add({
+                        'weekIndex': futureWeek,
+                        'dayIndex': dayIndex,
+                        'row': futureRows[i],
+                        'rowIndex': i,
+                      });
+                      futureRows.removeAt(i);
+                    }
+                  }
 
-                                  final futureStarts = <int>{};
-                                  for (int i = 0; i < futureRows.length; i++) {
-                                    if (i == 0 || futureRows[i].circuitIndex != futureRows[i - 1].circuitIndex) {
-                                      futureStarts.add(i);
-                                    }
-                                  }
-                                  circuitStartIndices[futureWeek][dayIndex] = futureStarts.toList()..sort();
-                                }
+                  final futureStarts = <int>{};
+                  for (int i = 0; i < futureRows.length; i++) {
+                    if (i == 0 || futureRows[i].circuitIndex != futureRows[i - 1].circuitIndex) {
+                      futureStarts.add(i);
+                    }
+                  }
+                  circuitStartIndices[futureWeek][dayIndex] = futureStarts.toList()..sort();
+                }
+              });
 
-                                _lastUndoAction = () {
-                                  setState(() {
-                                    exerciseRows[weekIndex][dayIndex].insert(rowIndex, removedRow);
-                                    for (final info in futureRemovedRows) {
-                                      final w = info['weekIndex'] as int;
-                                      final d = info['dayIndex'] as int;
-                                      final ExerciseRow r = info['row'] as ExerciseRow;
-                                      final int insertAt = info['rowIndex'] as int;
-                                      exerciseRows[w][d].insert(insertAt, r);
+              // 2️⃣ Cascade delete to persistence
+              final uid = _cachedUid;
+              final updatedList = exerciseRows[weekIndex][dayIndex]
+                  .map((r) => {
+                'name': (r.exercise ?? '').trim(),
+                'weight': double.tryParse(r.weightController.text) ?? 0.0,
+                'reps': int.tryParse(r.repsController.text) ?? 0,
+                'rir': double.tryParse(r.rirController.text) ?? 0.0,
+                'velocity': r.velocityController.text.trim(),
+                'notes': r.notesController.text.trim(),
+                'circuitIndex': r.circuitIndex,
+              })
+                  .toList();
 
-                                      final futureStarts = <int>{};
-                                      for (int i = 0; i < exerciseRows[w][d].length; i++) {
-                                        if (i == 0 || exerciseRows[w][d][i].circuitIndex != exerciseRows[w][d][i - 1].circuitIndex) {
-                                          futureStarts.add(i);
-                                        }
-                                      }
-                                      circuitStartIndices[w][d] = futureStarts.toList()..sort();
-                                    }
-                                  });
-                                };
-                              });
-                            });
+              // Save to Firestore
+              await saveDayToFirestore(weekIndex, dayIndex);
+              print('🗑️ [BB2 Delete→FS] uid=$uid w$weekIndex d$dayIndex name="$removedExerciseName" saved ${updatedList.length} exercises');
 
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Deleted "${row.exercise ?? 'Unnamed'}" across future weeks'),
-                                action: SnackBarAction(
-                                  label: 'Undo',
-                                  textColor: Colors.black,
-                                  onPressed: () {
-                                    _lastUndoAction?.call();
-                                    _lastUndoAction = null;
-                                  },
-                                ),
-                              ),
-                            );
-                          },
+              // Save to Isar
+              await BlockPlanCache.putDay(
+                uid: uid,
+                blockId: _selectedBlockId!,
+                weekIndex: weekIndex,
+                dayIndex: dayIndex,
+                exercises: updatedList,
+              );
+              print('🗑️ [BB2 Delete→ISAR] uid=$uid w$weekIndex d$dayIndex updatedList=${updatedList.length}');
 
-                          child: Transform.translate(
+              // 3️⃣ Undo support
+              _lastUndoAction = () {
+                setState(() {
+                  exerciseRows[weekIndex][dayIndex].insert(rowIndex, removedRow);
+                  for (final info in futureRemovedRows) {
+                    final w = info['weekIndex'] as int;
+                    final d = info['dayIndex'] as int;
+                    final ExerciseRow r = info['row'] as ExerciseRow;
+                    final int insertAt = info['rowIndex'] as int;
+                    exerciseRows[w][d].insert(insertAt, r);
+                  }
+                });
+                // Also restore persistence
+                saveDayToFirestore(weekIndex, dayIndex);
+                BlockPlanCache.putDay(
+                  uid: uid,
+                  blockId: _selectedBlockId!,
+                  weekIndex: weekIndex,
+                  dayIndex: dayIndex,
+                  exercises: exerciseRows[weekIndex][dayIndex]
+                      .map((r) => {
+                    'name': (r.exercise ?? '').trim(),
+                    'weight': double.tryParse(r.weightController.text) ?? 0.0,
+                    'reps': int.tryParse(r.repsController.text) ?? 0,
+                    'rir': double.tryParse(r.rirController.text) ?? 0.0,
+                    'velocity': r.velocityController.text.trim(),
+                    'notes': r.notesController.text.trim(),
+                    'circuitIndex': r.circuitIndex,
+                  })
+                      .toList(),
+                );
+                print('↩️ [BB2 Undo] Restored "$removedExerciseName"');
+              };
+
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Deleted "$removedExerciseName" across future weeks'),
+                  action: SnackBarAction(
+                    label: 'Undo',
+                    textColor: Colors.black,
+                    onPressed: () {
+                      _lastUndoAction?.call();
+                      _lastUndoAction = null;
+                    },
+                  ),
+                ),
+              );
+            },
+
+
+            child: Transform.translate(
                             offset: const Offset(0, -8), // 👈 shift upward by 6 pixels
                             child: Row(
                               children: [
