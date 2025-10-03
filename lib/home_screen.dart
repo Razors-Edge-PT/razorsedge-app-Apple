@@ -29,6 +29,12 @@ import 're_daily.dart';
 import 'dart:math';
 
 
+ import 'dart:convert';
+ import 'package:cloud_firestore/cloud_firestore.dart';
+ import 'local_cache/block_plan_cache.dart';
+ import 'local_cache/workout_day_cache.dart';
+
+
 enum SelectedFeed { home, points }
 const String kUserPrefFeedTab = 'feedTab'; // 'home' | 'points'
 
@@ -152,12 +158,150 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   bool _loadMoreScheduled = false;
 
 
+  Future<void> debugPrintEightDayWindow({
+    required String uid,
+    required String blockId,
+    DateTime? blockStartDate, // if null, we’ll fetch it
+  }) async {
+    String _ymd(DateTime d) =>
+        '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+    DateTime _dOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 
+    final fs = FirebaseFirestore.instance;
+
+    // fetch blockStartDate if not provided
+    DateTime? _blockStart = blockStartDate;
+    if (_blockStart == null) {
+      try {
+        final snap = await fs
+            .collection('planned_blocks').doc(uid)
+            .collection('blocks').doc(blockId)
+            .get(const GetOptions(source: Source.server));
+        final v = (snap.data() ?? const {})['startDate'];
+        if (v is Timestamp) _blockStart = _dOnly(v.toDate());
+        if (v is String) {
+          final dt = DateTime.tryParse(v);
+          if (dt != null) _blockStart = _dOnly(dt);
+        }
+      } catch (_) {}
+    }
+    if (_blockStart == null) {
+      print('🟥 [Scan8] missing blockStartDate → skipping planned_blocks lookups');
+    }
+
+    final base = _dOnly(DateTime.now());
+    print('🔎 [Scan8] uid=$uid block=$blockId base=${_ymd(base)}');
+
+    // today-5 … today+2
+    for (int offset = -5; offset <= 2; offset++) {
+      final day = _dOnly(base.add(Duration(days: offset)));
+      final ymd = _ymd(day);
+
+      int? weekIdx;
+      int? dayIdx;
+      if (_blockStart != null) {
+        final delta = day.difference(_blockStart!).inDays;
+        weekIdx = (delta ~/ 7);
+        dayIdx  = delta % 7;
+        if (dayIdx < 0) dayIdx += 7; // keep 0..6
+      }
+
+      // ==== Local: BB2 planned from ISAR ====
+      List<Map<String, dynamic>>? bb2Local;
+      if (weekIdx != null && dayIdx != null) {
+        bb2Local = await BlockPlanCache.getDay(
+          uid: uid, blockId: blockId, weekIndex: weekIdx, dayIndex: dayIdx,
+        );
+      }
+
+      // ==== Local: WESInit snapshot (planned & wesPlanned) ====
+      int wesInitPlanned = 0, wesInitWesPlanned = 0;
+      try {
+        final snap = await BlockPlanCache.getInitSnapshot(
+          uid: uid, blockId: blockId, dateYmd: ymd,
+        );
+        if (snap != null) {
+          try {
+            final p = jsonDecode(snap.plannedExercisesJson);
+            if (p is List) wesInitPlanned = p.length;
+          } catch (_) {}
+          try {
+            final w = jsonDecode(snap.wesPlannedExercisesJson);
+            if (w is List) wesInitWesPlanned = w.length;
+          } catch (_) {}
+        }
+      } catch (_) {}
+
+      // ==== Local: per-day workout cache ====
+      int wdcPlanned = 0, wdcWesPlanned = 0;
+      try {
+        final rec = await WorkoutCacheDb.getDay(uid: uid, dateKey: ymd);
+        if (rec != null) {
+          final ex = rec['exList'] as List<Map<String, dynamic>>? ?? const [];
+          final wp = rec['wesPlanned'] as List<Map<String, dynamic>>? ?? const [];
+          wdcPlanned = ex.length;
+          wdcWesPlanned = wp.length;
+        }
+      } catch (_) {}
+
+      // ==== Firestore: planned_blocks day (rows & date) ====
+      int fsPlanRows = 0;
+      String? fsPlanDate;
+      if (weekIdx != null && dayIdx != null) {
+        try {
+          final dSnap = await fs
+              .collection('planned_blocks').doc(uid)
+              .collection('blocks').doc(blockId)
+              .collection('weeks').doc('week_$weekIdx')
+              .collection('days').doc('day_$dayIdx')
+              .get(const GetOptions(source: Source.server));
+          if (dSnap.exists) {
+            final data = dSnap.data() ?? const <String, dynamic>{};
+            final raw = data['exercises'];
+            if (raw is List) fsPlanRows = raw.length;
+            final v = data['date'];
+            if (v is Timestamp) fsPlanDate = _ymd(_dOnly(v.toDate()));
+            if (v is String && v.isNotEmpty) {
+              final dt = DateTime.tryParse(v);
+              fsPlanDate = dt != null ? _ymd(_dOnly(dt)) : (v.length >= 10 ? v.substring(0, 10) : v);
+            }
+          }
+        } catch (_) {}
+      }
+
+      // ==== Firestore: users/workouts/{ymd} (wesPlanned + exercises) ====
+      int fsWesPlanned = 0, fsExercises = 0;
+      try {
+        final wSnap = await fs
+            .collection('users').doc(uid)
+            .collection('workouts').doc(ymd)
+            .get(const GetOptions(source: Source.server));
+        if (wSnap.exists) {
+          final data = wSnap.data() ?? const <String, dynamic>{};
+          final wp = data['wesPlannedExercises'];
+          final ex = data['exercises'];
+          if (wp is List) fsWesPlanned = wp.length;
+          if (ex is List) fsExercises  = ex.length;
+        }
+      } catch (_) {}
+
+      // ==== Print one compact block per day ====
+      final left = (weekIdx != null && dayIdx != null)
+          ? 'w$weekIdx d$dayIdx'
+          : 'w? d?';
+      print('📅 [$ymd] ($left)');
+      print('   • Local  BB2=${bb2Local?.length ?? 0}  WESInit(p=${wesInitPlanned}, w=${wesInitWesPlanned})  WDC(p=${wdcPlanned}, w=${wdcWesPlanned})');
+      print('   • FS     planned_blocks rows=$fsPlanRows date=${fsPlanDate ?? '—'}  workouts wesPlanned=$fsWesPlanned ex=$fsExercises');
+    }
+  }
 
 
   @override
   void initState() {
     super.initState();
+
+
+
     final src = _selectedDay ?? _focusedDay;
     final dateOnly = DateTime(src.year, src.month, src.day);
 
@@ -217,6 +361,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
 
 
+
     // Delay the email fetch until after build
     WidgetsBinding.instance.addPostFrameCallback((_) {
       print('🧩 Post-frame callback fired');
@@ -236,6 +381,17 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           .snapshots()
           .listen((_) {
         _fetchTrainingDaysForMonth(_focusedDay);
+      });
+
+      // 🔎 Kick the 8-day local/FS scan once (post-frame so context is ready)
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        final uid = actingUid ?? userContext.actorUid;
+        final bid = userContext.activeBlockId;
+        if (uid != null && bid != null && bid.isNotEmpty) {
+          await debugPrintEightDayWindow(uid: uid, blockId: bid);
+        } else {
+          print('🟥 [Scan8] skipped: uid or blockId missing (uid=$uid, bid=$bid)');
+        }
       });
     });
 

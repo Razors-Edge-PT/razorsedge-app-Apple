@@ -30,7 +30,11 @@ import 'local_cache/isar_db.dart';
 import 'package:isar/isar.dart';
 import 're_daily.dart';
 import 'progression_engine.dart';
+
+import 'package:cloud_firestore/cloud_firestore.dart' as firebase_firestore;
+
 import 'formula.dart' as formula;
+
 
 
 Future<void> deleteAllUserWorkouts() async {
@@ -495,6 +499,129 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     }
 
     print('✅ [NUKE] local wipe complete for $ymd');
+  }
+
+  /// Safe to run any time. Best-effort with verbose prints.
+  Future<void> nukeAllWesPlannedAndLocalCaches({
+    required String uid,
+    String? blockId, // optional: if provided, restrict BB2 local wipe to this block
+  }) async {
+    final sw = Stopwatch()..start();
+    print('🧨 [NUKE*] Begin full wipe → uid=$uid block=${blockId ?? "(all)"}');
+
+    int fsDocsTouched = 0;
+    int isarWesInitDel = 0;
+    int isarWdcDel = 0;
+    int isarBb2Del = 0;
+    int prefsDraftDel = 0;
+    int prefsBb2Del = 0;
+    int prefsWarmKeys = 0;
+
+    // ─────────────── Firestore: wipe wesPlannedExercises on every workout doc ───────────────
+    try {
+      final fs = FirebaseFirestore.instance;
+      final col = fs.collection('users').doc(uid).collection('workouts');
+
+      // Page through the collection in batches (server-backed read).
+      QueryDocumentSnapshot<Map<String, dynamic>>? lastDoc;
+      const batchSize = 200;
+      while (true) {
+        firebase_firestore.Query<Map<String, dynamic>> q = col.orderBy(FieldPath.documentId).limit(batchSize);
+
+        if (lastDoc != null) q = q.startAfterDocument(lastDoc);
+
+        final page = await q.get(const GetOptions(source: Source.server));
+        if (page.docs.isEmpty) break;
+
+        final writes = <Future<void>>[];
+        for (final d in page.docs) {
+          // Set to [] (don’t delete the field; explicit empty is clearer)
+          writes.add(d.reference.set(
+            {'wesPlannedExercises': <Map<String, dynamic>>[]},
+            SetOptions(merge: true),
+          ));
+        }
+        await Future.wait(writes);
+        fsDocsTouched += page.docs.length;
+        lastDoc = page.docs.last;
+        if (page.docs.length < batchSize) break;
+      }
+      print('🗑️ [NUKE*→FS] cleared wesPlannedExercises on $fsDocsTouched workout doc(s)');
+    } catch (e) {
+      print('🟥 [NUKE*→FS] failed: $e');
+    }
+
+    // ─────────────── ISAR: wipe local caches for this uid ───────────────
+    try {
+      final isar = await IsarDb.instance;
+
+      await isar.writeTxn(() async {
+        // WESInitSnapshot
+        isarWesInitDel = await isar.wESInitSnapshots
+            .filter()
+            .uidEqualTo(uid)
+            .deleteAll();
+
+        // WorkoutDayCache
+        isarWdcDel = await isar.workoutDayCaches
+            .filter()
+            .uidEqualTo(uid)
+            .deleteAll();
+
+        // BlockDay (BB2 local plan cache) — optionally scope to a single block
+        if (blockId == null || blockId.isEmpty) {
+          isarBb2Del = await isar.blockDays
+              .filter()
+              .uidEqualTo(uid)
+              .deleteAll();
+        } else {
+          isarBb2Del = await isar.blockDays
+              .filter()
+              .uidEqualTo(uid)
+              .and()
+              .blockIdEqualTo(blockId)
+              .deleteAll();
+        }
+      });
+
+      print('🗑️ [NUKE*→ISAR] WESInit=$isarWesInitDel WDC=$isarWdcDel BB2=$isarBb2Del');
+    } catch (e) {
+      print('🟥 [NUKE*→ISAR] failed: $e');
+    }
+
+    // ─────────────── SharedPreferences: wipe WES drafts + BB2 dayData + warmup cooldowns ───────────────
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final keys = prefs.getKeys().toList();
+
+      // WES drafts are keyed like "wes_draft_{uid}_{YYYY-MM-DD}"
+      for (final k in keys.where((k) => k.startsWith('wes_draft_${uid}_'))) {
+        await prefs.remove(k);
+        prefsDraftDel++;
+      }
+
+      // BB2 day cache in prefs is keyed like "bb2_dayData_{YYYY-MM-DD}" (no uid)
+      for (final k in keys.where((k) => k.startsWith('bb2_dayData_'))) {
+        await prefs.remove(k);
+        prefsBb2Del++;
+      }
+
+      // Warmup cooldowns so we don’t instant rewarm stale shapes
+      for (final k in keys.where((k) =>
+      k == 'wes_warm_last:$uid' || k == 'wes_warm_exercises_last')) {
+        await prefs.remove(k);
+        prefsWarmKeys++;
+      }
+
+      print('🗑️ [NUKE*→Prefs] drafts=$prefsDraftDel bb2Days=$prefsBb2Del warmKeys=$prefsWarmKeys');
+    } catch (e) {
+      print('🟥 [NUKE*→Prefs] failed: $e');
+    }
+
+    sw.stop();
+    print('✅ [NUKE*] complete in ${sw.elapsedMilliseconds}ms '
+        '(FS:$fsDocsTouched, WESInit:$isarWesInitDel, WDC:$isarWdcDel, BB2:$isarBb2Del, '
+        'prefs: drafts=$prefsDraftDel bb2=$prefsBb2Del warm=$prefsWarmKeys)');
   }
 
   String _getDraftKeyFor(DateTime d) {
@@ -5355,6 +5482,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
         dateYmd: ymd,
       );
 
+
       if (snap != null) {
         print('🟣 [FastPaint] Snapshot found for $ymd');
         print('🟣 [FastPaint] plannedExercisesJson → ${snap.plannedExercisesJson}');
@@ -6078,6 +6206,12 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           blockId: _selectedBlockId ?? (_activeBlockId ?? ''),
           dateYmd: ymd,
         );
+        if (snap == null || snap.dateYmd != ymd) {
+          print('🛑 [FastPaint] ignoring snapshot (null or date mismatch)');
+          return;
+        }
+
+
 
         if (snap != null) {
           // planned rows (name + ci) for placeholders
@@ -10670,6 +10804,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                         TextButton(
                           onPressed: () async {
                             Navigator.of(context).pop();
+
+                            // 1) Your existing per-day nuke
                             await nukeLocalWorkoutsForDay(
                               uid: _cachedUid ?? UserContext.of(context, listen: false).currentUid!,
                               blockId: _selectedBlockId ?? _activeBlockId!,
@@ -10677,8 +10813,15 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                               blockStartDate: blockStartDate,
                               getWesDraftKeyForDate: (d) => _getDraftKeyFor(d),
                             );
+
+                            // 2) Global wipe (ALL dates) of WES planned + all local caches
+                            await nukeAllWesPlannedAndLocalCaches(
+                              uid: _cachedUid ?? UserContext.of(context, listen: false).currentUid!,
+                              blockId: _selectedBlockId ?? _activeBlockId!, // optional
+                            );
+
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('💥 Local cache nuked')),
+                              const SnackBar(content: Text('💥 Local + WESPlanned nuked')),
                             );
                           },
                           child: const Text('NUKE', style: TextStyle(color: Colors.red)),

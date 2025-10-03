@@ -141,6 +141,44 @@ class WarmupService {
 
 
     // Try super-cache first
+
+    // ⛔ Sanity check: ensure cache corresponds to the selected calendar date.
+// We verify against the Firestore day doc's `date`. If mismatch → ignore cache.
+    bool _cacheMatchesSelectedDate = true;
+    try {
+      DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+      DateTime? _asDate(dynamic v) {
+        if (v == null) return null;
+        if (v is DateTime) return _dateOnly(v);
+        if (v is Timestamp) return _dateOnly(v.toDate());
+        if (v is String) {
+          final d = DateTime.tryParse(v);
+          return (d == null) ? null : _dateOnly(d);
+        }
+        return null;
+      }
+
+      final dSnap = await fs
+          .collection('planned_blocks').doc(uid)
+          .collection('blocks').doc(blockId)
+          .collection('weeks').doc('week_$weekIndex')
+          .collection('days').doc('day_$dayIndex')
+          .get(const GetOptions(source: Source.server));
+
+      final docDate = _asDate(dSnap.data()?['date']);
+      final want    = _dateOnly(selectedDate);
+      if (docDate == null || docDate != want) {
+        _cacheMatchesSelectedDate = false;
+        final gotStr  = (docDate == null) ? 'null' : '${docDate.toIso8601String().substring(0,10)}';
+        final wantStr = '${want.toIso8601String().substring(0,10)}';
+        print('🛑 [Warmup:3] cache rejected (day_$dayIndex date mismatch) → doc=$gotStr want=$wantStr');
+      }
+    } catch (e) {
+      // If we can’t validate, be conservative and fall back to FS read.
+      _cacheMatchesSelectedDate = false;
+      print('🟧 [Warmup:3] cache date-check failed → $e (ignoring cache)');
+    }
+
     final cached = await BlockPlanCache.getDay(
       uid: uid,
       blockId: blockId,
@@ -148,7 +186,8 @@ class WarmupService {
       dayIndex: dayIndex,
     );
 
-    if (cached != null) {
+    if (cached != null && _cacheMatchesSelectedDate) {
+
       print('🗂️ [Warmup:3] cache HIT → ${cached.length} exercises');
 
       // merge wesPlannedExercises + exercises for selectedDate into the cached list
@@ -239,15 +278,39 @@ class WarmupService {
         .get(const GetOptions(source: Source.server));
 
     final exercises = <Map<String, dynamic>>[];
+
+    DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+    DateTime? _asDate(dynamic v) {
+      if (v == null) return null;
+      if (v is DateTime) return _dateOnly(v);
+      if (v is Timestamp) return _dateOnly(v.toDate());
+      if (v is String) {
+        final d = DateTime.tryParse(v);
+        return (d == null) ? null : _dateOnly(d);
+      }
+      return null;
+    }
+
     if (dayDoc.exists) {
-      final data = dayDoc.data()!;
-      final raw = (data['exercises'] ?? data['planned'] ?? data['rows']);
-      if (raw is List) {
-        for (final e in raw) {
-          if (e is Map) exercises.add(Map<String, dynamic>.from(e));
+      final data = dayDoc.data() ?? const <String, dynamic>{};
+      final docDate = _asDate(data['date']);
+      final want    = _dateOnly(selectedDate);
+
+      if (docDate == null || docDate != want) {
+        final gotStr  = (docDate == null) ? 'null' : '${docDate.toIso8601String().substring(0,10)}';
+        final wantStr = '${want.toIso8601String().substring(0,10)}';
+        print('🛑 [Warmup:3] Firestore day rejected (day_$dayIndex date mismatch) → doc=$gotStr want=$wantStr');
+        // Leave `exercises` empty on purpose.
+      } else {
+        final raw = (data['exercises'] ?? data['planned'] ?? data['rows']);
+        if (raw is List) {
+          for (final e in raw) {
+            if (e is Map) exercises.add(Map<String, dynamic>.from(e));
+          }
         }
       }
     }
+
 
     // 🔹 Merge from /users/{uid}/workouts/{ymd}
     String _ymd(DateTime d) {
@@ -603,19 +666,25 @@ class WarmupService {
       weekDocs[di] = {'id': snap.id, 'date': data['date'], 'rows': rows};
     }
 
-    // 2) Pick the day that matches the selected calendar date; fallback to dayIndex
+    // 2) Pick the day that matches the selected calendar date; NO fallback
     int? matchDi;
     for (int di = 0; di < 7; di++) {
       final d = weekDocs[di];
       if (d == null) continue;
       if (_dateMatches(d['date'])) { matchDi = di; break; }
     }
-    final useDi = matchDi ?? dayIndex;
 
+    if (matchDi == null) {
+      print('🎯 [Warmup:5] no BB2 day matches selected date → overrides = {}');
+      return <String, Map<String, dynamic>>{}; // empty overrides
+    }
+
+    final useDi = matchDi;
     final sel = weekDocs[useDi] ?? const <String, dynamic>{};
     final selDateStr = _dateStr(sel['date']);
     final selRows = (sel['rows'] is List) ? List<Map<String, dynamic>>.from(sel['rows'] as List) : const <Map<String, dynamic>>[];
-    print('🎯 [Warmup:5] selected → day_$useDi (wanted=$dayIndex date=$selDateStr) rows=${selRows.length}');
+    print('🎯 [Warmup:5] selected → day_$useDi (date=$selDateStr) rows=${selRows.length}');
+
 
     // 3) Build overrides for the selected day aligned to `planned` by index
     final byIndex = <int, Map<String, dynamic>>{};
