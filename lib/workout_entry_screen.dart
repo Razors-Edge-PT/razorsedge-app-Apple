@@ -4961,6 +4961,334 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
   }
 
+  Future<void> _loadInitialData() async {
+    final _tInit = Stopwatch()
+      ..start(); // ⏱️ start total timer
+    print('⏱️ [WES] _loadInitialData started');
+    // If fast-paint already put rows on screen, never gate UI again.
+    final _bootPainted = _didFastPaint || _selectedExercisesWithCircuits.isNotEmpty;
+    if (_bootPainted) {
+      // Make sure UI shows content and never regresses to a spinner/placeholder
+      _isInitialized = true;
+      _isLoadingData = false;
+    }
+
+    print('🚀 [WES Init] Starting _loadInitialData');
+    final _loadInitialDataTimer = Stopwatch()
+      ..start();
+
+    // 0) Fast path for prefilled (unchanged)
+    if (widget.prefilledExercisesWithCircuits?.isNotEmpty ?? false) {
+      setState(() {
+        _selectedExercisesWithCircuits
+          ..clear()
+          ..addAll(widget.prefilledExercisesWithCircuits!.map((e) => Map<
+              String,
+              dynamic>.from(e)));
+        // init controllers
+        _workoutSets.clear();
+        _repsControllers.clear();
+        _weightControllers.clear();
+        _rirControllers.clear();
+        _velocityControllers.clear();
+        _notesControllers.clear();
+        for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+          _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
+          _repsControllers.add(
+              List.generate(_defaultSets, (_) => TextEditingController()));
+          _weightControllers.add(
+              List.generate(_defaultSets, (_) => TextEditingController()));
+          _rirControllers.add(
+              List.generate(_defaultSets, (_) => TextEditingController()));
+          _velocityControllers.add(
+              List.generate(_defaultSets, (_) => TextEditingController()));
+          _notesControllers.add(
+              List.generate(_defaultSets, (_) => TextEditingController()));
+        }
+        _blockStartDate = widget.initialDate;
+        _blockEndDate = widget.initialDate;
+        _isLoadingData = false;
+        _isInitialized = true;
+      });
+      return;
+    }
+
+    print('🔁 [WES Init] Running full BB2 plan load');
+
+// ──────────────────────────────────────────────────────────────
+// SUPER-CACHE READ: disabled here to avoid double fast-paint.
+// ──────────────────────────────────────────────────────────────
+    print('⏭️ [WES Init] Skipping in-function snapshot hydrate (boot paint handles it)');
+
+
+    // A) ORDER-DEPENDENT chain (keep sequential)
+    //    1) load exercises base list
+    await loadExercisesFromFirestoreForWES(); // has its own stopwatch
+    //    2) name/id maps
+    await _buildNameToIdMapsFromFirestore();
+    //    3) planned exercise **details** (depends on maps)
+    await _loadPlannedExerciseDetails();
+
+    // B) FIRE CACHE-FIRST READS IN PARALLEL (independent after A)
+    final uid = _cachedUid;
+    final List<Future> reads = [
+      // Saved workouts (instance counts / overlays)
+      loadSavedWorkoutsForInstanceCount(), // already ~134ms
+      // Planned exercises rows (weekly/day plan containers)
+      loadPlannedExercisesFromFirestore(),
+      // Previous workout data (overlay)
+      loadPreviousWorkoutData(), // ~100ms
+      // Full top-set history (can be long: keep parallel)
+      PeriodizationModelUtils.fetchFullTopSetHistory(uid: uid),
+    ];
+
+    // C) ALSO kick a cache-first touch of today’s BB2 day via Isar so first paint has data
+//    (non-blocking; _mergeNewBB2ExercisesIntoDraft will read Isar first now)
+// ignore: unawaited_futures
+    (() async {
+      try {
+        if (_blockStartDate != null && _selectedDate != null &&
+            _selectedBlockId != null) {
+          final ds = _selectedDate
+              .difference(_blockStartDate!)
+              .inDays;
+          if (ds >= 0) {
+            final wi = ds ~/ 7;
+            final di = ds % 7;
+            final isarList = await BlockPlanCache.getDay(
+              uid: _cachedUid ?? '',
+              blockId: _selectedBlockId!,
+              weekIndex: wi,
+              dayIndex: di,
+            );
+            if (isarList != null) {
+              print('🟣 [Init] ISAR day prefetch count=${isarList.length}');
+            }
+          }
+        }
+      } catch (_) {}
+    })();
+
+
+    // D) Await the parallel batch (don’t block paint on server reconciliation elsewhere)
+    await Future.wait(reads);
+
+    // E) Draft load (as before)
+    print('💾 [WES Init] Attempting to load draft from cache...');
+    final draftLoaded = await _loadWorkoutDraftFromCache();
+    print('📦 [WES Init] Draft loaded: $draftLoaded');
+
+    // F) Touch BB2 day doc from SERVER (best-effort) so merge has fresh data
+    //    Keep **non-blocking**: the merge will re-run when data arrives if needed
+    //    (You already have a server touch below; keep it best-effort)
+    try {
+      final uid = _cachedUid;
+      final bid = _selectedBlockId;
+      if (uid != null && bid != null && _blockStartDate != null &&
+          _selectedDate != null) {
+        final ds = _selectedDate
+            .difference(_blockStartDate!)
+            .inDays;
+        if (ds >= 0) {
+          final wi = (ds / 7).floor();
+          final di = ds % 7;
+          // server touch; cache-first UI has already painted from Isar/draft
+          await FirebaseFirestore.instance
+              .collection('planned_blocks').doc(uid)
+              .collection('blocks').doc(bid)
+              .collection('weeks').doc('week_$wi')
+              .collection('days').doc('day_$di')
+              .get(const GetOptions(source: Source.server));
+        }
+      }
+    } catch (e) {
+      print('⚠️ [WES Init] Server touch failed (non-fatal): $e');
+    }
+
+    // G) Merge BB2 into UI
+    final _rowsExist = _selectedExercisesWithCircuits.isNotEmpty;
+
+    if (draftLoaded) {
+      print('🔁 [WES Init] Merging BB2 exercises post-draft...');
+      await _mergeNewBB2ExercisesIntoDraft(); // Isar-first inside
+    } else {
+      print('📭 [WES Init] No draft found → merging BB2...');
+      if (!_rowsExist && !_didFastPaint) {
+        _selectedExercisesWithCircuits.clear();
+      }
+      await _mergeNewBB2ExercisesIntoDraft();
+
+    }
+
+
+    // H) Finalize UI flags + paint
+    final _needSpinnerFlip = (!_isInitialized || _isLoadingData);
+    _isLoadingData = false;
+    _isInitialized = true;
+// Only rebuild if we’d otherwise show a spinner and there’s no content yet
+    if (mounted && _needSpinnerFlip && _selectedExercisesWithCircuits.isEmpty) {
+      print('🟢 [WES] Spinner→content flip repaint');
+      setState(() {});
+    } else {
+      print('⚪ [WES] Skip spinner repaint (content already on screen)');
+    }
+
+
+    // ──────────────────────────────────────────────────────────────
+// SUPER-CACHE WRITE: persist a minimal snapshot for next open
+// (planned list + previous overlay + top-set history)
+// ──────────────────────────────────────────────────────────────
+    try {
+      final uid = _cachedUid;
+      final bid = _selectedBlockId;
+      if (uid != null && bid != null) {
+        final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+
+        // (1) Planned list: compact (name + circuitIndex)
+        final plannedCompact = _selectedExercisesWithCircuits.map((e) {
+          final name = (e['name'] ?? '').toString().trim();
+          final ci = (e['circuitIndex'] ?? 0) as int;
+          return {'name': name, 'circuitIndex': ci};
+        }).toList();
+
+        // (2) Previous workout overlay (compact rows)
+        final List<Map<String, dynamic>> previousOverlay = [];
+        for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+          final exName = (_selectedExercisesWithCircuits[i]['name'] ?? '')
+              .toString()
+              .trim();
+          final ci = (_selectedExercisesWithCircuits[i]['circuitIndex'] ??
+              0) as int;
+          if (i >= _workoutSets.length) continue;
+          final sets = _workoutSets[i].map((s) =>
+          {
+            if (s.reps != null) 'reps': s.reps,
+            if (s.weight != null) 'weight': s.weight,
+            if (s.rir != null) 'rir': s.rir,
+            if (s.velocity != null) 'velocity': s.velocity,
+            if ((s.notes ?? '')
+                .toString()
+                .isNotEmpty) 'notes': s.notes,
+          }).toList();
+          previousOverlay.add({
+            'name': exName,
+            'circuitIndex': ci,
+            'sets': sets,
+          });
+        }
+
+        // (3) Top-set history (best-effort)
+        Map<String, dynamic> topSetHistory = const {};
+        try {
+          // If you have a real source, populate it here.
+          // topSetHistory = PeriodizationModelUtils.fullTopSetHistoryCache ?? const {};
+        } catch (_) {}
+        final List<Map<String, dynamic>> topSetHistoryList = [topSetHistory];
+
+        // ✅ Save snapshot via the helper with named params
+        final plannedCount  = plannedCompact.length;
+        final previousCount = previousOverlay.length;
+
+        // (4) Pre-resolved S1 hints map for instant first paint next time
+        final Map<String, dynamic> hints = {};
+        for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+          final name = (_selectedExercisesWithCircuits[i]['name'] ?? '').toString().trim();
+          if (name.isEmpty) continue;
+          final ci   = (_selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0) as int;
+          final key  = '${name.toLowerCase()}|$ci';
+
+          // Use current helpers (they won’t recurse because _seedHintsByKey is empty on first save)
+          final double s1W = set1SuggestedWeight(i);
+          final double s1R = set1SuggestedReps(i);
+          final double s1Ri = getRirFromPlanOrInput(i, 1);
+
+          final exId = PeriodizationModelUtils.nameToId[name] ?? name;
+          final isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
+
+          final double e1 = PeriodizationModelUtils.calculateE1RM(
+            // For BW: reverse to absolute for e1rm computation
+            isBw
+                ? PeriodizationModelUtils.toAbsoluteWeight(
+              uid: _cachedUid ?? '',
+              displayAddedKg: s1W,
+              exerciseId: exId,
+              exerciseName: name,
+              asOfDate: _selectedDate,
+            )
+                : s1W,
+            s1R,
+            s1Ri,
+          );
+
+          hints[key] = isBw
+              ? {
+            's1_weight_added': s1W,
+            's1_reps': s1R,
+            's1_rir': s1Ri,
+            'e1rm': e1,
+          }
+              : {
+            's1_weight': s1W,
+            's1_reps': s1R,
+            's1_rir': s1Ri,
+            'e1rm': e1,
+          };
+        }
+        final String hintsJson = jsonEncode(hints);
+
+
+        if (plannedCount == 0 && previousCount == 0) {
+          print('🟨 [WES Init] Skip snapshot save (both planned & previous empty) for $ymd');
+        } else {
+          await BlockPlanCache.putInitSnapshot(
+            uid: uid,
+            blockId: bid,
+            dateYmd: ymd,
+            plannedExercises: plannedCompact,
+            wesPlannedExercises: const <Map<String, dynamic>>[],   // ← NEW (or your real WES placeholders if available)
+            previousWorkout: previousOverlay,
+            topSetHistory: topSetHistoryList,
+            hintsJson: hintsJson,
+            hintsInputsHash: '',            // ← set to your computed hash if you have it here
+            hintsReady: hintsJson.isNotEmpty && hintsJson != '{}',
+            schemaVersion: kWesSnapshotSchema,  // ← keep consistent with Warmup
+            updatedAt: DateTime.now(),
+          );
+
+          print('💾 [WES Init] Snapshot saved for $ymd (planned=$plannedCount, prev=$previousCount)');
+        }
+
+      } else {
+        print('🟨 [WES Init] Skip snapshot PUT (uid or blockId missing)');
+      }
+    } catch (e) {
+      print('🟥 [WES Init] WESInitSnapshot save failed: $e');
+    }
+
+    _debugLogCardsForSelectedDate('LoadExisting');
+
+    print('✅ [WES Init] _loadInitialData complete');
+    _loadInitialDataTimer.stop();
+    print('⏱️ [WES] _loadInitialData took ${_loadInitialDataTimer
+        .elapsedMilliseconds}ms');
+
+    // ⏱️ Add this for the full wall-clock first-paint measure
+    print('⏱️ [WES] FIRST-PAINT total = ${_loadInitialDataTimer
+        .elapsedMilliseconds}ms (_loadInitialData)');
+
+    // I) Overlay saved workout rows AFTER initial paint (kept non-blocking now)
+    //    You previously called this synchronously; now kick it after paint
+    //    (Your _loadExistingWorkoutIfAny already has cache/Isar-first)
+    // ignore: unawaited_futures
+    (() async {
+      final _before = _structureHash();
+      await _loadExistingWorkoutIfAny();
+      final _after = _structureHash();
+      if (mounted && _after != _before) setState(() {}); // only if shape changed
+    })();
+
+  }
+
 
   Future<void> _fetchActiveBlockThenMeta() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -5800,333 +6128,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
 
 
-  Future<void> _loadInitialData() async {
-    final _tInit = Stopwatch()
-      ..start(); // ⏱️ start total timer
-    print('⏱️ [WES] _loadInitialData started');
-    // If fast-paint already put rows on screen, never gate UI again.
-    final _bootPainted = _didFastPaint || _selectedExercisesWithCircuits.isNotEmpty;
-    if (_bootPainted) {
-      // Make sure UI shows content and never regresses to a spinner/placeholder
-      _isInitialized = true;
-      _isLoadingData = false;
-    }
 
-    print('🚀 [WES Init] Starting _loadInitialData');
-    final _loadInitialDataTimer = Stopwatch()
-      ..start();
-
-    // 0) Fast path for prefilled (unchanged)
-    if (widget.prefilledExercisesWithCircuits?.isNotEmpty ?? false) {
-      setState(() {
-        _selectedExercisesWithCircuits
-          ..clear()
-          ..addAll(widget.prefilledExercisesWithCircuits!.map((e) => Map<
-              String,
-              dynamic>.from(e)));
-        // init controllers
-        _workoutSets.clear();
-        _repsControllers.clear();
-        _weightControllers.clear();
-        _rirControllers.clear();
-        _velocityControllers.clear();
-        _notesControllers.clear();
-        for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
-          _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
-          _repsControllers.add(
-              List.generate(_defaultSets, (_) => TextEditingController()));
-          _weightControllers.add(
-              List.generate(_defaultSets, (_) => TextEditingController()));
-          _rirControllers.add(
-              List.generate(_defaultSets, (_) => TextEditingController()));
-          _velocityControllers.add(
-              List.generate(_defaultSets, (_) => TextEditingController()));
-          _notesControllers.add(
-              List.generate(_defaultSets, (_) => TextEditingController()));
-        }
-        _blockStartDate = widget.initialDate;
-        _blockEndDate = widget.initialDate;
-        _isLoadingData = false;
-        _isInitialized = true;
-      });
-      return;
-    }
-
-    print('🔁 [WES Init] Running full BB2 plan load');
-
-// ──────────────────────────────────────────────────────────────
-// SUPER-CACHE READ: disabled here to avoid double fast-paint.
-// ──────────────────────────────────────────────────────────────
-    print('⏭️ [WES Init] Skipping in-function snapshot hydrate (boot paint handles it)');
-
-
-    // A) ORDER-DEPENDENT chain (keep sequential)
-    //    1) load exercises base list
-    await loadExercisesFromFirestoreForWES(); // has its own stopwatch
-    //    2) name/id maps
-    await _buildNameToIdMapsFromFirestore();
-    //    3) planned exercise **details** (depends on maps)
-    await _loadPlannedExerciseDetails();
-
-    // B) FIRE CACHE-FIRST READS IN PARALLEL (independent after A)
-    final uid = _cachedUid;
-    final List<Future> reads = [
-      // Saved workouts (instance counts / overlays)
-      loadSavedWorkoutsForInstanceCount(), // already ~134ms
-      // Planned exercises rows (weekly/day plan containers)
-      loadPlannedExercisesFromFirestore(),
-      // Previous workout data (overlay)
-      loadPreviousWorkoutData(), // ~100ms
-      // Full top-set history (can be long: keep parallel)
-      PeriodizationModelUtils.fetchFullTopSetHistory(uid: uid),
-    ];
-
-    // C) ALSO kick a cache-first touch of today’s BB2 day via Isar so first paint has data
-//    (non-blocking; _mergeNewBB2ExercisesIntoDraft will read Isar first now)
-// ignore: unawaited_futures
-    (() async {
-      try {
-        if (_blockStartDate != null && _selectedDate != null &&
-            _selectedBlockId != null) {
-          final ds = _selectedDate
-              .difference(_blockStartDate!)
-              .inDays;
-          if (ds >= 0) {
-            final wi = ds ~/ 7;
-            final di = ds % 7;
-            final isarList = await BlockPlanCache.getDay(
-              uid: _cachedUid ?? '',
-              blockId: _selectedBlockId!,
-              weekIndex: wi,
-              dayIndex: di,
-            );
-            if (isarList != null) {
-              print('🟣 [Init] ISAR day prefetch count=${isarList.length}');
-            }
-          }
-        }
-      } catch (_) {}
-    })();
-
-
-    // D) Await the parallel batch (don’t block paint on server reconciliation elsewhere)
-    await Future.wait(reads);
-
-    // E) Draft load (as before)
-    print('💾 [WES Init] Attempting to load draft from cache...');
-    final draftLoaded = await _loadWorkoutDraftFromCache();
-    print('📦 [WES Init] Draft loaded: $draftLoaded');
-
-    // F) Touch BB2 day doc from SERVER (best-effort) so merge has fresh data
-    //    Keep **non-blocking**: the merge will re-run when data arrives if needed
-    //    (You already have a server touch below; keep it best-effort)
-    try {
-      final uid = _cachedUid;
-      final bid = _selectedBlockId;
-      if (uid != null && bid != null && _blockStartDate != null &&
-          _selectedDate != null) {
-        final ds = _selectedDate
-            .difference(_blockStartDate!)
-            .inDays;
-        if (ds >= 0) {
-          final wi = (ds / 7).floor();
-          final di = ds % 7;
-          // server touch; cache-first UI has already painted from Isar/draft
-          await FirebaseFirestore.instance
-              .collection('planned_blocks').doc(uid)
-              .collection('blocks').doc(bid)
-              .collection('weeks').doc('week_$wi')
-              .collection('days').doc('day_$di')
-              .get(const GetOptions(source: Source.server));
-        }
-      }
-    } catch (e) {
-      print('⚠️ [WES Init] Server touch failed (non-fatal): $e');
-    }
-
-    // G) Merge BB2 into UI
-    final _rowsExist = _selectedExercisesWithCircuits.isNotEmpty;
-
-    if (draftLoaded) {
-      print('🔁 [WES Init] Merging BB2 exercises post-draft...');
-      await _mergeNewBB2ExercisesIntoDraft(); // Isar-first inside
-    } else {
-      print('📭 [WES Init] No draft found → merging BB2...');
-      if (!_rowsExist && !_didFastPaint) {
-        _selectedExercisesWithCircuits.clear();
-      }
-      await _mergeNewBB2ExercisesIntoDraft();
-
-    }
-
-
-    // H) Finalize UI flags + paint
-    final _needSpinnerFlip = (!_isInitialized || _isLoadingData);
-    _isLoadingData = false;
-    _isInitialized = true;
-// Only rebuild if we’d otherwise show a spinner and there’s no content yet
-    if (mounted && _needSpinnerFlip && _selectedExercisesWithCircuits.isEmpty) {
-      print('🟢 [WES] Spinner→content flip repaint');
-      setState(() {});
-    } else {
-      print('⚪ [WES] Skip spinner repaint (content already on screen)');
-    }
-
-
-    // ──────────────────────────────────────────────────────────────
-// SUPER-CACHE WRITE: persist a minimal snapshot for next open
-// (planned list + previous overlay + top-set history)
-// ──────────────────────────────────────────────────────────────
-    try {
-      final uid = _cachedUid;
-      final bid = _selectedBlockId;
-      if (uid != null && bid != null) {
-        final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
-
-        // (1) Planned list: compact (name + circuitIndex)
-        final plannedCompact = _selectedExercisesWithCircuits.map((e) {
-          final name = (e['name'] ?? '').toString().trim();
-          final ci = (e['circuitIndex'] ?? 0) as int;
-          return {'name': name, 'circuitIndex': ci};
-        }).toList();
-
-        // (2) Previous workout overlay (compact rows)
-        final List<Map<String, dynamic>> previousOverlay = [];
-        for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
-          final exName = (_selectedExercisesWithCircuits[i]['name'] ?? '')
-              .toString()
-              .trim();
-          final ci = (_selectedExercisesWithCircuits[i]['circuitIndex'] ??
-              0) as int;
-          if (i >= _workoutSets.length) continue;
-          final sets = _workoutSets[i].map((s) =>
-          {
-            if (s.reps != null) 'reps': s.reps,
-            if (s.weight != null) 'weight': s.weight,
-            if (s.rir != null) 'rir': s.rir,
-            if (s.velocity != null) 'velocity': s.velocity,
-            if ((s.notes ?? '')
-                .toString()
-                .isNotEmpty) 'notes': s.notes,
-          }).toList();
-          previousOverlay.add({
-            'name': exName,
-            'circuitIndex': ci,
-            'sets': sets,
-          });
-        }
-
-        // (3) Top-set history (best-effort)
-        Map<String, dynamic> topSetHistory = const {};
-        try {
-          // If you have a real source, populate it here.
-          // topSetHistory = PeriodizationModelUtils.fullTopSetHistoryCache ?? const {};
-        } catch (_) {}
-        final List<Map<String, dynamic>> topSetHistoryList = [topSetHistory];
-
-        // ✅ Save snapshot via the helper with named params
-        final plannedCount  = plannedCompact.length;
-        final previousCount = previousOverlay.length;
-
-        // (4) Pre-resolved S1 hints map for instant first paint next time
-        final Map<String, dynamic> hints = {};
-        for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
-          final name = (_selectedExercisesWithCircuits[i]['name'] ?? '').toString().trim();
-          if (name.isEmpty) continue;
-          final ci   = (_selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0) as int;
-          final key  = '${name.toLowerCase()}|$ci';
-
-          // Use current helpers (they won’t recurse because _seedHintsByKey is empty on first save)
-          final double s1W = set1SuggestedWeight(i);
-          final double s1R = set1SuggestedReps(i);
-          final double s1Ri = getRirFromPlanOrInput(i, 1);
-
-          final exId = PeriodizationModelUtils.nameToId[name] ?? name;
-          final isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
-
-          final double e1 = PeriodizationModelUtils.calculateE1RM(
-            // For BW: reverse to absolute for e1rm computation
-            isBw
-                ? PeriodizationModelUtils.toAbsoluteWeight(
-              uid: _cachedUid ?? '',
-              displayAddedKg: s1W,
-              exerciseId: exId,
-              exerciseName: name,
-              asOfDate: _selectedDate,
-            )
-                : s1W,
-            s1R,
-            s1Ri,
-          );
-
-          hints[key] = isBw
-              ? {
-            's1_weight_added': s1W,
-            's1_reps': s1R,
-            's1_rir': s1Ri,
-            'e1rm': e1,
-          }
-              : {
-            's1_weight': s1W,
-            's1_reps': s1R,
-            's1_rir': s1Ri,
-            'e1rm': e1,
-          };
-        }
-        final String hintsJson = jsonEncode(hints);
-
-
-        if (plannedCount == 0 && previousCount == 0) {
-          print('🟨 [WES Init] Skip snapshot save (both planned & previous empty) for $ymd');
-        } else {
-          await BlockPlanCache.putInitSnapshot(
-            uid: uid,
-            blockId: bid,
-            dateYmd: ymd,
-            plannedExercises: plannedCompact,
-            wesPlannedExercises: const <Map<String, dynamic>>[],   // ← NEW (or your real WES placeholders if available)
-            previousWorkout: previousOverlay,
-            topSetHistory: topSetHistoryList,
-            hintsJson: hintsJson,
-            hintsInputsHash: '',            // ← set to your computed hash if you have it here
-            hintsReady: hintsJson.isNotEmpty && hintsJson != '{}',
-            schemaVersion: kWesSnapshotSchema,  // ← keep consistent with Warmup
-            updatedAt: DateTime.now(),
-          );
-
-          print('💾 [WES Init] Snapshot saved for $ymd (planned=$plannedCount, prev=$previousCount)');
-        }
-
-      } else {
-        print('🟨 [WES Init] Skip snapshot PUT (uid or blockId missing)');
-      }
-    } catch (e) {
-      print('🟥 [WES Init] WESInitSnapshot save failed: $e');
-    }
-
-    _debugLogCardsForSelectedDate('LoadExisting');
-
-    print('✅ [WES Init] _loadInitialData complete');
-    _loadInitialDataTimer.stop();
-    print('⏱️ [WES] _loadInitialData took ${_loadInitialDataTimer
-        .elapsedMilliseconds}ms');
-
-    // ⏱️ Add this for the full wall-clock first-paint measure
-    print('⏱️ [WES] FIRST-PAINT total = ${_loadInitialDataTimer
-        .elapsedMilliseconds}ms (_loadInitialData)');
-
-    // I) Overlay saved workout rows AFTER initial paint (kept non-blocking now)
-    //    You previously called this synchronously; now kick it after paint
-    //    (Your _loadExistingWorkoutIfAny already has cache/Isar-first)
-    // ignore: unawaited_futures
-    (() async {
-      final _before = _structureHash();
-      await _loadExistingWorkoutIfAny();
-      final _after = _structureHash();
-      if (mounted && _after != _before) setState(() {}); // only if shape changed
-    })();
-
-  }
 
 
   Future<void> _loadExistingWorkoutIfAny() async {
@@ -10295,6 +10297,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final ymdPicked = DateFormat('yyyy-MM-dd').format(picked);
     print('📆 [WES] Date changed → $ymdPicked');
 
+
+
     /* —— Provenance helpers (local to this call) —— */
     String _normNameForProv(String s) {
       var t = s.toLowerCase().trim();
@@ -10347,6 +10351,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     _resolvedBB2Values.clear();
     _savedExerciseKeysForDate.clear();
 
+    _seedHintsByKey.clear();                // prevent stale fast-paint hints influencing merge
+    _bb2PlannedKeysForSelectedDate.clear(); // ensure merge recomputes keys for this date
+    _lastMergedDate = null;                 // force merge to treat this as a new date
+    _hasCompletedInitialMergeForThisDate = false;
+
     // Best-effort autosave the current page in the background
     if (mounted) {
       // ignore: unawaited_futures
@@ -10368,14 +10377,26 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     _didFastPaint = false;
 
     // Pre-warm ISAR + caches for the picked date (best-effort)
+
+
     try {
       final uid = _cachedUid;
       final bid = _selectedBlockId ?? _activeBlockId;
+      print('🧩 [SelectDate→Warmup] about to warm '
+          '${DateFormat('yyyy-MM-dd').format(picked)} '
+          '(uid=$uid bid=$bid)');
+
       if (uid != null && bid != null) {
         WarmupService.instance
             .warmWES(uid, activeBlockId: bid, selectedDate: picked);
       }
-    } catch (_) {/* best-effort */ }
+    } catch (e) {
+      print('⚠️ [SelectDate→Warmup] error: $e');
+    } finally {
+      print('🧩 [SelectDate→Warmup] issued for '
+          '${DateFormat('yyyy-MM-dd').format(picked)}');
+    }
+
 
     // Switch date & clear UI structure in one setState
     print('🧼 [WES] Reset UI for new date…');
@@ -10403,16 +10424,107 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     _record('FastPaint/ISAR',
         _diffAdded(_snapBeforePaint, _snapshotRows()));
 
+    // #anchor: SelectDate→PreMergeCheck
+    try {
+      final DateTime pickedOnly = DateTime(picked.year, picked.month, picked.day);
+      final DateTime? blockStartOnly = (blockStartDate == null)
+          ? null
+          : DateTime(blockStartDate!.year, blockStartDate!.month, blockStartDate!.day);
+
+      if (blockStartOnly != null) {
+        final int delta = pickedOnly.difference(blockStartOnly).inDays;
+        final int wk = delta ~/ 7;
+        final int diRaw = delta % 7;
+        final int di = diRaw < 0 ? diRaw + 7 : diRaw;
+
+        print('🧮 [SelectDate PreMerge] picked=${DateFormat('yyyy-MM-dd').format(pickedOnly)} '
+            'blockStart=${DateFormat('yyyy-MM-dd').format(blockStartOnly)} '
+            '→ week_$wk/day_$di');
+
+        final uid = _cachedUid ?? UserContext.of(context, listen: false).currentUid;
+        final bid = _selectedBlockId ?? _activeBlockId;
+
+        if (uid != null && bid != null) {
+          final dayDoc = await FirebaseFirestore.instance
+              .collection('planned_blocks').doc(uid)
+              .collection('blocks').doc(bid)
+              .collection('weeks').doc('week_$wk')
+              .collection('days').doc('day_$di')
+              .get(const GetOptions(source: Source.server));
+
+          String _d(dynamic v) {
+            if (v == null) return '∅';
+            if (v is Timestamp) { final d = v.toDate(); return '${d.year}-${d.month.toString().padLeft(2,'0')}-${d.day.toString().padLeft(2,'0')}'; }
+            if (v is DateTime)   { final d = DateTime(v.year, v.month, v.day); return DateFormat('yyyy-MM-dd').format(d); }
+            if (v is String)     { return v.length >= 10 ? v.substring(0,10) : v; }
+            return v.toString();
+          }
+
+          final fsDate = _d(dayDoc.data()?['date']);
+          final pick   = DateFormat('yyyy-MM-dd').format(pickedOnly);
+          print('🔎 [SelectDate PreMerge] FS week_$wk/day_$di has date=$fsDate vs picked=$pick');
+        }
+      }
+    } catch (e) {
+      print('⚠️ [SelectDate PreMerge] probe failed: $e');
+    }
+
     // 2) Merge BB2 planned for this exact calendar date (guard block meta)
+// #anchor: SelectDate→MergeGate
     final _snapBeforeBB2 = _snapshotRows();
+    bool _allowMerge = true; // will flip to false if FS day≠picked
+
+    try {
+      final DateTime pickedOnly = DateTime(picked.year, picked.month, picked.day);
+      final DateTime? blockStartOnly = (blockStartDate == null)
+          ? null
+          : DateTime(blockStartDate!.year, blockStartDate!.month, blockStartDate!.day);
+
+      if (blockStartOnly != null) {
+        final int delta = pickedOnly.difference(blockStartOnly).inDays;
+        final int wk = delta ~/ 7;
+        final int diRaw = delta % 7;
+        final int di = diRaw < 0 ? diRaw + 7 : diRaw;
+
+        final uid = _cachedUid ?? UserContext.of(context, listen: false).currentUid;
+        final bid = _selectedBlockId ?? _activeBlockId;
+
+        if (uid != null && bid != null) {
+          final dayDoc = await FirebaseFirestore.instance
+              .collection('planned_blocks').doc(uid)
+              .collection('blocks').doc(bid)
+              .collection('weeks').doc('week_$wk')
+              .collection('days').doc('day_$di')
+              .get(const GetOptions(source: Source.server));
+
+          String _d(dynamic v) {
+            if (v == null) return '∅';
+            if (v is Timestamp) { final d = v.toDate(); return '${d.year}-${d.month.toString().padLeft(2,'0')}-${d.day.toString().padLeft(2,'0')}'; }
+            if (v is DateTime)  { final d = DateTime(v.year, v.month, v.day); return DateFormat('yyyy-MM-dd').format(d); }
+            if (v is String)    { return v.length >= 10 ? v.substring(0,10) : v; }
+            return v.toString();
+          }
+
+          final fsDate = _d(dayDoc.data()?['date']);
+          final pick   = DateFormat('yyyy-MM-dd').format(pickedOnly);
+          _allowMerge = (fsDate == pick);
+          print('✅ [SelectDate MergeGate] allowMerge=$_allowMerge (doc=$fsDate pick=$pick week_$wk/day_$di)');
+        }
+      }
+    } catch (e) {
+      print('⚠️ [SelectDate MergeGate] failed: $e (default allowMerge=true)');
+    }
+
     if (blockStartDate == null) {
       print('🚧 [WES] No block meta yet → skipping BB2 merge for $ymdPicked');
+    } else if (_allowMerge) {
+      try { await _mergeNewBB2ExercisesIntoDraft(); } catch (e) { print('⚠️ [WES Merge] threw: $e'); }
     } else {
-      try {
-        await _mergeNewBB2ExercisesIntoDraft();
-      } catch (_) {}
+      print('🛑 [WES] Skipping BB2 merge: FS day date doesn’t match picked calendar date.');
     }
+
     _record('BB2 planned', _diffAdded(_snapBeforeBB2, _snapshotRows()));
+
 
     // 3) Overlay any saved WES workout (completed + wesPlanned placeholders)
     final _snapBeforeWES = _snapshotRows();

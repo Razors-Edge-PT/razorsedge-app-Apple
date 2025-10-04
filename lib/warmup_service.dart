@@ -26,6 +26,11 @@ class WarmupService {
         String? activeBlockId,
         DateTime? selectedDate,
       }) async {
+
+    print('🔥 [Warmup:ENTRY] selectedDate='
+        '${DateFormat('yyyy-MM-dd').format(selectedDate ?? DateTime.now())} '
+        '(activeBlockId=$activeBlockId)');
+
     if (uid.isEmpty) return;
 
     final prefs = await SharedPreferences.getInstance();
@@ -1966,7 +1971,13 @@ class WarmupService {
 
             final String uidForHash = uid;
             final String blockForHash = activeBlockId;
+            print('🧪 [Warmup:DATE] _sel=${_ymd(_sel)} arg=${DateFormat('yyyy-MM-dd').format(selectedDate ?? _sel)}');
+
             final String dateYmd = _ymd(_sel);
+            print('🧩 [Warmup:DATECHECK] selectedDate=${selectedDate?.toIso8601String()} '
+                '→ computed dateYmd=$dateYmd '
+                '(tz=${selectedDate?.timeZoneOffset})');
+
             final int weekIdx = _getWeek(_sel, blockStart);
 
             final double? bodyweightAsOfDay = PeriodizationModelUtils.bodyweightKgForDate(
@@ -2063,6 +2074,8 @@ class WarmupService {
             final List<Map<String, dynamic>> previousWorkout = _buildPreviousWorkoutJson();
 
             // --- Skip/Overwrite policy ---
+            print('📦 [Warmup:READ] dateYmd=$dateYmd');
+
             final existing = await BlockPlanCache.getInitSnapshot(
               uid: uid,
               blockId: activeBlockId,
@@ -2170,9 +2183,14 @@ class WarmupService {
               print('[Warmup:9] snapshot saved for $dateYmd (hash: $hintsInputsHash, rows: ${planned.length})');
             }
 
+            print('💾 [Warmup:WRITE] dateYmd=$dateYmd '
+                'planned=${planned.length} '
+                'wes=${_wesPlannedForPersist.length}');
 
 // 🔎 ALWAYS re-read from Isar to verify current stored row (skip or save)
             try {
+              print('📦 [Warmup:READ] dateYmd=$dateYmd');
+
               final snapCheck = await BlockPlanCache.getInitSnapshot(
                 uid: uid,
                 blockId: activeBlockId,
