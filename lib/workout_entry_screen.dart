@@ -201,6 +201,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   bool _overlayLogged = false;
   bool _firstRowsLogged = false;
 
+  //Refresh bits
+  final Map<String, DateTime> _selfHealLastRun = <String, DateTime>{};
+  static const Duration _selfHealCooldown = Duration(seconds: 12);
+
 
   //autosave bits
   // ---- NEW: State fields ----
@@ -1937,6 +1941,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
   /// Force-recompute engine hints for the selected day, repainting this screen.
   /// Returns true if a newer/different snapshot was applied.
+  // sparkle function
   Future<bool> _refreshHintsForSelectedDay({bool alsoWarmTomorrow = false}) async {
     try {
       // ——— 0) Resolve acting/selected user + date + block ———
@@ -2109,6 +2114,111 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     }
   }
 
+  // ──────────────────────────────────────────────────────────────
+// ALIAS used by self-heal to refresh today's hints only.
+// This simply forwards to your existing _refreshHintsForSelectedDay.
+// ──────────────────────────────────────────────────────────────
+  Future<void> _refreshHintsForCurrentDate({
+    bool forceCooldownSkip = false, // ignored here if your refresh already bypasses cooldown internally
+    bool silent = true,             // only used for snackbar control below
+    bool onlyToday = true,          // map to alsoWarmTomorrow=false
+  }) async {
+    final ok = await _refreshHintsForSelectedDay(
+      alsoWarmTomorrow: !onlyToday, // we want today only → false
+    );
+
+    // Optional: only toast when updated and NOT silent
+    if (ok && !silent && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Hints updated')),
+      );
+    }
+  }
+
+
+
+
+// ──────────────────────────────────────────────────────────────
+// Verify the local snapshot for TODAY and self-heal if it's stale
+// Conditions to refresh:
+//  - no snapshot
+//  - snapshot.hintsReady == false
+//  - snapshot.hintsInputsHash != _computeNowInputsHash()
+// Cooldown: 12s per (uid|block|date)
+// Only shows a snackbar if hints actually changed.
+// ──────────────────────────────────────────────────────────────
+  Future<void> _verifyAndSelfHealIfStale() async {
+    try {
+      final uid = UserContext.of(context, listen: false).currentUid;
+      final bid = _selectedBlockId ?? _activeBlockId;
+      final date = _selectedDate ?? DateTime.now();
+      if (uid == null || uid.isEmpty || bid == null) {
+        debugPrint('🟨 [SelfHeal] Missing uid or block; skipping.');
+        return;
+      }
+
+      final ymd = DateFormat('yyyy-MM-dd').format(DateTime(date.year, date.month, date.day));
+      final key = '$uid|$bid|$ymd';
+
+      // Cooldown
+      final last = _selfHealLastRun[key];
+      if (last != null && DateTime.now().difference(last) < _selfHealCooldown) {
+        debugPrint('🟨 [SelfHeal] Cooldown active; skipping.');
+        return;
+      }
+
+      // Read current snapshot
+      final snap = await BlockPlanCache.getInitSnapshot(uid: uid, blockId: bid, dateYmd: ymd);
+      final nowHash = _computeNowInputsHash();
+
+      final bool needsRefresh = (snap == null) ||
+          (snap.hintsReady != true) ||
+          ((snap.hintsInputsHash ?? '') != nowHash);
+
+      debugPrint('🔎 [SelfHeal] hasSnap=${snap != null} ready=${snap?.hintsReady} '
+          'hashMatch=${(snap?.hintsInputsHash ?? '') == nowHash} → needs=$needsRefresh');
+
+      if (!needsRefresh) {
+        _selfHealLastRun[key] = DateTime.now();
+        return; // nothing to do
+      }
+
+      final beforeHints = snap?.hintsJson ?? '';
+
+      // Reuse your sparkle routine for TODAY only
+      debugPrint('⚙️ [SelfHeal] Running refresh (forced, silent) for $ymd…');
+      await _refreshHintsForCurrentDate(
+        forceCooldownSkip: true,   // skip warm cooldowns
+        silent: true,              // no "starting" snack
+        onlyToday: true,           // do not touch tomorrow
+      );
+
+      // Re-read snapshot and decide what changed
+      final snap2 = await BlockPlanCache.getInitSnapshot(uid: uid, blockId: bid, dateYmd: ymd);
+      final afterHints = snap2?.hintsJson ?? '';
+
+      final bool hintsChanged = (afterHints.isNotEmpty && afterHints != beforeHints);
+
+      if (hintsChanged) {
+        // Optional: tiny toast to let user know silently updated
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Hints updated'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+        debugPrint('✅ [SelfHeal] Hints changed; UI already updated by refresh.');
+      } else {
+        debugPrint('🟦 [SelfHeal] No diff after refresh (snapshot unchanged).');
+      }
+
+      _selfHealLastRun[key] = DateTime.now();
+    } catch (e) {
+      debugPrint('🟥 [SelfHeal] Failed: $e');
+    }
+  }
 
 
 
@@ -6294,6 +6404,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
           print('🟢 [WES UI] First frame painted from ISAR hints (no defaults).');
         });
       }
+
+      // ⛑️ Kick a silent self-heal only if needed (today only)
+    //  unawaited(_verifyAndSelfHealIfStale());
+
     } catch (e, st) {
       print('⚠️ [_paintFromSnapshotIfAny] error: $e');
       print(st);
