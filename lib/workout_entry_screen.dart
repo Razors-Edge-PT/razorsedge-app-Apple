@@ -30,6 +30,8 @@ import 'local_cache/isar_db.dart';
 import 'package:isar/isar.dart';
 import 're_daily.dart';
 import 'progression_engine.dart';
+import 'package:lottie/lottie.dart';
+
 
 import 'package:cloud_firestore/cloud_firestore.dart' as firebase_firestore;
 
@@ -204,7 +206,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   //Refresh bits
   final Map<String, DateTime> _selfHealLastRun = <String, DateTime>{};
   static const Duration _selfHealCooldown = Duration(seconds: 12);
-
+  late final AnimationController _sparkleCtrl;
+  bool _showSparkles = false;
 
   //autosave bits
   // ---- NEW: State fields ----
@@ -2100,6 +2103,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       await _paintFromSnapshotIfAny(); // this will call setState()
       print('✅ [WES Refresh] Full repaint applied.');
 
+
       // ——— 7) Post-paint confirmation: echo the first few hints we believe are live ———
       // (We can’t read hintText from controllers, so we re-echo what was just painted.)
       if (afterHints.isNotEmpty) {
@@ -2218,6 +2222,29 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     } catch (e) {
       debugPrint('🟥 [SelfHeal] Failed: $e');
     }
+  }
+
+  void _playSparkles() {
+    if (!mounted) return;
+
+    // prevent overlap if already showing
+    if (_showSparkles) return;
+
+    setState(() => _showSparkles = true);
+
+    // short burst duration — adjust freely (ms)
+    _sparkleCtrl
+      ..reset()
+      ..duration = const Duration(milliseconds: 1000)
+      ..forward();
+
+    // auto-hide after the same duration
+    Future.delayed(const Duration(milliseconds: 1000), () {
+      if (mounted) {
+        _sparkleCtrl.stop();
+        setState(() => _showSparkles = false);
+      }
+    });
   }
 
 
@@ -4931,7 +4958,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
     print('🚀 [WES] initState started');
 
-
+    _sparkleCtrl = AnimationController(vsync: this);
     _selectedDate = widget.initialDate ?? DateTime.now();
     if (_workoutNameController.text.trim().isEmpty) {
       _workoutNameController.text = DateFormat('EEE d MMM yyyy').format(_selectedDate);
@@ -7754,6 +7781,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
 
     _horizontalScrollController.dispose();
+    _sparkleCtrl.dispose();
+
     print('✅ [WES dispose] Completed cleanup.');
     super.dispose();
   }
@@ -11135,18 +11164,21 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     }
     // ───────────────────────────────────────────────────────────────
 
-    return WillPopScope(
-      onWillPop: () async {
-        if (_pendingChanges) {
-          await _upsertWorkoutToFirestore(alsoPushToBB2: true, markAllSaved: false);
-        }
-        return true;
-      },
-      child: Scaffold(
-        backgroundColor: Colors.blueGrey.shade900,
-        appBar: AppBar(
-          backgroundColor: Colors.blueGrey.shade800,
-          title: Builder(
+    return Stack(
+        children: [
+        // Your existing page (unchanged, just moved inside the Stack)
+        WillPopScope(
+        onWillPop: () async {
+      if (_pendingChanges) {
+        await _upsertWorkoutToFirestore(alsoPushToBB2: true, markAllSaved: false);
+      }
+      return true;
+    },
+    child: Scaffold(
+    backgroundColor: Colors.blueGrey.shade900,
+    appBar: AppBar(
+    backgroundColor: Colors.blueGrey.shade800,
+    title: Builder(
             builder: (context) {
               final actingAsUid = Provider.of<UserContext>(context, listen: true).actingAsUid;
 
@@ -11274,15 +11306,21 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                 final scaffold = ScaffoldMessenger.of(context);
                 scaffold.hideCurrentSnackBar();
                 scaffold.showSnackBar(
-                  const SnackBar(content: Text('Refreshing hints…')),
+                  const SnackBar(content: Text('Refreshing ✨')),
                 );
 
                 final ok = await _refreshHintsForSelectedDay(alsoWarmTomorrow: true);
 
                 scaffold.hideCurrentSnackBar();
                 scaffold.showSnackBar(
-                  SnackBar(content: Text(ok ? 'Hints updated' : 'Refresh failed')),
+                  SnackBar(content: Text(ok ? 'Workout updated' : 'Refresh failed')),
                 );
+
+// ✨ Run sparkles only when refresh succeeded
+                if (ok && mounted) {
+                  _playSparkles();
+                }
+
               },
             ),
 
@@ -12692,7 +12730,33 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
             ],
           ), // Column
         ), // SingleChildScrollView
-      ), // Scaffold
-    ); // WillPopScope
+      ),
+    ),
+          // Sparkle overlay (on top of everything; ignores touch)
+          Positioned.fill(
+            child: IgnorePointer(
+              ignoring: true, // overlay should never block taps
+              child: AnimatedOpacity(
+                opacity: _showSparkles ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeOut,
+                child: Center(
+                  // Feel free to tweak sizing; this fills safely on phones & tablets
+                  child: SizedBox(
+                    width: MediaQuery.of(context).size.width * 0.9,
+                    height: MediaQuery.of(context).size.height * 0.9,
+                    child: Lottie.asset(
+                      'assets/lottie/sparkle_stars.json',
+                      controller: _sparkleCtrl,
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+        ],// Scaffold
+    ); //this the will pop // WillPopScope
   }
 }

@@ -53,6 +53,7 @@ dependencies:
   isar_flutter_libs: ^3.1.0+1
   chewie: ^1.7.5
   flutter_image_compress: ^2.3.0
+  lottie: ^3.1.0
 
 
   flutter:
@@ -126,6 +127,8 @@ flutter:
     - assets/InApp/good_lift_splash_logo.png
     - assets/avatar.png
     - assets/InApp/Placeholder_profilepic.png
+    - assets/lottie/sparkle_stars.json
+
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/assets-and-images/#resolution-aware
