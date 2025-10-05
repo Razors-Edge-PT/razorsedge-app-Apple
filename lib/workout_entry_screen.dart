@@ -142,6 +142,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       UserContext
           .of(context, listen: false)
           .currentUid;
+
   String? _lastMergedUid;
   late final String _cachedUid;
   DateTime? _lastMergedDate;
@@ -4957,8 +4958,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     _wesInitTimer.stop();
     print('⏱️ [WES] initState total = ${_wesInitTimer.elapsedMilliseconds}ms');
 
-
-
   }
 
   Future<void> _loadInitialData() async {
@@ -6122,13 +6121,6 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       print(st);
     }
   }
-
-
-
-
-
-
-
 
 
   Future<void> _loadExistingWorkoutIfAny() async {
@@ -9029,6 +9021,39 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
       await docRef.set(payload, SetOptions(merge: false));
       print('✅ [WES upsert] Firestore write complete.');
+
+      // 🔥 [WES upsert → Warm] Precompute WES snapshots for *today* and *tomorrow* (fire-and-forget).
+// Uses the *selected athlete* uid from this save, and the currently selected block id.
+      try {
+        final String? blockId = _selectedBlockId ?? _activeBlockId;
+        if (blockId == null || blockId.isEmpty) {
+          debugPrint('⚠️ [WES upsert] Skipping warm — no active block id.');
+        } else {
+          // Normalize to LOCAL date-only to avoid UTC/local drift.
+          final DateTime d0 = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day);
+          final DateTime d1 = d0.add(const Duration(days: 1));
+
+          // Selected athlete UID (NOT necessarily the logged-in user)
+          final String uidSelected = uid;
+
+          // Kick both warms. warmWES is already non-blocking internally.
+          WarmupService.instance.warmWES(
+            uidSelected,
+            activeBlockId: blockId,
+            selectedDate: d0,
+          );
+          WarmupService.instance.warmWES(
+            uidSelected,
+            activeBlockId: blockId,
+            selectedDate: d1,
+          );
+
+          debugPrint('✅ [WES upsert] Warm kicked for $d0 and $d1 (uid=$uidSelected, block=$blockId)');
+        }
+      } catch (e, st) {
+        debugPrint('⚠️ [WES upsert] Warm kick failed: $e');
+      }
+
 
       // ✅ Kick off RE Daily compute/write in the background (don’t block save UI)
       try {

@@ -23,6 +23,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'dart:convert'; // (top of file if not already)
 import 'local_cache/block_plan_cache.dart';
+import 'warmup_service.dart';
 
 
 part 'block_data_loader.dart';
@@ -2983,6 +2984,38 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       'date': Timestamp.fromDate(date),
       'workoutName': workoutName,
     });
+
+    // 🔥 [BB2 → Warm] Precompute WES snapshots for this day and tomorrow (non-blocking).
+    try {
+      final String blockId = _selectedBlockId!;
+      if (blockId.isEmpty) {
+        print('⚠️ [BB2 Warm] Skipping warm — blockId empty');
+      } else {
+        // Use the exact calendar date you just saved; normalize to LOCAL date-only
+        final DateTime d0 = DateTime(date.year, date.month, date.day);
+        final DateTime d1 = d0.add(const Duration(days: 1));
+
+        // Selected athlete (NOT necessarily the logged-in user)
+        final String uidSelected = _cachedUid;
+
+        // Kick both warms; WarmupService.warmWES is already fire-and-forget
+        WarmupService.instance.warmWES(
+          uidSelected,
+          activeBlockId: blockId,
+          selectedDate: d0,
+        );
+        WarmupService.instance.warmWES(
+          uidSelected,
+          activeBlockId: blockId,
+          selectedDate: d1,
+        );
+
+        print('✅ [BB2 Warm] Warm kicked for $d0 and $d1 (uid=$uidSelected, block=$blockId)');
+      }
+    } catch (e, st) {
+      print('⚠️ [BB2 Warm] Warm kick failed: $e');
+    }
+
 
     await saveDayToSharedPrefs(weekIndex, dayIndex); // 👈 Add this right after Firestore save
 
