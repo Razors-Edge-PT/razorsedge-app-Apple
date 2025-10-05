@@ -8,6 +8,7 @@ import 'dart:async' show unawaited; // if you use unawaited() here
 import 'progression_engine.dart';                // engine + inputs
 import 'package:intl/intl.dart';                 // for y-M-d convenience (optional)
 import 'package:crypto/crypto.dart';   // for sha1
+import 'block_repository.dart';
 import 'dart:math' as math;
 
 import 'local_cache/block_plan_cache.dart'; // BlockPlanCache.putInitSnapshot()
@@ -941,6 +942,23 @@ class WarmupService {
         ? DateTime(selectedDate!.year, selectedDate!.month, selectedDate!.day)
         : DateTime.now();
     print('[Warmup:0] normalized selectedDate=${_sel.toIso8601String().substring(0,10)}');
+
+    // ⛳ ANCHOR: WARM_ACTIVE_BLOCK_RESOLVE
+    if (activeBlockId == null || activeBlockId.isEmpty) {
+      try {
+        final resolved = await BlockRepository().fetchActiveBlockId(uid);
+        if (resolved == null || resolved.isEmpty) {
+          print('🟥 [Warmup] abort: no active block for uid=$uid');
+          return; // cannot compute WES hints without a block
+        }
+        activeBlockId = resolved;
+        print('🎯 [Warmup] resolved activeBlockId=$activeBlockId for uid=$uid');
+      } catch (e) {
+        print('🟥 [Warmup] active block resolve failed: $e');
+        return;
+      }
+    }
+
 
     try {
       final fs = FirebaseFirestore.instance;

@@ -5,7 +5,10 @@ import 'package:intl/intl.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'user_context.dart';
 import 'periodization_model_utils.dart';
+import 'warmup_service.dart';
+import 'dart:async' show unawaited;
 
+import 'block_repository.dart';
 
 enum TrendRange { d14, m30, m90, m180, y365 }
 
@@ -153,6 +156,19 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
         widget.onWeightSaved!('${weight.toString()} $unit');
       }
       await _fetchWeights();
+// ⛳ ANCHOR: WES_WEIGHT_HOOK_SAVE
+      try {
+        final uidSelected = userId; // acting-as user (selected athlete)
+        // Use the date used for this save (you already stamp with _selectedDate at noon)
+        final d = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day);
+        unawaited(_warmWESForDateOnly(uid: uidSelected, date: d));
+
+        debugPrint('🚀 [BW Hook:Save] Warm kicked for ${d.toIso8601String().substring(0,10)} (uid=$uidSelected)');
+      } catch (e) {
+        debugPrint('🟧 [BW Hook:Save] Failed to kick warm: $e');
+      }
+
+
     } catch (e) {
       debugPrint('❌ _saveWeight failed: $e');
     }
@@ -181,6 +197,32 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
       debugPrint('❌ _deleteAllWeights failed: $e');
     }
   }
+
+  // ⛳ ANCHOR: WES_WEIGHT_WARM_HELPERS
+  Future<void> _warmWESForDateOnly({
+    required String uid,
+    required DateTime date,
+  }) async {
+    final dOnly = DateTime(date.year, date.month, date.day);
+    try {
+      debugPrint('🔥 [BW→Warm] Requesting WES warm for ${dOnly.toIso8601String().substring(0,10)} (uid=$uid)');
+
+      // We intentionally pass no activeBlockId; WarmupService will resolve it internally.
+      await WarmupService.instance.doWarmWES(
+        uid,
+        activeBlockId: null,      // 👈 let WarmupService figure it out
+        selectedDate: dOnly,
+        warmAthlete: true,        // BW affects athlete inputs
+        warmExercises: false,     // exercises list does not change from a weight entry
+      );
+
+      debugPrint('✅ [BW→Warm] Warm complete for ${dOnly.toIso8601String().substring(0,10)}');
+    } catch (e) {
+      debugPrint('🟥 [BW→Warm] Warm failed: $e');
+    }
+  }
+
+
 
   Future<void> _pickDate() async {
     final now = DateTime.now();
@@ -424,6 +466,20 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                         .collection('weights')
                         .doc(weightEntry['id'])
                         .delete();
+
+                    // ⛳ ANCHOR: WES_WEIGHT_HOOK_EDIT_DELETE
+                    try {
+                      final uidSelected = userId; // acting-as user (selected athlete)
+                      // Best effort date: try entry date if present; else default to _selectedDate
+                      final DateTime d = (weightEntry['date'] as DateTime?) ?? _selectedDate ?? DateTime.now();
+                      final dOnly = DateTime(d.year, d.month, d.day);
+                      unawaited(_warmWESForDateOnly(uid: uidSelected, date: dOnly)); // fire-and-forget
+
+                      debugPrint('🚀 [BW Hook:EditDelete] Warm kicked for ${dOnly.toIso8601String().substring(0,10)} (uid=$uidSelected)');
+                    } catch (e) {
+                      debugPrint('🟧 [BW Hook:EditDelete] Failed to kick warm: $e');
+                    }
+
                     Navigator.pop(context);
                     _fetchWeights();
                   }
@@ -475,6 +531,17 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
             'timestamp': Timestamp.fromDate(d),
             'tod': t,
           });
+
+          // ⛳ ANCHOR: WES_WEIGHT_HOOK_EDIT_UPDATE
+          try {
+            final uidSelected = userId;                   // acting-as user (selected athlete)
+            final DateTime dOnly = DateTime(d.year, d.month, d.day); // `d` is the edited date from dialog
+            unawaited(_warmWESForDateOnly(uid: uidSelected, date: dOnly));  // fire-and-forget
+            debugPrint('🚀 [BW Hook:EditUpdate] Warm kicked for ${dOnly.toIso8601String().substring(0,10)} (uid=$uidSelected)');
+          } catch (e) {
+            debugPrint('🟧 [BW Hook:EditUpdate] Failed to kick warm: $e');
+          }
+
         }
         _fetchWeights();
       }
