@@ -653,7 +653,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'repTargets': [15, 9],
       'rirModel': 'Static RIR',
       'rirTargets': [1, 1.5],
-      'progressionModel': 'Add reps',
+      'progressionModel': 'Smart Progression',
     },
     'Hip Hinge': {
       'weeklyFrequency': 3,
@@ -662,7 +662,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'repTargets': [15, 18, 9],
       'rirModel': 'Static RIR',
       'rirTargets': [1, 1, 1.5],
-      'progressionModel': 'Add reps',
+      'progressionModel': 'Smart Progression',
     },
     'Horizontal Press': {
       'weeklyFrequency': 3,
@@ -671,7 +671,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'repTargets': [9, 15, 5],
       'rirModel': 'Static RIR',
       'rirTargets': [1, 1, 1],
-      'progressionModel': 'Add reps',
+      'progressionModel': 'Smart Progression',
     },
     'Vertical Press': {
       'weeklyFrequency': 3,
@@ -680,7 +680,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'repTargets': [9, 15, 6],
       'rirModel': 'Static RIR',
       'rirTargets': [1, 1, 1],
-      'progressionModel': 'Add reps',
+      'progressionModel': 'Smart Progression',
     },
     'Vertical Pull': {
       'weeklyFrequency': 3,
@@ -689,7 +689,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'repTargets': [9, 15, 5],
       'rirModel': 'Static RIR',
       'rirTargets': [1, 1, 1],
-      'progressionModel': 'Add reps',
+      'progressionModel': 'Smart Progression',
     },
     'Horizontal Pull': {
       'weeklyFrequency': 3,
@@ -698,7 +698,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'repTargets': [9, 15, 5],
       'rirModel': 'Static RIR',
       'rirTargets': [1, 9, 1],
-      'progressionModel': 'Add reps',
+      'progressionModel': 'Smart Progression',
     },
     'Core': {
       'weeklyFrequency': 4,
@@ -707,7 +707,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'repTargets': [9, 14, 6, 18],
       'rirModel': 'Static RIR',
       'rirTargets': [1, 1, 1, 0.5],
-      'progressionModel': 'Add reps',
+      'progressionModel': 'Smart Progression',
     },
     'isolation': {
       'weeklyFrequency': 4,
@@ -716,7 +716,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'repTargets': [9, 14, 6, 18],
       'rirModel': 'Static RIR',
       'rirTargets': [1, 1, 1, 0.5],
-      'progressionModel': 'Add reps',
+      'progressionModel': 'Smart Progression',
     },
   };
 //Default Settings Block End
