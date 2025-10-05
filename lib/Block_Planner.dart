@@ -552,14 +552,12 @@ class _BlockPlannerState extends State<Block_Planner> {
   }
 
   Map<String, Map<String, String>> _buildRepTargetMap(List<int> reps) {
-    final map = <String, Map<String, String>>{};
-    final instanceMap = <String, String>{};
-    for (int i = 0; i < reps.length; i++) {
-      instanceMap['instance${i + 1}'] = reps[i].toString();
-    }
-    map['week1'] = instanceMap;
-    return map;
+    final instanceMap = <String, String>{
+      for (int i = 0; i < reps.length; i++) 'instance${i + 1}': '${reps[i]} x 3'
+    };
+    return {'week1': instanceMap};
   }
+
 
   Map<String, Map<String, Map<String, Map<String, String>>>> _buildRirPlan(List<num> rirTargets) {
     final weekMap = <String, Map<String, Map<String, String>>>{};
