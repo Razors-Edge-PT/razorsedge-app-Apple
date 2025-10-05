@@ -639,7 +639,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'repTargets': [15, 9, 6],
       'rirModel': 'Static RIR',
       'rirTargets': [1, 1.5, 2],
-      'progressionModel': 'Add reps',
+      'progressionModel': 'Smart Progression',
     },
   };
 
@@ -695,7 +695,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [9, 15, 5],
       'rirModel': 'Static RIR',
-      'rirTargets': [1, 9, 1],
+      'rirTargets': [1.5, 2, 1],
       'progressionModel': 'Smart Progression',
     },
     'Core': {
@@ -2250,11 +2250,19 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     return (value * 2).round() / 2.0;
   }
 
-  void _syncCachedRepTargets(String exerciseName) {
-    final settings = widget.exerciseSettings[exerciseName];
-    final reps = settings?['repTargets'];
+  void _syncCachedRepTargets(String exerciseId) {
+    // 🧩 Try by ID first, then fall back to name
+    var settings = widget.exerciseSettings[exerciseId];
+    if (settings == null && widget.exerciseSettings.containsKey(widget.exerciseName)) {
+      settings = widget.exerciseSettings[widget.exerciseName];
+      print("⚠️ [_syncCachedRepTargets] Fallback used: exerciseName key instead of ID");
+    }
 
-    print("🛠️ [_syncCachedRepTargets] for $exerciseName → $reps");
+    final reps = settings?['repTargets'];
+    final exName = widget.exerciseName;
+    final exId = exerciseId;
+    print("🛠️ [_syncCachedRepTargets] for $exName ($exId) → $reps");
+
 
     if (reps is Map<String, dynamic> &&
         reps.keys.any((k) => k.toString().startsWith('week'))) {
@@ -2286,7 +2294,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
       _repTargetsDisplayController.text = formatted.join(' || ');
       _cachedRepTargetMap = safeMap;
-      print("✅ [_syncCachedRepTargets] Cache updated for $exerciseName");
+      print("✅ [_syncCachedRepTargets] Cache updated for $exerciseId");
     } else {
       print(
           "! [_syncCachedRepTargets] No valid repTargets found (value: $reps)");
@@ -2421,7 +2429,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   }
 
   void _showLinearClassicRepTargetDialog(String exerciseName) {
-    _syncCachedRepTargets(exerciseName);
+    _syncCachedRepTargets(widget.exerciseId);
+
 
     print("📆 widget.blockStartDate = ${widget.blockStartDate}");
     print("📆 widget.blockEndDate = ${widget.blockEndDate}");
@@ -3106,7 +3115,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   }
 
   void _showDailyUndulatingWeekRepTargetDialog(String exerciseName) {
-    _syncCachedRepTargets(exerciseName);
+    _syncCachedRepTargets(widget.exerciseId);
+
     final frequency = int.tryParse(_weeklyFrequencyController.text) ?? 3;
 
     // Load saved or default data
@@ -4418,7 +4428,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                       // 🧼 Clear stale repTargets if the model changed since last open
                       if (_lastOpenedModel != null && _lastOpenedModel != model) {
                         print("🧼 Model changed from $_lastOpenedModel → $model. Clearing stale repTargets.");
-                        widget.onUpdateSetting(widget.exerciseName, 'repTargets', null);
+                        widget.onUpdateSetting(widget.exerciseId, 'repTargets', null);
+
                       }
 
                       // 🧠 Store this model as last used
