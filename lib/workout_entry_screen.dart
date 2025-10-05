@@ -6406,7 +6406,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       }
 
       // ⛑️ Kick a silent self-heal only if needed (today only)
-    //  unawaited(_verifyAndSelfHealIfStale());
+      unawaited(_verifyAndSelfHealIfStale());
 
     } catch (e, st) {
       print('⚠️ [_paintFromSnapshotIfAny] error: $e');
