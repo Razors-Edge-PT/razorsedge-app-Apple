@@ -1935,6 +1935,182 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     ).hash();
   }
 
+  /// Force-recompute engine hints for the selected day, repainting this screen.
+  /// Returns true if a newer/different snapshot was applied.
+  Future<bool> _refreshHintsForSelectedDay({bool alsoWarmTomorrow = false}) async {
+    try {
+      // ——— 0) Resolve acting/selected user + date + block ———
+      final String uid = UserContext.of(context, listen: false).currentUid; // ✅ selected athlete
+      final String? blockId = _selectedBlockId ?? _activeBlockId;
+      if (uid.isEmpty || blockId == null || blockId.isEmpty) {
+        print('🟥 [WES Refresh] Missing uid/blockId (uid="$uid", blockId="$blockId")');
+        return false;
+      }
+
+      // Normalize to LOCAL date-only (avoid TZ edges)
+      final DateTime d0 = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day);
+      final String ymd = DateFormat('yyyy-MM-dd').format(d0);
+
+      print('✨ [WES Refresh] START → uid=$uid block=$blockId date=$ymd');
+
+      // ——— helpers ———
+      Map<String, Map<String, dynamic>> _parseHintsJson(String? jsonStr) {
+        if (jsonStr == null || jsonStr.isEmpty || jsonStr == '{}') return {};
+        try {
+          final raw = Map<String, dynamic>.from(jsonDecode(jsonStr));
+          return raw.map((k, v) => MapEntry(k, Map<String, dynamic>.from(v as Map)));
+        } catch (e) {
+          print('⚠️ [WES Refresh] hintsJson parse failed: $e');
+          return {};
+        }
+      }
+
+      List<String> _summarizeHints(Map<String, Map<String, dynamic>> m, {int take = 6}) {
+        final out = <String>[];
+        int c = 0;
+        for (final e in m.entries) {
+          final name = (e.value['name'] ?? '').toString();
+          final ci   = (e.value['circuitIndex'] ?? 0).toString();
+          final w    = (e.value['s1_weight'] as num?)?.toDouble();
+          final wa   = (e.value['s1_weight_added'] as num?)?.toDouble();
+          final r    = (e.value['s1_reps'] as num?)?.toDouble();
+          final rr   = (e.value['s1_rir'] as num?)?.toDouble();
+          out.add('$name|$ci → w=${w ?? '—'} add=${wa ?? '—'} r=${r ?? '—'} rir=${rr ?? '—'}');
+          if (++c >= take) break;
+        }
+        return out;
+      }
+
+      List<String> _diffHints(Map<String, Map<String, dynamic>> a, Map<String, Map<String, dynamic>> b) {
+        final keys = {...a.keys, ...b.keys}.toList()..sort();
+        final lines = <String>[];
+        for (final k in keys) {
+          final va = a[k] ?? const {};
+          final vb = b[k] ?? const {};
+          // compare key fields only
+          double? wA = (va['s1_weight'] as num?)?.toDouble();
+          double? wB = (vb['s1_weight'] as num?)?.toDouble();
+          double? waA = (va['s1_weight_added'] as num?)?.toDouble();
+          double? waB = (vb['s1_weight_added'] as num?)?.toDouble();
+          double? rA = (va['s1_reps'] as num?)?.toDouble();
+          double? rB = (vb['s1_reps'] as num?)?.toDouble();
+          double? rirA = (va['s1_rir'] as num?)?.toDouble();
+          double? rirB = (vb['s1_rir'] as num?)?.toDouble();
+          if (wA != wB || waA != waB || rA != rB || rirA != rirB) {
+            final name = (vb['name'] ?? va['name'] ?? '').toString();
+            final ci   = (vb['circuitIndex'] ?? va['circuitIndex'] ?? 0).toString();
+            lines.add('$name|$ci: '
+                'w ${wA ?? '—'}→${wB ?? '—'}, '
+                'add ${waA ?? '—'}→${waB ?? '—'}, '
+                'r ${rA ?? '—'}→${rB ?? '—'}, '
+                'rir ${rirA ?? '—'}→${rirB ?? '—'}');
+          }
+        }
+        return lines;
+      }
+
+      // ——— 1) Read BEFORE snapshot for change detection ———
+      final before = await BlockPlanCache.getInitSnapshot(
+        uid: uid, blockId: blockId, dateYmd: ymd,
+      );
+      final String beforeHash   = before?.hintsInputsHash ?? '';
+      final String beforeHintsS = before?.hintsJson ?? '{}';
+      final DateTime? beforeCachedAt = before?.cachedAt;
+      final beforeHints = _parseHintsJson(beforeHintsS);
+
+      print('🔹 [WES Refresh] BEFORE hash=${beforeHash.isEmpty ? '—' : beforeHash} '
+          'rows=${beforeHints.length}');
+      if (beforeHints.isNotEmpty) {
+        final p = _summarizeHints(beforeHints);
+        for (final line in p) print('   • $line');
+      }
+
+      // ——— 2) Ensure BB2 plan edits are merged into WES draft (best effort) ———
+      try {
+        await _mergeNewBB2ExercisesIntoDraft();
+      } catch (e) {
+        print('⚠️ [WES Refresh] _mergeNewBB2ExercisesIntoDraft failed (continuing): $e');
+      }
+
+      // ——— 3) Force recompute now (skip cooldown): await doWarmWES ———
+      print('✨ [WES Refresh] Running WarmupService.doWarmWES()…');
+      await WarmupService.instance.doWarmWES(
+        uid,
+        activeBlockId: blockId,
+        selectedDate: d0,
+        warmAthlete: true,
+        warmExercises: true,
+      );
+
+      // Optionally warm tomorrow (non-blocking)
+      if (alsoWarmTomorrow) {
+        final d1 = d0.add(const Duration(days: 1));
+        WarmupService.instance.warmWES(uid, activeBlockId: blockId, selectedDate: d1);
+      }
+
+      // ——— 4) Retry-read until we observe newer/changed snapshot ———
+      const int maxAttempts = 6;
+      const Duration pause = Duration(milliseconds: 80);
+      WESInitSnapshot? after;
+      for (int i = 1; i <= maxAttempts; i++) {
+        after = await BlockPlanCache.getInitSnapshot(uid: uid, blockId: blockId, dateYmd: ymd);
+        final bool newer =
+            after != null && (beforeCachedAt == null || after.cachedAt.isAfter(beforeCachedAt));
+        final bool contentChanged =
+            after != null &&
+                (((after.hintsInputsHash ?? '') != beforeHash) || (after.hintsJson != beforeHintsS));
+
+        print('🔎 [WES Refresh] attempt $i/$maxAttempts '
+            'newer=$newer changed=$contentChanged '
+            'hash=${after?.hintsInputsHash ?? '—'}');
+
+        if (newer || contentChanged) break;
+        await Future.delayed(pause);
+      }
+      if (after == null) {
+        print('🟥 [WES Refresh] No snapshot found after warm; aborting');
+        return false;
+      }
+
+      final afterHints = _parseHintsJson(after.hintsJson);
+      print('🔹 [WES Refresh] AFTER  hash=${after.hintsInputsHash ?? '—'} '
+          'rows=${afterHints.length}');
+      if (afterHints.isNotEmpty) {
+        final p = _summarizeHints(afterHints);
+        for (final line in p) print('   • $line');
+      }
+
+      // ——— 5) Print a concise DIFF so you can see exactly what changed ———
+      final diffs = _diffHints(beforeHints, afterHints);
+      if (diffs.isEmpty) {
+        print('ℹ️  [WES Refresh] Hints unchanged (but repaint will still ensure UI is in sync).');
+      } else {
+        print('✅ [WES Refresh] Hints changed on ${diffs.length} row(s):');
+        for (final d in diffs) print('   • $d');
+      }
+
+      // ——— 6) Full repaint from snapshot (rock-solid) ———
+      print('🎨 [WES Refresh] Repainting from snapshot…');
+      _bootPaintDone = false;          // allow fast-paint to run again
+      await _paintFromSnapshotIfAny(); // this will call setState()
+      print('✅ [WES Refresh] Full repaint applied.');
+
+      // ——— 7) Post-paint confirmation: echo the first few hints we believe are live ———
+      // (We can’t read hintText from controllers, so we re-echo what was just painted.)
+      if (afterHints.isNotEmpty) {
+        final applied = _summarizeHints(afterHints);
+        for (final line in applied) print('🟢 [WES Refresh][Applied] $line');
+      }
+
+      return true;
+    } catch (e, st) {
+      print('🟥 [WES Refresh] Failed: $e');
+      return false;
+    }
+  }
+
+
+
 
   String _rowCacheKey(int rowIndex) {
     var id = _selectedExercisesWithCircuits[rowIndex]['rowId'];
@@ -1950,6 +2126,8 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     final hash = _computeNowInputsHash(); // new helper from Step 3
     return '$id|$ymd|$hash';
   }
+
+
 
 
 
@@ -10916,7 +11094,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                   : null,
             ),
 
-            IconButton(
+            /*IconButton(
               icon: const Icon(Icons.bolt, color: Colors.orange), // 💥 closest stock icon; swap if you add custom nuclear icon
               onPressed: () {
                 showDialog(
@@ -10969,6 +11147,32 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                 );
               },
             ),
+
+             */
+
+            IconButton(
+              icon: const Icon(
+                Icons.auto_awesome, // ✨ sparkle icon
+                color: Colors.amberAccent, // warm yellow
+              ),
+              tooltip: 'Refresh hints',
+              onPressed: () async {
+                final scaffold = ScaffoldMessenger.of(context);
+                scaffold.hideCurrentSnackBar();
+                scaffold.showSnackBar(
+                  const SnackBar(content: Text('Refreshing hints…')),
+                );
+
+                final ok = await _refreshHintsForSelectedDay(alsoWarmTomorrow: true);
+
+                scaffold.hideCurrentSnackBar();
+                scaffold.showSnackBar(
+                  SnackBar(content: Text(ok ? 'Hints updated' : 'Refresh failed')),
+                );
+              },
+            ),
+
+
 
             IconButton(
               icon: const Icon(Icons.delete),
