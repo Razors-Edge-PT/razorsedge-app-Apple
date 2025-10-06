@@ -1890,6 +1890,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   ];
 
 
+
+
   PeriodizationModelType _mapLabelToModelType(String label) {
     switch (label) {
       case 'DUP, By Exposure':
@@ -2762,13 +2764,19 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       frequency,
     );
     final defaultReps = defaults['week1']?.values.toList() ?? [];
+    // 🔢 Pull per-exercise default sets (falls back to 3)
+    final int defaultSets = (widget.exerciseSettings[widget.exerciseId]?['defaultSets'] ?? 3) as int;
+
 
     // Normalize to saved user reps and sets
     final repsControllers = <TextEditingController>[];
     final setsControllers = <TextEditingController>[];
 
     for (int i = 0; i < frequency; i++) {
-      String fallback = (i < defaultReps.length) ? defaultReps[i] : '10 x 3';
+      final base = (i < defaultReps.length) ? defaultReps[i] : '10 x 3';
+      final baseReps = base.split('x').first.trim();
+      final String fallback = '$baseReps x $defaultSets';
+
       String saved = '';
 
       if (existing is Map<String, dynamic>) {
