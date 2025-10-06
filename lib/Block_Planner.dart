@@ -532,14 +532,16 @@ class _BlockPlannerState extends State<Block_Planner> {
         'weeklyFrequency': def['weeklyFrequency'],
         'increments': Block_Planner.parseIncrements(def['increments']),
         'periodizationModel': def['periodizationModel'],
-        // ⬇️ pass explicit sets (defaults to 3 if absent)
         'repTargets': _buildRepTargetMap(def['repTargets'], sets: (def['defaultSets'] ?? 3)),
         'rirModel': def['rirModel'],
         'rirPlan': _buildRirPlan(def['rirTargets']),
         'progressionModel': def['progressionModel'],
-        // ⬇️ keep around so UI/tools can read/change later
         'defaultSets': def['defaultSets'] ?? 3,
+        // ⬇️ carry overrides so the card can use them on model flip
+        'modelSpecificRepTargets': def['modelSpecificRepTargets'],
+        // 'modelSpecificSets': def['modelSpecificSets'],  // only if you added it
       };
+
 
     }
 
@@ -606,6 +608,10 @@ class _BlockPlannerState extends State<Block_Planner> {
       'rirTargets': [2, 2, 1.5, 2],
       'defaultSets': 3,
       'progressionModel': 'Smart Progression',
+      'modelSpecificRepTargets': {
+        'Linear, Classic': [15, 20, 16, 18]  // ← your LC reps for Squat
+      },
+
     },
     'Back Squat, Barbell': {
       'weeklyFrequency': 2,
@@ -616,7 +622,13 @@ class _BlockPlannerState extends State<Block_Planner> {
       'rirTargets': [2, 3, 2],
       'defaultSets': 3,
       'progressionModel': 'Smart Progression',
+      'modelSpecificRepTargets': {
+        'Linear, Classic': [15, 19, 12,]  // ← your LC reps for Squat
+      },
+
+
     },
+
     'Deadlift, Conventional': {
       'weeklyFrequency': 4,
       'increments': '2.5, 1',
@@ -626,7 +638,14 @@ class _BlockPlannerState extends State<Block_Planner> {
       'rirTargets': [3.5, 3, 2, 2],
       'defaultSets': 4,
       'progressionModel': 'Smart Progression',
+      'modelSpecificRepTargets': {
+        'Linear, Classic': [15, 18, 12, 13]
+      },
+// (optional, if sets differ for LC)
+// 'modelSpecificSets': { 'Linear, Classic': 3 },
+
     },
+
     'Deadlift, Sumo': {
       'weeklyFrequency': 3,
       'increments': '2.5, 1',
@@ -1007,9 +1026,23 @@ class _BlockPlannerState extends State<Block_Planner> {
           }
         }
       });
-      // 💾 Persist newly added exercises immediately (no big Save needed)
+
+      // 💾 Persist seeds so re-open uses explicit defaults (not PMU fallbacks)
+      for (final id in selected) {
+        final settings = exerciseSettings[id];
+        if (settings != null) {
+          _onUpdateSetting(id, 'repTargets', settings['repTargets']);
+          _onUpdateSetting(id, 'defaultSets', settings['defaultSets'] ?? 3);
+         // _onUpdateSetting(id, 'explicitRepTargets', settings['repTargets']);
+          _onUpdateSetting(id, 'modelSpecificRepTargets', settings['modelSpecificRepTargets']);
+
+        }
+      }
+
+      // Also persist the list/details (silent)
       Future.microtask(() => _savePlannedExercises(suppressSnack: true));
     }
+
 
   }
 
@@ -1154,6 +1187,16 @@ class _BlockPlannerState extends State<Block_Planner> {
       'plannedExercises': exercises,
       'plannedExerciseDetails': existingDetails,
     }, SetOptions(merge: true));
+
+    // 🧹 Schema hygiene: remove explicitRepTargets from Firestore (kept only in local state)
+    final cleanup = <String, dynamic>{};
+    for (final ex in exercises) {
+      cleanup['exerciseSettings.$ex.explicitRepTargets'] = FieldValue.delete();
+    }
+    await docRef.update(cleanup).catchError((_) {
+      // ignore if nothing to delete
+    });
+
 
     print("✅ Planned exercises and details saved safely.");
 
@@ -1890,7 +1933,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
   final List<String> supportedModels = [
     'Linear Weight Increase',
-    'Add reps',
+    'Add Reps',
     'Smart Progression',
   ];
 
@@ -2063,7 +2106,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
     final supportedModels = [
       'Linear Weight Increase',
-      'Add reps',
+      'Add Reps',
       'Smart Progression',
     ];
 
@@ -2258,12 +2301,29 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
     }
 
-    final progressionModel = _selectedProgressionModel[widget.exerciseName];
-    if (progressionModel != null && progressionModel.isNotEmpty) {
-      safeSave('progressionModel', progressionModel);
-      print("💾 [DISPOSE] Saved progression model for ${widget.exerciseName}: $progressionModel");
+    // 🔎 Prefer exerciseId → fallback to name
+    final idVal   = _selectedProgressionModel[widget.exerciseId];
+    final nameVal = _selectedProgressionModel[widget.exerciseName];
 
+    print("🔎 [DISPOSE] progressionModel candidates for ${widget.exerciseName} (${widget.exerciseId}) → "
+        "byId='$idVal' byName='$nameVal'");
+
+    final String? pickedRaw = (idVal != null && idVal.isNotEmpty)
+        ? idVal
+        : (nameVal != null && nameVal.isNotEmpty ? nameVal : null);
+
+    if (pickedRaw != null && pickedRaw.isNotEmpty) {
+      // 🧼 Normalize legacy aliases (keep this minimal)
+      final normalized = (pickedRaw.trim() == 'linear')
+          ? 'Linear Weight Increase'
+          : pickedRaw.trim();
+
+      safeSave('progressionModel', normalized);
+      print("💾 [DISPOSE] Saved progression model for ${widget.exerciseName} (${widget.exerciseId}): $normalized");
+    } else {
+      print("⚠️ [DISPOSE] No progressionModel found for ${widget.exerciseName} (${widget.exerciseId}); leaving existing value untouched.");
     }
+
 
     final notes = _notesController.text.trim();
     safeSave('notes', notes);
@@ -2356,6 +2416,21 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     final exName = widget.exerciseName;
     final exId = exerciseId;
     print("🛠️ [_syncCachedRepTargets] for $exName ($exId) → $reps");
+    // 🟣 Handle DUP Signature: show "min – max reps"
+    if (reps is Map<String, dynamic> && reps['repRange'] is Map) {
+      final rr = Map<String, dynamic>.from(reps['repRange'] as Map);
+      final min = rr['min']?.toString() ?? '6';
+      final max = rr['max']?.toString() ?? '10';
+      _repTargetsDisplayController.text = '$min – $max reps';
+
+      // Keep a minimal cache so dialogs relying on _cachedRepTargetMap are safe
+      _cachedRepTargetMap = {
+        'week1': {'instance1': '$min – $max reps'}
+      };
+      print("✅ [_syncCachedRepTargets] Signature preview → ${_repTargetsDisplayController.text}");
+      return; // done
+    }
+
 
 
     if (reps is Map<String, dynamic> &&
@@ -3218,6 +3293,13 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     _syncCachedRepTargets(widget.exerciseId);
 
     final frequency = int.tryParse(_weeklyFrequencyController.text) ?? 3;
+    // 🔢 Per-exercise default sets (3 by default)
+    final int defaultSets = (widget.exerciseSettings[widget.exerciseId]?['defaultSets'] ?? 3) as int;
+
+// 🧩 Exercise explicit week1 defaults (seed created when exercise was added)
+    final Map<String, dynamic>? explicitWeek1 =
+    (widget.exerciseSettings[widget.exerciseId]?['explicitRepTargets']?['week1'] as Map?)?.cast<String, dynamic>();
+
 
     // Load saved or default data
     final raw = _cachedRepTargetMap ??
@@ -3226,12 +3308,28 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         ? Map<String, dynamic>.from(raw['week1'] ?? {})
         : {};
 
-    final defaultPattern = [10, 5, 8, 3, 12, 1, 6];
-    final fallback = List.generate(frequency, (i) {
-      final base = defaultPattern[i % defaultPattern.length];
-      final sets = base < 5 ? 4 : 3;
-      return '$base x $sets';
-    });
+    // Build fallback: prefer the exercise's explicit defaults; otherwise PMU pattern normalized to defaultSets
+    final List<String> fallback = () {
+      if (explicitWeek1 != null && explicitWeek1.isNotEmpty) {
+        // Use explicit week1 instance1..instanceN
+        final keys = explicitWeek1.keys.toList()
+          ..sort((a, b) {
+            final ai = int.tryParse(a.replaceAll('instance', '')) ?? 0;
+            final bi = int.tryParse(b.replaceAll('instance', '')) ?? 0;
+            return ai.compareTo(bi);
+          });
+        final values = keys.map((k) => explicitWeek1[k]?.toString() ?? '').where((s) => s.isNotEmpty).toList();
+        return List<String>.generate(frequency, (i) {
+          final v = (i < values.length) ? values[i] : values.lastOrNull ?? '10 x $defaultSets';
+          return v;
+        });
+      } else {
+        // Fallback to PMU-like reps but force sets = defaultSets
+        const pattern = [10, 5, 8, 3, 12, 1, 6];
+        return List<String>.generate(frequency, (i) => '${pattern[i % pattern.length]} x $defaultSets');
+      }
+    }();
+
 
     final reps = List<String>.generate(frequency, (i) {
       final key = 'instance${i + 1}';
@@ -4509,6 +4607,26 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         return; // we're done for Signature
                       }
 
+                      // 🔀 If this exercise defines an override for Linear, Classic, use it (and stop)
+                      if (model == PeriodizationModelType.linearClassic) {
+                        final perModel = widget.exerciseSettings[widget.exerciseId]?['modelSpecificRepTargets'];
+                        if (perModel is Map<String, dynamic>) {
+                          final list = perModel['Linear, Classic'];
+                          if (list is List) {
+                            final sets = (widget.exerciseSettings[widget.exerciseId]?['defaultSets'] as int?) ?? 3;
+                            final inst = <String, String>{
+                              for (int i = 0; i < list.length; i++) 'instance${i + 1}': '${list[i]} x $sets'
+                            };
+                            final result = {'week1': inst};
+
+                            widget.onUpdateSetting(widget.exerciseId, 'repTargets', result);
+                            _repTargetsDisplayController.text = inst.values.join(' | ');
+                            return; // ⬅️ IMPORTANT: do not fall through to useExplicit (Exposure seed)
+                          }
+                        }
+                      }
+
+
                       final useExplicit =
                           model == PeriodizationModelType.dailyUndulatingExposure ||
                               model == PeriodizationModelType.dailyUndulatingWeek ||
@@ -4536,6 +4654,27 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                           return; // done
                         }
                       }
+
+                      if (useExplicit) {
+                        // Fallback: reuse the existing saved repTargets (first week) as the seed
+                        final existing = widget.exerciseSettings[widget.exerciseId]?['repTargets'];
+                        if (existing is Map<String, dynamic> && existing['week1'] is Map) {
+                          widget.onUpdateSetting(widget.exerciseId, 'repTargets', existing);
+                          final w1 = Map<String, dynamic>.from(existing['week1'] as Map);
+                          final keys = w1.keys.toList()
+                            ..sort((a, b) {
+                              final ai = int.tryParse(a.toString().replaceAll('instance', '')) ?? 0;
+                              final bi = int.tryParse(b.toString().replaceAll('instance', '')) ?? 0;
+                              return ai.compareTo(bi);
+                            });
+                          _repTargetsDisplayController.text = keys
+                              .map((k) => w1[k]?.toString() ?? '')
+                              .where((s) => s.isNotEmpty)
+                              .join(' | ');
+                          return;
+                        }
+                      }
+
 
                       // 2) Fallback: use PMU defaults but normalize sets to this exercise's defaultSets
                       final frequency = int.tryParse(_weeklyFrequencyController.text) ??

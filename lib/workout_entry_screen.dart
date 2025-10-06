@@ -122,7 +122,9 @@ class WorkoutPage extends StatefulWidget {
   _WorkoutPageState createState() => _WorkoutPageState();
 }
 
-class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, SingleTickerProviderStateMixin {
+class _WorkoutPageState extends State<WorkoutPage>
+    with WidgetsBindingObserver, TickerProviderStateMixin {
+
   List<String> exercises = []; // Store selected exercises from dialog
   final TextEditingController _workoutNameController = TextEditingController();
   late DateTime _selectedDate;
@@ -1570,8 +1572,10 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   bool _didShineThisOpen = false;
 
 // Shine animation
-  late final AnimationController? _catchupShineCtl;
-  late final Animation<double>? _catchupShineAnim;
+// Shine animation
+  AnimationController? _catchupShineCtl;
+  Animation<double>? _catchupShineAnim;
+
 
 
   //UI bits
@@ -2224,7 +2228,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     }
   }
 
+  int _sparklePlays = 0;
   void _playSparkles() {
+    debugPrint('✨ [Sparkles] request (mounted=$mounted, showing=$_showSparkles)');
     if (!mounted) return;
 
     // 🧭 debug: count or confirm when sparkles run
@@ -4964,6 +4970,17 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
     print('🚀 [WES] initState started');
 
     _sparkleCtrl = AnimationController(vsync: this);
+
+    // Initialize "catch up" shine animation early to avoid LateInitializationError
+    _catchupShineCtl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    );
+    _catchupShineAnim = CurvedAnimation(
+      parent: _catchupShineCtl!,
+      curve: Curves.easeInOut,
+    );
+
     _selectedDate = widget.initialDate ?? DateTime.now();
     if (_workoutNameController.text.trim().isEmpty) {
       _workoutNameController.text = DateFormat('EEE d MMM yyyy').format(_selectedDate);
@@ -5233,14 +5250,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
 
 
           _scheduleMissedButtonAfterPaint(); // compute in background; show button when ready
-          _catchupShineCtl = AnimationController(
-            vsync: this,
-            duration: const Duration(milliseconds: 1200),
-          );
-          _catchupShineAnim = CurvedAnimation(
-            parent: _catchupShineCtl!,
-            curve: Curves.easeInOut,
-          );
+
 
 
           Future.delayed(const Duration(milliseconds: 10), () {
@@ -11320,6 +11330,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                 );
 
                 final ok = await _refreshHintsForSelectedDay(alsoWarmTomorrow: true);
+                debugPrint('✨ [SparkleBtn] refresh result ok=$ok (mounted=$mounted)');
 
                 scaffold.hideCurrentSnackBar();
                 scaffold.showSnackBar(

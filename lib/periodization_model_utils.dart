@@ -1684,208 +1684,191 @@ class PeriodizationModelUtils {
     List<Map<String, dynamic>>? topSetHistory,
     int weekIndex = 0,
   }) {
-    print('🧠 [AddRepsProgression] Entered model for $exerciseName, week $weekIndex, OG reps = $repTarget');
+    print('🧠 [AddRepsProgression] Entered for $exerciseName '
+        '(week $weekIndex, repTarget=$repTarget, baseWt=$defaultWeight)');
 
+    // 🕓 Week 1 short-circuit (base week)
     if (weekIndex == 0) {
-      print('🕓 Week 1 detected → base weight and rep target used');
+      print('🕓 Week 1 detected → using base weight/reps');
       return {
         'weight': defaultWeight,
         'reps': repTarget,
       };
     }
 
-    // Load top set history
-    final recentSets = PeriodizationModelUtils.topSetsByExercise[exerciseName] ?? [];
+    // 🧮 Unified E1RM context (same as Smart Progression)
+    final baseInfo = PeriodizationModelUtils.computeBaseE1RMFromHistory(
+      exerciseName: exerciseName,
+      repTarget: repTarget,
+      plannedRIR: rirValue,
+      topSetHistory: topSetHistory,
+      maxWeightByReps: maxWeightByReps,
+      now: DateTime.now(),
+    );
 
+    final double? baseE1RMNullable = baseInfo['baseE1RM'] as double?;
+    final String baseSource = (baseInfo['baseSource'] as String?) ?? 'no_history';
+
+    print('🧭 [AddRepsProgression] Base source=$baseSource '
+        'E1RM=${baseE1RMNullable?.toStringAsFixed(2)}');
+
+    if (baseE1RMNullable == null) {
+      print('🚫 No historical E1RM → fallback to base values');
+      return {
+        'weight': defaultWeight,
+        'reps': repTarget,
+      };
+    }
+
+    final double baseE1RM = baseE1RMNullable;
+
+    // 🎯 Valid increment grid from planner context
+    final validWeights = roundToAllValidIncrements(
+      baseWeight: defaultWeight,
+      exerciseName: exerciseName,
+    )..sort();
+
+    // 🔍 Avoid repeating identical combos
+    final usedCombos =
+    PeriodizationModelUtils.getUsedWeightRepsRirTripletsForExercise(
+      exerciseName: exerciseName,
+      savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+    );
+
+    // 🧾 Most recent performance
+    final recentSets =
+        PeriodizationModelUtils.topSetsByExercise[exerciseName] ?? [];
     if (recentSets.isEmpty) {
-      print('🚫 No previous top sets found → using default weight and reps');
-      return {
-        'weight': defaultWeight,
-        'reps': repTarget,
-      };
-    }
-
-
-// 🐞 DEBUG: Show the most recent 4 entries
-    print('🧾 [DEBUG] Top 4 sets for $exerciseName:');
-    for (int i = 0; i < recentSets.length.clamp(0, 4); i++) {
-      final set = recentSets[i];
-      final w = (set['weight'] as num?)?.toDouble() ?? 0;
-      final r = (set['reps'] as num?)?.toInt() ?? 0;
-      final rir = (set['rir'] as num?)?.toDouble() ?? 0;
-      final d = set['date'] ?? 'No Date';
-      print('  #${i + 1} → $w kg × $r @ RIR $rir on $d');
+      print('🚫 No top-set history found → using default');
+      return {'weight': defaultWeight, 'reps': repTarget};
     }
 
     recentSets.sort((a, b) {
-      final aDate = a['date'] is DateTime ? a['date'] as DateTime : DateTime.tryParse(a['date']?.toString() ?? '') ?? DateTime(2000);
-      final bDate = b['date'] is DateTime ? b['date'] as DateTime : DateTime.tryParse(b['date']?.toString() ?? '') ?? DateTime(2000);
-      return bDate.compareTo(aDate); // descending
+      final aDate = a['date'] is DateTime
+          ? a['date'] as DateTime
+          : DateTime.tryParse(a['date']?.toString() ?? '') ?? DateTime(2000);
+      final bDate = b['date'] is DateTime
+          ? b['date'] as DateTime
+          : DateTime.tryParse(b['date']?.toString() ?? '') ?? DateTime(2000);
+      return bDate.compareTo(aDate);
     });
 
     final latest = recentSets.first;
-
-    final double lastWeight = (latest['weight'] as num?)?.toDouble() ?? defaultWeight;
+    final double lastWeight =
+        (latest['weight'] as num?)?.toDouble() ?? defaultWeight;
     final int lastReps = (latest['reps'] as num?)?.toInt() ?? repTarget;
-    final double lastRIR = (latest['rir'] as num?)?.toDouble() ?? rirValue; // ✅ fallback still respected
+    final double lastRIR =
+        (latest['rir'] as num?)?.toDouble() ?? rirValue;
 
+    print('📦 Last top set → $lastWeight kg × $lastReps @ RIR $lastRIR');
 
-    print('📦 [AddRepsProgression] Last top set: $lastWeight × $lastReps @ RIR $lastRIR');
+    final double currentE1RM =
+    calculateE1RM(lastWeight, lastReps.toDouble(), lastRIR);
+    print('📈 Current E1RM = ${currentE1RM.toStringAsFixed(2)} '
+        '(base = ${baseE1RM.toStringAsFixed(2)})');
 
+    // 🔍 Check if we’ve done target-rep work before
+    final hasMatchingReps =
+    recentSets.any((entry) => (entry['reps'] as num?)?.toInt() == repTarget);
 
-    final currentE1RM = calculateE1RM(lastWeight, lastReps.toDouble(), lastRIR); // ✅ real RIR
-
-    print('📈 Current E1RM = ${currentE1RM.toStringAsFixed(2)} from $lastWeight × $lastReps');
-
-    // 🧠 Determine if we have top set history for the current repTarget
-    final hasMatchingReps = recentSets.any((entry) {
-      final reps = (entry['reps'] as num?)?.toInt();
-      return reps == repTarget;
-    });
-
+    // === ORIGINAL Add-Reps logic from here on ===
     if (!hasMatchingReps) {
-      // 🔍 Reverse-calculate weight from E1RM
       final bool isNewTargetHigher = repTarget > lastReps;
-      final double adjustedE1RM = isNewTargetHigher
-          ? currentE1RM
-          : currentE1RM * 0.96; // conservative if going to lower rep target
+      final double adjustedE1RM =
+      isNewTargetHigher ? currentE1RM : currentE1RM * 0.96;
 
-      final double estimatedWeight = reverseCalculateWeight(
+      final double estWeight = reverseCalculateWeight(
         targetE1RM: adjustedE1RM,
         reps: repTarget,
         rir: rirValue,
       );
 
-      final validWeights = roundToAllValidIncrements(
-        baseWeight: estimatedWeight,
+      final valid = roundToAllValidIncrements(
+        baseWeight: estWeight,
         exerciseName: exerciseName,
       )..sort();
 
-      final List<double> weightsBelow = validWeights.where((w) => w <= estimatedWeight).toList();
-      final List<double> weightsAbove = validWeights.where((w) => w > estimatedWeight).toList();
+      final below = valid.where((w) => w <= estWeight).toList();
+      final above = valid.where((w) => w > estWeight).toList();
 
-      double chosenWeight;
-
-// Decide how to round
-      if (weightsAbove.isNotEmpty && (weightsAbove.first - estimatedWeight) < 0.3) {
-        // very close to next increment, allow rounding up
-        chosenWeight = weightsAbove.first;
-        print('🧮 Rounding up to nearest weight due to proximity → $chosenWeight');
-      } else if (weightsBelow.isNotEmpty) {
-        // round down
-        chosenWeight = weightsBelow.last;
-        print('🧮 Rounding down to $chosenWeight');
-      } else {
-        // fallback to exact estimate if no valid match
-        chosenWeight = estimatedWeight;
-        print('⚠️ No valid rounded match, using estimated weight → $chosenWeight');
+      double chosen = estWeight;
+      if (above.isNotEmpty && (above.first - estWeight) < 0.3) {
+        chosen = above.first;
+      } else if (below.isNotEmpty) {
+        chosen = below.last;
       }
 
-// Now adjust reps to match targetE1RM without going over
-      // Start from the original target reps
       int adjustedReps = repTarget;
-      double finalE1RM = calculateE1RM(chosenWeight, adjustedReps.toDouble(), rirValue);
-
-// Increase reps until E1RM meets or slightly approaches target without exceeding
+      double finalE1RM = calculateE1RM(chosen, adjustedReps.toDouble(), rirValue);
       while (finalE1RM < adjustedE1RM && adjustedReps < 20) {
-        adjustedReps += 1;
-        finalE1RM = calculateE1RM(chosenWeight, adjustedReps.toDouble(), rirValue);
+        adjustedReps++;
+        finalE1RM = calculateE1RM(chosen, adjustedReps.toDouble(), rirValue);
       }
-
-// Step back if we overshot
       if (finalE1RM > adjustedE1RM && adjustedReps > 1) {
-        adjustedReps -= 1;
-        finalE1RM = calculateE1RM(chosenWeight, adjustedReps.toDouble(), rirValue);
+        adjustedReps--;
+        finalE1RM = calculateE1RM(chosen, adjustedReps.toDouble(), rirValue);
       }
 
+      final comboKey =
+          '${chosen.toStringAsFixed(1)}_${adjustedReps}_${rirValue.toStringAsFixed(1)}';
+      if (usedCombos.contains(comboKey)) {
+        print('⛔ Combo already used → fallback to default');
+        return {'weight': defaultWeight, 'reps': repTarget};
+      }
 
-      print('🎯 Final reverse-assigned: $chosenWeight kg × $adjustedReps → E1RM = ${finalE1RM.toStringAsFixed(2)} (target = ${adjustedE1RM.toStringAsFixed(2)})');
-
-      return {
-        'weight': chosenWeight,
-        'reps': adjustedReps,
-      };
-
+      print('🎯 Final reverse-calc → $chosen kg × $adjustedReps '
+          '(E1RM=${finalE1RM.toStringAsFixed(2)}, base=${baseE1RM.toStringAsFixed(2)})');
+      return {'weight': chosen, 'reps': adjustedReps};
     }
 
-    // Build valid weight options
-    final validWeights = roundToAllValidIncrements(
-      baseWeight: defaultWeight,
-      exerciseName: exerciseName,
-    );
-    validWeights.sort();
-    print('⚙️ [NextWeight] lastWeight=$lastWeight '
-        'indexOf=${validWeights.indexOf(lastWeight)}');
-
-    final int weightIndex = validWeights.indexOf(lastWeight);
-    final double? nextWeight = (weightIndex >= 0 && weightIndex + 1 < validWeights.length)
-        ? validWeights[weightIndex + 1]
-        : null;
-
-    print('⚙️ [NextWeight] validWeights(count)=${validWeights.length} '
-        'first=${validWeights.isNotEmpty ? validWeights.first : null} '
-        'last=${validWeights.isNotEmpty ? validWeights.last : null}');
-    print('⚙️ [NextWeight] listCount=${validWeights.length} '
-        'first=${validWeights.first} last=${validWeights.last}');
-
-
+    // Weight-increment progression path
+    final int idx = validWeights.indexOf(lastWeight);
+    final double? nextWeight =
+    (idx >= 0 && idx + 1 < validWeights.length) ? validWeights[idx + 1] : null;
 
     if (nextWeight == null) {
-      print('🚧 No next weight found → staying at current');
-      return {
-        'weight': lastWeight,
-        'reps': lastReps + 1,
-      };
+      print('🚧 No higher weight → stay and +1 rep');
+      return {'weight': lastWeight, 'reps': lastReps + 1};
     }
 
-    print('🎯 [NextWeight] chosen nextWeight=$nextWeight '
-        '(weightIndex=$weightIndex / ${validWeights.length - 1})');
-
-
-    // Gating logic
     final int repsAboveOG = lastReps - repTarget;
+    List<int> allowed = [];
+    if (repsAboveOG >= 2) allowed.add(repTarget);
+    if (repsAboveOG >= 3) allowed.add(repTarget - 1);
+    if (repsAboveOG >= 4) allowed.add(repTarget - 2);
 
-    List<int> allowedNextWeightRepOptions = [];
-    if (repsAboveOG >= 2) allowedNextWeightRepOptions.add(repTarget);       // OG
-    if (repsAboveOG >= 3) allowedNextWeightRepOptions.add(repTarget - 1);   // OG -1
-    if (repsAboveOG >= 4) allowedNextWeightRepOptions.add(repTarget - 2);   // OG -2
+    double? promotedW;
+    int? promotedR;
 
-    double? promotedWeight;
-    int? promotedReps;
-
-
-
-    for (final reps in allowedNextWeightRepOptions) {
+    for (final reps in allowed) {
       if (reps < 1) continue;
-
       final double tryE1RM = calculateE1RM(nextWeight, reps.toDouble(), rirValue);
       final double threshold = tryE1RM * 1.040;
-
-      print('🧪 Trying: $nextWeight × $reps → E1RM = $tryE1RM vs current = $currentE1RM, threshold = $threshold');
-
-      print('🔍 Try $nextWeight × $reps → E1RM = ${tryE1RM.toStringAsFixed(2)}, threshold = ${threshold.toStringAsFixed(2)}');
-
       if (currentE1RM >= threshold) {
-        print('✅ Threshold met → move to $nextWeight × $reps');
-        promotedWeight = nextWeight;
-        promotedReps = reps;
-        break; // prefer higher reps (OG > OG-1 > OG-2)
+        promotedW = nextWeight;
+        promotedR = reps;
+        break;
       }
     }
 
-    if (promotedWeight != null && promotedReps != null) {
-      return {
-        'weight': promotedWeight,
-        'reps': promotedReps,
-      };
+    if (promotedW != null && promotedR != null) {
+      final comboKey =
+          '${promotedW.toStringAsFixed(1)}_${promotedR}_${rirValue.toStringAsFixed(1)}';
+      if (usedCombos.contains(comboKey)) {
+        print('⛔ Duplicate combo detected, skipping promotion');
+        return {'weight': lastWeight, 'reps': lastReps + 1};
+      }
+
+      print('✅ Promote → $promotedW kg × $promotedR '
+          '(E1RM=${calculateE1RM(promotedW, promotedR.toDouble(), rirValue).toStringAsFixed(2)} '
+          'vs base ${baseE1RM.toStringAsFixed(2)})');
+      return {'weight': promotedW, 'reps': promotedR};
     }
 
-    print('➕ Staying at $lastWeight → increase reps to ${lastReps + 1}');
-    return {
-      'weight': lastWeight,
-      'reps': lastReps + 1,
-    };
+    print('➕ Stay → $lastWeight kg × ${lastReps + 1}');
+    return {'weight': lastWeight, 'reps': lastReps + 1};
   }
+
 
   static final Set<String> _velocityTrackedExercises = {
     // Bench press variants
