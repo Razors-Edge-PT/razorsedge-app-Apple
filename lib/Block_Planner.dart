@@ -1007,6 +1007,8 @@ class _BlockPlannerState extends State<Block_Planner> {
           }
         }
       });
+      // 💾 Persist newly added exercises immediately (no big Save needed)
+      Future.microtask(() => _savePlannedExercises(suppressSnack: true));
     }
 
   }
@@ -4482,6 +4484,31 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                       // Map to enum and decide reseed policy
                       final model = _mapLabelToModelType(value);
+                      // If DUP Signature, show/save the range in the preview immediately
+                      if (model == PeriodizationModelType.dupSignature) {
+                        // Try existing range first
+                        final existing = widget.exerciseSettings[widget.exerciseId]?['repTargets'];
+                        String min = '6';
+                        String max = '10';
+
+                        if (existing is Map<String, dynamic> && existing['repRange'] is Map) {
+                          final rr = Map<String, dynamic>.from(existing['repRange'] as Map);
+                          min = rr['min']?.toString() ?? min;
+                          max = rr['max']?.toString() ?? max;
+                        }
+
+                        // Seed the structure the dialog expects
+                        final result = {
+                          'repRange': {'min': min, 'max': max},
+                          'week1': {'instance1': '$min – $max reps'},
+                        };
+                        widget.onUpdateSetting(widget.exerciseId, 'repTargets', result);
+
+                        // Update the read-only field so it matches the dialog
+                        _repTargetsDisplayController.text = '$min – $max reps';
+                        return; // we're done for Signature
+                      }
+
                       final useExplicit =
                           model == PeriodizationModelType.dailyUndulatingExposure ||
                               model == PeriodizationModelType.dailyUndulatingWeek ||
