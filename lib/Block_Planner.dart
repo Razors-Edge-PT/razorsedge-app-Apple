@@ -997,11 +997,14 @@ class _BlockPlannerState extends State<Block_Planner> {
               print("⚠️ Fallback: Empty rirPlan injected for $name");
             }
 
-            exerciseSettings[id] = defaults;
-            print("🧠 Assigned sanitized defaults for $name → $defaults");
+            // 🧩 Keep a copy of explicit week1 rep defaults for reseeding previews after model flips
+            final explicitSeed = defaults['repTargets']; // keep whatever structure you already built
+            exerciseSettings[id] = {
+              ...defaults,
+              if (explicitSeed != null) 'explicitRepTargets': explicitSeed,
+            };
+
           }
-
-
         }
       });
     }
@@ -4468,36 +4471,73 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                     onChanged: (value) {
                       if (value == null) return;
 
-                      final modelType = _mapLabelToModelType(value);
-                      final frequency =
-                          int.tryParse(_weeklyFrequencyController.text) ?? 3;
-                      final defaultReps =
-                          PeriodizationModelUtils.getDefaultReps(
-                              modelType, frequency);
-
-                      print("🧠 Model selected: $value → mapped to $modelType");
-                      print(
-                          "🎯 Default reps generated for $modelType: $defaultReps");
-
-                      // ✅ Force UI sync
+                      // blur any focused input
                       FocusScope.of(context).unfocus();
 
+                      // Save the chosen label
                       setState(() {
                         _selectedModel = value;
-                        widget.onUpdateSetting(
-                            widget.exerciseId, 'periodizationModel', value);
-                        widget.onUpdateSetting(
-                            widget.exerciseId, 'repTargets', defaultReps);
-
-                        // ✅ Preview rep targets from Map<String, Map<String, String>>
-                        final preview = defaultReps.entries.expand((weekEntry) {
-                          final instanceMap = weekEntry.value;
-                          return instanceMap.values;
-                          return <dynamic>[];
-                        }).join(', ');
-                        _repTargetsDisplayController.text = preview;
+                        widget.onUpdateSetting(widget.exerciseId, 'periodizationModel', value);
                       });
+
+                      // Map to enum and decide reseed policy
+                      final model = _mapLabelToModelType(value);
+                      final useExplicit =
+                          model == PeriodizationModelType.dailyUndulatingExposure ||
+                              model == PeriodizationModelType.dailyUndulatingWeek ||
+                              model == PeriodizationModelType.linearClassic;
+
+                      if (useExplicit) {
+                        // 1) Try the exercise-specific explicit week1 defaults (what you stored when adding)
+                        final seed = widget.exerciseSettings[widget.exerciseId]?['explicitRepTargets'];
+                        if (seed is Map<String, dynamic>) {
+                          widget.onUpdateSetting(widget.exerciseId, 'repTargets', seed);
+
+                          // Update preview to exactly match the dialog
+                          final week1 = Map<String, dynamic>.from(seed['week1'] as Map? ?? const {});
+                          final keys = week1.keys.toList()
+                            ..sort((a, b) {
+                              final ai = int.tryParse(a.toString().replaceAll('instance', '')) ?? 0;
+                              final bi = int.tryParse(b.toString().replaceAll('instance', '')) ?? 0;
+                              return ai.compareTo(bi);
+                            });
+                          final preview = keys
+                              .map((k) => week1[k]?.toString() ?? '')
+                              .where((s) => s.isNotEmpty)
+                              .join(' | ');
+                          _repTargetsDisplayController.text = preview;
+                          return; // done
+                        }
+                      }
+
+                      // 2) Fallback: use PMU defaults but normalize sets to this exercise's defaultSets
+                      final frequency = int.tryParse(_weeklyFrequencyController.text) ??
+                          (widget.exerciseSettings[widget.exerciseId]?['weeklyFrequency'] as int? ?? 3);
+                      final defaultSets = (widget.exerciseSettings[widget.exerciseId]?['defaultSets'] as int?) ?? 3;
+
+                      final def = PeriodizationModelUtils.getDefaultReps(model, frequency);
+                      final week1 = Map<String, dynamic>.from(def['week1'] ?? const {});
+
+                      // Normalize "R x 3" -> "R x {defaultSets}"
+                      final values = week1.values
+                          .take(frequency)
+                          .map((v) {
+                        final reps = v.toString().split('x').first.trim();
+                        return '$reps x $defaultSets';
+                      })
+                          .toList();
+
+                      // Write normalized map so the dialog reads exactly this
+                      final instMap = <String, String>{
+                        for (int i = 0; i < values.length; i++) 'instance${i + 1}': values[i]
+                      };
+                      final normalized = {'week1': instMap};
+                      widget.onUpdateSetting(widget.exerciseId, 'repTargets', normalized);
+
+                      // And mirror into the preview
+                      _repTargetsDisplayController.text = values.join(' | ');
                     },
+
                     dropdownColor: Colors.blueGrey.shade800,
                     decoration: InputDecoration(
                       labelText: "Periodization Model",
