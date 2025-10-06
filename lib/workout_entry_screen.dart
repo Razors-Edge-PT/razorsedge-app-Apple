@@ -11240,7 +11240,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                   : null,
             ),
 
-            /*IconButton(
+            IconButton(
               icon: const Icon(Icons.bolt, color: Colors.orange), // 💥 closest stock icon; swap if you add custom nuclear icon
               onPressed: () {
                 showDialog(
@@ -11294,7 +11294,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
               },
             ),
 
-             */
+
 
             IconButton(
               icon: const Icon(

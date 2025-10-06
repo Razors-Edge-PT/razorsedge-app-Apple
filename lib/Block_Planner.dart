@@ -15,6 +15,7 @@ import 'week_planner.dart';
 import 'planned_blocks_screen.dart';
 import 'package:uuid/uuid.dart';
 import 'user_context.dart';
+import 'warmup_service.dart';
 import 'dart:math' as math;
 
 
@@ -62,27 +63,31 @@ class _BlockPlannerState extends State<Block_Planner> {
     _blockNameController.dispose();
     _historyInputController.dispose();
 
-    Future.delayed(Duration(milliseconds: 100), () async {
-      await _savePlannedExercises(); // ✅ Saves to /planned_blocks
+    // 🏁 Best-effort background save. Non-blocking for navigation.
+    Future.microtask(() async {
+      try {
+        if (blockIdToUse == null) {
+          print("ℹ️ [BP.dispose] Skipping save (blockIdToUse is null)");
+          return;
+        }
 
-      // ✅ Also mirror to WES-compatible location
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) return;
+        // 1) Persist the full block doc (planned_blocks/{uid}/blocks/{blockId})
+        await _savePlannedExercises();
+        print("💾 [BP.dispose] _savePlannedExercises() completed");
 
-      final plannedBlock = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(userId)
-          .collection('planned_blocks')
-          .doc('current_block')
-          .get();
+        // 2) Mirror per-exercise details to WES-compatible location
+        //    Use in-memory exerciseSettings as the source of truth.
+        if (exercises.isEmpty) {
+          print("ℹ️ [BP.dispose] No exercises to mirror");
+          return;
+        }
 
-      final blockData = plannedBlock.data();
-      final exerciseSettings = blockData?['blocks']?[blockIdToUse]?['exerciseSettings'];
-
-
-      if (exerciseSettings != null) {
-        for (final exerciseId in exerciseSettings.keys) {
+        for (final exerciseId in exercises) {
           final data = exerciseSettings[exerciseId];
+          if (data == null) {
+            print("⚠️ [BP.dispose] No settings for $exerciseId; skipping mirror");
+            continue;
+          }
 
           await FirebaseFirestore.instance
               .collection('users')
@@ -94,15 +99,23 @@ class _BlockPlannerState extends State<Block_Planner> {
             'periodizationModel': data['periodizationModel'],
             'repTargets': data['repTargets'],
             'rirPlan': data['rirPlan'],
+            'rirModel': data['rirModel'],
             'increments': data['increments'],
-            'maxWeightByReps': data['maxWeightByReps'],
+            'weeklyFrequency': data['weeklyFrequency'],
+            'maxWeightXReps': data['maxWeightXReps'],
+            'notes': data['notes'] ?? '',
           }, SetOptions(merge: true));
+
+          print("📌 [BP.dispose] Mirrored plannedExerciseDetails for $exerciseId");
         }
+      } catch (e) {
+        print("❌ [BP.dispose] Background save/mirror error: $e");
       }
     });
 
     super.dispose();
   }
+
 
 
   @override
@@ -2230,6 +2243,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       safeSave('rirPlan', _cachedRirPlan);
       print("💾 [DISPOSE] Saved rirPlan for ${widget.exerciseName}: ${jsonEncode(_cachedRirPlan)}");
 
+
     }
 
 
@@ -2241,6 +2255,25 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     _maxRepsController.dispose();
     _rirDisplayController.dispose();
     _incrementsFocusNode.dispose();
+
+
+    // ⬇️ Kick a WES warm for *today* based on these BP edits (fire-and-forget)
+    try {
+      final String uidSelected = UserContext.of(context, listen: false).currentUid; // selected athlete
+      if (uidSelected.isNotEmpty) {
+        final now = DateTime.now();
+        final dOnly = DateTime(now.year, now.month, now.day); // LOCAL date-only
+        // Service should fetch the active block id internally
+        WarmupService.instance.warmWES(uidSelected, selectedDate: dOnly);
+        debugPrint('🚀 [BP→Warm] Warm kicked for ${dOnly.toIso8601String().substring(0,10)} (uid=$uidSelected)');
+      } else {
+        debugPrint('⚠️ [BP→Warm] No selected uid; skip warm.');
+      }
+    } catch (e) {
+      debugPrint('🟧 [BP→Warm] warm kick failed: $e');
+    }
+
+    super.dispose();
 
     super.dispose();
   }
