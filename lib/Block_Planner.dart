@@ -528,11 +528,15 @@ class _BlockPlannerState extends State<Block_Planner> {
         'weeklyFrequency': def['weeklyFrequency'],
         'increments': Block_Planner.parseIncrements(def['increments']),
         'periodizationModel': def['periodizationModel'],
-        'repTargets': _buildRepTargetMap(def['repTargets']),
+        // ⬇️ pass explicit sets (defaults to 3 if absent)
+        'repTargets': _buildRepTargetMap(def['repTargets'], sets: (def['defaultSets'] ?? 3)),
         'rirModel': def['rirModel'],
         'rirPlan': _buildRirPlan(def['rirTargets']),
         'progressionModel': def['progressionModel'],
+        // ⬇️ keep around so UI/tools can read/change later
+        'defaultSets': def['defaultSets'] ?? 3,
       };
+
     }
 
     // --- Tier 1: Named overrides ---
@@ -564,12 +568,13 @@ class _BlockPlannerState extends State<Block_Planner> {
     return bodyPart.split(',').length == 1;
   }
 
-  Map<String, Map<String, String>> _buildRepTargetMap(List<int> reps) {
+  Map<String, Map<String, String>> _buildRepTargetMap(List<int> reps, {int sets = 3}) {
     final instanceMap = <String, String>{
-      for (int i = 0; i < reps.length; i++) 'instance${i + 1}': '${reps[i]} x 3'
+      for (int i = 0; i < reps.length; i++) 'instance${i + 1}': '${reps[i]} x $sets'
     };
     return {'week1': instanceMap};
   }
+
 
 
   Map<String, Map<String, Map<String, Map<String, String>>>> _buildRirPlan(List<num> rirTargets) {
@@ -598,6 +603,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'repTargets': [9, 5, 12, 3],
       'rirModel': 'Static RIR',
       'rirTargets': [2, 2, 1.5, 2],
+      'defaultSets': 3,
       'progressionModel': 'Smart Progression',
     },
     'Back Squat, Barbell': {
@@ -606,7 +612,8 @@ class _BlockPlannerState extends State<Block_Planner> {
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [8, 3],
       'rirModel': 'Static RIR',
-      'rirTargets': [2, 3],
+      'rirTargets': [2, 3, 2],
+      'defaultSets': 3,
       'progressionModel': 'Smart Progression',
     },
     'Deadlift, Conventional': {
@@ -616,6 +623,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'repTargets': [9, 5, 3, 1],
       'rirModel': 'Static RIR',
       'rirTargets': [3.5, 3, 2, 2],
+      'defaultSets': 4,
       'progressionModel': 'Smart Progression',
     },
     'Deadlift, Sumo': {
@@ -624,7 +632,8 @@ class _BlockPlannerState extends State<Block_Planner> {
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [15, 9, 5],
       'rirModel': 'Static RIR',
-      'rirTargets': [2, 2, 2.5],
+      'rirTargets': [2, 2, 2.5, 2.5],
+      'defaultSets': 2,
       'progressionModel': 'Smart Progression',
     },
     'Bulgarian Split Squat, Deficit': {
@@ -633,7 +642,8 @@ class _BlockPlannerState extends State<Block_Planner> {
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [6, 8],
       'rirModel': 'Static RIR',
-      'rirTargets': [3, 3],
+      'rirTargets': [3, 3, 2],
+      'defaultSets': 3,
       'progressionModel': 'Smart Progression',
     },
     'Chin-Up': {
@@ -642,6 +652,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [8, 3, 6, 1],
       'rirModel': 'Static RIR',
+      'defaultSets': 3,
       'rirTargets': [1.5, 2, 2, 0.5 ],
       'progressionModel': 'Smart Progression',
     },
@@ -652,6 +663,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'repTargets': [15, 9, 6],
       'rirModel': 'Static RIR',
       'rirTargets': [1, 1.5, 2],
+      'defaultSets': 3,
       'progressionModel': 'Smart Progression',
     },
   };
@@ -664,6 +676,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'repTargets': [15, 9],
       'rirModel': 'Static RIR',
       'rirTargets': [1, 1.5],
+      'defaultSets': 3,
       'progressionModel': 'Smart Progression',
     },
     'Hip Hinge': {
@@ -673,6 +686,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'repTargets': [15, 18, 9],
       'rirModel': 'Static RIR',
       'rirTargets': [1, 1, 1.5],
+      'defaultSets': 3,
       'progressionModel': 'Smart Progression',
     },
     'Horizontal Press': {
@@ -682,6 +696,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'repTargets': [9, 15, 5],
       'rirModel': 'Static RIR',
       'rirTargets': [1, 1, 1],
+      'defaultSets': 3,
       'progressionModel': 'Smart Progression',
     },
     'Vertical Press': {
@@ -690,7 +705,8 @@ class _BlockPlannerState extends State<Block_Planner> {
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [9, 15, 6],
       'rirModel': 'Static RIR',
-      'rirTargets': [1, 1, 1],
+      'rirTargets': [1.5, 1, 1],
+      'defaultSets': 3,
       'progressionModel': 'Smart Progression',
     },
     'Vertical Pull': {
@@ -699,7 +715,8 @@ class _BlockPlannerState extends State<Block_Planner> {
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [9, 15, 5],
       'rirModel': 'Static RIR',
-      'rirTargets': [1, 1, 1],
+      'rirTargets': [1.5, 1, 1],
+      'defaultSets': 3,
       'progressionModel': 'Smart Progression',
     },
     'Horizontal Pull': {
@@ -709,6 +726,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'repTargets': [9, 15, 5],
       'rirModel': 'Static RIR',
       'rirTargets': [1.5, 2, 1],
+      'defaultSets': 3,
       'progressionModel': 'Smart Progression',
     },
     'Core': {
@@ -718,6 +736,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'repTargets': [9, 14, 6, 18],
       'rirModel': 'Static RIR',
       'rirTargets': [1, 1, 1, 0.5],
+      'defaultSets': 3,
       'progressionModel': 'Smart Progression',
     },
     'isolation': {
@@ -727,6 +746,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'repTargets': [9, 14, 6, 18],
       'rirModel': 'Static RIR',
       'rirTargets': [1, 1, 1, 0.5],
+      'defaultSets': 3,
       'progressionModel': 'Smart Progression',
     },
   };
@@ -1116,9 +1136,14 @@ class _BlockPlannerState extends State<Block_Planner> {
       print("📅 Saved blockMeta to plannedExerciseDetails");
     }
 
+    // 🧹 Remove details for exercises that were deleted (keep blockMeta)
+    existingDetails.removeWhere((k, v) => k != 'blockMeta' && !exercises.contains(k));
+
+
     print("📤 Saving plannedExerciseDetails:\n${jsonEncode(existingDetails)}");
 
     await docRef.set({
+      'exercises': exercises,
       'plannedExercises': exercises,
       'plannedExerciseDetails': existingDetails,
     }, SetOptions(merge: true));
@@ -1510,7 +1535,12 @@ class _BlockPlannerState extends State<Block_Planner> {
 
                         setState(() {
                           exercises.removeAt(index);
+                          // 🧼 Also drop its settings locally so save won’t re-add details
+                          exerciseSettings.remove(removedExercise);
                         });
+
+                        // 💾 Fire-and-forget save so deletion persists immediately
+                        Future.microtask(() => _savePlannedExercises());
 
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
@@ -1522,6 +1552,8 @@ class _BlockPlannerState extends State<Block_Planner> {
                                 setState(() {
                                   exercises.insert(index, removedExercise);
                                 });
+                                // 💾 Persist the undo as well
+                                Future.microtask(() => _savePlannedExercises());
                               },
                             ),
                             duration: const Duration(seconds: 4),
@@ -1531,6 +1563,7 @@ class _BlockPlannerState extends State<Block_Planner> {
                           ),
                         );
                       },
+
                       background: Container(
                         color: Colors.red,
                         padding: const EdgeInsets.only(left: 16),
@@ -4044,7 +4077,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     'Bench Press, Barbell': [2.0, 1.5, 0.5, 1.0],
     'Chin-Up': [2.0, 1.5, 0.5, 1.0],
     'Overhead Dumbbell Press, Unilateral': [2.0, 1.5, 0.5, 1.0],
-    'Deadlift, Conventional': [3.0, 3.5, 2.5, 1.0],
+    'Deadlift, Conventional': [3.0, 3.5, 2.5, 1.5],
     'Back Squat, Barbell': [3.0, 2.0, 1.0, 2.5],
     'default': [1.5, 1.0, 0.5, 1.0],
   };

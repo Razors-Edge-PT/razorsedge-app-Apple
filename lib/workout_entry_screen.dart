@@ -2227,6 +2227,9 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
   void _playSparkles() {
     if (!mounted) return;
 
+    // 🧭 debug: count or confirm when sparkles run
+    debugPrint('✨ [Sparkles] Triggered at ${DateTime.now()} (already showing=$_showSparkles)');
+
     // prevent overlap if already showing
     if (_showSparkles) return;
 
@@ -2243,9 +2246,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
       if (mounted) {
         _sparkleCtrl.stop();
         setState(() => _showSparkles = false);
+        debugPrint('✨ [Sparkles] Hidden at ${DateTime.now()}');
       }
     });
   }
+
 
 
 
@@ -11240,7 +11245,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
                   : null,
             ),
 
-            IconButton(
+            /*IconButton(
               icon: const Icon(Icons.bolt, color: Colors.orange), // 💥 closest stock icon; swap if you add custom nuclear icon
               onPressed: () {
                 showDialog(
@@ -11294,6 +11299,7 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
               },
             ),
 
+             */
 
 
             IconButton(
@@ -11303,7 +11309,11 @@ class _WorkoutPageState extends State<WorkoutPage> with WidgetsBindingObserver, 
               ),
               tooltip: 'Refresh hints',
               onPressed: () async {
-                final scaffold = ScaffoldMessenger.of(context);
+                debugPrint('✨ [SparkleBtn] pressed, mounted=$mounted');
+
+                final scaffold = ScaffoldMessenger.maybeOf(context);
+                if (scaffold == null) return; // 🔒 context not safe yet
+
                 scaffold.hideCurrentSnackBar();
                 scaffold.showSnackBar(
                   const SnackBar(content: Text('Refreshing ✨')),
