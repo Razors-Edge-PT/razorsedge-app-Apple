@@ -52,6 +52,8 @@ class _BlockPlannerState extends State<Block_Planner> {
   List<String> selectedDays = []; // e.g., ['Mon', 'Wed', 'Fri']
   List<Map<String, dynamic>> weekPlans = [];
   String? blockIdToUse;
+  final GlobalKey<ScaffoldMessengerState> _bpMessengerKey = GlobalKey<ScaffoldMessengerState>();
+
   bool _isSavedBlock = false;
   bool _didRunInitOnce = false;
   bool _initialBlockIsActive = false;
@@ -72,7 +74,8 @@ class _BlockPlannerState extends State<Block_Planner> {
         }
 
         // 1) Persist the full block doc (planned_blocks/{uid}/blocks/{blockId})
-        await _savePlannedExercises();
+        await _savePlannedExercises(suppressSnack: true);
+
         print("💾 [BP.dispose] _savePlannedExercises() completed");
 
         // 2) Mirror per-exercise details to WES-compatible location
@@ -131,6 +134,7 @@ class _BlockPlannerState extends State<Block_Planner> {
     }
 
     _didRunInitOnce = true;
+
   }
 
   Future<void> _loadExistingBlock(String blockId) async {
@@ -556,9 +560,6 @@ class _BlockPlannerState extends State<Block_Planner> {
       final def = _defaultsByGroup['isolation']!;
       return sanitize(def);
     }
-
-
-
     // 🔸 Fallback if unmatched
     return {};
   }
@@ -1007,7 +1008,8 @@ class _BlockPlannerState extends State<Block_Planner> {
 
   }
 
-  Future<void> _savePlannedExercises() async {
+  Future<void> _savePlannedExercises({bool suppressSnack = false}) async {
+
     final userId = UserContext.of(context, listen: false).currentUid;
     if (userId == null || blockIdToUse == null) return;
 
@@ -1200,11 +1202,13 @@ class _BlockPlannerState extends State<Block_Planner> {
 
 
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
+    if (!suppressSnack && mounted && (ModalRoute.of(context)?.isCurrent ?? false)) {
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      messenger?.showSnackBar(
         const SnackBar(content: Text('✅ Planned exercises updated.')),
       );
     }
+
 
     print("📦 Final saved frequencies:");
     for (final ex in exercises) {
@@ -1405,7 +1409,7 @@ class _BlockPlannerState extends State<Block_Planner> {
               );
 
               if (confirm == true) {
-                await _savePlannedExercises(); // ✅ Save exercise-level data
+                await _savePlannedExercises(suppressSnack: true); // ✅ Save exercise-level data
                 await _savePlannedBlock(setActive: tempActive); // ✅ Save block-level metadata
               }
 
@@ -1533,6 +1537,9 @@ class _BlockPlannerState extends State<Block_Planner> {
                       onDismissed: (_) {
                         final removedExercise = exercises[index];
 
+                        final messenger = ScaffoldMessenger.of(context); // capture BEFORE list mutation
+
+
                         setState(() {
                           exercises.removeAt(index);
                           // 🧼 Also drop its settings locally so save won’t re-add details
@@ -1540,28 +1547,38 @@ class _BlockPlannerState extends State<Block_Planner> {
                         });
 
                         // 💾 Fire-and-forget save so deletion persists immediately
-                        Future.microtask(() => _savePlannedExercises());
+                        Future.microtask(() => _savePlannedExercises(suppressSnack: true));
 
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text('Removed "${_exerciseIdToName[removedExercise] ?? 'Unknown Exercise'}"'),
-                            action: SnackBarAction(
-                              label: 'Undo',
-                              textColor: Colors.amberAccent,
-                              onPressed: () {
-                                setState(() {
-                                  exercises.insert(index, removedExercise);
-                                });
-                                // 💾 Persist the undo as well
-                                Future.microtask(() => _savePlannedExercises());
-                              },
-                            ),
-                            duration: const Duration(seconds: 4),
-                            backgroundColor: Colors.blueGrey.shade700,
-                            behavior: SnackBarBehavior.floating,
-                            margin: const EdgeInsets.all(16),
-                          ),
-                        );
+
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (!mounted) return;
+                          try {
+                            ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                              SnackBar(
+                                content: Text('Removed "${_exerciseIdToName[removedExercise] ?? 'Unknown Exercise'}"'),
+                                action: SnackBarAction(
+                                  label: 'Undo',
+                                  textColor: Colors.amberAccent,
+                                  onPressed: () {
+                                    if (!mounted) return;
+                                    setState(() { exercises.insert(index, removedExercise); });
+                                    Future.microtask(() => _savePlannedExercises(suppressSnack: true));
+                                  },
+                                ),
+                                duration: const Duration(seconds: 4),
+                                backgroundColor: Colors.blueGrey.shade700,
+                                behavior: SnackBarBehavior.floating,
+                                margin: const EdgeInsets.all(16),
+                              ),
+                            );
+                          } catch (_) {
+                            // ignore — context likely deactivated during dismiss animation
+                          }
+                        });
+
+
+
+
                       },
 
                       background: Container(
@@ -1858,7 +1875,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
   Map<String, Map<String, Map<String, Map<String, String>>>>? _cachedRirPlan;
   String get userId => UserContext.of(context, listen: false).currentUid;
-
+  String? _parentBlockId;
 
 
   double _currentE1RM = 0.0;
@@ -2275,8 +2292,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     if (_cachedRirPlan != null && _cachedRirPlan!.isNotEmpty) {
       safeSave('rirPlan', _cachedRirPlan);
       print("💾 [DISPOSE] Saved rirPlan for ${widget.exerciseName}: ${jsonEncode(_cachedRirPlan)}");
-
-
     }
 
 
@@ -2306,9 +2321,15 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       debugPrint('🟧 [BP→Warm] warm kick failed: $e');
     }
 
-    super.dispose();
 
     super.dispose();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Safe time to read ancestors
+    _parentBlockId = context.findAncestorStateOfType<_BlockPlannerState>()?.blockIdToUse;
   }
 
 
