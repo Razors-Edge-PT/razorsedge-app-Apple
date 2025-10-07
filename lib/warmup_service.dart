@@ -1139,6 +1139,125 @@ class WarmupService {
           selectedDate: _sel, // 🔹 added
         );
 
+        // ── STEP 3c: detect completed rows for this date + prebuild final hints for them
+        List<bool> _skipRow = List<bool>.filled(planned.length, false);
+        final Map<String, Map<String, dynamic>> _completedHintsByKey = {};
+        final List<int> _engineIdxForPlannedIdx = List<int>.filled(planned.length, -1);
+
+// reuse your row-key helper from Step 8 to keep identity stable
+        String _rowKeyBy(int idx) => 'wk${weekIndex}_d${dayIndex}_i$idx';
+
+        String _ymd(DateTime d) {
+          final m = d.month.toString().padLeft(2, '0');
+          final da = d.day.toString().padLeft(2, '0');
+          return '${d.year}-$m-$da';
+        }
+        String _norm(String s) {
+          var t = s.toLowerCase().trim();
+          t = t.replaceAll(RegExp(r'\([^)]*\)'), '');
+          t = t.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');
+          t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
+          t = t.replaceAll(RegExp(r'\bdb\b'), 'dumbbell');
+          t = t.replaceAll(RegExp(r'\bbb\b'), 'barbell');
+          return t;
+        }
+
+        double? _num(dynamic v) {
+          if (v == null) return null;
+          if (v is num) return v.toDouble();
+          if (v is String) return double.tryParse(v);
+          return null;
+        }
+
+        final ymd = _ymd(_sel);
+        try {
+          final wesSnap = await fs
+              .collection('users').doc(uid)
+              .collection('workouts').doc(ymd)
+              .get(const GetOptions(source: Source.server));
+
+          if (wesSnap.exists) {
+            final data = wesSnap.data() ?? const <String, dynamic>{};
+            final completed = (data['exercises'] is List)
+                ? (data['exercises'] as List).whereType<Map>().map((m) => Map<String, dynamic>.from(m)).toList()
+                : const <Map<String, dynamic>>[];
+
+            // Build a simple matcher: exerciseId (preferred) else normalized name; also match circuitIndex if present
+            for (int i = 0; i < planned.length; i++) {
+              final p = planned[i];
+              final pName = (p['name'] ?? p['exercise'] ?? '').toString().trim();
+              if (pName.isEmpty) continue;
+              final pId = (p['exerciseId'] ?? p['id'] ?? p['exercise_id'])?.toString()
+                  ?? (PeriodizationModelUtils.nameToId[pName] ?? pName).toString();
+              final pNorm = _norm(pName);
+              final pCi = (p['circuitIndex'] is num) ? (p['circuitIndex'] as num).toInt() : 0;
+
+              Map<String, dynamic>? match;
+
+              for (final ex in completed) {
+                final exName = (ex['name'] ?? ex['exercise'] ?? '').toString().trim();
+                if (exName.isEmpty) continue;
+                final exId = (ex['exerciseId'] ?? ex['id'] ?? ex['exercise_id'])?.toString()
+                    ?? (PeriodizationModelUtils.nameToId[exName] ?? exName).toString();
+                final exNorm = _norm(exName);
+                final exCi = (ex['circuitIndex'] is num) ? (ex['circuitIndex'] as num).toInt() : 0;
+
+                final idMatch = exId.isNotEmpty && pId.isNotEmpty && exId == pId;
+                final nameMatch = (exId.isEmpty || pId.isEmpty) && exNorm == pNorm;
+                final ciMatch = exCi == pCi;
+
+                if ((idMatch || nameMatch) && ciMatch) {
+                  // Any set recorded counts as "completed" for skipping
+                  final sets = (ex['sets'] is List)
+                      ? (ex['sets'] as List).whereType<Map>().map((m) => Map<String, dynamic>.from(m)).toList()
+                      : const <Map<String, dynamic>>[];
+                  if (sets.isNotEmpty) { match = ex; break; }
+                }
+              }
+
+              if (match != null) {
+                _skipRow[i] = true;
+
+                // Build final hint entry for Step 9 (S1 only; optional RIR for S2..S8 if trivially present)
+                final sets = (match['sets'] as List).whereType<Map>().map((m) => Map<String, dynamic>.from(m)).toList();
+                final s1 = sets.first;
+
+                final double? s1Weight = _num(s1['actualWeight'] ?? s1['weight']);
+                final double? s1Added  = _num(s1['weightAdded'] ?? s1['addedWeight']);
+                final double? s1Reps   = _num(s1['actualReps'] ?? s1['reps']);
+                final double? s1Rir    = _num(s1['actualRir'] ?? s1['rir']);
+
+                final isBw = PeriodizationModelUtils.isBodyweightExercise(
+                  id: pId, name: pName,
+                );
+
+                final entry = <String, dynamic>{
+                  'name'        : pName,
+                  'circuitIndex': pCi,
+                  if (!isBw && s1Weight != null) 's1_weight'       : s1Weight,
+                  if (isBw  && s1Added  != null) 's1_weight_added' : s1Added,
+                  if (s1Reps != null)            's1_reps'         : s1Reps,
+                  if (s1Rir  != null)            's1_rir'          : s1Rir,
+                  // 'origin': 'completed', // (optional) handy for debugging
+                };
+
+                // Minimal, safe add: if later sets have explicit RIR, include them (cheap best-effort).
+                // We DO NOT compute/guess anything if missing.
+                for (int s = 2; s <= 8 && s <= sets.length; s++) {
+                  final r = _num(sets[s - 1]['actualRir'] ?? sets[s - 1]['rir']);
+                  if (r != null) entry['s${s}_rir'] = r;
+                }
+
+                _completedHintsByKey[_rowKeyBy(i)] = entry;
+                print('✅ [Warmup:3c] will skip row#$i "$pName"|ci=$pCi (completed in WES); S1 ready for first-paint.');
+              }
+            }
+          }
+        } catch (e) {
+          print('🟧 [Warmup:3c] completed-scan failed: $e');
+        }
+
+
 
         // ── STEP 4: exercise settings (progressionModel/repTargets/increments/caps)
         final exerciseSettings = await _loadExerciseSettingsForPlanned(
@@ -1298,9 +1417,10 @@ class WarmupService {
 
           final List<Map<String, dynamic>> wesPlanned = <Map<String, dynamic>>[];
           // capture exactly what the engine used so we don't re-derive later
-          final List<double?> _rirUsedByRow = <double?>[];
-          final List<double?> _planRepsByRow = <double?>[];
-          final List<bool>    _isBwByRow     = <bool>[];
+          final List<double?> _rirUsedByRow = List<double?>.filled(planned.length, null);
+          final List<double?> _planRepsByRow = List<double?>.filled(planned.length, null);
+          final List<bool>    _isBwByRow     = List<bool>.filled(planned.length, false);
+
 
 
           // ——— instance counting helpers (saved-workouts based) ———
@@ -1614,7 +1734,18 @@ class WarmupService {
 
 
 
+          // Prepare per-row arrays aligned to PLANNED indices (so skipped rows are just nulls)
+          final List<Map<String, dynamic>?> _wesByPlannedIdx = List<Map<String, dynamic>?>.filled(planned.length, null);
+
+
+
+
           for (int iRow = 0; iRow < planned.length; iRow++) {
+            if (_skipRow[iRow]) {
+              print('⏭️  [Warmup:8] skip engine for row#$iRow "${(planned[iRow]['name'] ?? planned[iRow]['exercise'] ?? '').toString()}" (completed)');
+              continue; // do not call the engine at all
+            }
+
             final res = ProgressionEngine.engineProgressedValues(
               ProgressionEngineInputs(
                 blockStartDate: blockStart,
@@ -1632,106 +1763,105 @@ class WarmupService {
                 weightTextAt: _weightTextAt,
                 rirTextAt: _rirTextAt,
                 debugPrintBlockDates: () {},
-                // ✅ make sure your ProgressionEngineInputs includes this field:
                 resolvedBB2Values: resolvedBB2Values,
               ),
               iRow,
             );
-            wesPlanned.add(res);
 
-            // capture the exact plan inputs the engine used for its calc
+            final outIdx = wesPlanned.length;
+            _engineIdxForPlannedIdx[iRow] = outIdx;
+
+            wesPlanned.add(res);
+            _wesByPlannedIdx[iRow] = res;
+
+            // capture plan inputs used by the engine (aligned to PLANNED index)
             final usedRir  = _getRirFromPlanOrInput(iRow, 1);
             final planReps = _getRepsFromPlan(iRow, 1);
+            _rirUsedByRow[iRow] = usedRir;
+            _planRepsByRow[iRow] = planReps;
 
-// record them in order, aligned to iRow
-            _rirUsedByRow.add(usedRir);
-            _planRepsByRow.add(planReps);
-
-// also record BW vs non-BW for the row (to control s1_weight_added output)
+            // BW vs load for this row
             final exName = (res['exerciseName'] ?? '').toString();
             final exId   = (res['exerciseId'] ?? PeriodizationModelUtils.nameToId[exName] ?? exName).toString();
-            final isBw   = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: exName);
-            _isBwByRow.add(isBw);
+            _isBwByRow[iRow] = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: exName);
 
-
-
-            print('   • #$iRow ${res['exerciseName']} → ${res['weight']}kg @ ${res['reps']} (rir=${res['rir']}) id=${res['exerciseId']}');
-
-            // 👇 add instance context print here
-            final priorSaved = _priorSavedInstancesThisWeekFor(iRow);
-            final todayIdx   = _todayPlannedIndexFor(iRow);
-            final instance   = priorSaved + todayIdx;
-            print('   • [INST] wk=$weekIndex day=$dayIndex date=${_sel.toIso8601String().substring(0,10)} priorSaved=$priorSaved todayIdx=$todayIdx instance=$instance');
-
-
+            print('   • #$iRow $exName → ${res['weight']}kg @ ${res['reps']} (rir=${res['rir']}) id=${res['exerciseId']}');
           }
+
 
           // DEVBIG: verify we have everything and results look correct
           print('🧪 [Warmup:8] engine results → ${wesPlanned.length} rows '
               '(wk=$weekIndex day=$dayIndex date=${_sel.toIso8601String().substring(0,10)})');
 
-          for (int i = 0; i < wesPlanned.length && i < 4; i++) {
-            final r = wesPlanned[i];
-            final usedRir  = _getRirFromPlanOrInput(i, 1);     // RIR used for calc
-            final planReps = _getRepsFromPlan(i, 1);           // Reps from Step-4 plan
-            final overlayRir = (r['rir'] as num?)?.toDouble(); // BB2 override after calc (if any)
+          int printed = 0;
+          for (int i = 0; i < planned.length && printed < 4; i++) {
+            if (_skipRow[i]) continue; // skipped rows have no engine result to peek
+            final ei = _engineIdxForPlannedIdx[i];
+            if (ei < 0 || ei >= wesPlanned.length) continue;
+
+            final r = wesPlanned[ei];
+            final usedRir  = _getRirFromPlanOrInput(i, 1);
+            final planReps = _getRepsFromPlan(i, 1);
+            final overlayRir = (r['rir'] as num?)?.toDouble();
             final rirInfo = (overlayRir == null || overlayRir == usedRir)
                 ? 'rir=$usedRir'
                 : 'rirUsed=$usedRir override=$overlayRir';
 
-            print('   • #$i ${r['exerciseName']} → ${r['weight']}kg @ $planReps ($rirInfo) '
-                'id=${r['exerciseId']}');
-
+            print('   • #$i ${r['exerciseName']} → ${r['weight']}kg @ $planReps ($rirInfo) id=${r['exerciseId']}');
             print('   • [CTX] wk=$weekIndex day=$dayIndex date=${_sel.toIso8601String().substring(0,10)}');
+            printed++;
+          }
 
-
-
-
-
-
-        }
 
           // Build final hints directly from ENGINE outputs (post-progression)
           final Map<String, Map<String, dynamic>> hints = <String, Map<String, dynamic>>{};
-          for (int i = 0; i < wesPlanned.length; i++) {
-            final res  = wesPlanned[i];  // progressed row from the engine
+          for (int i = 0; i < planned.length; i++) {
+            final key = _rowKeyBy(i);
+
+            if (_skipRow[i]) {
+              // Completed path: use what we built in Step 3c
+              final entry = _completedHintsByKey[key];
+              if (entry != null) {
+                hints[key] = entry;
+                continue;
+              }
+              // safety: if somehow missing, fall through to engine path
+            }
+
+            // Engine path for non-skipped rows
+            final ei = _engineIdxForPlannedIdx[i];
+            if (ei < 0) continue; // nothing to output
+            final res  = wesPlanned[ei];
             final name = (res['exerciseName'] ?? '').toString();
-            final ci   = (planned[i]['circuitIndex'] is num) ? (planned[i]['circuitIndex'] as num).toInt() : 0;
 
-            // absolute weight from engine
+            final ci   = (planned[i]['circuitIndex'] is num)
+                ? (planned[i]['circuitIndex'] as num).toInt()
+                : 0;
+
             final double? wAbs   = (res['weight'] as num?)?.toDouble();
-            // display-added only exists (and only makes sense) on BW rows
             final double? wAdded = (res['weightDisplayAdded'] as num?)?.toDouble();
-
-            // reps from engine (includes DUPE/linear resolution)
             final double? reps   = (res['reps'] as num?)?.toDouble();
 
-            // RIR: prefer an explicit override in engine output when it’s intentional;
-            // otherwise fall back to plan-based RIR used by calc
             final double? rirOverlay = (res['rir'] as num?)?.toDouble();
             final double planRir = _getRirFromPlanOrInput(i, 1);
+            bool _intent(num? v) => v != null && v != 0;
+            final double? rirFinal = _intent(rirOverlay) ? rirOverlay : planRir;
 
-            bool _isMeaningfulOverride(num? v) => v != null && v != 0; // 0 is valid but must be intentional upstream
-            final double? rirFinal = _isMeaningfulOverride(rirOverlay) ? rirOverlay : planRir;
-
-            final key = _rowKeyBy(i);
             final exId = (PeriodizationModelUtils.nameToId[name] ?? name).toString();
             final bool isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
 
             final entry = <String, dynamic>{
-
               'name'        : name,
               'circuitIndex': ci,
-              if (!isBw && wAbs != null) 's1_weight' : wAbs,
-              if (isBw  && wAdded != null) 's1_weight_added' : wAdded,
-
-              if (reps   != null) 's1_reps'         : reps,
-              if (rirFinal != null) 's1_rir'        : rirFinal,
-
+              if (!isBw && wAbs != null) 's1_weight'       : wAbs,
+              if (isBw  && wAdded != null) 's1_weight_added': wAdded,
+              if (reps   != null)          's1_reps'        : reps,
+              if (rirFinal != null)        's1_rir'         : rirFinal,
             };
 
             hints[key] = entry;
           }
+
 
 // quick sanity peek
           hints.entries.take(2).forEach((e) {
@@ -1742,10 +1872,27 @@ class WarmupService {
 
 
 /// Build final hints directly from ENGINE outputs (post-progression) + the exact plan RIR it used
+          /// Build final hints directly from ENGINE outputs (post-progression) + the exact plan RIR it used
           hints.clear(); // ← reuse the existing map instead of redeclaring
 
-          for (int i = 0; i < wesPlanned.length; i++) {
-            final res  = wesPlanned[i];  // progressed row from the engine
+          for (int i = 0; i < planned.length; i++) {
+            final key = _rowKeyBy(i);
+
+            // If this exercise is completed today, use what we built from Firestore (Step 3 extension)
+            if (_skipRow[i]) {
+              final entry = _completedHintsByKey[key];
+              if (entry != null) {
+                hints[key] = entry;     // S1 values (+ any explicit s2..s8 RIR present in saved sets)
+                continue;
+              }
+              // safety: if somehow missing, fall through to engine path
+            }
+
+            // Engine path for non-skipped rows
+            final ei = _engineIdxForPlannedIdx[i];
+            if (ei < 0 || ei >= wesPlanned.length) continue;
+
+            final res  = wesPlanned[ei];  // progressed row from the engine
             final name = (res['exerciseName'] ?? '').toString();
             final ci   = (planned[i]['circuitIndex'] is num)
                 ? (planned[i]['circuitIndex'] as num).toInt()
@@ -1765,13 +1912,12 @@ class WarmupService {
             final bool hasIntentionalOverride = (rirOverlay != null);    // 0.0 is valid override
             final double? rirFinal = hasIntentionalOverride ? rirOverlay : planRir;
 
-            // BW/non-BW check we captured during the engine pass
+            // BW/non-BW captured during engine pass at PLANNED index
             final bool isBw = _isBwByRow[i];
 
-            final key = _rowKeyBy(i);
+            // row identity
             final exId = PeriodizationModelUtils.nameToId[name] ?? name;
-            final exerciseId = exId.toString();   // normalised id
-                // you already calculated this earlier in Step 2
+            final exerciseId = exId.toString();   // normalized id
             final sessionIndex = ci;              // circuitIndex doubles as session index
 
             // pull all planned RIRs from rirPlan (sets 2–8)
@@ -1782,17 +1928,17 @@ class WarmupService {
             final rir6 = _rirFromPlan(exerciseId, weekIndex, sessionIndex, 6);
             final rir7 = _rirFromPlan(exerciseId, weekIndex, sessionIndex, 7);
             final rir8 = _rirFromPlan(exerciseId, weekIndex, sessionIndex, 8);
-// 🔎 Pretty-print whatever RIRs exist for sets 1–8
+
+            // pretty print (optional)
             final _allRirs = <String>[];
             if (rirFinal != null) _allRirs.add('s1=${rirFinal.toStringAsFixed(2)}');
-            if (rir2     != null) _allRirs.add('s2=${rir2!.toStringAsFixed(2)}');
-            if (rir3     != null) _allRirs.add('s3=${rir3!.toStringAsFixed(2)}');
-            if (rir4     != null) _allRirs.add('s4=${rir4!.toStringAsFixed(2)}');
-            if (rir5     != null) _allRirs.add('s5=${rir5!.toStringAsFixed(2)}');
-            if (rir6     != null) _allRirs.add('s6=${rir6!.toStringAsFixed(2)}');
-            if (rir7     != null) _allRirs.add('s7=${rir7!.toStringAsFixed(2)}');
-            if (rir8     != null) _allRirs.add('s8=${rir8!.toStringAsFixed(2)}');
-
+            if (rir2     != null) _allRirs.add('s2=${rir2.toStringAsFixed(2)}');
+            if (rir3     != null) _allRirs.add('s3=${rir3.toStringAsFixed(2)}');
+            if (rir4     != null) _allRirs.add('s4=${rir4.toStringAsFixed(2)}');
+            if (rir5     != null) _allRirs.add('s5=${rir5.toStringAsFixed(2)}');
+            if (rir6     != null) _allRirs.add('s6=${rir6.toStringAsFixed(2)}');
+            if (rir7     != null) _allRirs.add('s7=${rir7.toStringAsFixed(2)}');
+            if (rir8     != null) _allRirs.add('s8=${rir8.toStringAsFixed(2)}');
             print('   • [RIR-Plan] ${res['exerciseName']} → ${_allRirs.join(' ')}');
 
             final entry = <String, dynamic>{
@@ -1800,7 +1946,6 @@ class WarmupService {
               'circuitIndex': ci,
               if (!isBw && wAbs != null) 's1_weight' : wAbs,
               if (isBw  && wAdded != null) 's1_weight_added' : wAdded,
-
               if (reps   != null) 's1_reps'         : reps,
               if (rirFinal != null) 's1_rir'        : rirFinal,
               if (rir2    != null) 's2_rir'         : rir2,
@@ -1812,7 +1957,6 @@ class WarmupService {
               if (rir8    != null) 's8_rir'         : rir8,
             };
 
-
             hints[key] = entry;
           }
 
@@ -1820,6 +1964,7 @@ class WarmupService {
           hints.entries.take(2).forEach((e) {
             print('🟣 [Warmup:8→9] hint ${e.key} → ${e.value}');
           });
+
 
 // JSON for Step 9 snapshot — compute AFTER filling `hints`
           final String hintsJson = jsonEncode(hints);
@@ -1861,8 +2006,25 @@ class WarmupService {
             // 9.1 Build hintsJson (Map keyed by rowKey: wk{w}_d{d}_i{idx})
             final Map<String, Map<String, dynamic>> hints = <String, Map<String, dynamic>>{};
 
-            for (int i = 0; i < wesPlanned.length; i++) {
-              final res  = wesPlanned[i];  // progressed row from the engine
+            for (int i = 0; i < planned.length; i++) {
+              final key = _rowKeyBy(i);
+
+              // Completed rows: use prebuilt entry (S1 + any explicit s2..s8 RIR from saved sets)
+              if (_skipRow[i]) {
+                final entry = _completedHintsByKey[key];
+                if (entry != null) {
+                  hints[key] = entry;
+                  print('🟣 [Warmup:9] hint $key (completed) → $entry');
+                  continue;
+                }
+                // safety: fall through if missing
+              }
+
+              // Engine rows
+              final ei = _engineIdxForPlannedIdx[i];
+              if (ei < 0 || ei >= wesPlanned.length) continue;
+
+              final res  = wesPlanned[ei];
               final name = (res['exerciseName'] ?? '').toString();
               final ci   = (planned[i]['circuitIndex'] is num)
                   ? (planned[i]['circuitIndex'] as num).toInt()
@@ -1878,16 +2040,15 @@ class WarmupService {
 
               // RIR: prefer explicit overlay if non-null; else use the exact plan RIR the engine used
               final double? rirOverlay = (res['rir'] as num?)?.toDouble(); // may be null
-              final double? planRir    = _rirUsedByRow[i];                  // captured earlier
-              final bool hasIntentionalOverride = (rirOverlay != null);     // 0.0 is valid override
+              final double? planRir    = _rirUsedByRow[i];                 // captured earlier
+              final bool hasIntentionalOverride = (rirOverlay != null);    // 0.0 is valid override
               final double? rirFinal = hasIntentionalOverride ? rirOverlay : planRir;
 
-              final key = _rowKeyBy(i);
-              final isBw = _isBwByRow[i];
+              // BW/non-BW for this planned row
+              final bool isBw = _isBwByRow[i];
 
               // pull planned RIRs for sets 2–8 from rirPlan
               final exId = (PeriodizationModelUtils.nameToId[name] ?? name).toString();
-
               final int sessionIndex = ci;             // circuit index doubles as session index
               final double? rir2 = _rirFromPlan(exId, weekIndex, sessionIndex, 2);
               final double? rir3 = _rirFromPlan(exId, weekIndex, sessionIndex, 3);
@@ -1931,6 +2092,7 @@ class WarmupService {
 
 // JSON for Step 9 snapshot — compute AFTER filling `hints`
             final String hintsJson = jsonEncode(_jsonSafe(hints));
+
 
 
 
