@@ -6248,7 +6248,13 @@ class _WorkoutPageState extends State<WorkoutPage>
           final s1Ri  = (v['s1_rir'] as num?)?.toDouble();
           final e1    = (v['e1rm'] as num?)?.toDouble();
 
-          // NEW: pull planned RIRs for sets 2–8 if present
+// NEW: completion flags from Warmup (if present)
+          final bool completed = (v['completed'] == true);
+          final List completedSets = (v['completedSets'] is List)
+              ? (v['completedSets'] as List)
+              : const [];
+
+// NEW: pull planned RIRs for sets 2–8 if present
           final s2Ri = (v['s2_rir'] as num?)?.toDouble();
           final s3Ri = (v['s3_rir'] as num?)?.toDouble();
           final s4Ri = (v['s4_rir'] as num?)?.toDouble();
@@ -6257,6 +6263,7 @@ class _WorkoutPageState extends State<WorkoutPage>
           final s7Ri = (v['s7_rir'] as num?)?.toDouble();
           final s8Ri = (v['s8_rir'] as num?)?.toDouble();
 
+
           hintsByKey[rowKey] = {
             's1_weight'       : s1W,
             's1_weight_added' : s1WA,
@@ -6264,7 +6271,6 @@ class _WorkoutPageState extends State<WorkoutPage>
             's1_rir'          : s1Ri,
             'e1rm'            : e1,
 
-            // expose planned RIRs for 2–8
             if (s2Ri != null) 's2_rir': s2Ri,
             if (s3Ri != null) 's3_rir': s3Ri,
             if (s4Ri != null) 's4_rir': s4Ri,
@@ -6273,12 +6279,17 @@ class _WorkoutPageState extends State<WorkoutPage>
             if (s7Ri != null) 's7_rir': s7Ri,
             if (s8Ri != null) 's8_rir': s8Ri,
 
-            // Aliases some code paths look for:
+            // Aliases
             'weight'          : s1W,
             'absWeight'       : s1W,
             'reps'            : s1R,
             'rir'             : s1Ri,
+
+            // NEW: completion flags & sets
+            'completed'       : completed,
+            'completedSets'   : completedSets,
           };
+
 
           // Short debug
           final rirs = [
@@ -6334,6 +6345,79 @@ class _WorkoutPageState extends State<WorkoutPage>
 
         final exId = PeriodizationModelUtils.nameToId[name] ?? name;
         final isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
+
+        // NEW: if the row is completed, hydrate from completedSets and skip the hint path
+        final bool isCompleted = (h['completed'] == true);
+        if (isCompleted) {
+          final List cs = (h['completedSets'] is List) ? (h['completedSets'] as List) : const [];
+          final int maxSets = (_defaultSets < cs.length) ? _defaultSets : cs.length;
+
+          for (var k = 0; k < maxSets; k++) {
+            final m = Map<String, dynamic>.from(cs[k] as Map);
+
+            // Pull normalized fields (these were normalized by Warmup)
+            final double? absW   = (m['weight'] as num?)?.toDouble();
+            final double? addW   = (m['addedWeight'] as num?)?.toDouble();
+            final int?    reps   = (m['reps'] as num?)?.toInt();
+            final double? rir    = (m['rir'] as num?)?.toDouble();
+            final double? vel    = (m['velocity'] as num?)?.toDouble();
+            final String? notes  = (m['notes'] as String?);
+
+            // Convert to display weight for BW exercises (prefer addedWeight)
+            double? displayWeight;
+            if (isBw) {
+              if (addW != null) {
+                displayWeight = addW;
+              } else if (absW != null) {
+                displayWeight = PeriodizationModelUtils.toDisplayAddedWeight(
+                  uid: uid,
+                  absoluteKg: absW,
+                  exerciseId: exId,
+                  exerciseName: name,
+                  asOfDate: _selectedDate,
+                );
+              }
+            } else {
+              displayWeight = absW;
+            }
+
+            // Controllers text — set actual values (not hints)
+            if (k < tmpWts[i].length)   tmpWts[i][k].text  = (displayWeight == null) ? '' : (displayWeight.toString());
+            if (k < tmpReps[i].length)  tmpReps[i][k].text = (reps == null) ? '' : reps.toString();
+            if (k < tmpRir[i].length)   tmpRir[i][k].text  = (rir == null) ? '' : rir.toString();
+            if (k < tmpVel[i].length && vel != null)   tmpVel[i][k].text   = vel.toString();
+            if (k < tmpNotes[i].length && notes != null && notes.trim().isNotEmpty) {
+              tmpNotes[i][k].text = notes.trim();
+            }
+
+            // SetDetails (kept for non-controller readers)
+            if (k < tmpSets[i].length) {
+              tmpSets[i][k].weight = displayWeight;
+              tmpSets[i][k].reps   = reps;
+              tmpSets[i][k].rir    = rir;
+              // If your SetDetails class has velocity/notes fields, assign here too:
+              // tmpSets[i][k].velocity = vel;
+              // tmpSets[i][k].notes = notes?.trim();
+            }
+          }
+
+          // Clear any remaining sets (so they appear empty/hidden depending on your UI)
+          for (var k = maxSets; k < _defaultSets && k < tmpWts[i].length; k++) {
+            tmpWts[i][k].text  = '';
+            tmpReps[i][k].text = '';
+            tmpRir[i][k].text  = '';
+            // optional: tmpVel/tmpNotes left empty
+            if (k < tmpSets[i].length) {
+              tmpSets[i][k].weight = null;
+              tmpSets[i][k].reps   = null;
+              tmpSets[i][k].rir    = null;
+            }
+          }
+
+          print('✅ [FastPaint Completed] ${name}|$ci → hydrated ${maxSets} set(s) from completedSets');
+          continue; // ⬅️ very important: skip the hint path below
+        }
+
 
         final abs = (h['s1_weight'] as num?)?.toDouble();
         final add = (h['s1_weight_added'] as num?)?.toDouble();

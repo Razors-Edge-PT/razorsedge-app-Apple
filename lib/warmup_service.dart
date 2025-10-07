@@ -1219,43 +1219,96 @@ class WarmupService {
                 _skipRow[i] = true;
 
                 // Build final hint entry for Step 9 (S1 only; optional RIR for S2..S8 if trivially present)
-                final sets = (match['sets'] as List).whereType<Map>().map((m) => Map<String, dynamic>.from(m)).toList();
-                final s1 = sets.first;
+                // Also mark it as completed and include normalized completedSets for WES UI.
+                final List<Map<String, dynamic>> sets =
+                (match['sets'] as List)
+                    .whereType<Map>()
+                    .map((m) => Map<String, dynamic>.from(m))
+                    .toList();
 
-                final double? s1Weight = _num(s1['actualWeight'] ?? s1['weight']);
-                final double? s1Added  = _num(s1['weightAdded'] ?? s1['addedWeight']);
-                final double? s1Reps   = _num(s1['actualReps'] ?? s1['reps']);
-                final double? s1Rir    = _num(s1['actualRir'] ?? s1['rir']);
+                // Guard: if somehow no sets, still build a minimal completed entry
+                final Map<String, dynamic> s1 =
+                sets.isNotEmpty ? sets.first : <String, dynamic>{};
 
-                final isBw = PeriodizationModelUtils.isBodyweightExercise(
+                // Small inline parsers (no nested functions to keep things simple)
+                double? _d(dynamic v) {
+                  if (v == null) return null;
+                  if (v is num) return v.toDouble();
+                  if (v is String) return double.tryParse(v);
+                  return null;
+                }
+
+                int? _i(dynamic v) {
+                  if (v == null) return null;
+                  if (v is num) return v.toInt();
+                  if (v is String) {
+                    final m = RegExp(r'(-?\d+)').firstMatch(v.trim());
+                    if (m != null) return int.tryParse(m.group(1)!);
+                    return int.tryParse(v);
+                  }
+                  return null;
+                }
+
+                final double? s1Weight = _d(s1['actualWeight'] ?? s1['weight']);
+                final double? s1Added  = _d(s1['weightAdded'] ?? s1['addedWeight']);
+                final double? s1Rir    = _d(s1['actualRir'] ?? s1['rir']);
+                final int?    s1Reps   = _i(s1['actualReps'] ?? s1['reps']);
+
+                final bool isBw = PeriodizationModelUtils.isBodyweightExercise(
                   id: pId, name: pName,
                 );
 
-                final entry = <String, dynamic>{
+                // Normalize all saved sets (S1..Sn) for UI if FastPaint wants to show them directly
+                final List<Map<String, dynamic>> completedSets =
+                sets.map<Map<String, dynamic>>((raw) {
+                  final out = <String, dynamic>{};
+                  final reps = _i(raw['actualReps'] ?? raw['reps']);
+                  final wt   = _d(raw['actualWeight'] ?? raw['weight']);
+                  final add  = _d(raw['weightAdded'] ?? raw['addedWeight']);
+                  final rir  = _d(raw['actualRir'] ?? raw['rir']);
+                  final vel  = _d(raw['velocity']);
+                  final note = (raw['notes'] is String) ? (raw['notes'] as String).trim() : null;
+
+                  if (reps != null) out['reps'] = reps;
+                  if (wt   != null) out['weight'] = wt;
+                  if (add  != null) out['addedWeight'] = add;
+                  if (rir  != null) out['rir'] = rir;
+                  if (vel  != null) out['velocity'] = vel;
+                  if (note != null && note.isNotEmpty) out['notes'] = note;
+                  return out;
+                }).toList();
+
+                // Base hint (what FastPaint uses today) + explicit completion flags
+                final Map<String, dynamic> entry = <String, dynamic>{
                   'name'        : pName,
                   'circuitIndex': pCi,
                   if (!isBw && s1Weight != null) 's1_weight'       : s1Weight,
                   if (isBw  && s1Added  != null) 's1_weight_added' : s1Added,
                   if (s1Reps != null)            's1_reps'         : s1Reps,
                   if (s1Rir  != null)            's1_rir'          : s1Rir,
-                  // 'origin': 'completed', // (optional) handy for debugging
+
+                  // ✅ new flags used by WES to render as completed on first paint
+                  'completed'     : true,
+                  'completedSets' : completedSets,
                 };
 
                 // Minimal, safe add: if later sets have explicit RIR, include them (cheap best-effort).
                 // We DO NOT compute/guess anything if missing.
                 for (int s = 2; s <= 8 && s <= sets.length; s++) {
-                  final r = _num(sets[s - 1]['actualRir'] ?? sets[s - 1]['rir']);
+                  final r = _d(sets[s - 1]['actualRir'] ?? sets[s - 1]['rir']);
                   if (r != null) entry['s${s}_rir'] = r;
                 }
 
                 _completedHintsByKey[_rowKeyBy(i)] = entry;
-                print('✅ [Warmup:3c] will skip row#$i "$pName"|ci=$pCi (completed in WES); S1 ready for first-paint.');
+                print('✅ [Warmup:3c] will skip row#$i "$pName"|ci=$pCi (completed in WES); '
+                    'S1 ready + completed flags + ${sets.length} set(s).');
               }
             }
           }
         } catch (e) {
           print('🟧 [Warmup:3c] completed-scan failed: $e');
         }
+
 
 
 
