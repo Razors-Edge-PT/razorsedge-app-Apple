@@ -5123,8 +5123,6 @@ class _WorkoutPageState extends State<WorkoutPage>
             }
           }
 
-
-
           if (widget.initialDate != null) {
             _selectedDate = widget.initialDate!;
             _workoutNameController.text = _formatWorkoutDate(_selectedDate);
@@ -6201,30 +6199,10 @@ class _WorkoutPageState extends State<WorkoutPage>
           _plannedIdx++;
         }
       } else {
-        for (final e in prev) {
-          final m = Map<String, dynamic>.from(e as Map);
-          final name = (m['name'] ?? '').toString().trim();
-          if (name.isEmpty) continue;
-
-          final ci = (m['circuitIndex'] is int)
-              ? (m['circuitIndex'] as num).toInt()
-              : 0;
-
-          final kn = _kName(name);
-          if (_seenNames.contains(kn)) {
-            // print('🧹 [FastPaint] skipped duplicate prev by name: $kn');
-            continue;
-          }
-          _seenNames.add(kn);
-
-          tmpRows.add({
-            'name': name,
-            'circuitIndex': ci,
-            'cardId': '$ymd|prev|$_prevIdx|$kn',
-          });
-          _prevIdx++;
-        }
+        // No planned rows for this date → do not auto-seed from previousWorkoutJson.
+        // Leave tmpRows empty to avoid “ghost” exercises.
       }
+
       if (tmpRows.isEmpty) return;
 
 
@@ -6306,6 +6284,14 @@ class _WorkoutPageState extends State<WorkoutPage>
       _seedHintsByKey
         ..clear()
         ..addAll(hintsByKey);
+// Preserve any user-typed text from existing controllers (if this runs again)
+      final prevWtsCtr   = _weightControllers;
+      final prevRepsCtr  = _repsControllers;
+      final prevRirCtr   = _rirControllers;
+// (Optional, if you want to preserve velocity/notes too)
+// final prevVelCtr   = _velocityControllers;
+// final prevNotesCtr = _notesControllers;
+
 
       // ⚙️ Build controllers and sets in locals and hydrate BEFORE setState
       final tmpSets = List.generate(
@@ -6442,10 +6428,28 @@ class _WorkoutPageState extends State<WorkoutPage>
         final reps = (h['s1_reps'] as num?)?.toInt();
         final rir  = (h['s1_rir'] as num?)?.toString();
 
-        // Controllers (Set 1): leave EMPTY so UI shows hintText instead of “user input”
-        tmpWts[i][0].text  = '';
-        tmpReps[i][0].text = '';
-        tmpRir[i][0].text  = '';
+        // Controllers (Set 1): keep any user-entered text from previous controllers;
+// otherwise leave empty so hintText shows (newest hints will be “underneath”)
+        String? userWt, userReps, userRir;
+        final bool havePrevRows =
+            i < prevWtsCtr.length && i < prevRepsCtr.length && i < prevRirCtr.length;
+
+        if (havePrevRows) {
+          final prevWt   = (prevWtsCtr[i].isNotEmpty)  ? prevWtsCtr[i][0]  : null;
+          final prevReps = (prevRepsCtr[i].isNotEmpty) ? prevRepsCtr[i][0] : null;
+          final prevRir  = (prevRirCtr[i].isNotEmpty)  ? prevRirCtr[i][0]  : null;
+
+          if (prevWt   != null && prevWt.text.isNotEmpty)   userWt   = prevWt.text;
+          if (prevReps != null && prevReps.text.isNotEmpty) userReps = prevReps.text;
+          if (prevRir  != null && prevRir.text.isNotEmpty)  userRir  = prevRir.text;
+
+        }
+
+// Set the new controllers to the user’s prior text if present; else keep empty to show hint
+        tmpWts[i][0].text  = userWt   ?? '';
+        tmpReps[i][0].text = userReps ?? '';
+        tmpRir[i][0].text  = userRir  ?? '';
+
 
         print('🟢 [FastPaint Row $i] ${name}|$ci '
             '→ HINT weight=${displayWeight ?? '—'} reps=${reps ?? '—'} rir=${rir ?? '—'} '
@@ -11339,61 +11343,9 @@ class _WorkoutPageState extends State<WorkoutPage>
                   : null,
             ),
 
-            /*IconButton(
-              icon: const Icon(Icons.bolt, color: Colors.orange), // 💥 closest stock icon; swap if you add custom nuclear icon
-              onPressed: () {
-                showDialog(
-                  context: context,
-                  builder: (BuildContext context) {
-                    return AlertDialog(
-                      backgroundColor: Colors.blueGrey.shade900,
-                      title: const Text(
-                        'NUKE Local Cache',
-                        style: TextStyle(fontFamily: 'Verdana', color: Colors.white),
-                      ),
-                      content: Text(
-                        'Delete ALL locally stored data for ${DateFormat('yyyy-MM-dd').format(_selectedDate)}?\n\n'
-                            'This will wipe WESInit, WorkoutDayCache, BB2 BlockDay, SharedPrefs (drafts) for this date.',
-                        style: const TextStyle(fontFamily: 'Verdana', color: Colors.white),
-                      ),
-                      actions: <Widget>[
-                        TextButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          child: const Text('Cancel'),
-                        ),
-                        TextButton(
-                          onPressed: () async {
-                            Navigator.of(context).pop();
 
-                            // 1) Your existing per-day nuke
-                            await nukeLocalWorkoutsForDay(
-                              uid: _cachedUid ?? UserContext.of(context, listen: false).currentUid!,
-                              blockId: _selectedBlockId ?? _activeBlockId!,
-                              date: _selectedDate,
-                              blockStartDate: blockStartDate,
-                              getWesDraftKeyForDate: (d) => _getDraftKeyFor(d),
-                            );
 
-                            // 2) Global wipe (ALL dates) of WES planned + all local caches
-                            await nukeAllWesPlannedAndLocalCaches(
-                              uid: _cachedUid ?? UserContext.of(context, listen: false).currentUid!,
-                              blockId: _selectedBlockId ?? _activeBlockId!, // optional
-                            );
 
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('💥 Local + WESPlanned nuked')),
-                            );
-                          },
-                          child: const Text('NUKE', style: TextStyle(color: Colors.red)),
-                        ),
-                      ],
-                    );
-                  },
-                );
-              },
-            ),
-
-             */
 
 
             IconButton(
@@ -11471,6 +11423,61 @@ class _WorkoutPageState extends State<WorkoutPage>
                 );
               },
             ),
+
+            IconButton(
+              icon: const Icon(Icons.bolt, color: Colors.orange), // 💥 closest stock icon; swap if you add custom nuclear icon
+              onPressed: () {
+                showDialog(
+                  context: context,
+                  builder: (BuildContext context) {
+                    return AlertDialog(
+                      backgroundColor: Colors.blueGrey.shade900,
+                      title: const Text(
+                        'NUKE Local Cache',
+                        style: TextStyle(fontFamily: 'Verdana', color: Colors.white),
+                      ),
+                      content: Text(
+                        'Delete ALL locally stored data for ${DateFormat('yyyy-MM-dd').format(_selectedDate)}?\n\n'
+                            'This will wipe WESInit, WorkoutDayCache, BB2 BlockDay, SharedPrefs (drafts) for this date.',
+                        style: const TextStyle(fontFamily: 'Verdana', color: Colors.white),
+                      ),
+                      actions: <Widget>[
+                        TextButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: const Text('Cancel'),
+                        ),
+                        TextButton(
+                          onPressed: () async {
+                            Navigator.of(context).pop();
+
+                            // 1) Your existing per-day nuke
+                            await nukeLocalWorkoutsForDay(
+                              uid: _cachedUid ?? UserContext.of(context, listen: false).currentUid!,
+                              blockId: _selectedBlockId ?? _activeBlockId!,
+                              date: _selectedDate,
+                              blockStartDate: blockStartDate,
+                              getWesDraftKeyForDate: (d) => _getDraftKeyFor(d),
+                            );
+
+                            // 2) Global wipe (ALL dates) of WES planned + all local caches
+                            await nukeAllWesPlannedAndLocalCaches(
+                              uid: _cachedUid ?? UserContext.of(context, listen: false).currentUid!,
+                              blockId: _selectedBlockId ?? _activeBlockId!, // optional
+                            );
+
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('💥 Local + WESPlanned nuked')),
+                            );
+                          },
+                          child: const Text('NUKE', style: TextStyle(color: Colors.red)),
+                        ),
+                      ],
+                    );
+                  },
+                );
+              },
+            ),
+
             IconButton(
               icon: const Icon(Icons.save),
               onPressed: _saveWorkout,
