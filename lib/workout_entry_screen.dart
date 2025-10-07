@@ -6368,9 +6368,30 @@ class _WorkoutPageState extends State<WorkoutPage>
             }
 
             // Controllers text — set actual values (not hints)
-            if (k < tmpWts[i].length)   tmpWts[i][k].text  = (displayWeight == null) ? '' : (displayWeight.toString());
-            if (k < tmpReps[i].length)  tmpReps[i][k].text = (reps == null) ? '' : reps.toString();
-            if (k < tmpRir[i].length)   tmpRir[i][k].text  = (rir == null) ? '' : rir.toString();
+            // Controllers text — keep any user-entered text from previous controllers;
+// otherwise set to the completed value for this set.
+            String? userWt, userReps, userRir;
+
+// weight
+            if (i < prevWtsCtr.length && k < prevWtsCtr[i].length) {
+              final prev = prevWtsCtr[i][k];
+              if (prev.text.isNotEmpty) userWt = prev.text;
+            }
+// reps
+            if (i < prevRepsCtr.length && k < prevRepsCtr[i].length) {
+              final prev = prevRepsCtr[i][k];
+              if (prev.text.isNotEmpty) userReps = prev.text;
+            }
+// rir
+            if (i < prevRirCtr.length && k < prevRirCtr[i].length) {
+              final prev = prevRirCtr[i][k];
+              if (prev.text.isNotEmpty) userRir = prev.text;
+            }
+
+            if (k < tmpWts[i].length)   tmpWts[i][k].text  = userWt   ?? ((displayWeight == null) ? '' : displayWeight.toString());
+            if (k < tmpReps[i].length)  tmpReps[i][k].text = userReps ?? ((reps == null) ? '' : reps.toString());
+            if (k < tmpRir[i].length)   tmpRir[i][k].text  = userRir  ?? ((rir == null) ? '' : rir.toString());
+
             if (k < tmpVel[i].length && vel != null)   tmpVel[i][k].text   = vel.toString();
             if (k < tmpNotes[i].length && notes != null && notes.trim().isNotEmpty) {
               tmpNotes[i][k].text = notes.trim();
