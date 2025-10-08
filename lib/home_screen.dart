@@ -375,7 +375,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
       FirebaseFirestore.instance
           .collection('planned_blocks')
-          .doc(FirebaseAuth.instance.currentUser!.uid)
+          .doc(actingUid) //
           .collection('blocks')
           .where('isActive', isEqualTo: true)
           .snapshots()
