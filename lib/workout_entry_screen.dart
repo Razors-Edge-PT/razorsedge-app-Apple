@@ -3887,11 +3887,18 @@ class _WorkoutPageState extends State<WorkoutPage>
   double set1SuggestedReps(int exerciseIndex) {
     // FAST-PATH: use precomputed hint if available
     final hintK = _rowKeyBy(exerciseIndex);
+
+    // ⛳ Touch-state: if user typed anything in S1 (weight/reps/RIR), bypass snapshot
+    final bool hasUserWeight = _weightControllers[exerciseIndex][0].text.trim().isNotEmpty;
+    final bool hasUserReps   = _repsControllers[exerciseIndex][0].text.trim().isNotEmpty;
+    final bool hasUserRir    = _rirControllers[exerciseIndex][0].text.trim().isNotEmpty;
+
     final num? hr = _seedHintsByKey[hintK]?['s1_reps'] as num?;
-    if (hr != null) {
+    if (hr != null && !(hasUserWeight || hasUserReps || hasUserRir)) {
       // print('⚡ [WES Hints] S1 reps from snapshot for $hintK = $hr');
       return hr.toDouble();
     }
+
 
     final exerciseName =
         _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
@@ -3939,7 +3946,7 @@ class _WorkoutPageState extends State<WorkoutPage>
             .toStringAsFixed(1)}, RIR = $usedRIR)');
 
     // Prioritization (unchanged for reps)
-    final bool hasUserReps = reps != null;
+
     final bool hasBB2Reps = bb2Reps != null && bb2Reps > 0;
 
     // CASE 1: Reps already entered by user → use it
@@ -4638,11 +4645,16 @@ class _WorkoutPageState extends State<WorkoutPage>
 
   double set1SuggestedWeight(int exerciseIndex) {
 
-
     // FAST-PATH: use precomputed hint if available
     final hintK = _rowKeyBy(exerciseIndex);
+
+    // ⛳ Touch-state: if user typed anything in S1 (weight/reps/RIR), bypass snapshot
+    final bool hasUserWeight = _weightControllers[exerciseIndex][0].text.trim().isNotEmpty;
+    final bool hasUserReps   = _repsControllers[exerciseIndex][0].text.trim().isNotEmpty;
+    final bool hasUserRir    = _rirControllers[exerciseIndex][0].text.trim().isNotEmpty;
+
     final hint  = _seedHintsByKey[hintK];
-    if (hint != null) {
+    if (hint != null && !(hasUserWeight || hasUserReps || hasUserRir)) {
       final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
       final exId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
       final isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: exerciseName);
@@ -4653,6 +4665,7 @@ class _WorkoutPageState extends State<WorkoutPage>
         return v.toDouble();
       }
     }
+
 
     final exerciseName =
         _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
