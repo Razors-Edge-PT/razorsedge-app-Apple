@@ -4,6 +4,8 @@ import 'package:isar/isar.dart';
 import 'package:path_provider/path_provider.dart';
 import 'isar_wes_init.dart';
 import 'workout_day_cache.dart'; // <-- brings in WorkoutDayCacheSchema
+import 'autosave_queue_db.dart'; // ← ADD
+
 
 
 import 'isar_block_plan.dart';
@@ -29,7 +31,9 @@ class IsarDb {
       [
         BlockDaySchema,
         WESInitSnapshotSchema,
-        WorkoutDayCacheSchema,// 👈 add more schemas here if you create them
+        WorkoutDayCacheSchema,
+        AutosaveJobSchema,     // ← ADD
+        LastSaveHashSchema,    // ← ADD// 👈 add more schemas here if you create them
       ],
       directory: dir.path,
       inspector: false,      // set true if you want Isar Inspector in dev
