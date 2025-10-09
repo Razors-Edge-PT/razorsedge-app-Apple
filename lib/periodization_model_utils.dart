@@ -1363,6 +1363,11 @@ class PeriodizationModelUtils {
           : DateTime.tryParse('${b['date']}') ?? DateTime(2000);
       return bDate.compareTo(aDate);
     });
+    print('🧾 [LinearAdded] recentSets=${recentSets.length} repTarget=$repTarget');
+    if (recentSets.isNotEmpty) {
+      final s0 = recentSets.first;
+      print('🧾 [LinearAdded] head → w=${s0['weight']} r=${s0['reps']} date=${s0['date']}');
+    }
 
     if (recentSets.isEmpty) {
       print('🚫 [LinearAdded] No top-set history → defaultWeight=$defaultWeight');
@@ -1383,42 +1388,58 @@ class PeriodizationModelUtils {
       savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
     );
 
-    // Your summarized previous reps at target
-    final previousReps = PeriodizationModelUtils.exercisePreviousTopSetReps[exerciseName];
-    if (previousReps == null || previousReps.isEmpty) {
-      print('ℹ️ [LinearAdded] No previousReps summary → defaultWeight=$defaultWeight');
-      print('🏁 [LinearAdded] Final weight=$defaultWeight');
-      return defaultWeight;
-    }
-
-    final matchIndex = previousReps.indexWhere((r) => r == repTarget);
-    if (matchIndex == -1) {
-      if (maxWeightByReps != null &&
-          (maxWeightByReps['reps'] == repTarget ||
-              maxWeightByReps['reps'].toString() == repTarget.toString())) {
-        final w = _asDouble(maxWeightByReps['weight'], fallback: defaultWeight);
-        print('🪂 [LinearAdded] No match; using maxWeightByReps → $w');
-        print('🏁 [LinearAdded] Final weight=$w');
-        return w;
-      }
-      print('🚨 [LinearAdded] No match for $repTarget reps → defaultWeight=$defaultWeight');
-      print('🏁 [LinearAdded] Final weight=$defaultWeight');
-      return defaultWeight;
-    }
-
     // Last weight actually used at target reps (if any)
     double weightUsed = defaultWeight;
     final atTarget = recentSets.firstWhere(
           (e) => (e['reps'] as num?)?.toInt() == repTarget,
       orElse: () => const {},
     );
+    // NEW: show whether we actually matched a set at this repTarget
+    print('🔎 [LinearAdded] atTarget.isNotEmpty=${atTarget.isNotEmpty} payload=${atTarget.isNotEmpty ? atTarget : '(none)'}');
     if (atTarget.isNotEmpty && atTarget['weight'] != null) {
       weightUsed = _asDouble(atTarget['weight'], fallback: defaultWeight);
     }
 
-    final matchedReps = previousReps[matchIndex];
+    // Your summarized previous reps at target
+    final previousReps = PeriodizationModelUtils.exercisePreviousTopSetReps[exerciseName];
 
-    // If target met → step to next higher valid increment
+// Try summary list first; if missing, fall back to the actual recent set we already found.
+    int? matchedReps;
+    if (previousReps != null && previousReps.isNotEmpty) {
+      final idx = previousReps.indexWhere((r) => r == repTarget);
+      if (idx >= 0) {
+        matchedReps = previousReps[idx];
+      }
+    }
+
+// Fallback: if summary list didn’t have the rep, but history does at this target, use it.
+    if (matchedReps == null && atTarget.isNotEmpty) {
+      matchedReps = (atTarget['reps'] as num?)?.toInt();
+      print('🧷 [LinearAdded] Fallback matchedReps from history entry → $matchedReps');
+    }
+
+// If still nothing, keep legacy fallback behavior
+    if (matchedReps == null) {
+      if (maxWeightByReps != null &&
+          (maxWeightByReps['reps'] == repTarget ||
+              maxWeightByReps['reps'].toString() == repTarget.toString())) {
+        final w = _asDouble(maxWeightByReps['weight'], fallback: defaultWeight);
+        print('🪂 [LinearAdded] No match; using maxWeightByReps → $w');
+        print('🏁 [LinearAdded] Final weight = $w');
+        return w;
+      }
+      print('🚨 [LinearAdded] No match for $repTarget reps → defaultWeight = $defaultWeight');
+      print('🏁 [LinearAdded] Final weight = $defaultWeight');
+      return defaultWeight;
+    }
+
+
+
+
+    final _lastDate = atTarget.isNotEmpty ? (atTarget['date'] ?? 'unknown') : 'none';
+    print('🧾 [LinearAdded] Last @repTarget=$repTarget → ${weightUsed.toStringAsFixed(1)} kg (date=$_lastDate)');
+
+
     if (matchedReps >= repTarget) {
       double nextHigher = weightUsed;
       for (final option in validWeights) {
@@ -2045,7 +2066,7 @@ class PeriodizationModelUtils {
 
 
       case ProgressionModelType.smartProgression: {
-        final result = smartProgressionModel(
+        final Map<String, dynamic> result = smartProgressionModel(
           exerciseName: exerciseName,
           repTarget: repTarget,
           defaultWeight: defaultWeight,
@@ -2071,7 +2092,7 @@ class PeriodizationModelUtils {
       }
 
       case ProgressionModelType.addRepsProgressionModel: {
-        final result = addRepsProgressionModel(
+        final Map<String, dynamic> result = addRepsProgressionModel(
           exerciseName: exerciseName,
           repTarget: repTarget,
           defaultWeight: defaultWeight,
