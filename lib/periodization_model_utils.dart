@@ -1497,6 +1497,7 @@ class PeriodizationModelUtils {
       print('✅ [LinearAdded] Target met → progress to $nextHigher');
       print('🏁 [LinearAdded] Final weight=$nextHigher');
       return nextHigher;
+
     }
 
     // Target not met: keep weight (your original behavior)
