@@ -565,6 +565,15 @@ class WarmupService {
       final s = settings[id];
       if (s != null) {
         print('   • [$id] $name → ${jsonEncode(s)}');
+
+        try {
+          final incMap = PeriodizationModelUtils.incMapFromRaw(s['increments']);
+          final expanded = PeriodizationModelUtils.expandIncrementOptions(incMap);
+          print('[Warmup:4/inc] id=$id name="$name" raw=${s['increments']} expanded=$expanded');
+        } catch (e) {
+          print('[Warmup:4/inc] id=$id name="$name" ❌ failed to expand increments: $e');
+        }
+
       } else {
         print('   • [$id] $name → (no settings found)');
       }

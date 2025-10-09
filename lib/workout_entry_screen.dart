@@ -4910,10 +4910,38 @@ class _WorkoutPageState extends State<WorkoutPage>
             : (setIdx == 0 ? 15 : 10));
 
 
-    final double rir = double.tryParse(rirText) ??
-        (setIdx == 0 ? (_isInitialized ? set1RIR(exIdx) : 0.5)
-            : setIdx == 1 ? (_isInitialized ? set2RIR(exIdx) : 0.5)
-            : (_isInitialized ? set3RIR(exIdx) : 0.5));
+    // --- RIR: prefer typed → seed hint → plan ---
+    final double? rirTyped = double.tryParse(rirText);
+
+// build the same seed-key the hintText uses
+    final String _normName = name.toLowerCase();
+    final String _seedKey  = '$_normName|$exIdx';
+
+// read seed rir for the correct set index
+    double? _seedRirFor(int setIdx) {
+      if (setIdx == 0) {
+        final v = (_seedHintsByKey[_seedKey]?['s1_rir'] ??
+            _seedHintsByKey[_seedKey]?['rir']);
+        return (v is num) ? v.toDouble() : double.tryParse(v?.toString() ?? '');
+      }
+      final v = _seedHintsByKey[_seedKey]?['s${setIdx + 1}_rir'];
+      return (v is num) ? v.toDouble() : double.tryParse(v?.toString() ?? '');
+    }
+
+    final double? rirSeed = _seedRirFor(setIdx);
+
+// read plan RIR the same way your UI hint does
+    double _planRirFor(int setIdx) {
+      if (setIdx == 0) return set1RIR(exIdx);
+      if (setIdx == 1) return set2RIR(exIdx);
+      if (setIdx == 2) return set3RIR(exIdx);
+      // safe default for sets >3 if you don’t have helpers
+      return 1.0;
+    }
+
+// final chosen rir: typed > seed > plan
+    final double rir = rirTyped ?? rirSeed ?? _planRirFor(setIdx);
+
 
     // convert to absolute if BW
     final uid = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '';
@@ -12640,6 +12668,9 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                       ? set3RIR(i).toString()
                                                                       : '1'))
                                                                   : '1',
+
+
+
                                                               hintStyle: const TextStyle(
                                                                 color: Colors.grey,
                                                                 fontStyle: FontStyle.italic,
