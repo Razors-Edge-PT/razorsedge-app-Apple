@@ -3807,6 +3807,13 @@ class _WorkoutPageState extends State<WorkoutPage>
 // as-of date for BW lookups = the day being edited in WES
     final DateTime _asOfDate = _selectedDate ?? DateTime.now();
 
+    // 🔧 guard: LWI sometimes returns 'weight' as String; coerce once to double
+    if (progressed['weight'] is String) {
+      final _w = double.tryParse(progressed['weight'] as String);
+      if (_w != null) progressed['weight'] = _w;
+    }
+
+
     final target = (progressed['weight'] as num).toDouble();
 
 // keep variable name `snapped` so nothing else downstream changes
