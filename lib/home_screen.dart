@@ -43,9 +43,7 @@ const String kUserPrefFeedTab = 'feedTab'; // 'home' | 'points'
 // Taglines to rotate
 const List<String> _kPointsTaglines = [
   'Certified Gainz Accounting™ department 🧮🏋️‍♂️📊',
-  'Chalk up—this feed counts. 🧼📈',
   'Do you even metrics? 📏📐',
-  'If you didnt log the workout, did it even count? your points say no ❌',        // ← clout variant
   'Literally your street cred 🏙️✅',
   'Woah take those points the bank, so you earn interest 🏦💰📈',
   'Today’s gains: properly weighted. ⚖️💪',
@@ -53,36 +51,29 @@ const List<String> _kPointsTaglines = [
   'Scored and adored ❤️🧮',
   'That e1RM? Extremely my type 😏📊',
   'Swipe right on those metrics 👉❤️📈',
-  'Proof of effort, proof of allure ✅🔥',
-  'PRs + HRs = good chemistry 🧪❤️‍🔥',
+  'PRs + Pts = good chemistry 🧪❤️‍🔥',
   'Points that slap 👋✨',
   'You’re not just strong—you’re quantifiably tempting 📊😮‍💨',
   'Big sets, big energy, big data 📦⚡💾',
-  'Clout compound interest: accruing daily 🏦📈⏱️',
+  'Quantifiable Clout',
 ];
 
 const List<String> _kHomeTaglines = [
-  'Go on, scroll your gains. We won’t tell 🤫💪📱',
-  'The feed is starving—serve a set 🍽️🏋️‍♂️',
+  'Go on, scroll. We won’t tell 🤫💪📱',
   'For the love of iron pls do not scroll instagram in the squat rack. scroll GoodLift instead 😎 🏋️️',
-  'Your friends did 3×10 of content 🔁📸',
   'Don’t ghost the feed—post the set 👻📤',
   'If it’s not posted, was it even a set? 📸❓',
-  'Go on, scroll through your home feed, you love it 👇 ❤️📲',
-  'Bench: racked. Gains: tracked. Content: lacked 🏋️‍♂️📈📭',
-  'Humblebrag optional. Upload mandatory 🙃📤✅',
+  'Scroll your home feed, you love it 👇 ❤️📲',
+  'Humblebrag optional 🙃📤✅',
   'Your spotter can film. No excuses 🎥🤝🙅‍♂️',
   'The grid needs iron. Contribute 🔩🟦➕',
   'Pics or it was active recovery 📸🆚🧘‍♂️',
-  'Stop hoarding clout. Share the set 🏆➡️📤',
   'Post-workout afterglow belongs on the feed ✨📲',
-  'Consent to clout: share the set ✅🏆📤',
   'You + good lighting = public service 💡📸🫶',
-  'Give the timeline feed a little cardio 🫀🏃‍♂️📲',
-  'post something! do you even gen Z? 🤳📤🫡',
+  'Camera loves you. Algorithm agrees ❤️‍🔥',
+  'Strong is the new aesthetic 💅🏽🏋️',
   'The algorithm is blushing. Keep going 🤖😳➡️',
   'Hit depth on that scroll ⬇️📱',
-  'Warning: side effects include inspiration ⚠️💡✨',
   'A little lurk between sets 👀⏱️',
   'Scroll like you mean it 💨📱',
   'This is your sign to keep scrolling ➡️📱',
@@ -1950,77 +1941,91 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
                           child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              SegmentedButton<SelectedFeed>(
-                                showSelectedIcon: false,
-                                segments: const [
-                                  ButtonSegment<SelectedFeed>(
-                                    value: SelectedFeed.home,
-                                    icon: Icon(Icons.photo_library_outlined, size: 16),
-                                    label: SizedBox.shrink(), // icon-only
+                              // ── Feed switch buttons ───────────────────────────────
+                              Row(
+                                children: [
+                                  SegmentedButton<SelectedFeed>(
+                                    showSelectedIcon: false,
+                                    segments: const [
+                                      ButtonSegment<SelectedFeed>(
+                                        value: SelectedFeed.home,
+                                        icon: Icon(Icons.photo_library_outlined, size: 16),
+                                        label: SizedBox.shrink(), // icon-only
+                                      ),
+                                      ButtonSegment<SelectedFeed>(
+                                        value: SelectedFeed.points,
+                                        icon: Icon(Icons.leaderboard_outlined, size: 16),
+                                        label: SizedBox.shrink(), // icon-only
+                                      ),
+                                    ],
+                                    selected: <SelectedFeed>{_selectedFeed},
+                                    onSelectionChanged: (s) async {
+                                      final next = s.first;
+                                      if (_selectedFeed == next) return;
+
+                                      setState(() => _selectedFeed = next);
+                                      await _persistSelectedFeed();
+
+                                      if (next == SelectedFeed.home) {
+                                        _pickHomeTagline();
+                                        if (_feedPosts.isEmpty && !_feedLoading) _loadInitialHomeFeed();
+                                      } else {
+                                        _pickPointsTagline();
+                                        if (_pointsPosts.isEmpty && !_pointsLoading) _loadInitialPointsFeed();
+                                      }
+                                    },
+                                    style: ButtonStyle(
+                                      padding: MaterialStateProperty.all(const EdgeInsets.symmetric(horizontal: 6, vertical: 2)),
+                                      visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+                                      side: MaterialStateProperty.resolveWith((states) {
+                                        final selected = states.contains(MaterialState.selected);
+                                        return BorderSide(color: selected ? Colors.white70 : Colors.white24, width: 1);
+                                      }),
+                                      backgroundColor: MaterialStateProperty.resolveWith((states) {
+                                        final selected = states.contains(MaterialState.selected);
+                                        return selected ? Colors.white12 : Colors.transparent;
+                                      }),
+                                      shape: MaterialStateProperty.all(
+                                        RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                      ),
+                                      foregroundColor: MaterialStateProperty.all(Colors.white),
+                                    ),
                                   ),
-                                  ButtonSegment<SelectedFeed>(
-                                    value: SelectedFeed.points,
-                                    icon: Icon(Icons.leaderboard_outlined, size: 16),
-                                    label: SizedBox.shrink(), // icon-only
-                                  ),
+                                  /*if (_selectedFeed == SelectedFeed.points) ...[
+                                    const SizedBox(width: 8),
+                                    _MonthPickerChip(
+                                      monthKey: _pointsMonthKey,
+                                      onChanged: (mk) {
+                                        setState(() => _pointsMonthKey = mk);
+                                        _loadInitialPointsFeed();
+                                      },
+                                    ),
+                                  ],*/
                                 ],
-                                selected: <SelectedFeed>{_selectedFeed},
-                                onSelectionChanged: (s) async {
-                                  final next = s.first;
-                                  if (_selectedFeed == next) return;
+                              ),
 
-                                  setState(() => _selectedFeed = next);
-                                  await _persistSelectedFeed();
-
-                                  if (next == SelectedFeed.home) {
-                                    _pickHomeTagline();                // 👈 add
-                                    if (_feedPosts.isEmpty && !_feedLoading) _loadInitialHomeFeed();
-                                  } else {
-                                    _pickPointsTagline();
-                                    if (_pointsPosts.isEmpty && !_pointsLoading) _loadInitialPointsFeed();
-                                  }
-                                },
-
-
-                                style: ButtonStyle(
-                                  padding: MaterialStateProperty.all(const EdgeInsets.symmetric(horizontal: 6, vertical: 2)),
-                                  visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
-                                  side: MaterialStateProperty.resolveWith((states) {
-                                    final selected = states.contains(MaterialState.selected);
-                                    return BorderSide(color: selected ? Colors.white70 : Colors.white24, width: 1);
-                                  }),
-                                  backgroundColor: MaterialStateProperty.resolveWith((states) {
-                                    final selected = states.contains(MaterialState.selected);
-                                    return selected ? Colors.white12 : Colors.transparent;
-                                  }),
-                                  shape: MaterialStateProperty.all(
-                                    RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                  ),
-                                  foregroundColor: MaterialStateProperty.all(Colors.white),
+                              // ── Motivational tagline on the same row ───────────────
+                              Flexible(
+                                child: Text(
+                                  _selectedFeed == SelectedFeed.home ? _homeTagline : _pointsTagline,
+                                  style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.end,
                                 ),
                               ),
-                              if (_selectedFeed == SelectedFeed.points) ...[
-                                const SizedBox(width: 8),
-                                _MonthPickerChip(
-                                  monthKey: _pointsMonthKey,
-                                  onChanged: (mk) {
-                                    setState(() => _pointsMonthKey = mk);
-                                    _loadInitialPointsFeed();
-                                  },
-                                ),
-                              ],
                             ],
                           ),
                         ),
+
 
 
                         // ── Home Feed ──────────────────────────────────────────────────────────
 
                         if (_selectedFeed == SelectedFeed.home) ...[
                           const SizedBox(height: 2),
-                          Text(_homeTagline,
-                              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+
 
                           const SizedBox(height: 8),
 
@@ -2116,7 +2121,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                         ] else ...[
                           // Points feed
                           const SizedBox(height: 2),
-                          Text(_pointsTagline, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+
 
                           const SizedBox(height: 8),
 
