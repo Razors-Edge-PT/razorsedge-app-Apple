@@ -610,6 +610,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
 
   Future<void> _loadInitialHomeFeed() async {
+    debugPrint('[HOME INIT] enter resolved=$_feedOwnersResolved posts=${_feedPosts.length} hasMore=$_feedHasMore');
+
     if (!_feedOwnersResolved) return;
     setState(() {
       _feedLoading = false;
@@ -651,6 +653,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
       final qs = await q.get();
       final docs = qs.docs;
+      debugPrint('[HOME PAGE] fetched=${docs.length} types=${docs.take(5).map((d)=>d.data()['type']).toList()}');
+
 
       final newPosts = <Post>[];
       for (final d in docs) {
@@ -864,6 +868,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       _feedOwnerUids = owners.toList();
       _feedOwnersResolved = true;
     });
+    debugPrint('[FEED BOOT] ownersResolved=true owners=${_feedOwnerUids.length} selected=${_selectedFeed}');
+
   }
 
 
@@ -1417,11 +1423,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Quick Access',
-                          style: TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.bold)),
+                      //Quick Access
                       SizedBox(
-                        height: 115,
+                        height: 125,
                         child: // in your HomeScreen.build():
                             SingleChildScrollView(
                           scrollDirection: Axis.horizontal,
