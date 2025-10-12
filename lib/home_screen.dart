@@ -656,6 +656,33 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       debugPrint('[HOME PAGE] fetched=${docs.length} types=${docs.take(5).map((d)=>d.data()['type']).toList()}');
 
 
+// 👀 Count items that will actually render on Home
+      final int _renderableThisPage = docs.where((d) {
+        final m = d.data();
+        final t = m['type'];
+        if (t != 're_daily') return true; // media always renders on Home
+        // re_daily renders on Home only when current gates pass:
+        final promoted = (m['promoteToHome'] as bool?) == true;
+        final badges = (m['badges'] as List?) ?? const [];
+        final total = (m['dailyTotal'] as num?)?.toDouble() ?? 0.0;
+        return promoted && badges.isNotEmpty && total > 0.0;
+      }).length;
+
+// Update cursor BEFORE deciding to prefetch
+      if (docs.isNotEmpty) {
+        final last = docs.last.data();
+        final ts = (last['createdAt'] as Timestamp?);
+        _lastCreatedAt = ts ?? _lastCreatedAt;
+      }
+
+// 🚀 If nothing on this page would render, prefetch the next page immediately
+      if (_renderableThisPage == 0 && docs.isNotEmpty && docs.length >= _kFeedPageSize) {
+        _feedLoading = false; // allow re-entry past the guard
+        await _loadMoreHomeFeed();
+        return;
+      }
+
+
       final newPosts = <Post>[];
       for (final d in docs) {
         try {
