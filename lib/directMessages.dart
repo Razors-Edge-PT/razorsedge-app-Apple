@@ -279,6 +279,7 @@ class _ConversationPageState extends State<ConversationPage> {
   String? _lastLatestMsgId; // for "auto-scroll on my new message"
   Timestamp? _initialLastReadAt;   // from my participantState at page open
   bool _gotInitialLastReadAt = false;
+  bool _didMarkOnOpen = false; // ensures we only write once on open
 
   // mark-as-read when near bottom
   Future<void> _markAsRead() async {
@@ -564,6 +565,15 @@ class _ConversationPageState extends State<ConversationPage> {
   void initState() {
     super.initState();
 
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || _didMarkOnOpen) return;
+      _didMarkOnOpen = true;
+      try {
+        await _markAsRead();
+      } catch (e) {
+        // optional: debugPrint('⚠️ mark-on-open failed: $e');
+      }
+    });
     // Listen for bottom reach (you already have this if you followed earlier steps)
     _itemPositionsListener.itemPositions.addListener(() {
       final positions = _itemPositionsListener.itemPositions.value;
