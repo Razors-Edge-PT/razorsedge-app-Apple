@@ -1421,7 +1421,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                           style: TextStyle(
                               fontSize: 16, fontWeight: FontWeight.bold)),
                       SizedBox(
-                        height: 125,
+                        height: 115,
                         child: // in your HomeScreen.build():
                             SingleChildScrollView(
                           scrollDirection: Axis.horizontal,
@@ -1811,7 +1811,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                         }).toList(),
                       ),
 
-                      const SizedBox(height: 20),
+                      const SizedBox(height: 2),
                       // Training Calendar
                       if (_currentSection == HomeSection.calendar) ...[
                         TableCalendar(
@@ -1912,12 +1912,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                             },
                           ),
                         ),
-                        const SizedBox(height: 2),
+                        const SizedBox(height: 1),
                         // Simple grey background input
 
                         // ── Feed Switcher ──────────────────────────────────────────────────────
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
                           child: Row(
                             children: [
                               SegmentedButton<SelectedFeed>(
