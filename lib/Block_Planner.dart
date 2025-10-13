@@ -1859,25 +1859,6 @@ class _BlockPlannerState extends State<Block_Planner> {
       ),
     );
   }
-
-  Widget _smallInput(String label, {bool multiline = false}) {
-    return SizedBox(
-      width: 140,
-      child: TextField(
-        maxLines: multiline ? 3 : 1,
-        style: const TextStyle(color: Colors.white, fontSize: 12),
-        decoration: InputDecoration(
-          labelText: label,
-          labelStyle: const TextStyle(color: Colors.white70, fontSize: 11),
-          filled: true,
-          fillColor: Colors.blueGrey.shade700,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        ),
-      ),
-    );
-  }
 }
 
 class _ExerciseCard extends StatefulWidget {
@@ -1938,6 +1919,54 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   ];
 
 
+// 🔧 Prune any RIR sessions beyond the current frequency
+  void _pruneRirPlanToFrequency(int freq) {
+    if (_cachedRirPlan == null || _cachedRirPlan!.isEmpty) return;
+
+    _cachedRirPlan!.forEach((weekKey, weekMap) {
+      // Collect first, then remove to avoid concurrent modification
+      final toRemove = <String>[];
+      weekMap.forEach((sessionKey, _) {
+        final m = RegExp(r'^session(\d+)$').firstMatch(sessionKey);
+        if (m != null) {
+          final s = int.tryParse(m.group(1) ?? '');
+          if (s != null && s > freq) toRemove.add(sessionKey);
+        }
+      });
+      for (final k in toRemove) {
+        weekMap.remove(k);
+      }
+    });
+  }
+
+// 🔧 Refresh the compact W1 summary in the read-only RIR field
+  void _updateRirSummaryDisplay({int? freqOverride}) {
+    final weekData = _cachedRirPlan?['week1'] as Map<String, dynamic>?;
+    if (weekData == null) {
+      _rirDisplayController.text = '';
+      return;
+    }
+    // Prefer live frequency from repTargets (instances), else text field, else 3
+    int freq = freqOverride ??
+        (() {
+          final instCount = (widget.exerciseSettings[widget.exerciseId]?['repTargets']?['week1'] as Map?)?.keys
+              .where((k) => k.toString().startsWith('instance'))
+              .length ??
+              0;
+          if (instCount > 0) return instCount;
+          return int.tryParse(_weeklyFrequencyController.text.trim()) ?? 3;
+        })();
+
+    final summary = <String>[];
+    for (int i = 1; i <= freq; i++) {
+      final session = weekData['session$i'] as Map<String, dynamic>?;
+      final set1 = session?['set1'] as Map<String, dynamic>?;
+      final rir = set1?['rir'];
+      if (rir != null) summary.add(rir.toString());
+    }
+    _rirDisplayController.text =
+    summary.isEmpty ? '' : 'W1 → ${summary.join(' | ')}';
+  }
 
 
   PeriodizationModelType _mapLabelToModelType(String label) {
@@ -2045,8 +2074,19 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       final value = int.tryParse(_weeklyFrequencyController.text.trim());
       if (value != null) {
         widget.onUpdateSetting(widget.exerciseId, 'weeklyFrequency', value);
+
+        // 🧹 Also prune RIR sessions beyond the new frequency, update state + summary
+        _pruneRirPlanToFrequency(value);
+        if (mounted) {
+          setState(() {
+            // persist the pruned plan in settings immediately
+            widget.onUpdateSetting(widget.exerciseId, 'rirPlan', _cachedRirPlan);
+            _updateRirSummaryDisplay(freqOverride: value);
+          });
+        }
       }
     });
+
 
 
     final rirModel = settings != null ? settings['rirModel'] : null;
@@ -2083,26 +2123,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       print("📥 [INIT] Loaded and casted RIR plan for ${widget.exerciseName}: $_cachedRirPlan");
     }
 
-    final weekData = _cachedRirPlan?['week1'] as Map<String, dynamic>?;
+    _updateRirSummaryDisplay();
 
-    if (weekData != null) {
-      final summary = <String>[];
-
-      for (int i = 1; i <= 3; i++) {
-        final session = weekData['session$i'] as Map<String, dynamic>?;
-
-        if (session != null) {
-          final set1 = session['set1'] as Map<String, dynamic>?;
-
-          if (set1 != null) {
-            final rir = set1['rir'];
-            if (rir != null) summary.add(rir.toString());
-          }
-        }
-      }
-
-      _rirDisplayController.text = 'W1 → ${summary.join(' | ')}';
-    }
 
     final supportedModels = [
       'Linear Weight Increase',
@@ -2357,9 +2379,23 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
 
     if (_cachedRirPlan != null && _cachedRirPlan!.isNotEmpty) {
+      // 🧯 One final prune using repTargets as the source of truth
+      final repTargets = widget.exerciseSettings[widget.exerciseId]?['repTargets'];
+      final instCount = (repTargets?['week1'] as Map?)?.keys
+          .where((k) => k.toString().startsWith('instance'))
+          .length ??
+          0;
+      final freqForSave = instCount > 0
+          ? instCount
+          : int.tryParse(_weeklyFrequencyController.text.trim()) ?? 3;
+
+      _pruneRirPlanToFrequency(freqForSave);
+      _updateRirSummaryDisplay(freqOverride: freqForSave);
+
       safeSave('rirPlan', _cachedRirPlan);
-      print("💾 [DISPOSE] Saved rirPlan for ${widget.exerciseName}: ${jsonEncode(_cachedRirPlan)}");
+      print("💾 [DISPOSE] Saved rirPlan (pruned to $freqForSave) for ${widget.exerciseName}: ${jsonEncode(_cachedRirPlan)}");
     }
+
 
 
     _weeklyFrequencyController.dispose();
@@ -4128,11 +4164,22 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                             };
                           }
 
-                          widget.onUpdateSetting(
-                            widget.exerciseId,
-                            'rirPlan',
-                            _cachedRirPlan ?? {},
-                          );
+                          // 🔒 Safety prune based on current frequency prior to saving
+                          final freqNow = (() {
+                            // Prefer instance count from repTargets (week1)
+                            final instCount = (details['repTargets']?['week1'] as Map?)?.keys
+                                .where((k) => k.toString().startsWith('instance'))
+                                .length ??
+                                0;
+                            if (instCount > 0) return instCount;
+                            // Fallback to the visible text field
+                            return int.tryParse(_weeklyFrequencyController.text.trim()) ?? 3;
+                          })();
+                          _pruneRirPlanToFrequency(freqNow);
+
+
+                          widget.onUpdateSetting(widget.exerciseId, 'rirPlan', _cachedRirPlan ?? {});
+                          _updateRirSummaryDisplay(freqOverride: freqNow);
 
 
                           final weekData = _cachedRirPlan?['week1'] as Map<String, dynamic>?;
@@ -4376,6 +4423,20 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                               'reps': _repsControllers[key]?.text.trim() ?? '',
                             };
                           }
+
+                          // 🔒 Safety prune based on current frequency prior to saving
+                          final freqNow = (() {
+                            // Prefer instance count from repTargets (week1)
+                            final instCount = (details['repTargets']?['week1'] as Map?)?.keys
+                                .where((k) => k.toString().startsWith('instance'))
+                                .length ??
+                                0;
+                            if (instCount > 0) return instCount;
+                            // Fallback to the visible text field
+                            return int.tryParse(_weeklyFrequencyController.text.trim()) ?? 3;
+                          })();
+                          _pruneRirPlanToFrequency(freqNow);
+
 
                           widget.onUpdateSetting(widget.exerciseId, 'rirPlan', _cachedRirPlan ?? {});
 

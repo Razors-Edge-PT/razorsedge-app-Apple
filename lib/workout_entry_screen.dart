@@ -4582,9 +4582,7 @@ class _WorkoutPageState extends State<WorkoutPage>
     if (weekIndex == null) return setNumber == 1 ? 1 : 1.5;
 
 
-
     if (blockStartDate == null) {
-
       return 2; // fallback RIR value
     }
 
@@ -4598,18 +4596,32 @@ class _WorkoutPageState extends State<WorkoutPage>
       selectedDate: _selectedDate, // ← ensure this is present
     );
 
-    final rirPlan =
-    PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['rirPlan'];
+    final plannedDetails = PeriodizationModelUtils
+        .plannedExerciseDetails[exerciseId] ?? const {};
+    final repInstances = ((plannedDetails['repTargets']?['week1']) as Map?)
+        ?.keys
+        .where((k) => k.toString().startsWith('instance'))
+        .length ?? 0;
+    final effectiveFreq = repInstances > 0
+        ? repInstances
+        : (plannedDetails['weeklyFrequency'] as int? ?? 1);
+
+// Rotate occurrences by effective frequency (e.g., 3rd appearance with freq=2 → session2)
+    final desiredSessionIndex = (effectiveFreq > 0) ? (sessionIndex %
+        effectiveFreq) : 0;
+
+    final rirPlan = plannedDetails['rirPlan'];
     final weekKey = 'week${weekIndex + 1}';
     final weekData = (rirPlan?[weekKey] as Map?)?.cast<String, dynamic>() ??
         const {};
-    final maxSessions = weekData.keys
-        .where((k) => k.startsWith('session'))
-        .length;
-    final safeSessionIndex = (maxSessions > 0) ? sessionIndex.clamp(
-        0, maxSessions - 1) : 0;
 
-    final sessionKey = 'session${safeSessionIndex + 1}';
+    String sessionKey = 'session${desiredSessionIndex + 1}';
+
+// If the desired session isn’t present (e.g., ghosts elsewhere), fall back to session1
+    if (!weekData.containsKey(sessionKey)) {
+      sessionKey = 'session1';
+    }
+
     final setKey = 'set$setNumber';
 
 
@@ -4628,6 +4640,69 @@ class _WorkoutPageState extends State<WorkoutPage>
     final fallback = 1.0;
 
     final finalRir = plannedRir ?? fallback;
+
+    // ── DEBUG DUMPS (week start respected via your weekIndex/sessionIndex utilities) ──
+
+// 1) Dump repTargets.week1 “instances” for visibility
+    final repWeek1Map = ((plannedDetails['repTargets']?['week1']) as Map?)
+        ?.map((k, v) => MapEntry(k.toString(), v.toString())) ?? const {};
+    final repInstancesList = repWeek1Map.keys
+        .where((k) => k.startsWith('instance'))
+        .toList()
+      ..sort((a, b) {
+        final ai = int.tryParse(
+            RegExp(r'(\d+)').firstMatch(a)?.group(1) ?? '0') ?? 0;
+        final bi = int.tryParse(
+            RegExp(r'(\d+)').firstMatch(b)?.group(1) ?? '0') ?? 0;
+        return ai.compareTo(bi);
+      });
+    final repInstancesPretty = repInstancesList
+        .map((k) => '$k=${repWeek1Map[k]}')
+        .join(', ');
+
+// 2) Dump full RIR plan for the current week (compact)
+    String _dumpWeek(Map<String, dynamic> wk) {
+      final sessKeys = wk.keys
+          .where((k) => k.toString().startsWith('session'))
+          .map((k) => k.toString())
+          .toList()
+        ..sort((a, b) {
+          final ai = int.tryParse(
+              RegExp(r'(\d+)').firstMatch(a)?.group(1) ?? '0') ?? 0;
+          final bi = int.tryParse(
+              RegExp(r'(\d+)').firstMatch(b)?.group(1) ?? '0') ?? 0;
+          return ai.compareTo(bi);
+        });
+
+      final lines = <String>[];
+      for (final sKey in sessKeys) {
+        final sets = (wk[sKey] as Map?)?.cast<String, dynamic>() ?? const {};
+        String setStr(int n) {
+          final set = (sets['set$n'] as Map?)?.cast<String, dynamic>() ??
+              const {};
+          final reps = set['reps']?.toString();
+          final rir = set['rir']?.toString();
+          return (reps != null || rir != null)
+              ? 'set$n{reps:$reps, rir:$rir}'
+              : '';
+        }
+        final s = [setStr(1), setStr(2), setStr(3), setStr(4)]
+            .where((e) => e.isNotEmpty)
+            .join('  ');
+        lines.add('  $sKey → $s');
+      }
+      return (lines.isEmpty) ? '  (no sessions found)' : lines.join('\n');
+    }
+
+    print('📋 [WES] rirPlan.$weekKey snapshot:\n${_dumpWeek(weekData)}');
+
+// 3) Final pick summary (shows rotation + week start effects indirectly)
+    print(
+        '🎯 [WES] RIR pick → weekIndex=$weekIndex (key=$weekKey) '
+            'rawSessionIndex=$sessionIndex  desiredSessionIndex=${desiredSessionIndex} '
+            '(effectiveFreq=$effectiveFreq)  sessionKey=$sessionKey  set=$setNumber '
+            'plannedRir=$plannedRir  bb2Rir=$bb2Rir  final=$finalRir'
+    );
 
     return finalRir;
   }
@@ -6316,6 +6391,115 @@ class _WorkoutPageState extends State<WorkoutPage>
             'completedSets'   : completedSets,
           };
 
+// 🔁 Override RIR hints with rotated pick from today's planned occurrence (null-safe)
+          try {
+            final exId = PeriodizationModelUtils.nameToId[name] ?? name;
+
+            // Resolve dates safely (respects BP week-start because your helpers do)
+            final DateTime? start = _blockStartDate ?? blockStartDate;
+            final DateTime? sel   = _selectedDate;
+            if (start == null || sel == null) {
+              print('🟨 [FastPaint RIR Override] skip: missing dates (start=$start sel=$sel)');
+              // do not throw; leave existing hints
+            } else {
+              // 1) Determine week for this exercise
+              final int? weekIndex = _getApplicableWeekIndex(exId);
+              if (weekIndex == null) {
+                print('🟨 [FastPaint RIR Override] skip: weekIndex=null for $exId');
+              } else {
+                final String weekKey = 'week${weekIndex + 1}';
+
+                // 2) Raw occurrence index this week (up to + incl. today)
+                final int rawSessionIndex =
+                PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+                  exerciseName: name,
+                  savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+                  blockStartDate: start,
+                  weekIndex: weekIndex,
+                  selectedDate: sel,
+                );
+
+                // 3) Effective frequency from repTargets (fallback 1)
+                final Map<String, dynamic>? repTargets =
+                (PeriodizationModelUtils.plannedExerciseDetails[exId]?['repTargets'] as Map?)
+                    ?.cast<String, dynamic>();
+                final Map<String, dynamic> wk1 =
+                    (repTargets?['week1'] as Map?)?.cast<String, dynamic>() ?? const {};
+                final int effectiveFreq =
+                wk1.keys.where((k) => k.toString().startsWith('instance')).length.clamp(1, 99);
+
+                // 4) Rotate raw index into session key
+                final int desiredSessionIndex = (rawSessionIndex % effectiveFreq);
+                final String sessionKey = 'session${desiredSessionIndex + 1}';
+
+                // 5) Read planned RIRs for sets 1..8
+                final Map<String, dynamic>? rirPlan =
+                (PeriodizationModelUtils.plannedExerciseDetails[exId]?['rirPlan'] as Map?)
+                    ?.cast<String, dynamic>();
+                final Map<String, dynamic> weekData =
+                    (rirPlan?[weekKey] as Map?)?.cast<String, dynamic>() ?? const {};
+                final Map<String, dynamic> sessionData =
+                    (weekData[sessionKey] as Map?)?.cast<String, dynamic>() ?? const {};
+
+                double? _rirForSet(int setNo) {
+                  final setKey = 'set$setNo';
+                  final v = (sessionData[setKey] as Map?)?['rir'];
+                  if (v == null) return null;
+                  final s = v.toString().trim();
+                  if (s.isEmpty) return null;
+                  return double.tryParse(s);
+                }
+
+                // 6) Ensure non-null hint map and write overrides
+                final Map<String, dynamic> hb = hintsByKey[rowKey] ?? <String, dynamic>{};
+                hintsByKey[rowKey] = hb; // persist back
+
+                final s1o = _rirForSet(1);
+                if (s1o != null) {
+                  hb['rir']    = s1o; // alias for set-1
+                  hb['s1_rir'] = s1o;
+                }
+                for (int setNo = 2; setNo <= 8; setNo++) {
+                  final v = _rirForSet(setNo);
+                  if (v != null) hb['s${setNo}_rir'] = v;
+                }
+
+                // 7) Debug: what we actually wrote
+                final wroteParts = <String>[];
+                for (int k = 1; k <= 4; k++) {
+                  final v = hb['s${k}_rir'];
+                  if (v != null) wroteParts.add('s$k=$v');
+                }
+                final wrote = wroteParts.join(' ');
+                if (wrote.isNotEmpty) {
+                  print(
+                      '🟪 [FastPaint RIR Override] ${name.toLowerCase()}|$ci '
+                          '→ s1=${hintsByKey[rowKey]?['s1_rir']} '
+                          's2=${hintsByKey[rowKey]?['s2_rir']} '
+                          's3=${hintsByKey[rowKey]?['s3_rir']} '
+                          '(week=$weekKey session=session${desiredSessionIndex + 1} '
+                          'raw=$rawSessionIndex freq=$effectiveFreq)'
+                  );
+
+                }
+
+                // 8) Compute merged values for the upcoming "Short debug" (no reassignment to finals)
+                final double? s1RiMerged = (hintsByKey[rowKey]?['s1_rir'] as num?)?.toDouble() ?? s1Ri;
+                final double? s2RiMerged = (hintsByKey[rowKey]?['s2_rir'] as num?)?.toDouble() ?? s2Ri;
+                final double? s3RiMerged = (hintsByKey[rowKey]?['s3_rir'] as num?)?.toDouble() ?? s3Ri;
+
+// Save them into locals you’ll reference in the debug right below
+                final _rirMergedForDebug = <int, double?>{
+                  1: s1RiMerged,
+                  2: s2RiMerged,
+                  3: s3RiMerged,
+                };
+
+              }
+            }
+          } catch (e) {
+            print('🟥 [FastPaint RIR Override] failed for "$name": $e');
+          }
 
           // Short debug
           final rirs = [
@@ -12659,6 +12843,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                         // RIR
                                                         SizedBox(
                                                           width: 50,
+
                                                           child: TextField(
                                                             controller: _rirControllers[i][j],
                                                             keyboardType: TextInputType
