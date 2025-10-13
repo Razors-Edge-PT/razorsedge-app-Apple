@@ -27,7 +27,7 @@ import 'feed_post_card.dart';
 import 'main.dart';
 import 're_daily.dart';
 import 'dart:math';
-
+import 'leaderboard_page.dart';
 
  import 'dart:convert';
  import 'package:cloud_firestore/cloud_firestore.dart';
@@ -35,7 +35,7 @@ import 'dart:math';
  import 'local_cache/workout_day_cache.dart';
 
 
-enum SelectedFeed { home, points }
+enum SelectedFeed { home, points, leaderboard }
 const String kUserPrefFeedTab = 'feedTab'; // 'home' | 'points'
 
 
@@ -47,7 +47,6 @@ const List<String> _kPointsTaglines = [
   'Literally your street cred 🏙️✅',
   'Woah take those points the bank, so you earn interest 🏦💰📈',
   'Today’s gains: properly weighted. ⚖️💪',
-  'My favorite function? Progressive overload - u a math nerd if u got it what u doing in the gym anyway 🤓➕📈🏋️‍♂️', // ← street–cred variant
   'Scored and adored ❤️🧮',
   'That e1RM? Extremely my type 😏📊',
   'Swipe right on those metrics 👉❤️📈',
@@ -60,7 +59,7 @@ const List<String> _kPointsTaglines = [
 
 const List<String> _kHomeTaglines = [
   'Go on, scroll. We won’t tell 🤫💪📱',
-  'For the love of iron pls do not scroll instagram in the squat rack. scroll GoodLift instead 😎 🏋️️',
+  'For the love of iron pls do not scroll instagram.',
   'Don’t ghost the feed—post the set 👻📤',
   'If it’s not posted, was it even a set? 📸❓',
   'Scroll your home feed, you love it 👇 ❤️📲',
@@ -1950,6 +1949,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                     showSelectedIcon: false,
                                     segments: const [
                                       ButtonSegment<SelectedFeed>(
+                                        value: SelectedFeed.leaderboard,
+                                        icon: Icon(Icons.emoji_events_outlined, size: 16),
+                                        label: SizedBox.shrink(), // icon-only
+                                      ),
+                                      ButtonSegment<SelectedFeed>(
                                         value: SelectedFeed.home,
                                         icon: Icon(Icons.photo_library_outlined, size: 16),
                                         label: SizedBox.shrink(), // icon-only
@@ -1962,7 +1966,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                     ],
                                     selected: <SelectedFeed>{_selectedFeed},
                                     onSelectionChanged: (s) async {
+
                                       final next = s.first;
+                                      debugPrint('🔘 SelectedFeed -> $next'); // <— add this line
                                       if (_selectedFeed == next) return;
 
                                       setState(() => _selectedFeed = next);
@@ -1971,11 +1977,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                       if (next == SelectedFeed.home) {
                                         _pickHomeTagline();
                                         if (_feedPosts.isEmpty && !_feedLoading) _loadInitialHomeFeed();
-                                      } else {
+                                      } else if (next == SelectedFeed.points) {
                                         _pickPointsTagline();
                                         if (_pointsPosts.isEmpty && !_pointsLoading) _loadInitialPointsFeed();
+                                      } else { // SelectedFeed.leaderboard
+                                        // optional: _pickLeaderboardTagline();
                                       }
                                     },
+
                                     style: ButtonStyle(
                                       padding: MaterialStateProperty.all(const EdgeInsets.symmetric(horizontal: 6, vertical: 2)),
                                       visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
@@ -2009,7 +2018,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                               // ── Motivational tagline on the same row ───────────────
                               Flexible(
                                 child: Text(
-                                  _selectedFeed == SelectedFeed.home ? _homeTagline : _pointsTagline,
+                                  _selectedFeed == SelectedFeed.home
+                                      ? _homeTagline
+                                      : (_selectedFeed == SelectedFeed.points ? _pointsTagline : 'Leaderboard')
+                                  ,
                                   style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
                                   overflow: TextOverflow.ellipsis,
                                   textAlign: TextAlign.end,
@@ -2022,19 +2034,24 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
 
                         // ── Home Feed ──────────────────────────────────────────────────────────
-
                         if (_selectedFeed == SelectedFeed.home) ...[
                           const SizedBox(height: 2),
-
-
                           const SizedBox(height: 8),
 
                           if (!_feedOwnersResolved)
-                            const Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)))
+                            const Center(
+                              child: SizedBox(
+                                width: 24, height: 24,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              ),
+                            )
                           else if (_feedOwnerUids.isEmpty)
                             const Padding(
                               padding: EdgeInsets.symmetric(vertical: 8),
-                              child: Text('No recent posts from you or your gym buddies yet.', style: TextStyle(color: Colors.white70)),
+                              child: Text(
+                                'No recent posts from you or your gym buddies yet.',
+                                style: TextStyle(color: Colors.white70),
+                              ),
                             )
                           else
                             Column(
@@ -2053,8 +2070,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                             builder: (_) => PostDetailPage(
                                               post: p,
                                               onToggleLike: (pp) => PostService.instance.toggleLike(pp.id),
-                                              onToggleGoodLift: (pp) => PostService.instance.toggleGoodLift(pp.id, isVideo: pp.mediaType == 'video'),
-                                              onAddComment: (pp, text) => PostService.instance.addComment(pp.id, text, usernameFallback: 'user'),
+                                              onToggleGoodLift: (pp) => PostService.instance.toggleGoodLift(
+                                                  pp.id, isVideo: pp.mediaType == 'video'),
+                                              onAddComment: (pp, text) =>
+                                                  PostService.instance.addComment(pp.id, text, usernameFallback: 'user'),
                                               canDelete: (UserContext.of(context, listen: false).actorUid == p.ownerUid),
                                             ),
                                           ),
@@ -2095,15 +2114,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                   );
                                 }),
 
-
-
                                 // Footer (Home)
                                 SizedBox(
                                   height: 52,
                                   child: Center(
                                     child: () {
                                       if (_feedLoading) {
-                                        return const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2));
+                                        return const SizedBox(
+                                          width: 24, height: 24,
+                                          child: CircularProgressIndicator(strokeWidth: 2),
+                                        );
                                       }
                                       if (_feedError) {
                                         return TextButton(onPressed: _loadInitialHomeFeed, child: const Text('Retry'));
@@ -2118,26 +2138,26 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                 const SizedBox(height: 8),
                               ],
                             ),
-                        ] else ...[
-                          // Points feed
+                        ] else if (_selectedFeed == SelectedFeed.points) ...[
+                          // ── Points Feed ──────────────────────────────────────────────────────
                           const SizedBox(height: 2),
-
-
                           const SizedBox(height: 8),
 
                           if (_pointsLoading && _pointsPosts.isEmpty)
-                            const Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)))
+                            const Center(
+                              child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)),
+                            )
                           else if (_pointsPosts.isEmpty)
                             Padding(
                               padding: const EdgeInsets.symmetric(vertical: 8),
                               child: Column(
                                 children: [
-                                  const Text('No points posts for this month yet, brah do you even lift.', style: TextStyle(color: Colors.white70)),
+                                  const Text(
+                                    'No points posts for this month yet, brah do you even lift.',
+                                    style: TextStyle(color: Colors.white70),
+                                  ),
                                   TextButton.icon(
-                                    onPressed: () {
-                                      // CTA: jump to workout composer or calendar (hook to your nav)
-                                      // e.g., Navigator.pushNamed(context, '/log-workout');
-                                    },
+                                    onPressed: () {},
                                     icon: const Icon(Icons.fitness_center),
                                     label: const Text('Log a workout'),
                                   ),
@@ -2148,12 +2168,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                             Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                ... _pointsPosts.map((p) => FeedPostCard(
+                                ..._pointsPosts.map((p) => FeedPostCard(
                                   post: p,
-                                  isHomeContext: false, // optional; default is false
+                                  isHomeContext: false,
                                   onOpenDetail: () async { /* ReDailyDetailPage */ },
                                 )),
-
 
                                 // Footer (Points)
                                 SizedBox(
@@ -2173,40 +2192,19 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                 const SizedBox(height: 8),
                               ],
                             ),
+                        ] else ...[
+                          // ── Leaderboard Tab ──────────────────────────────────────────────────
+                          const SizedBox(height: 2),
+                          const SizedBox(height: 8),
+
+                          // Inline leaderboard widget (no Scaffold inside this page)
+                          const LeaderboardEmbedded(),
+
                         ],
 
-
-                      ] else ...[
-                        // Top Lifts
-                        const SizedBox(height: 8),
-                        Card(
-
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16)),
-                          elevation: 2,
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: FutureBuilder<List<Map<String, dynamic>>>(
-                              future: _fetchTopLifts(),
-                              builder: (context, snapshot) {
-                                if (!snapshot.hasData) {
-                                  return const CircularProgressIndicator();
-                                }
-                                final lifts = snapshot.data!;
-                                return Column(
-                                  children: lifts
-                                      .map((e) => ListTile(
-                                            title: Text(e['exercise']),
-                                            trailing: Text(
-                                                '${e['weight'].toStringAsFixed(1)} kg'),
-                                          ))
-                                      .toList(),
-                                );
-                              },
-                            ),
-                          ),
-                        ),
                       ],
+
+
                     ],
                   ),
                 ),
