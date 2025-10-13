@@ -8835,6 +8835,12 @@ class _WorkoutPageState extends State<WorkoutPage>
 
       _initializeControllers();
       _populateVelocityFlags();
+      () async {
+        try {
+          await _upsertWorkoutToFirestore(alsoPushToBB2: false, markAllSaved: false);
+        } catch (_) {}
+      }();
+
     });
   }
 
