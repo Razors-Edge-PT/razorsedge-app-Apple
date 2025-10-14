@@ -289,8 +289,8 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          medalChip('B', _tierFor(bench, byLift)),
                           medalChip('S', _tierFor(squat, byLift)),
+                          medalChip('B', _tierFor(bench, byLift)),
                           medalChip('D', _tierFor(dead,  byLift)),
                           medalChip('C', _tierFor(chin,  byLift)),
                           medalChip('O', _tierFor(ohp,   byLift)),
@@ -531,9 +531,9 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
                       width: kMedalsW,
                       child: Row(
                         children: const [
-                          SizedBox(width: kMedalSlotW, child: Text('Bnch', textAlign: TextAlign.center, style: TextStyle(color: Colors.white38, fontSize: 11))),
-                          SizedBox(width: kMedalGap),
                           SizedBox(width: kMedalSlotW, child: Text('Sqt', textAlign: TextAlign.center, style: TextStyle(color: Colors.white38, fontSize: 11))),
+                          SizedBox(width: kMedalGap),
+                          SizedBox(width: kMedalSlotW, child: Text('Bnch', textAlign: TextAlign.center, style: TextStyle(color: Colors.white38, fontSize: 11))),
                           SizedBox(width: kMedalGap),
                           SizedBox(width: kMedalSlotW, child: Text('DL',    textAlign: TextAlign.center, style: TextStyle(color: Colors.white38, fontSize: 11))),
                           SizedBox(width: kMedalGap),
@@ -543,6 +543,7 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
                         ],
                       ),
                     ),
+                    const SizedBox(width: 4),
                   ],
                 ),
 
@@ -710,7 +711,7 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
                         SizedBox(
                           width: kPtsW,
                           child: Text(
-                            pts.toStringAsFixed(0),
+                            pts.toStringAsFixed(1),
                             textAlign: TextAlign.right,
                             style: const TextStyle(
                               color: Colors.white70,
@@ -728,8 +729,8 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              SizedBox(width: kMedalSlotW, child: Center(child: medalChip('B', _tierFor(bench, byLift)))),
                               SizedBox(width: kMedalSlotW, child: Center(child: medalChip('S', _tierFor(squat, byLift)))),
+                              SizedBox(width: kMedalSlotW, child: Center(child: medalChip('B', _tierFor(bench, byLift)))),
                               SizedBox(width: kMedalSlotW, child: Center(child: medalChip('D', _tierFor(dead,  byLift)))),
                               SizedBox(width: kMedalSlotW, child: Center(child: medalChip('C', _tierFor(chin,  byLift)))),
                               SizedBox(width: kMedalSlotW, child: Center(child: medalChip('O', _tierFor(ohp,   byLift)))),

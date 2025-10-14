@@ -1948,11 +1948,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                   SegmentedButton<SelectedFeed>(
                                     showSelectedIcon: false,
                                     segments: const [
-                                      ButtonSegment<SelectedFeed>(
-                                        value: SelectedFeed.leaderboard,
-                                        icon: Icon(Icons.emoji_events_outlined, size: 16),
-                                        label: SizedBox.shrink(), // icon-only
-                                      ),
+
                                       ButtonSegment<SelectedFeed>(
                                         value: SelectedFeed.home,
                                         icon: Icon(Icons.photo_library_outlined, size: 16),
@@ -1961,6 +1957,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                       ButtonSegment<SelectedFeed>(
                                         value: SelectedFeed.points,
                                         icon: Icon(Icons.leaderboard_outlined, size: 16),
+                                        label: SizedBox.shrink(), // icon-only
+                                      ),
+                                      ButtonSegment<SelectedFeed>(
+                                        value: SelectedFeed.leaderboard,
+                                        icon: Icon(Icons.emoji_events_outlined, size: 16),
                                         label: SizedBox.shrink(), // icon-only
                                       ),
                                     ],

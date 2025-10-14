@@ -3358,8 +3358,6 @@ class _ProfilePageState extends State<ProfilePage> {
 
                   const SizedBox(height: 6),
 
-
-                  // --- Current Body Weight ---
                   // --- Current Body Weight (label w/ privacy under it; chip w/ mode toggle under) ---
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
@@ -4091,7 +4089,7 @@ class _ProfilePageState extends State<ProfilePage> {
             ),
 
             const SizedBox(height: 8),
-            // ⬇️ Drop-in replacement
+
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 0),
               child: _buildMoreStatsCard(),
