@@ -69,6 +69,20 @@ class ApproveRequestsScreen extends StatelessWidget {
     }
   }
 
+  Widget _avatarFromPublic(Map<String, dynamic> public) {
+    // Handle possible key variations just in case
+    final String url = (public['photoURL'] ?? public['photoUrl'] ?? public['photo'] ?? '')
+        .toString()
+        .trim();
+
+    return CircleAvatar(
+      radius: 12,                       // similar visual size to your 18px icon
+      backgroundColor: Colors.white10,  // subtle ring; tweak if you like
+      foregroundImage: url.isNotEmpty ? NetworkImage(url) : null,
+      // If the image fails or doesn't exist, this child shows
+      child: const Icon(Icons.person_outline, size: 16, color: Colors.cyanAccent),
+    );
+  }
 
 
 
@@ -584,8 +598,9 @@ class ApproveRequestsScreen extends StatelessWidget {
                             visualDensity: const VisualDensity(horizontal: 0, vertical: -3),
                             minVerticalPadding: 0,
                             contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
-                            leading: const Icon(Icons.person_outline, size: 18, color: Colors.cyanAccent),
-                            minLeadingWidth: 20,
+                            leading: _avatarFromPublic(public),
+                            minLeadingWidth: 28, // a touch wider so the circle doesn’t feel cramped
+
 
                             // Line 1: username (fallback → email → uid)
                             title: Text(

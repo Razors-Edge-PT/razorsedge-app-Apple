@@ -4156,31 +4156,8 @@ class _ProfilePageState extends State<ProfilePage> {
             // ===== NEW: Posts Grid (3×3) =====
             const SizedBox(height: 16),
 
-// 🔘 Toggle between Uploads (videos/pics) and Workouts (re_daily)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: SegmentedButton<ProfilePostTab>(
-                segments: const [
-                  ButtonSegment(
-                    value: ProfilePostTab.uploads,
-                    label: Text('Uploads'),
-                    icon: Icon(Icons.photo_library_outlined),
-                  ),
-                  ButtonSegment(
-                    value: ProfilePostTab.workouts,
-                    label: Text('Workouts'),
-                    icon: Icon(Icons.fitness_center_outlined),
-                  ),
-                ],
-                selected: <ProfilePostTab>{_selectedTab},
-                onSelectionChanged: (newSelection) {
-                  setState(() {
-                    _selectedTab = newSelection.first;
-                  });
-                  _loadInitialPosts(); // reload with new filter
-                },
-              ),
-            ),
+
+
 
             const SizedBox(height: 12),
             Padding(
