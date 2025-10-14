@@ -45,6 +45,9 @@ enum HeightUnit { cm, inch }
 
 enum BodyWeightUnit { kg, lb }
 
+enum ProfilePostTab { uploads, workouts }
+ProfilePostTab _selectedTab = ProfilePostTab.uploads; // default to uploads
+
 class LiftVideo {
   final String liftId;      // stable key e.g., 'bench_barbell'
   final String? localPath;  // file path on device
@@ -922,7 +925,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
   // Posts grid state
   final List<Post> _posts = [];
-  DocumentSnapshot<Map<String, dynamic>>? _lastPostSnap;
+  QueryDocumentSnapshot<Map<String, dynamic>>? _lastPostSnap;
   bool _loadingPosts = false;
   bool _hasMorePosts = true;
 
@@ -1409,18 +1412,46 @@ class _ProfilePageState extends State<ProfilePage> {
     if (_loadingPosts) return;
     _loadingPosts = true;
     try {
-      final q = await FirebaseFirestore.instance
+      Query query = FirebaseFirestore.instance
           .collection('posts')
-          .where('ownerUid', isEqualTo: _ownerUid)
-          .orderBy('createdAt', descending: true)
-          .limit(30)
-          .get();
+          .where('ownerUid', isEqualTo: _ownerUid);
+
+      // 🧩 Apply tab filter
+      if (_selectedTab == ProfilePostTab.workouts) {
+        // Only workout snapshots
+        query = query.where('type', isEqualTo: 're_daily');
+      } else {
+        // Only media uploads (images/videos) → exclude re_daily
+        // Legacy uploads had no 'type' field, so we filter manually after fetch
+      }
+
+      // 🔽 Always order by createdAt
+      query = query.orderBy('createdAt', descending: true).limit(30);
+
+      final snap = await query.get();
+
+      // Manual filtering for Uploads tab to include legacy posts
+      final docs = snap.docs
+          .where((d) {
+        final data = d.data() as Map<String, dynamic>?;
+        final t = data?['type'];
+        if (_selectedTab == ProfilePostTab.workouts) {
+          return t == 're_daily';
+        } else {
+          return t == null || t == 'upload';
+        }
+      })
+          .cast<QueryDocumentSnapshot<Map<String, dynamic>>>()
+          .toList();
 
       _posts
         ..clear()
-        ..addAll(q.docs.map(Post.fromSnap));
-      _lastPostSnap = q.docs.isNotEmpty ? q.docs.last : null;
-      _hasMorePosts = q.docs.length == 30;
+        ..addAll(docs.map(Post.fromSnap));
+      _lastPostSnap = snap.docs.isNotEmpty
+          ? snap.docs.last as QueryDocumentSnapshot<Map<String, dynamic>>
+          : null;
+      _hasMorePosts = snap.docs.length == 30;
+
       if (mounted) setState(() {});
     } catch (e) {
       debugPrint('❌ [_loadInitialPosts] $e');
@@ -1429,6 +1460,7 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
+
   Future<void> _loadMorePosts() async {
     if (_loadingPosts || !_hasMorePosts || _lastPostSnap == null) return;
     _loadingPosts = true;
@@ -1436,6 +1468,11 @@ class _ProfilePageState extends State<ProfilePage> {
       final q = await FirebaseFirestore.instance
           .collection('posts')
           .where('ownerUid', isEqualTo: _ownerUid)
+          .where(
+        'type',
+        isEqualTo: _selectedTab == ProfilePostTab.workouts ? 're_daily' : 'upload',
+      )
+
           .orderBy('createdAt', descending: true)
           .startAfterDocument(_lastPostSnap!)
           .limit(30)
@@ -2297,6 +2334,7 @@ class _ProfilePageState extends State<ProfilePage> {
       // Create post doc (denormalized counters)
       await FirebaseFirestore.instance.collection('posts').doc(postId).set({
         'ownerUid': ownerUid,
+        'type': 'upload',
         'mediaType': mediaType,
         'storagePathOriginal': storagePathOriginal,
         'thumbUrl': thumbUrl,
@@ -4115,11 +4153,41 @@ class _ProfilePageState extends State<ProfilePage> {
             ),
 
 // ===== NEW: Posts Grid (3×3) =====
+            // ===== NEW: Posts Grid (3×3) =====
             const SizedBox(height: 16),
+
+// 🔘 Toggle between Uploads (videos/pics) and Workouts (re_daily)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: SegmentedButton<ProfilePostTab>(
+                segments: const [
+                  ButtonSegment(
+                    value: ProfilePostTab.uploads,
+                    label: Text('Uploads'),
+                    icon: Icon(Icons.photo_library_outlined),
+                  ),
+                  ButtonSegment(
+                    value: ProfilePostTab.workouts,
+                    label: Text('Workouts'),
+                    icon: Icon(Icons.fitness_center_outlined),
+                  ),
+                ],
+                selected: <ProfilePostTab>{_selectedTab},
+                onSelectionChanged: (newSelection) {
+                  setState(() {
+                    _selectedTab = newSelection.first;
+                  });
+                  _loadInitialPosts(); // reload with new filter
+                },
+              ),
+            ),
+
+            const SizedBox(height: 12),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8),
               child: _buildPostsSection(),
             ),
+
 
             const SizedBox(height: 60),
 
