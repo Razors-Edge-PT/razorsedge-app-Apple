@@ -2201,6 +2201,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                           // Inline leaderboard widget (no Scaffold inside this page)
                           const LeaderboardEmbedded(),
 
+                          // Give short leaderboards some scrollable breathing room
+                          const SizedBox(height: 140),
+
                         ],
 
                       ],

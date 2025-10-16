@@ -140,6 +140,7 @@ class _WorkoutPageState extends State<WorkoutPage>
   List<List<TextEditingController>> _notesControllers = [];
   Map<String, bool> _showVelocityByExercise = {
   }; // exerciseName.toLowerCase() → true/false
+  double _dragX = 0;
 
 
   String get userId =>
@@ -10988,12 +10989,13 @@ class _WorkoutPageState extends State<WorkoutPage>
     });
   }
 
-  Future<void> _selectDate(BuildContext context) async {
+  Future<void> _selectDate(BuildContext context, {DateTime? pickedOverride}) async {
+
     final sw = Stopwatch()..start();
     print('⏱️ [WES] _selectDate started');
 
-    final picked = await showDatePicker(
-      context: context,
+    final picked = pickedOverride ?? await showDatePicker(
+    context: context,
       initialDate: _selectedDate,
       firstDate: DateTime(2000),
       lastDate: DateTime(2101),
@@ -11005,9 +11007,6 @@ class _WorkoutPageState extends State<WorkoutPage>
     final ymdPicked = DateFormat('yyyy-MM-dd').format(picked);
     print('📆 [WES] Date changed → $ymdPicked');
 
-
-
-    /* —— Provenance helpers (local to this call) —— */
     String _normNameForProv(String s) {
       var t = s.toLowerCase().trim();
       t = t.replaceAll(RegExp(r'\([^)]*\)'), '');
@@ -11085,8 +11084,6 @@ class _WorkoutPageState extends State<WorkoutPage>
     _didFastPaint = false;
 
     // Pre-warm ISAR + caches for the picked date (best-effort)
-
-
     try {
       final uid = _cachedUid;
       final bid = _selectedBlockId ?? _activeBlockId;
@@ -11132,7 +11129,7 @@ class _WorkoutPageState extends State<WorkoutPage>
     _record('FastPaint/ISAR',
         _diffAdded(_snapBeforePaint, _snapshotRows()));
 
-    // #anchor: SelectDate→PreMergeCheck
+    // PreMergeCheck
     try {
       final DateTime pickedOnly = DateTime(picked.year, picked.month, picked.day);
       final DateTime? blockStartOnly = (blockStartDate == null)
@@ -11178,7 +11175,6 @@ class _WorkoutPageState extends State<WorkoutPage>
     }
 
     // 2) Merge BB2 planned for this exact calendar date (guard block meta)
-// #anchor: SelectDate→MergeGate
     final _snapBeforeBB2 = _snapshotRows();
     bool _allowMerge = true; // will flip to false if FS day≠picked
 
@@ -11212,7 +11208,6 @@ class _WorkoutPageState extends State<WorkoutPage>
             if (v is String)    { return v.length >= 10 ? v.substring(0,10) : v; }
             return v.toString();
           }
-
           final fsDate = _d(dayDoc.data()?['date']);
           final pick   = DateFormat('yyyy-MM-dd').format(pickedOnly);
           _allowMerge = (fsDate == pick);
@@ -11232,7 +11227,6 @@ class _WorkoutPageState extends State<WorkoutPage>
     }
 
     _record('BB2 planned', _diffAdded(_snapBeforeBB2, _snapshotRows()));
-
 
     // 3) Overlay any saved WES workout (completed + wesPlanned placeholders)
     final _snapBeforeWES = _snapshotRows();
@@ -11288,11 +11282,12 @@ class _WorkoutPageState extends State<WorkoutPage>
       blockId: _selectedBlockId ?? _activeBlockId!,
       date: _selectedDate,
     );
-
-
   }
 
-
+  void _bumpDate(int deltaDays) {
+    final next = _selectedDate.add(Duration(days: deltaDays));
+    _selectDate(context, pickedOverride: next); // ← uses the same pipeline
+  }
 
 
   String _formatWorkoutDate(DateTime date) {
@@ -11767,21 +11762,36 @@ class _WorkoutPageState extends State<WorkoutPage>
 // 🆕 Add a non-editable display of the workout date
               // 🆕 Date displayed below, uneditable
 
-              Padding(
-                padding: const EdgeInsets.only(
-                    left: 8.0, bottom: 7.0), // 👈 shifts it to the right
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    DateFormat('EEE d MMM yyyy').format(_selectedDate),
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      color: Colors.white70,
+              GestureDetector(
+                behavior: HitTestBehavior.opaque, // makes the whole area swipeable
+                onHorizontalDragUpdate: (details) {
+                  _dragX += details.delta.dx;
+                },
+                onHorizontalDragEnd: (_) {
+                  // simple threshold for intentional swipes
+                  if (_dragX > 24) {
+                    _bumpDate(-1);   // swipe right → previous day
+                  } else if (_dragX < -24) {
+                    _bumpDate(1);    // swipe left → next day
+                  }
+                  _dragX = 0;
+                },
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 8.0, bottom: 7.0), // 👈 shifts it to the right
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      DateFormat('EEE d MMM yyyy').format(_selectedDate),
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.white70,
+                      ),
                     ),
                   ),
                 ),
               ),
+
 
               const SizedBox(height: 0.0),
               Padding(
