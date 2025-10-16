@@ -266,10 +266,40 @@ class PeriodizationModelUtils {
     return idToName[key] ?? key;
   }
 
+  // ✅ ID-based lookup (fastest and most reliable)
   static const Map<String, bool> _bwById = {
+    // --- Core existing ---
     'XM9026peNIu0R8qh7UqY': true, // Chin-Up
     'RFyjAjezFs8Rf7CQoaXz': true, // Pull-Up
     'KPewxxYYrhsOp84lIQr5': true, // Suspended High Row
+
+    // --- New additions ---
+    'YrwqLg6c9CJLu7yfLYn0': true, // Alternating Plank
+    'BpO7e9KsDJsvwhfo09uU': true, // Hanging Knee Raise (🔸 needs weighting factor)
+    'P88Vj5pBydqmiEzFowag': true, // Hanging Straight Leg Raise (🔸 needs weighting factor)
+    '8CIXN12uS2xwF4JzVLq3': true, // Long Lever Plank
+    'xU7MNEvnaoSwz5jy3uHw': true, // Plank
+    '63ryIPxgXVPX7jLtAecC': true, // Pull-Up, Wide Arm
+    'jSC34DLH5C7t9jH0pWfo': true, // Push Up Off Bench
+    'pJQaGJlTAOoyZ8TyEmrY': true, // Push Up, Banded
+    '0P4ECDHtfF7oKExmNhbN': true, // Push Up, Decline
+    'Da2xWZqbeCsbGCwdbwbs': true, // Push Up, Deficit
+    'EFbQl9i9NdYi13F3DqHr': true, // Push Up, Suspended
+    '0YNV3P4D7QaN6xLI9lo8': true, // Push Up, Weighted
+    '0d1HmQpwesdOESqoQHBq': true, // Russian Twist
+    'Ei4x9i5mirIUdMxWKZCk': true, // Side Plank
+    'iPaRtXsLXcXHQg5vmVA0': true, // Suspended Fly
+    'oiQ7EJsGLgJG3Sx9m2sB': true, // Suspended High Row, Unilateral
+    'PXqhBA8ib7FWAcPjDlES': true, // Suspended Leg Curl
+    '7gc2YEj9ZQe6A0kr5NcX': true, // Suspended Leg Curl, Unilateral
+    'mJKwE9Fc2opMiiy7yUFt': true, // Suspended Reverse Fly
+    '9Oovma2yszjmSm420awp': true, // Suspended Triceps Extension
+    'jRDb5LbN9e7PyiQMQcPn': true, // Suspended Triceps Extension, Unilateral
+    'FtayDmR5BVnGS1FXlXLL': true, // Triceps Dip
+    'lGaQiv5BwE1H5eJSkesj': true, // Weighted Long Lever Plank
+    'DTkkN5pi05RWQyNYhizQ': true, // Weighted Plank
+    'wrCwLDvwMYAgQtoiaJTh': true, // Weighted Push Up, Deficit
+
   };
 
 
@@ -354,10 +384,40 @@ class PeriodizationModelUtils {
   // BodyWeight Exercises Block begins...
 
 // fallback by normalized name (lowercase, hyphens kept)
+  // ✅ Name-based fallback (lowercased and trimmed)
   static const Map<String, bool> _bwByName = {
+    // --- Core existing ---
     'chin-up': true,
     'pull-up': true,
     'suspended high row': true,
+
+    // --- New additions ---
+    'alternating plank': true,
+    'hanging knee raise': true, // 🔸 needs weighting factor
+    'hanging straight leg raise': true, // 🔸 needs weighting factor
+    'long lever plank': true,
+    'plank': true,
+    'pull-up, wide arm': true,
+    'push up off bench': true,
+    'push up, banded': true,
+    'push up, decline': true,
+    'push up, deficit': true,
+    'push up, suspended': true,
+    'push up, weighted': true,
+    'russian twist': true,
+    'side plank': true,
+    'suspended fly': true,
+    'suspended high row, unilateral': true,
+    'suspended leg curl': true,
+    'suspended leg curl, unilateral': true,
+    'suspended reverse fly': true,
+    'suspended triceps extension': true,
+    'suspended triceps extension, unilateral': true,
+    'triceps dip': true,
+    'weighted long lever plank': true,
+    'weighted plank': true,
+    'weighted push up, deficit': true,
+
   };
 
   static bool isBodyweightExercise({String? id, String? name}) {
