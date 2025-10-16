@@ -1,148 +1,98 @@
-// Cloud Functions for Firebase (v2 modular syntax)
+// Cloud Functions for Firebase (v2)
 const { onDocumentWritten } = require('firebase-functions/v2/firestore');
 const logger = require('firebase-functions/logger');
 const admin = require('firebase-admin');
-
 try { admin.initializeApp(); } catch (_) {}
 const db = admin.firestore();
 
-// **** YOUR PATH ****
-// Users' RE Daily docs like: /users/{uid}/re_daily/{dayKey}
-const RE_DAILY_PATH = 'users/{uid}/re_daily/{dayKey}';
-
-// Canonical lift keys (must match app/UI keys)
-const LIFTS = [
-  'Back Squat, Barbell',
+// --- Constants ---
+const CANONICAL_LIFTS = [
   'Bench Press, Barbell',
+  'Back Squat, Barbell',
   'Deadlift, Conventional',
   'Chin-Up',
   'Overhead Dumbbell Press, Unilateral',
 ];
 
+const RE_DAILY_PATH = 'users/{uid}/re_daily/{dayKey}';
+
+// --- Helpers ---
 function monthKeyFromDate(d) {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   return `${yyyy}-${mm}`;
 }
-const num = (v) => (typeof v === 'number' ? v : 0);
 
-// Try to parse YYYY-MM-DD from the docId (dayKey)
-function dateFromDayKey(dayKey) {
-  // Safety: handle incorrect ids
+function parseDate(dayKey) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey || '');
-  if (!m) return new Date(); // fallback now
-  const y = parseInt(m[1], 10);
-  const mo = parseInt(m[2], 10) - 1;
-  const d = parseInt(m[3], 10);
-  return new Date(Date.UTC(y, mo, d, 12, 0, 0)); // noon UTC to avoid TZ drift
+  if (!m) return new Date();
+  return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], 12, 0, 0));
 }
 
-// Extract total points and per-lift points from your daily schema
-function extractPointsFromDailyDoc(docData) {
-  // Preferred: sum of lifts[*].pts
-  const lifts = docData?.lifts || {};
-  const perLift = {};
-  let total = 0;
-
-  for (const k of LIFTS) {
-    const entry = lifts?.[k];
-    const pts = num(entry?.pts);
-    perLift[k] = pts;
-    total += pts;
-  }
-
-  // Fallbacks if you ever store these directly:
-  // - dailyTotal
-  // - rePointsByLift / perLift
-  if (total === 0) {
-    if (typeof docData?.dailyTotal === 'number') total = docData.dailyTotal;
-  }
-  if (Object.values(perLift).every((v) => v === 0)) {
-    const alt = docData?.rePointsByLift || docData?.perLift || {};
-    for (const k of LIFTS) perLift[k] = num(alt[k]);
-    const sumAlt = Object.values(perLift).reduce((a, b) => a + b, 0);
-    if (sumAlt > 0) total = sumAlt;
-  }
-
-  return { total, perLift };
+function num(v) {
+  return typeof v === 'number' && !isNaN(v) ? v : 0;
 }
 
+// --- Function ---
 exports.repointsMonthlyAggregator = onDocumentWritten(RE_DAILY_PATH, async (event) => {
-  const before = event.data?.before?.data() || null;
-  const after  = event.data?.after?.data()  || null;
-
-  // You only want to track daily RE docs, which in your schema are all docs here
-  // (No need to check type == 're_daily' because the collection itself is re_daily)
-
-  // Identify user + month key
   const uid = event.params?.uid;
   const dayKey = event.params?.dayKey;
+  const after = event.data?.after?.data();
+
   if (!uid || !dayKey) return;
-
-  const dt = dateFromDayKey(dayKey);
-  const mKey = monthKeyFromDate(dt);
-
-  // Compute before/after points
-  const { total: totalBefore, perLift: perLiftBefore } = before ? extractPointsFromDailyDoc(before) : { total: 0, perLift: {} };
-  const { total: totalAfter,  perLift: perLiftAfter  } = after  ? extractPointsFromDailyDoc(after)  : { total: 0, perLift: {} };
-
-  const deltaTotal = totalAfter - totalBefore;
-  const deltaByLift = {};
-  for (const k of LIFTS) {
-    deltaByLift[k] = num(perLiftAfter[k]) - num(perLiftBefore[k]);
-  }
-
-  const userPubRef = db.collection('users_public').doc(uid);
+  if (!after) return; // deleted day → nothing to aggregate
 
   try {
+    const monthKey = monthKeyFromDate(parseDate(dayKey));
+    const monthlyRef = db.collection('users').doc(uid)
+                         .collection('re_monthly').doc(monthKey);
+
+    // 1) Extract best score per canonical lift from today's doc (safe for arrays/empty)
+    const lifts = after.lifts || {};
+    const bestPerLift = {};
+    for (const lift of CANONICAL_LIFTS) {
+      const entry = lifts[lift];
+      if (!entry) { bestPerLift[lift] = 0; continue; }
+      if (Array.isArray(entry)) {
+        const arr = entry.map(e => num(e?.pts || 0));
+        bestPerLift[lift] = arr.length ? Math.max(...arr) : 0;
+      } else {
+        bestPerLift[lift] = num(entry.pts);
+      }
+    }
+
+    // 2) Transaction: update this day in month doc + recompute totals
     await db.runTransaction(async (tx) => {
-      const snap = await tx.get(userPubRef);
-      const m = snap.exists ? snap.data() : {};
+      const snap = await tx.get(monthlyRef);
+      const data = snap.exists ? snap.data() : {};
+      const days = data.days || {};
+      days[dayKey] = bestPerLift;
 
-      const curKey = m.currentMonthKey;
-      const sameMonth = (curKey === mKey);
-
-      // Initialize/reset structure on month change
-      const currentByLift = sameMonth && m.rePointsMonthlyByLiftCurrent
-        ? { ...m.rePointsMonthlyByLiftCurrent }
-        : Object.fromEntries(LIFTS.map(k => [k, 0]));
-
-      let currentTotal = sameMonth ? num(m.rePointsMonthlyCurrent) : 0;
-
-      // Apply deltas (create/update/delete)
-      currentTotal = num(currentTotal) + deltaTotal;
-      for (const k of LIFTS) {
-        currentByLift[k] = num(currentByLift[k]) + num(deltaByLift[k]);
+      let total = 0;
+      for (const d of Object.values(days)) {
+        for (const lift of CANONICAL_LIFTS) total += num(d[lift]);
       }
 
-      // Clamp >= 0
-      currentTotal = Math.max(0, currentTotal);
-      for (const k of LIFTS) currentByLift[k] = Math.max(0, currentByLift[k]);
-
-      tx.set(userPubRef, {
-        currentMonthKey: mKey,
-        rePointsMonthlyCurrent: currentTotal,
-        rePointsMonthlyByLiftCurrent: currentByLift,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
-
-            // 🔁 Also mirror results into /users/{uid}/re_monthly/{mKey}
-      const monthlyRef = db
-        .collection('users')
-        .doc(uid)
-        .collection('re_monthly')
-        .doc(mKey);
-
       tx.set(monthlyRef, {
-        totalPoints: currentTotal,
+        days,
+        totalPoints: total,
         recomputedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
-
     });
 
-    logger.info('Monthly RE updated', { uid, dayKey, mKey, delta: deltaTotal });
-  } catch (e) {
-    logger.error('Monthly aggregator failed', { error: e, uid, dayKey });
-    throw e;
+    // 3) Read back the saved total and sync to users_public for the client
+    const monthlySnap = await monthlyRef.get();
+    const total = monthlySnap.exists ? num(monthlySnap.data().totalPoints) : 0;
+
+    await db.collection('users_public').doc(uid).set({
+      rePointsMonthlyCurrent: total,
+      currentMonthKey: monthKey,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    logger.info('✅ Monthly RE recomputed & synced', { uid, dayKey, total });
+  } catch (err) {
+    logger.error('❌ Monthly aggregator failed', { uid, dayKey, error: err });
+    throw err;
   }
 });
