@@ -125,6 +125,19 @@ exports.repointsMonthlyAggregator = onDocumentWritten(RE_DAILY_PATH, async (even
         rePointsMonthlyByLiftCurrent: currentByLift,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
+
+            // 🔁 Also mirror results into /users/{uid}/re_monthly/{mKey}
+      const monthlyRef = db
+        .collection('users')
+        .doc(uid)
+        .collection('re_monthly')
+        .doc(mKey);
+
+      tx.set(monthlyRef, {
+        totalPoints: currentTotal,
+        recomputedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+
     });
 
     logger.info('Monthly RE updated', { uid, dayKey, mKey, delta: deltaTotal });
