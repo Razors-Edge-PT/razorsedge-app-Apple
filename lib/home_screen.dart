@@ -176,11 +176,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       } catch (_) {}
     }
     if (_blockStart == null) {
-      print('🟥 [Scan8] missing blockStartDate → skipping planned_blocks lookups');
+
     }
 
     final base = _dOnly(DateTime.now());
-    print('🔎 [Scan8] uid=$uid block=$blockId base=${_ymd(base)}');
+
 
     // today-5 … today+2
     for (int offset = -5; offset <= 2; offset++) {
@@ -295,13 +295,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     final src = _selectedDay ?? _focusedDay;
     final dateOnly = DateTime(src.year, src.month, src.day);
 
-    print('🏠 [Home:initState] warmup date → ${dateOnly.toIso8601String().substring(0,10)} '
-        '(selectedDay=$_selectedDay focusedDay=$_focusedDay)');
+
 
     final userContext = Provider.of<UserContext>(context, listen: false);
     final actingUid = userContext.actingAsUid ?? userContext.actorUid; // add this line
-    print("🏠 Home loaded for ${userContext.actingAsUid} "
-        "(actor: ${userContext.actorUid}, coach: ${userContext.isCoach})");
     _homeScrollCtrl.addListener(_onHomeScroll);
     _pointsScrollCtrl.addListener(_onPointsScroll);
 
@@ -332,16 +329,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     }());
 
 
-    print('[Warmup] started for $actingUid');
-
-
 
 // Pass block + date so Warmup can precompute the exact WES snapshot you’ll need.
     final _warmDateSrc = _selectedDay ?? _focusedDay; // use picked day, else the visible day
     final _warmDate = DateTime(_warmDateSrc.year, _warmDateSrc.month, _warmDateSrc.day);
-
-    print('🔥 [Home→Warmup] date=${_warmDate.toIso8601String().substring(0,10)}  '
-        '(selectedDay=${_selectedDay?.toIso8601String()}, focusedDay=${_focusedDay.toIso8601String()})');
 
     unawaited(WarmupService.instance.warmWES(
       actingUid ?? '',
@@ -354,7 +345,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
     // Delay the email fetch until after build
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      print('🧩 Post-frame callback fired');
       _loadAthleteEmail();
     });
 
@@ -380,15 +370,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         if (uid != null && bid != null && bid.isNotEmpty) {
           await debugPrintEightDayWindow(uid: uid, blockId: bid);
         } else {
-          print('🟥 [Scan8] skipped: uid or blockId missing (uid=$uid, bid=$bid)');
+
         }
       });
     });
 
-    debugPrint('[UserContext] uid=${userContext.actorUid} '
-        'isCoach=${userContext.isCoach} '
-        'isAdmin=${userContext.isAdmin} '
-    );
   }
 
   Future<void> _persistAvatarLocalIfNeeded(BuildContext context, {
@@ -600,7 +586,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
 
   Future<void> _loadInitialHomeFeed() async {
-    debugPrint('[HOME INIT] enter resolved=$_feedOwnersResolved posts=${_feedPosts.length} hasMore=$_feedHasMore');
 
     if (!_feedOwnersResolved) return;
     setState(() {
@@ -617,7 +602,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
 
   Future<void> _loadMoreHomeFeed() async {
-    debugPrint('[HOME FEED] >>> ENTER _loadMoreHomeFeed, loading=$_feedLoading hasMore=$_feedHasMore owners=${_feedOwnerUids.length}');
     if (_feedLoading || !_feedHasMore || _feedOwnerUids.isEmpty) return;
 
     // capture scroll metrics BEFORE we change state
@@ -643,7 +627,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
       final qs = await q.get();
       final docs = qs.docs;
-      debugPrint('[HOME PAGE] fetched=${docs.length} types=${docs.take(5).map((d)=>d.data()['type']).toList()}');
 
 
 // 👀 Count items that will actually render on Home
@@ -678,7 +661,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         try {
           newPosts.add(Post.fromSnap(d));
         } catch (e) {
-          debugPrint('[HOME FEED] Post.fromSnap error on ${d.id}: $e');
         }
       }
 
@@ -703,7 +685,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         });
       }
     } on FirebaseException catch (e) {
-      debugPrint('[HOME FEED] Firestore error: code=${e.code}, message=${e.message}');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Feed error: ${e.code}')),
@@ -716,7 +697,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         _feedHasMore = false;
       });
     } catch (e) {
-      debugPrint('[HOME FEED] Unknown error: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Feed failed to load: $e')));
@@ -816,7 +796,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         await _loadMorePointsFeed();
       }
     } catch (e) {
-      debugPrint('[POINTS FEED] error: $e');
       _pointsHasMore = false;
     } finally {
       _pointsLoading = false;
@@ -876,16 +855,15 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           : const <String, dynamic>{};
 
       owners.addAll(athletesMap.keys);
-      debugPrint('[FEED] viewer=$viewerUid buddies=${athletesMap.keys.length} owners=${owners.length}');
+
     } catch (e) {
-      debugPrint('[FEED] buddyAssignments read failed: $e');
+
     }
 
     setState(() {
       _feedOwnerUids = owners.toList();
       _feedOwnersResolved = true;
     });
-    debugPrint('[FEED BOOT] ownersResolved=true owners=${_feedOwnerUids.length} selected=${_selectedFeed}');
 
   }
 
@@ -908,7 +886,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       // If the doc ID is the same as the 'name' field, it's likely incorrectly added
       if (data != null && data['name'] == id) {
         await doc.reference.delete();
-        print('🗑️ Deleted improperly added exercise: $id');
       }
     }
 
@@ -928,11 +905,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           'category': core['category'] ?? '',
           'bodyPart': core['bodyPart'] ?? '',
         });
-        print('✅ Added missing exercise: ${core['name']}');
+
       }
     }
-
-    print('🎉 Finished syncing exercises with Firestore.');
   }
 
 
@@ -1015,7 +990,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
       setState(() => _trainingDays = trainingDays);
     } catch (e) {
-      print('Error fetching training days: $e');
     }
   }
 
@@ -1671,7 +1645,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                 child: GestureDetector(
                                   onTap: () {
                                     final userContext = UserContext.of(context, listen: false);
-                                    print('🧭 [NAV→Profile] actorUid=${userContext.actorUid} currentUid(actingAs)=${userContext.currentUid}');
 
                                     Navigator.push(
                                       context,
@@ -1969,7 +1942,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                     onSelectionChanged: (s) async {
 
                                       final next = s.first;
-                                      debugPrint('🔘 SelectedFeed -> $next'); // <— add this line
                                       if (_selectedFeed == next) return;
 
                                       setState(() => _selectedFeed = next);

@@ -9498,7 +9498,13 @@ class _WorkoutPageState extends State<WorkoutPage>
     final docRef = coll.doc(docId);
 
     // ⬇️ NEW: read existing doc so we can preserve previously-completed entries if user clears fields
+    print('⏳ [WES upsert] starting docRef.get()...');
+    final _tGetStart = _upsertSw.elapsedMilliseconds;;
     final existingSnap = await docRef.get();
+
+    final _tGetEnd = _upsertSw.elapsedMilliseconds;
+    print('✅ [WES upsert] finished docRef.get() (+${_tGetEnd - _tGetStart} ms)');
+
     final List<Map<String, dynamic>> existingExercises =
     List<Map<String, dynamic>>.from(
         existingSnap.data()?['exercises'] ?? const []);
@@ -9705,7 +9711,13 @@ class _WorkoutPageState extends State<WorkoutPage>
       print(
           '📝 [WES upsert] Writing doc $docId for uid=$uid (exercises=$_exCount, wesPlanned=$_wesCount)...');
 
+      print('⏳ [WES upsert] starting Firestore write...');
       await docRef.set(payload, SetOptions(merge: false));
+      final _tWriteStart = _upsertSw.elapsedMilliseconds;
+      await docRef.set(payload, SetOptions(merge: false));
+      final _tWriteEnd = _upsertSw.elapsedMilliseconds;
+      print('✅ [WES upsert] Firestore write complete (+${_tWriteEnd - _tWriteStart} ms)');
+
       print('✅ [WES upsert] Firestore write complete.');
 
       // 🔥 [WES upsert → Warm] Precompute WES snapshots for *today* and *tomorrow* (fire-and-forget).
@@ -9777,16 +9789,22 @@ class _WorkoutPageState extends State<WorkoutPage>
       }
 
       // 🔁 Keep public profile stats fresh (only if there are completed sets)
-      final hasExercises = ((payload['exercises'] as List?)?.isNotEmpty ??
-          false);
+      final hasExercises = ((payload['exercises'] as List?)?.isNotEmpty ?? false);
       if (hasExercises) {
-        try {
-          await updateStatsFromWorkout(uid: uid, workout: payload);
-          print('🏷️ [WES upsert] Stats snapshot updated.');
-        } catch (e) {
-          print('⚠️ [WES upsert] Stats snapshot update failed: $e');
-        }
+        print('⏳ [WES upsert] scheduling updateStatsFromWorkout...');
+        final _tStatsStart = _upsertSw.elapsedMilliseconds;
+        () async {
+          try {
+            await updateStatsFromWorkout(uid: uid, workout: payload);
+            final _tStatsEnd = _upsertSw.elapsedMilliseconds;
+            print('✅ [WES upsert] finished updateStatsFromWorkout (+${_tStatsEnd - _tStatsStart} ms)');
+          } catch (e) {
+            print('⚠️ [WES upsert] Stats snapshot update failed: $e');
+          }
+        }();
       }
+
+
       _lastSavedHash = currentHash;
       _pendingChanges = false;
 
