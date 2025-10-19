@@ -9809,10 +9809,19 @@ class _WorkoutPageState extends State<WorkoutPage>
       _pendingChanges = false;
 
       if (alsoPushToBB2) {
-        print('📤 [WES upsert] Pushing top sets to BB2...');
-        await _pushTopSetsToBlockDataIfAny();
-        print('✅ [WES upsert] BB2 push complete.');
+        print('📤 [WES upsert] scheduling BB2 top-sets push (background)…');
+        () async {
+          final _bgSw = Stopwatch()..start();
+          try {
+            print('⏳ [WES upsert] (bg) starting _pushTopSetsToBlockDataIfAny()...');
+            await _pushTopSetsToBlockDataIfAny();
+            print('✅ [WES upsert] (bg) finished _pushTopSetsToBlockDataIfAny (+${_bgSw.elapsedMilliseconds} ms)');
+          } catch (e) {
+            print('⚠️ [WES upsert] (bg) top-sets push failed: $e');
+          }
+        }();
       }
+
 
       await _persistSavedFlagsLocally();
       await _persistDraftLocally();
