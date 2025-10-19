@@ -8109,6 +8109,8 @@ class _WorkoutPageState extends State<WorkoutPage>
 
   @override
   void dispose() {
+    final _disposeSw = Stopwatch()..start();
+
     print('🧹 [WES] dispose called — uid=$_cachedUid');
     _catchupShineCtl?.dispose();
     print('💾 [WES dispose] Persisting local draft...');
@@ -8141,6 +8143,8 @@ class _WorkoutPageState extends State<WorkoutPage>
     _sparkleCtrl.dispose();
 
     print('✅ [WES dispose] Completed cleanup.');
+    print('⏱️ [WES dispose] total=${_disposeSw.elapsedMilliseconds} ms');
+
     super.dispose();
   }
 
@@ -9474,8 +9478,11 @@ class _WorkoutPageState extends State<WorkoutPage>
   }) async {
     print(
         '🚀 [WES upsert] Starting upsert (markAllSaved=$markAllSaved, pushBB2=$alsoPushToBB2)');
+    final _upsertSw = Stopwatch()..start();
+    try {
 
-    // Ensure controllers → _workoutSets are in sync for the first-exit case
+
+      // Ensure controllers → _workoutSets are in sync for the first-exit case
     await _persistDraftLocally();
     bool _printedUpsertBw = false;
     // Resolve the acting UID WITHOUT using context (dispose-safe)
@@ -9683,12 +9690,7 @@ class _WorkoutPageState extends State<WorkoutPage>
 // Install planned list into payload (fresh each write based on UI)
     payload['wesPlannedExercises'] = wesPlannedByKey.values.toList();
 
-
-    // NEW: Exercises now reflect ONLY rows with qualifying sets currently in UI.
-// (If a previously completed row was cleared, it is excluded here and
-// represented in wesPlannedExercises above.)
     payload['exercises'] = newExercises;
-
 
     final currentHash = payload.hashCode.toString();
     if (_lastSavedHash == currentHash) {
@@ -9731,13 +9733,11 @@ class _WorkoutPageState extends State<WorkoutPage>
             activeBlockId: blockId,
             selectedDate: d1,
           );
-
           debugPrint('✅ [WES upsert] Warm kicked for $d0 and $d1 (uid=$uidSelected, block=$blockId)');
         }
       } catch (e, st) {
         debugPrint('⚠️ [WES upsert] Warm kick failed: $e');
       }
-
 
       // ✅ Kick off RE Daily compute/write in the background (don’t block save UI)
       try {
@@ -9776,11 +9776,6 @@ class _WorkoutPageState extends State<WorkoutPage>
         debugPrint('⚠️ [RE Daily] kickoff failed for $docId: $e');
       }
 
-
-
-
-
-
       // 🔁 Keep public profile stats fresh (only if there are completed sets)
       final hasExercises = ((payload['exercises'] as List?)?.isNotEmpty ??
           false);
@@ -9792,8 +9787,6 @@ class _WorkoutPageState extends State<WorkoutPage>
           print('⚠️ [WES upsert] Stats snapshot update failed: $e');
         }
       }
-
-
       _lastSavedHash = currentHash;
       _pendingChanges = false;
 
@@ -9809,7 +9802,11 @@ class _WorkoutPageState extends State<WorkoutPage>
       print('❌ [WES upsert] Firestore write failed: $e');
       print(st);
     }
+    } finally {
+      print('⏱️ [WES upsert] total=${_upsertSw.elapsedMilliseconds} ms');
+    }
   }
+
 
 
   bool _isExerciseSaved(int index) {
