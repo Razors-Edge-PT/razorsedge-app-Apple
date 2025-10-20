@@ -309,6 +309,18 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   @override
   void initState() {
     super.initState();
+    // 🔔 Page open timers
+    final __pageSw = Stopwatch()..start();
+    bool __firstPaintLogged = false;
+
+    // First frame (first visual paint)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!__firstPaintLogged) {
+        __firstPaintLogged = true;
+        debugPrint('🎨 [BB2] First frame painted in ${__pageSw.elapsedMilliseconds}ms');
+      }
+    });
+
     _cachedUid = UserContext.of(context, listen: false).currentUid;
     _repo = BlockPlannerRepository();
 
@@ -353,6 +365,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       setState(() {});
       total.stop();
       print("✅ BB2 initState completed in ${total.elapsedMilliseconds}ms");
+      debugPrint('🟢 [BB2] Interactive ready in ${__pageSw.elapsedMilliseconds}ms');
+
     }).catchError((e, stack) {
       print('❌ [BB2 INIT] Future.wait failed: $e');
       print(stack);
@@ -2596,8 +2610,9 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       }
     });
 
-    print('✅ [BB2] loadBlockDataForWeek($weekIndex) done in ${total.elapsedMilliseconds}ms');
+    print('⏱️ [BB2] loadBlockDataForWeek($weekIndex) ${total.elapsedMilliseconds}ms — end');
     print('📦 [BB2 Count Ready] week=$weekIndex hydratedKeys=${completedWesRows.keys.toList()..sort()}');
+
 
   }
 
