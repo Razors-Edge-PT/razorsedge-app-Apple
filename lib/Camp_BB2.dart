@@ -200,10 +200,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   int initialDayIndex = 0; // Optional but useful for fine control
   final Set<int> loadedWeekIndices = {};
   final Set<int> _loadingWeeks = {};
-  String? _pmuOwnerUid;
-  String? _pmuOwnerBlockId;
-
-
+  final Map<int, Future<void>> _inflightLoads = <int, Future<void>>{};
 
   DateTime _bb2StartTime = DateTime.now();
 
@@ -352,12 +349,16 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       await _loadRepTargets();
       _weekPageController = PageController(initialPage: _currentWeekPage);
 
-      await _timeStep('loadBlockDataForWeek($_currentWeekPage)',
-              () => loadBlockDataForWeek(_currentWeekPage),
-          total: total);
+      await _timeStep('ensureWeekLoaded($_currentWeekPage)',
+          () => ensureWeekLoaded(_currentWeekPage, caller: 'initState'),
+      total: total);
+
       print("📦 Week $_currentWeekPage data loaded.");
-      loadedWeekIndices.add(_currentWeekPage);
-      unawaited(_prefetchNeighborWeeks(_currentWeekPage));
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_prefetchNeighborWeeks(_currentWeekPage));
+      });
+
 
       await _timeStep('loadPlannedExercisesFromFirestore',
               () => loadPlannedExercisesFromFirestore(),
@@ -657,11 +658,10 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
   Future<void> _prefetchNeighborWeeks(int center) async {
     final futures = <Future<void>>[];
-    // previous
-    futures.add(_loadWeekIfNeeded(center - 1));
-    // next
-    futures.add(_loadWeekIfNeeded(center + 1));
+    futures.add(ensureWeekLoaded(center - 1, caller: 'prefetch'));
+    futures.add(ensureWeekLoaded(center + 1, caller: 'prefetch'));
     await Future.wait(futures);
+
   }
 
   Future<void> loadVisibleWeeksOnly() async {
@@ -681,13 +681,55 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     for (final weekIndex in weeksToLoad) {
       if (!loadedWeekIndices.contains(weekIndex)) {
         print('📦 [BB2] Requesting load for week_$weekIndex...');
-        await loadBlockDataForWeek(weekIndex);
+        await ensureWeekLoaded(weekIndex, caller: 'visibleWeeks');
         loadedWeekIndices.add(weekIndex);
       }
     }
     stopwatch.stop();
     print('✅ [BB2] loadVisibleWeeksOnly completed in ${stopwatch.elapsedMilliseconds}ms');
   }
+
+  Future<void> ensureWeekLoaded(int week, {String caller = 'unknown'}) {
+    // quick guards
+    if (week < 0 || week >= totalWeeks) {
+      debugPrint('⏭️ [BB2] ensureWeekLoaded($week) ignored (out of range) ← $caller');
+      return Future.value();
+    }
+    if (loadedWeekIndices.contains(week)) {
+      // already loaded
+      return Future.value();
+    }
+
+    // coalesce parallel requests
+    final existing = _inflightLoads[week];
+    if (existing != null) {
+      debugPrint('⏳ [BB2] ensureWeekLoaded($week) joining in-flight ← $caller');
+      return existing;
+    }
+
+    // create a single in-flight future for this week
+    final f = (() async {
+      try {
+        // prevent double-entry while running
+        _loadingWeeks.add(week);
+
+        debugPrint('📦 [BB2] ensureWeekLoaded($week) → loadBlockDataForWeek ← $caller');
+        await loadBlockDataForWeek(week);
+
+        // mark as loaded once successfully fetched
+        loadedWeekIndices.add(week);
+
+        if (mounted) setState(() {}); // keep UI updated once per completed load
+      } finally {
+        _loadingWeeks.remove(week);
+        _inflightLoads.remove(week);
+      }
+    })();
+
+    _inflightLoads[week] = f;
+    return f;
+  }
+
 
   // ...Cache loading technique
 
@@ -5498,12 +5540,12 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                         itemCount: weekIndices.length,
                         onPageChanged: (newPage) async {
                           setState(() => _currentWeekPage = newPage);
-                          if (!loadedWeekIndices.contains(newPage)) {
-                            await loadBlockDataForWeek(newPage);
-                            loadedWeekIndices.add(newPage);
-                            setState(() {});
-                          }
+                          await ensureWeekLoaded(newPage, caller: 'onPageChanged');
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            unawaited(_prefetchNeighborWeeks(newPage));
+                          });
                         },
+
                         itemBuilder: (ctx, pageIndex) {
                           // each week can scroll vertically if it overflows:
                           return SingleChildScrollView(
