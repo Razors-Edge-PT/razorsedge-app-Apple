@@ -5551,42 +5551,41 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<void>(
-        future: _initialLoad,
-        builder: (context, snapshot) {
-          // Allow early paint when cache hydrate succeeded for the current week
-          final bool canEarlyPaint =
-              _earlyHydrated &&
-                  _weekPageController != null &&
-                  loadedWeekIndices.contains(_currentWeekPage);
-          debugPrint('[BB2 build] canEarlyPaint=$canEarlyPaint '
-              'earlyHydrated=$_earlyHydrated '
-              'loadedNow=${loadedWeekIndices.contains(_currentWeekPage)} '
-              'ctrlNull=${_weekPageController == null} '
-              'future=${snapshot.connectionState}');
+      future: _initialLoad,
+      builder: (context, snapshot) {
+        // 1) If we have early-hydrated data, make sure the PageController exists
+        if (_earlyHydrated && _weekPageController == null) {
+          _weekPageController = PageController(initialPage: _currentWeekPage);
+          debugPrint('🧭 [BB2] Created PageController for early paint (page=$_currentWeekPage)');
+        }
 
-          if (snapshot.connectionState != ConnectionState.done && !canEarlyPaint) {
-            return const Scaffold(
-              backgroundColor: Colors.black,
-              body: Center(child: CircularProgressIndicator()),
-            );
-          }
+        // 2) Early paint should depend ONLY on _earlyHydrated
+        final bool canEarlyPaint = _earlyHydrated;
 
-// 👇 NEW: if we can early-paint but the controller isn't built yet,
-// create it now so we don't block first paint on the spinner.
-          if (_weekPageController == null && canEarlyPaint) {
-            _weekPageController = PageController(initialPage: _currentWeekPage);
-            debugPrint('🧭 [BB2] Created PageController for early paint (page=$_currentWeekPage)');
-          }
+        debugPrint('[BB2 build] canEarlyPaint=$canEarlyPaint '
+            'earlyHydrated=$_earlyHydrated '
+            'loadedNow=${loadedWeekIndices.contains(_currentWeekPage)} '
+            'ctrlNull=${_weekPageController == null} '
+            'future=${snapshot.connectionState}');
 
-// Keep guard just in case
-          if (_weekPageController == null) {
-            return const Scaffold(
-              backgroundColor: Colors.black,
-              body: Center(child: CircularProgressIndicator()),
-            );
-          }
+        // 3) If Firestore still loading and we have no early-hydrated UI, show spinner
+        if (snapshot.connectionState != ConnectionState.done && !canEarlyPaint) {
+          return const Scaffold(
+            backgroundColor: Colors.black,
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
 
-          return Scaffold(
+        // 4) Safety guard: if controller is still null (shouldn't happen when earlyHydrated), show spinner
+        if (_weekPageController == null) {
+          return const Scaffold(
+            backgroundColor: Colors.black,
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+
+        return Scaffold(
           appBar: AppBar(
             title: _allBlocks.isEmpty
                 ? const Text("Block Builder 2")
