@@ -24,6 +24,7 @@ import 'package:flutter/foundation.dart';
 import 'dart:convert'; // (top of file if not already)
 import 'local_cache/block_plan_cache.dart';
 import 'warmup_service.dart';
+import 'warmupBB2.dart';
 import 'local_cache/isar_db.dart';
 import 'package:isar/isar.dart';
 import 'local_cache/isar_bb2_merged_day.dart';
@@ -404,10 +405,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     }
   }
 
-
-
-
-
   @override
   void initState() {
     super.initState();
@@ -429,6 +426,14 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     final total = Stopwatch()..start();
     print("⏱️ BB2 initState started…");
 
+    debugPrint('[BB2 init] before assigning _initialLoad, earlyHydrated=$_earlyHydrated');
+    // 🚀 Defensive warmup (idempotent; Home also warms). Runs server reads → Isar cache.
+    if ((_cachedUid).isNotEmpty) {
+      unawaited(WarmupBB2.runForActiveBlock(uid: _cachedUid));
+      debugPrint('🚀 [BB2] warmup kick (defensive) for uid=$_cachedUid');
+    }
+
+
     _initialLoad = Future.wait([
       _fetchActiveBlockThenMeta(),
       _loadAllBlocks(),
@@ -447,9 +452,31 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       final today = DateTime.now();
       _currentWeekPage = (today.difference(_displayStart).inDays ~/ 7)
           .clamp(0, totalWeeks - 1);
+      // 🔥 Pre-warm the exact week we’re about to render (server → Isar)
+      if ((_cachedUid).isNotEmpty && _selectedBlockId != null) {
+        unawaited(WarmupBB2.run(
+          uid: _cachedUid,
+          blockId: _selectedBlockId!,
+          weekIndex: _currentWeekPage,
+          blockStartDate: blockStartDate,
+          blockEndDate: blockEndDate,
+        ));
+        debugPrint('🔥 [BB2] Warmup queued for week=$_currentWeekPage block=$_selectedBlockId');
+      }
+
+// ⚡ Early hydrate UI from Isar (controller-ready rows & circuits)
+// NOTE: this sets _earlyHydrated=true and setState() if anything found
+      await _hydrateFromMergedCache(
+        uid: _cachedUid,
+        blockId: _selectedBlockId!,
+        weekIndex: _currentWeekPage,
+      );
+
+// ⬇️ Continue your normal path (authoritative reconciliation)
       print("📊 Rep targets loaded.");
       await _loadRepTargets();
       _weekPageController = PageController(initialPage: _currentWeekPage);
+
 
 
 
@@ -767,12 +794,41 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   }
 
   Future<void> _prefetchNeighborWeeks(int center) async {
+    // 🧊 Warm neighbor weeks into Isar so swipes are instant
+    final uid = _cachedUid;
+    final bid = _selectedBlockId;
+    if (uid != null && uid.isNotEmpty && bid != null && totalWeeks > 0) {
+      final prev = center - 1;
+      final next = center + 1;
+      if (prev >= 0) {
+        unawaited(WarmupBB2.run(
+          uid: uid,
+          blockId: bid,
+          weekIndex: prev,
+          blockStartDate: blockStartDate,
+          blockEndDate: blockEndDate,
+        ));
+        debugPrint('🧊 [BB2] Warmed neighbor prev=$prev');
+      }
+      if (next < totalWeeks) {
+        unawaited(WarmupBB2.run(
+          uid: uid,
+          blockId: bid,
+          weekIndex: next,
+          blockStartDate: blockStartDate,
+          blockEndDate: blockEndDate,
+        ));
+        debugPrint('🧊 [BB2] Warmed neighbor next=$next');
+      }
+    }
+
+    // 📦 Existing Firestore prefetch remains unchanged
     final futures = <Future<void>>[];
     futures.add(ensureWeekLoaded(center - 1, caller: 'prefetch'));
     futures.add(ensureWeekLoaded(center + 1, caller: 'prefetch'));
     await Future.wait(futures);
-
   }
+
 
   Future<void> loadVisibleWeeksOnly() async {
     final stopwatch = Stopwatch()..start();
@@ -5502,6 +5558,11 @@ class _BlockBuilder2State extends State<Camp_BB2> {
               _earlyHydrated &&
                   _weekPageController != null &&
                   loadedWeekIndices.contains(_currentWeekPage);
+          debugPrint('[BB2 build] canEarlyPaint=$canEarlyPaint '
+              'earlyHydrated=$_earlyHydrated '
+              'loadedNow=${loadedWeekIndices.contains(_currentWeekPage)} '
+              'ctrlNull=${_weekPageController == null} '
+              'future=${snapshot.connectionState}');
 
           if (snapshot.connectionState != ConnectionState.done && !canEarlyPaint) {
             return const Scaffold(
@@ -5510,15 +5571,20 @@ class _BlockBuilder2State extends State<Camp_BB2> {
             );
           }
 
-          // Keep guard just in case, though hydrate path should have set it
+// 👇 NEW: if we can early-paint but the controller isn't built yet,
+// create it now so we don't block first paint on the spinner.
+          if (_weekPageController == null && canEarlyPaint) {
+            _weekPageController = PageController(initialPage: _currentWeekPage);
+            debugPrint('🧭 [BB2] Created PageController for early paint (page=$_currentWeekPage)');
+          }
+
+// Keep guard just in case
           if (_weekPageController == null) {
             return const Scaffold(
               backgroundColor: Colors.black,
               body: Center(child: CircularProgressIndicator()),
             );
           }
-
-
 
           return Scaffold(
           appBar: AppBar(
@@ -5659,11 +5725,37 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                         itemCount: weekIndices.length,
                         onPageChanged: (newPage) async {
                           setState(() => _currentWeekPage = newPage);
+
+                          // 1) Warm server→Isar for this week (idempotent)
+                          if ((_cachedUid).isNotEmpty && _selectedBlockId != null) {
+                            unawaited(WarmupBB2.run(
+                              uid: _cachedUid,
+                              blockId: _selectedBlockId!,
+                              weekIndex: newPage,
+                              blockStartDate: blockStartDate,
+                              blockEndDate: blockEndDate,
+                            ));
+                            debugPrint('🔥 [BB2] Warmup queued (onPageChanged) week=$newPage');
+                          }
+
+                          // 2) Early paint from Isar if available (fast UI)
+                          if ((_cachedUid).isNotEmpty && _selectedBlockId != null) {
+                            await _hydrateFromMergedCache(
+                              uid: _cachedUid,
+                              blockId: _selectedBlockId!,
+                              weekIndex: newPage,
+                            );
+                          }
+
+                          // 3) Authoritative reconciliation (Firestore)
                           await ensureWeekLoaded(newPage, caller: 'onPageChanged');
+
+                          // 4) Prefetch + warm neighbors after this frame
                           WidgetsBinding.instance.addPostFrameCallback((_) {
                             unawaited(_prefetchNeighborWeeks(newPage));
                           });
                         },
+
 
                         itemBuilder: (ctx, pageIndex) {
                           // each week can scroll vertically if it overflows:
