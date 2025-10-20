@@ -200,6 +200,9 @@ class _BlockBuilder2State extends State<Camp_BB2> {
   int initialDayIndex = 0; // Optional but useful for fine control
   final Set<int> loadedWeekIndices = {};
   final Set<int> _loadingWeeks = {};
+  String? _pmuOwnerUid;
+  String? _pmuOwnerBlockId;
+
 
 
   DateTime _bb2StartTime = DateTime.now();
@@ -336,13 +339,11 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       // 2) Pick the selected block
       print("✅ Meta loaded. Block list and active block ID ready.");
 
-      setState(() {
-        _selectedBlockId = _allBlocks
-            .firstWhere((b) => b.id == _activeBlockId, orElse: () => _allBlocks.first)
-            .id;
+      _selectedBlockId = _allBlocks
+          .firstWhere((b) => b.id == _activeBlockId, orElse: () => _allBlocks.first)
+          .id;
+      print("🧱 [BB2 Init] Loaded blockId: $_selectedBlockId (should match active: $_activeBlockId)");
 
-        print("🧱 [BB2 Init] Loaded blockId: $_selectedBlockId (should match active: $_activeBlockId)");
-      });
 
       final today = DateTime.now();
       _currentWeekPage = (today.difference(_displayStart).inDays ~/ 7)
