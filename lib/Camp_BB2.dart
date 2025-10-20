@@ -24,7 +24,9 @@ import 'package:flutter/foundation.dart';
 import 'dart:convert'; // (top of file if not already)
 import 'local_cache/block_plan_cache.dart';
 import 'warmup_service.dart';
-
+import 'local_cache/isar_db.dart';
+import 'package:isar/isar.dart';
+import 'local_cache/isar_bb2_merged_day.dart';
 
 part 'block_data_loader.dart';
 
@@ -129,6 +131,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
   bool completedWesRowsReady = false;
   Map<String, Map<String, dynamic>>? _pendingPmuPatch;
+  bool _earlyHydrated = false; // allow painting before _initialLoad completes
 
   late final BlockPlannerRepository _repo;
   List<String> _selectedDays = [];
@@ -303,6 +306,105 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     _dbgTrackedWeights.add(c);
   }
 
+  //isar bit
+
+  Future<void> _hydrateFromMergedCache({
+    required String uid,
+    required String blockId,
+    required int weekIndex,
+  }) async {
+    try {
+      final isar = await IsarDb.instance;
+
+      bool anyDay = false;
+
+      // 1) Rehydrate rows + circuit headers for all 7 days from the merged cache
+      for (int dayIdx = 0; dayIdx < 7; dayIdx++) {
+        final doc = await isar.bB2MergedDays.get(
+          bb2MergedDayId(uid, blockId, weekIndex, dayIdx),
+        );
+        if (doc == null) continue;
+
+        final List<dynamic> rowsJson   = jsonDecode(doc.mergedExercisesJson);
+        final List<dynamic> startsJson = jsonDecode(doc.circuitStartIndicesJson);
+
+        final rows = <ExerciseRow>[];
+        for (final r in rowsJson) {
+          final m = Map<String, dynamic>.from(r as Map);
+
+          final er = ExerciseRow(
+            id: const Uuid().v4(), // keep your existing key style
+            exercise: (m['exercise'] ?? '').toString(),
+            circuitIndex: (m['circuitIndex'] ?? 0) as int,
+          );
+
+          // Controller-ready values (exactly what the UI should show on first paint)
+          er.exerciseController.text = (m['exercise']  ?? '').toString();
+          er.weightController.text   = (m['weight']    ?? '').toString();
+          er.repsController.text     = (m['reps']      ?? '').toString();
+          er.rirController.text      = (m['rir']       ?? '').toString();
+          er.velocityController.text = (m['velocity']  ?? '').toString();
+          er.notesController.text    = (m['notes']     ?? '').toString();
+
+          rows.add(er);
+        }
+
+        exerciseRows[weekIndex][dayIdx]             = rows;
+        circuitStartIndices[weekIndex][dayIdx]      = startsJson.cast<int>().toList();
+        _loadedDays.add('w${weekIndex}_d$dayIdx');
+        anyDay = true;
+      }
+
+      // 2) If we haven’t populated increments/hints sources yet, set them from the block doc (CACHE ONLY)
+      //    This keeps first-frame hint math identical to your live path, without a network trip.
+      if (anyDay && (_exerciseSettings.isEmpty || _dataOwnerUid != uid || _dataOwnerBlockId != blockId)) {
+        final blockDocRef = FirebaseFirestore.instance
+            .collection('planned_blocks')
+            .doc(uid)
+            .collection('blocks')
+            .doc(blockId);
+
+        try {
+          final metaSnap = await blockDocRef.get(const GetOptions(source: Source.cache));
+          final data = metaSnap.data();
+
+          // plannedExerciseDetails → PMU (only if available in cache)
+          if (data != null && data['plannedExerciseDetails'] != null) {
+            final plannedDetails = Map<String, Map<String, dynamic>>.from(
+              ((data['plannedExerciseDetails'] as Map).map(
+                    (k, v) => MapEntry(k.toString(), Map<String, dynamic>.from(v as Map)),
+              )),
+            );
+            // keep same injection semantics as live path
+            PeriodizationModelUtils.setExerciseSettings(plannedDetails);
+          }
+
+          // exerciseSettings → BB2 (id-first, name fallback)
+          if (data != null && data['exerciseSettings'] != null) {
+            _exerciseSettings = Map<String, Map<String, dynamic>>.from(
+              ((data['exerciseSettings'] as Map).map(
+                    (k, v) => MapEntry(k.toString(), Map<String, dynamic>.from(v as Map)),
+              )),
+            );
+            _dataOwnerUid = uid;
+            _dataOwnerBlockId = blockId;
+          }
+        } catch (_) {
+          // Safe to ignore; if nothing in cache, the live loader will fill it later
+        }
+      }
+
+      if (anyDay) {
+        _earlyHydrated = true;
+        if (mounted) setState(() {});
+        debugPrint('⚡ [BB2] earlyHydrated=true (week=$weekIndex)');
+      }
+    } catch (e, st) {
+      debugPrint('⚠️ [BB2] _hydrateFromMergedCache failed: $e\n$st');
+    }
+  }
+
+
 
 
 
@@ -348,6 +450,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       print("📊 Rep targets loaded.");
       await _loadRepTargets();
       _weekPageController = PageController(initialPage: _currentWeekPage);
+
+
 
       await _timeStep('ensureWeekLoaded($_currentWeekPage)',
           () => ensureWeekLoaded(_currentWeekPage, caller: 'initState'),
@@ -463,6 +567,12 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     if (kDebugMode) {
       debugPrint('   ↳ compute/init took ${tCompute.elapsedMilliseconds}ms');
     }
+    await _hydrateFromMergedCache(
+      uid: _cachedUid ?? '',
+      blockId: _activeBlockId ?? _selectedBlockId ?? '',
+      weekIndex: _currentWeekPage,
+    );
+
 
     // 4) Load the rest
     final tAll = Stopwatch()..start();
@@ -5387,21 +5497,30 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     return FutureBuilder<void>(
         future: _initialLoad,
         builder: (context, snapshot) {
-      if (snapshot.connectionState != ConnectionState.done) {
-        return const Scaffold(
-          backgroundColor: Colors.black,
-          body: Center(child: CircularProgressIndicator()),
-        );
-      }
-      if (_weekPageController == null) {
-        return const Scaffold(
-          backgroundColor: Colors.black,
-          body: Center(child: CircularProgressIndicator()),
-        );
-      }
+          // Allow early paint when cache hydrate succeeded for the current week
+          final bool canEarlyPaint =
+              _earlyHydrated &&
+                  _weekPageController != null &&
+                  loadedWeekIndices.contains(_currentWeekPage);
+
+          if (snapshot.connectionState != ConnectionState.done && !canEarlyPaint) {
+            return const Scaffold(
+              backgroundColor: Colors.black,
+              body: Center(child: CircularProgressIndicator()),
+            );
+          }
+
+          // Keep guard just in case, though hydrate path should have set it
+          if (_weekPageController == null) {
+            return const Scaffold(
+              backgroundColor: Colors.black,
+              body: Center(child: CircularProgressIndicator()),
+            );
+          }
 
 
-      return Scaffold(
+
+          return Scaffold(
           appBar: AppBar(
             title: _allBlocks.isEmpty
                 ? const Text("Block Builder 2")

@@ -21,6 +21,7 @@ import'stats_snapshot.dart';
 import 'directMessages.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:path_provider/path_provider.dart';
+import 'warmupBB2.dart';
 import 'post_service.dart';
 import 'post_header.dart';
 import 'feed_post_card.dart';
@@ -290,12 +291,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   void initState() {
     super.initState();
 
-
-
     final src = _selectedDay ?? _focusedDay;
     final dateOnly = DateTime(src.year, src.month, src.day);
-
-
 
     final userContext = Provider.of<UserContext>(context, listen: false);
     final actingUid = userContext.actingAsUid ?? userContext.actorUid; // add this line
@@ -328,8 +325,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       }
     }());
 
-
-
 // Pass block + date so Warmup can precompute the exact WES snapshot you’ll need.
     final _warmDateSrc = _selectedDay ?? _focusedDay; // use picked day, else the visible day
     final _warmDate = DateTime(_warmDateSrc.year, _warmDateSrc.month, _warmDateSrc.day);
@@ -340,14 +335,18 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       selectedDate: _warmDate,
     ));
 
+    debugPrint('🏁 [HOME] Triggering WarmupBB2 for $actingUid');
 
+    // 🔥 Prewarm BB2 current week (server-based merged cache for first-paint correctness)
+    if (actingUid != null && actingUid.isNotEmpty) {
+      unawaited(WarmupBB2.runForActiveBlock(uid: actingUid));
+    }
 
 
     // Delay the email fetch until after build
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadAthleteEmail();
     });
-
 
     _ensureAtLeastOneBlockExists().then((_) {
       _fetchRecentData();
