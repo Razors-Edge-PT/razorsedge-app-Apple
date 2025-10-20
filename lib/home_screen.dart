@@ -109,6 +109,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   String? _avatarLastUrlSaved;
   final ImagePicker _picker = ImagePicker();
 
+  //Warm ups
+  bool _bb2WarmupScheduled = false;     // first-time warmup
+  bool _bb2WarmupOnResumePending = false; // throttle resume warmups in a single frame
+
+
+
 
   String? _actingAsEmail;
   String? _lastWarmUid;
@@ -290,6 +296,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   @override
   void initState() {
     super.initState();
+    debugPrint('🏠 [HOME:initState] running initState()');
 
     final src = _selectedDay ?? _focusedDay;
     final dateOnly = DateTime(src.year, src.month, src.day);
@@ -554,6 +561,19 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     if (route != null) {
       routeObserver.subscribe(this, route); // 👈 subscribe
     }
+    // First time this page becomes active → schedule a one-shot warmup post-frame
+    if (!_bb2WarmupScheduled) {
+      _bb2WarmupScheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final userContext = Provider.of<UserContext>(context, listen: false);
+        final actingUid = userContext.actingAsUid ?? userContext.actorUid;
+        debugPrint('🏁 [HOME] First-show: schedule WarmupBB2 for $actingUid');
+        if (actingUid != null && actingUid.isNotEmpty) {
+          unawaited(WarmupBB2.runForActiveBlock(uid: actingUid));
+        }
+      });
+    }
+
   }
 
   @override
@@ -568,17 +588,29 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     _pointsScrollCtrl.dispose();
 
     super.dispose();
+    debugPrint('❌ [HOME] dispose() called');
   }
 
   @override
   void didPopNext() {
-    if (!_feedOwnersResolved) return;
-    if (_selectedFeed == SelectedFeed.home) {
-      _loadInitialHomeFeed();
-    } else {
-      _loadInitialPointsFeed();
+    // 🟢 Existing logic — re-fetch whichever feed is active
+    if (_feedOwnersResolved) {
+      if (_selectedFeed == SelectedFeed.home) {
+        _loadInitialHomeFeed();
+      } else {
+        _loadInitialPointsFeed();
+      }
+    }
+
+    // 🔥 NEW: also warm up BB2 cache on resume
+    final userContext = Provider.of<UserContext>(context, listen: false);
+    final actingUid = userContext.actingAsUid ?? userContext.actorUid;
+    debugPrint('🔁 [HOME] didPopNext: resume WarmupBB2 for $actingUid');
+    if (actingUid != null && actingUid.isNotEmpty) {
+      unawaited(WarmupBB2.runForActiveBlock(uid: actingUid));
     }
   }
+
 
 
 //Home FEED functions
