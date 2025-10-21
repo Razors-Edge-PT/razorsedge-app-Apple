@@ -5722,6 +5722,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                       PageView.builder(
                         controller: _weekPageController!,
                         itemCount: weekIndices.length,
+                        physics: const BouncingScrollPhysics(), // allows swipe only
+                        allowImplicitScrolling: true,           // smoother pre-render
                         onPageChanged: (newPage) async {
                           setState(() => _currentWeekPage = newPage);
 
@@ -5754,8 +5756,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                             unawaited(_prefetchNeighborWeeks(newPage));
                           });
                         },
-
-
                         itemBuilder: (ctx, pageIndex) {
                           // each week can scroll vertically if it overflows:
                           return SingleChildScrollView(
@@ -5763,45 +5763,9 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                           );
                         },
                       ),
-
-                      // ‹ button
-                      Positioned(
-                        left: 0,
-                        top: 0,
-                        bottom: 0,
-                        child: IconButton(
-                          icon: Icon(Icons.chevron_left, color: Colors.white70),
-                          onPressed: () {
-                            if (_currentWeekPage > 0) {
-                              _weekPageController!.previousPage(
-                                duration: Duration(milliseconds: 300),
-                                curve: Curves.easeInOut,
-                              );
-                            }
-                          },
-                        ),
-                      ),
-
-                      // › button
-                      Positioned(
-                        right: 0,
-                        top: 0,
-                        bottom: 0,
-                        child: IconButton(
-                          icon:
-                              Icon(Icons.chevron_right, color: Colors.white70),
-                          onPressed: () {
-                            if (_currentWeekPage < weekIndices.length - 1) {
-                              _weekPageController!.nextPage(
-                                duration: Duration(milliseconds: 300),
-                                curve: Curves.easeInOut,
-                              );
-                            }
-                          },
-                        ),
-                      ),
                     ],
                   ),
+
                 ),
               ],
             ),

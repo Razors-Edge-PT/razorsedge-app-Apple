@@ -231,34 +231,52 @@ class _BlockPlannerState extends State<Block_Planner> {
     super.initState();
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final args =
-          ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+      final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
 
-      await loadExercisesFromFirestore(); // ✅ Always load this first
-
-      print('🚀 loadExercisesFromFirestore() called');
+      await loadExercisesFromFirestore(); // names/cache first for defaults
 
       if (args != null && args['blockId'] != null) {
+        // Explicit block → load its dates/scaffold, then planned IDs & settings
         await _loadBlockFromFirestore(args['blockId']);
+        await _loadPlannedExercises();
+        await _seedDefaultsFor(_idsWithoutSettings(exercises)); // mirror “Save” in picker
       } else if (args != null && args['newBlock'] == true) {
-        // 👇 Completely fresh — skip all loading
-        print("🆕 Starting new empty block.");
+        // New block created via Home.ensure → hydrate from pointer and finish like picker Save
+        final userId = UserContext.of(context, listen: false).currentUid;
+        final ptrSnap = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(userId)
+            .collection('block_planner')
+            .doc('current_block')
+            .get();
+
+        final ptr = ptrSnap.data();
+        final ptrBlockId = (ptr?['blockId'] as String?) ?? '';
+
+        if (ptrBlockId.isNotEmpty) {
+          await _loadBlockFromFirestore(ptrBlockId);  // dates/scaffold
+        } else {
+          await _loadBlockDatesFromFirestore();       // at least get dates
+        }
+
+        await _loadPlannedExercises();                // IDs + any existing settings
+        await _seedDefaultsFor(_idsWithoutSettings(exercises)); // same as picker Save
+
         setState(() {
-          _blockStartDate = null;
-          _blockEndDate = null;
-          exercises = [];
-          exerciseSettings = {};
           _isSavedBlock = false;
           _isNewBlock = true;
+          // DO NOT clear exercises / exerciseSettings
         });
       } else {
-        // Default behavior — fallback to auto-init
-        await _initData();
+        // Default path: load dates & planned → hydrate any missing settings
+        await _initData(); // see updated version below
       }
 
-      await _loadRepHistoryAndGenerateReps(); // Still needed for rep preview
+      // Still needed for preview (runs after defaults are in place)
+      await _loadRepHistoryAndGenerateReps();
     });
   }
+
 
   Future<void> _loadBlockFromFirestore(String blockId) async {
     final userId = UserContext.of(context, listen: false).currentUid;
@@ -451,11 +469,146 @@ class _BlockPlannerState extends State<Block_Planner> {
   }
 
   Future<void> _initData() async {
-    await loadExercisesFromFirestore(); // 🧠 make sure this finishes first
+    await loadExercisesFromFirestore();
     await _loadBlockDatesFromFirestore();
-    await _loadPlannedExercises();
-    await initializePlannedExerciseDetails(exercises);
+    await _loadPlannedExercises();           // sets exercises + any existing settings
+    await _seedDefaultsFor(_idsWithoutSettings(exercises));  // complete like picker Save
   }
+
+  List<String> _idsWithoutSettings(List<String> ids) {
+    final out = <String>[];
+    for (final id in ids) {
+      final m = exerciseSettings[id];
+      if (m == null || (m is Map && m.isEmpty)) out.add(id);
+    }
+    return out;
+  }
+
+
+  Future<void> _seedDefaultsFor(List<String> ids) async {
+    if (ids.isEmpty) return;
+
+    // ---- 1) Ensure we know name/category/bodyPart for each id ----
+    // Try to use what you may already have in memory (_exerciseIdToName, etc.)
+    final metaById = <String, Map<String, String>>{};
+    final idsNeedingFetch = <String>[];
+
+    for (final id in ids) {
+      final name = _exerciseIdToName[id]; // you already maintain this
+      // If we don’t have enough to resolve defaults, fetch the doc.
+      if (name == null || name.isEmpty) {
+        idsNeedingFetch.add(id);
+      } else {
+        metaById[id] = {
+          'name': name,
+          // category/bodyPart may still be needed for getDefaultSettings
+          // we'll fetch them below if missing after this pass
+        };
+      }
+    }
+
+    if (idsNeedingFetch.isNotEmpty) {
+      final snaps = await Future.wait(idsNeedingFetch.map(
+            (id) => FirebaseFirestore.instance.collection('exercises').doc(id).get(),
+      ));
+      for (final doc in snaps) {
+        final d = doc.data();
+        if (d == null) continue;
+        final id = doc.id;
+        final name = (d['name'] as String?) ?? '';
+        final category = (d['category'] as String?) ?? 'Other';
+        // bodyPart can be string or list
+        String bodyPart = '';
+        final bp = d['bodyPart'];
+        if (bp is List && bp.isNotEmpty) bodyPart = bp.first.toString();
+        if (bp is String) bodyPart = bp;
+
+        _exerciseIdToName[id] = name; // keep your cache aligned
+        metaById[id] = {'name': name, 'category': category, 'bodyPart': bodyPart};
+      }
+    }
+
+    // If any entries still missing category/bodyPart, try to fetch them (cheap single gets)
+    final idsMissingCat = metaById.entries
+        .where((e) => (e.value['category'] ?? '').isEmpty)
+        .map((e) => e.key)
+        .toList();
+    if (idsMissingCat.isNotEmpty) {
+      final snaps = await Future.wait(idsMissingCat.map(
+            (id) => FirebaseFirestore.instance.collection('exercises').doc(id).get(),
+      ));
+      for (final doc in snaps) {
+        final d = doc.data();
+        if (d == null) continue;
+        final id = doc.id;
+        final category = (d['category'] as String?) ?? 'Other';
+        String bodyPart = '';
+        final bp = d['bodyPart'];
+        if (bp is List && bp.isNotEmpty) bodyPart = bp.first.toString();
+        if (bp is String) bodyPart = bp;
+
+        final cur = metaById[id] ?? <String, String>{};
+        cur['category'] = category;
+        cur['bodyPart'] = bodyPart;
+        metaById[id] = cur;
+      }
+    }
+
+    // ---- 2) Mirror the dialog’s seeding into in-memory settings ----
+    bool changed = false;
+    for (final id in ids) {
+      final meta = metaById[id] ?? const {};
+      final name = meta['name'] ?? '';
+      final category = (meta['category'] ?? 'Other');
+      final bodyPart = (meta['bodyPart'] ?? '');
+
+      // getDefaultSettings exactly like the dialog
+      final defaults = getDefaultSettings(name, category, bodyPart);
+
+      // Normalize repTargets to Map<String, Map<String, String>>
+      final repTargets = defaults['repTargets'];
+      if (repTargets is! Map<String, Map<String, String>>) {
+        defaults['repTargets'] = _convertToMap(repTargets);
+        print("🔧 Normalized repTargets for $name");
+      }
+
+      // Ensure rirPlan is a Map to avoid crashes
+      final rirPlan = defaults['rirPlan'];
+      if (rirPlan is! Map<String, dynamic>) {
+        defaults['rirPlan'] = {};
+        print("⚠️ Fallback: Empty rirPlan injected for $name");
+      }
+
+      // Keep explicit copy for reseeding after model flips (in-memory only)
+      final explicitSeed = defaults['repTargets'];
+
+      // Write to in-memory settings (same as dialog)
+      exerciseSettings[id] = {
+        ...defaults,
+        if (explicitSeed != null) 'explicitRepTargets': explicitSeed,
+      };
+      changed = true;
+    }
+    if (changed && mounted) setState(() {});
+
+    // ---- 3) Persist the same fields the dialog persists ----
+    for (final id in ids) {
+      final settings = exerciseSettings[id];
+      if (settings != null) {
+        _onUpdateSetting(id, 'repTargets', settings['repTargets']);
+        _onUpdateSetting(id, 'defaultSets', settings['defaultSets'] ?? 3);
+        _onUpdateSetting(
+          id,
+          'modelSpecificRepTargets',
+          settings['modelSpecificRepTargets'],
+        );
+      }
+    }
+
+    // ---- 4) Silent background save (same as dialog) ----
+    Future.microtask(() => _savePlannedExercises(suppressSnack: true));
+  }
+
 
   Future<void> _loadBlockDatesFromFirestore() async {
     final userId = UserContext.of(context, listen: false).currentUid;
@@ -507,7 +660,6 @@ class _BlockPlannerState extends State<Block_Planner> {
       _exerciseIdToName[id] = name;
       PeriodizationModelUtils.nameToId[name.trim()] =
           id; // ✅ this is what you’re missing
-      print('✅ Mapped "$name" → $id');
 
       return {
         'id': id, // 👈 Add id here too if needed later
@@ -1292,7 +1444,6 @@ class _BlockPlannerState extends State<Block_Planner> {
     final userId = UserContext.of(context, listen: false).currentUid;
     if (userId == null) return;
 
-
     final snapshot = await FirebaseFirestore.instance
         .collection('users')
         .doc(userId)
@@ -1300,8 +1451,19 @@ class _BlockPlannerState extends State<Block_Planner> {
         .doc('current_block')
         .get();
 
+
+// INSERT UNDER THIS LINE
+    print('🧪 [BP.load] current_block exists=${snapshot.exists}');
+    if (snapshot.exists) {
+      final dd = snapshot.data();
+      print('🧪 [BP.load] keys=${dd?.keys.toList()}');
+      print('🧪 [BP.load] plannedExercises.len=${(dd?['plannedExercises'] as List?)?.length ?? -1}');
+    }
+
+
     if (snapshot.exists) {
       final data = snapshot.data();
+      print('🧪 [BP.load] plannedExercises at runtime → ${data?['plannedExercises']}');
       if (data != null) {
         // ✅ Restore planned exercise IDs
         if (data.containsKey('plannedExercises')) {
@@ -1326,61 +1488,13 @@ class _BlockPlannerState extends State<Block_Planner> {
                 (e) => e.value.containsKey('rirPlan'),
             orElse: () => MapEntry('none', {}),
           );
-
           print('🧪 [DEBUG] Found rirPlan under: ${rir.key}');
-
-
           print(
               "📋 Loaded plannedExerciseDetails for ${converted.length} exercises");
         }
       }
     }
   }
-
-  Future<void> initializePlannedExerciseDetails(List<String> plannedExercises) async {
-    final userId = UserContext.of(context, listen: false).currentUid;
-    if (userId == null) return;
-
-    final docRef = FirebaseFirestore.instance
-        .collection('users')
-        .doc(userId)
-        .collection('block_planner')
-        .doc('current_block');
-
-    final snapshot = await docRef.get();
-    final data = snapshot.data() ?? {};
-
-    // ✅ This matches what's saved in _savePlannedExercises()
-    final existingDetails = Map<String, dynamic>.from(
-      data['plannedExerciseDetails'] ?? {},
-    );
-
-    // Update or insert entries for each planned exercise
-    for (final exercise in plannedExercises) {
-      final existingEntry = existingDetails[exercise] as Map<String, dynamic>?;
-
-      final reps = exerciseRepTargets[exercise] ?? [10, 8, 6];
-
-      final entry = {
-        'periodizationModel':
-            existingEntry?['periodizationModel'] ?? 'Linear Exposure',
-        'repTargets': reps,
-        'progressionModel': existingEntry?['progressionModel'] ?? "Linear Weight Increase",
-        'increments': existingEntry?['increments'] ?? {'week': 2.5, 'block': 5.0},
-        'weeklyFrequency': existingEntry?['weeklyFrequency'] ?? 3,
-        'maxWeightXReps': existingEntry?['maxWeightXReps'] ?? '',
-        'notes': existingEntry?['notes'] ?? '',
-      };
-
-      existingDetails[exercise] = entry;
-      exerciseSettings[exercise] = entry;
-    }
-
-    await docRef.set({
-      'plannedExerciseDetails': existingDetails,
-    }, SetOptions(merge: true));
-  }
-
 
   @override
   Widget build(BuildContext context) {

@@ -467,7 +467,43 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       print('🆕 [Home] No blocks found — creating default "1st Block"...');
       final now = DateTime.now();
       final startDate = now;
-      final endDate = now.add(const Duration(days: 42));
+      final endDate = now.add(const Duration(days: 42)); // 6 weeks
+
+      // ✅ seed only at block root (no per-day planning)
+      const seededExerciseIds = <String>[
+        'heeBViVINHO6tUScSd6y', // Back Squat, Barbell
+        'zn5PgKNRrWo1MTE4wnCy', // Bayesian Biceps Curl
+        'AmfUWbF1DH3I7qPAdh5k', // Bench Press, Barbell
+        'eyh76KELuuO805rZBpMa', // 45 Degree Hip Extension
+        'MsGl7e9yanDeEnYX0e4X', // Deadlift, Conventional
+        '0dZrCqZ8M7Q1sAn0zeeb', // Dumbbell Biceps Curl
+        'kTs5fLSTKjUkUZL10iii', // Flat Bench Dumbbell Press
+        'BpO7e9KsDJsvwhfo09uU', // Hanging Knee Raise
+        'P88Vj5pBydqmiEzFowag', // Hanging Straight Leg Raise
+        'LGhFj8o0sG3X12296UAh', // Hip Thrust, Barbell
+        'eeEXnmSXv90q0rUgGECq', // KP Face Pull
+        '1XOIXxeLFhgmgjZS9Cyq', // Lat Pull Down, Supinated
+        'JbthLLjMF6xRvvaUY8PU', // Lat Pull Down, Unilateral
+        'Url65Q2RxZa00dkDpUdl', // Lat Pull Down, Wide Arm
+        'ZKpGshMxFl2dxNmYSATj', // Leg Extension, Unilateral
+        'LVMQEQl6ZWBcgEUdk2tP', // Leg Press Calf Raise
+        '8CIXN12uS2xwF4JzVLq3', // Long Lever Plank
+        'wIcMsf2J9cswJRs1GuYX', // Lying Leg Curl
+        '7WBffXwK7vJcMi3mtJTF', // Machine Hip Abduction
+        'YaQ0FCQEUAk4ALwAPhv2', // Machine Hip Thrust
+        'ocNWJv7xLrlinGmjG6cV', // Machine Row, Supported
+        'lVDG90yN6Z8aPjRNV2wc', // Overhead Barbell Press
+        'z5gs1ilr4DpKlSZaRNG5', // Overhead Cable Triceps Extension, Unilateral
+        'RdsGazgdH0xgpjek0n3u', // Overhead Dumbbell Press, Unilateral
+        'xU7MNEvnaoSwz5jy3uHw', // Plank
+        '63ryIPxgXVPX7jLtAecC', // Pull-Up, Wide Arm
+        'y5q9OU9OBzZQMkfPzFrf', // Romanian Deadlift
+        'spGqXXReJNHMcc62YgZX', // Seated Calf Raise
+        'ETm055bydWtUCxTMu3MR', // Seated Leg Curl
+        'ci3KpMTEacH4bw8ZumJW', // Standing Calf Raise
+        'KPewxxYYrhsOp84lIQr5', // Suspended High Row
+        'FtayDmR5BVnGS1FXlXLL', // Triceps Dip
+      ];
 
       final defaultBlock = {
         'name': '1st Block',
@@ -475,14 +511,54 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         'createdAt': Timestamp.now(),
         'startDate': Timestamp.fromDate(startDate),
         'endDate': Timestamp.fromDate(endDate),
-        'selectedDays': ['Mon', 'Wed', 'Fri'],
+        'selectedDays': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+        // 👇 BP/WES read these lists
+        'exercises': seededExerciseIds,
+        'plannedExercises': seededExerciseIds,
+        // 👇 minimal stub so readers depending on this field won't spin
+        'plannedExerciseDetails': {
+          'blockMeta': {
+            'blockStartDate': startDate.toIso8601String(),
+            'blockEndDate': endDate.toIso8601String(),
+            'selectedDays': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+          }
+        },
       };
 
       final newBlockRef = await blocksRef.add(defaultBlock);
       final newBlockId = newBlockRef.id;
       print('✅ [Home] Default block created with ID: $newBlockId');
+      // 🔗 Point BP to this new block and seed what BP._loadPlannedExercises() reads
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('block_planner')
+          .doc('current_block')
+          .set({
+        'blockId': newBlockId,
+        'blockName': '1st Block',
 
-      // ✅ Create week_0 to week_5 and day_0 to day_6 in each
+        // BP loader uses these:
+        'plannedExercises': seededExerciseIds,
+        'plannedExerciseDetails': {
+          'blockMeta': {
+            'blockStartDate': startDate.toIso8601String(),
+            'blockEndDate': endDate.toIso8601String(),
+            'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
+          }
+        },
+
+        // (Optional legacy helper – some code paths still glance at this)
+        'blockMeta': {
+          'blockStartDate': startDate.toIso8601String(),
+          'blockEndDate': endDate.toIso8601String(),
+        },
+      }, SetOptions(merge: true));
+
+      print('📌 [Home] Set current_block pointer → $newBlockId');
+
+
+      // ✅ Scaffold weeks & days (days keep exercises: [] → no day planning yet)
       for (int week = 0; week < 6; week++) {
         final weekRef = newBlockRef.collection('weeks').doc('week_$week');
         await weekRef.set({'exists': true}, SetOptions(merge: true));
@@ -490,11 +566,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         final daysRef = weekRef.collection('days');
         for (int day = 0; day < 7; day++) {
           final currentDate = now.add(Duration(days: week * 7 + day));
-          final weekday = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][day];
-          final monthName = [
-            'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-            'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-          ][currentDate.month - 1];
+          final weekday = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day];
+          final monthName = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][currentDate.month - 1];
 
           await daysRef.doc('day_$day').set({
             'date': Timestamp.fromDate(currentDate),
@@ -502,44 +575,37 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             'exercises': [],
             'workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}',
             'exists': true,
-          });
+          }, SetOptions(merge: true));
         }
       }
 
-      // ✅ Inject a planned exercise with Static RIR and periodization
-      final exerciseId = 'AmfUWbF1DH3I7qPAdh5k'; // Bench Press, Barbell
-      final defaultRirPlan = {
-        for (int w = 1; w <= 6; w++)
-          'week$w': {
-            'session1': {
-              'set1': {'reps': '10', 'rir': '1'},
-              'set2': {'reps': '10', 'rir': '1'},
-              'set3': {'reps': '10', 'rir': '1'},
-            }
-          }
-      };
+      // ✅ Point the user to this new active block to avoid home spinner
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('block_planner')
+          .doc('current_block')
+          .set({
+        'blockId': newBlockId,
+        'blockName': '1st Block',
 
-      final plannedExerciseDetails = {
-        exerciseId: {
-          'rirModel': 'Static RIR',
-          'rirPlan': defaultRirPlan,
-          'periodizationModel': 'DUP, Custom',
-          'progressionModel': 'Add Reps',
-          'weeklyFrequency': 3,
-          'increments': {'week': 2.5, 'block': 5.0},
-          'notes': '',
-          'maxWeightXReps': '',
+        // 👇 This is what BP._loadPlannedExercises() reads
+        'plannedExercises': seededExerciseIds,
+        'plannedExerciseDetails': {
+          'blockMeta': {
+            'blockStartDate': startDate.toIso8601String(),
+            'blockEndDate': endDate.toIso8601String(),
+            'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
+          }
         },
+        // (Optional legacy: some code also reads this)
         'blockMeta': {
           'blockStartDate': startDate.toIso8601String(),
           'blockEndDate': endDate.toIso8601String(),
-          'selectedDays': ['Mon', 'Wed', 'Fri'],
-        }
-      };
-
-      await newBlockRef.set({
-        'plannedExerciseDetails': plannedExerciseDetails,
+        },
       }, SetOptions(merge: true));
+
+      print('📌 [Home] Set current_block pointer → $newBlockId');
     }
   }
 
@@ -551,7 +617,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       unawaited(WarmupService.instance.warmWES(newUid));
     }
   }
-
 
   @override
   void didChangeDependencies() {
@@ -573,7 +638,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         }
       });
     }
-
   }
 
   @override
@@ -601,7 +665,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         _loadInitialPointsFeed();
       }
     }
-
     // 🔥 NEW: also warm up BB2 cache on resume
     final userContext = Provider.of<UserContext>(context, listen: false);
     final actingUid = userContext.actingAsUid ?? userContext.actorUid;
@@ -611,13 +674,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     }
   }
 
-
-
 //Home FEED functions
-
-
   Future<void> _loadInitialHomeFeed() async {
-
     if (!_feedOwnersResolved) return;
     setState(() {
       _feedLoading = false;
@@ -629,8 +687,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     });
     await _loadMoreHomeFeed();
   }
-
-
 
   Future<void> _loadMoreHomeFeed() async {
     if (_feedLoading || !_feedHasMore || _feedOwnerUids.isEmpty) return;
@@ -655,10 +711,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       if (_lastCreatedAt != null) {
         q = q.startAfter([_lastCreatedAt]);
       }
-
       final qs = await q.get();
       final docs = qs.docs;
-
 
 // 👀 Count items that will actually render on Home
       final int _renderableThisPage = docs.where((d) {
@@ -678,14 +732,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         final ts = (last['createdAt'] as Timestamp?);
         _lastCreatedAt = ts ?? _lastCreatedAt;
       }
-
 // 🚀 If nothing on this page would render, prefetch the next page immediately
       if (_renderableThisPage == 0 && docs.isNotEmpty && docs.length >= _kFeedPageSize) {
         _feedLoading = false; // allow re-entry past the guard
         await _loadMoreHomeFeed();
         return;
       }
-
 
       final newPosts = <Post>[];
       for (final d in docs) {
@@ -694,19 +746,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         } catch (e) {
         }
       }
-
       if (docs.isNotEmpty) {
         final last = docs.last.data();
         final ts = (last['createdAt'] as Timestamp?);
         _lastCreatedAt = ts ?? _lastCreatedAt;
       }
-
       setState(() {
         _feedPosts.addAll(newPosts);
         _feedHasMore = docs.length >= _kFeedPageSize;
         _feedLoading = false;
       });
-
       // if nothing new, restore scroll offset so the view doesn’t “jump”
       if (hadClients && docs.isEmpty) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -740,8 +789,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       });
     }
   }
-
-
 
   Future<void> _loadInitialPointsFeed() async {
     if (!_feedOwnersResolved) return;
@@ -790,7 +837,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         monthStart = start;
         monthEnd = end;
       }
-
       final filtered = <Post>[];
       for (final d in docs) {
         Post? p;
@@ -833,8 +879,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     }
   }
 
-
-
   void _onPointsScroll() {
     if (!_pointsScrollCtrl.hasClients || _pointsLoading || !_pointsHasMore) return;
     final pos = _pointsScrollCtrl.position;
@@ -842,8 +886,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       _loadMorePointsFeed();
     }
   }
-
-
 
 // Trigger more when near bottom of outer scroll view
   void _onHomeScroll() {
@@ -864,7 +906,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     }
   }
 
-
   Future<void> _resolveFeedOwners() async {
     final uc = UserContext.of(context, listen: false);
     final viewerUid = uc.currentUid ?? uc.actorUid;
@@ -873,7 +914,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     if (viewerUid != null && viewerUid.isNotEmpty) {
       owners.add(viewerUid);
     }
-
     try {
       final d = await FirebaseFirestore.instance
           .collection('buddyAssignments')
@@ -888,17 +928,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       owners.addAll(athletesMap.keys);
 
     } catch (e) {
-
     }
-
     setState(() {
       _feedOwnerUids = owners.toList();
       _feedOwnersResolved = true;
     });
-
   }
-
-
 
 // cleaning function
   Future<void> cleanAndSyncExercisesInFirestore() async {
@@ -963,11 +998,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
     setState(() => _actingAsEmail = chosen);
   }
-
-
-
-
-
 
   Future<void> _fetchTrainingDaysForMonth(DateTime month) async {
     final user = FirebaseAuth.instance.currentUser;
