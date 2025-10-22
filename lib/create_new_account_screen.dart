@@ -282,8 +282,6 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
           return;
         }
 
-
-
         final payload = {
           'email': user.email,
           'username': username,
@@ -310,6 +308,7 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
       if (mounted) {
         Navigator.pushReplacementNamed(context, '/home');
       }
+
     } on FirebaseAuthException catch (e) {
       String message;
       switch (e.code) {
@@ -337,6 +336,60 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
       }
     }
   }
+
+  void _continueToOnboarding() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final email = _emailController.text.trim();
+      final password = _passwordController.text.trim();
+      final username = _usernameController.text.trim();
+      final fullName = _fullNameController.text.trim();
+      final dobRaw   = _dobController.text.trim();
+      final sex      = _selectedSex; // 'M' | 'F' | 'N'
+
+      // Re-normalize DOB (same rules as your validator)
+      final dobNormalized = _normalizeDob(dobRaw);
+      if (dobNormalized == null) {
+        setState(() { _errorMessage = 'Please enter a valid date of birth.'; _isLoading = false; });
+        return;
+      }
+
+      // Optional: if your availability flag exists, block if it's explicitly false
+      if (_usernameAvailableFlag == false) {
+        setState(() { _errorMessage = 'That username is taken by your nemesis. Please choose another.'; _isLoading = false; });
+        return;
+      }
+
+      // Navigate to Page 2 (no account creation yet)
+      if (!mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => OnboardingPageTwo(
+            // pass everything needed to create the account later
+            email: email,
+            password: password,
+            username: username,
+            fullName: fullName,
+            dob: dobNormalized, // yyyy-mm-dd
+            sex: sex,
+          ),
+        ),
+      );
+    } catch (e, st) {
+      print('❌ [_continueToOnboarding] $e\n$st');
+      setState(() { _errorMessage = 'Something went wrong. Please try again.'; });
+    } finally {
+      if (mounted) setState(() { _isLoading = false; });
+    }
+  }
+
 
   @override
   void initState() {
@@ -904,12 +957,12 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                       shape: RoundedRectangleBorder(
                                           borderRadius: BorderRadius.circular(12)),
                                     ),
-                                    onPressed: _isLoading ? null : _register,
+                                    onPressed: _isLoading ? null : _continueToOnboarding,
                                     child: _isLoading
                                         ? const CircularProgressIndicator(
                                         color: Colors.white)
                                         : const Text(
-                                      'Sign Up',
+                                      'Continue',
                                       style: TextStyle(fontSize: 18),
                                     ),
                                   ),
@@ -949,3 +1002,540 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
   }
 
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Page 2: Onboarding (Goals, Focus, Injuries, Experience, Best Efforts)
+// All fields are optional in the model; UI enforces "required" where needed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum TrainingExperience { never, lt6mo, oneYear, twoPlus }
+
+class BestEffort {
+  final String liftKey;     // e.g. 'bench_barbell', 'bench_db', 'squat', 'leg_press', 'chinup', 'lat_pulldown', 'deadlift'
+  final double? weightKg;
+  final int? reps;
+  const BestEffort({ this.liftKey = '', this.weightKg, this.reps });
+
+  Map<String, dynamic> toJson() => {
+    'liftKey': liftKey,
+    'weightKg': weightKg,
+    'reps': reps,
+  };
+
+  factory BestEffort.fromJson(Map<String, dynamic> j) => BestEffort(
+    liftKey: (j['liftKey'] ?? '') as String,
+    weightKg: (j['weightKg'] as num?)?.toDouble(),
+    reps: (j['reps'] as num?)?.toInt(),
+  );
+}
+
+class OnboardingAnswers {
+  final List<String>? goalsRanked;      // ranked list, highest priority first
+  final List<String>? bodyFocus;        // selected areas
+  final Map<String, int>? painNow;      // {'lower_back': 4, 'knees': 2} (1–10)
+  final List<String>? injuries;         // ['lower_back','knees',...]
+  final TrainingExperience? experience; // radio selection
+  final List<BestEffort>? bestEfforts;  // optional
+  final DateTime? createdAt;
+  final String? version;
+
+  const OnboardingAnswers({
+    this.goalsRanked,
+    this.bodyFocus,
+    this.painNow,
+    this.injuries,
+    this.experience,
+    this.bestEfforts,
+    this.createdAt,
+    this.version,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'goalsRanked': goalsRanked,
+    'bodyFocus': bodyFocus,
+    'painNow': painNow,
+    'injuries': injuries,
+    'experience': experience?.name,
+    'bestEfforts': bestEfforts?.map((b) => b.toJson()).toList(),
+    'createdAt': (createdAt ?? DateTime.now()).toUtc().toIso8601String(),
+    'version': version ?? 'v1',
+  };
+
+  factory OnboardingAnswers.fromJson(Map<String, dynamic> j) => OnboardingAnswers(
+    goalsRanked: (j['goalsRanked'] as List?)?.map((e) => e.toString()).toList(),
+    bodyFocus: (j['bodyFocus'] as List?)?.map((e) => e.toString()).toList(),
+    painNow: (j['painNow'] as Map?)?.map((k, v) => MapEntry(k.toString(), (v as num).toInt())),
+    injuries: (j['injuries'] as List?)?.map((e) => e.toString()).toList(),
+    experience: _expFromString(j['experience']),
+    bestEfforts: (j['bestEfforts'] as List?)
+        ?.map((e) => BestEffort.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList(),
+    createdAt: (j['createdAt'] != null) ? DateTime.tryParse(j['createdAt'].toString()) : null,
+    version: j['version']?.toString(),
+  );
+
+  static TrainingExperience? _expFromString(dynamic v) {
+    final s = v?.toString();
+    if (s == null) return null;
+    return TrainingExperience.values.firstWhere(
+          (e) => e.name == s,
+      orElse: () => TrainingExperience.never,
+    );
+  }
+}
+
+class OnboardingPageTwo extends StatefulWidget {
+  final String email;
+  final String password;
+  final String? sex;       // 'M' | 'F' | 'N'
+  final String? username;
+  final String? fullName;
+  final String? dob;       // yyyy-mm-dd
+
+  const OnboardingPageTwo({
+    Key? key,
+    required this.email,
+    required this.password,
+    this.sex,
+    this.username,
+    this.fullName,
+    this.dob,
+  }) : super(key: key);
+
+  @override
+  State<OnboardingPageTwo> createState() => _OnboardingPageTwoState();
+}
+
+class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
+  final _formKey = GlobalKey<FormState>();
+
+  // ── A) Goals: start with full list; user reorders to set priority.
+  List<String> _goals = const [
+    'Get stronger',
+    'Build more muscle',
+    'Get fitter',
+    'Get leaner',
+    'Feel healthier / move better',
+  ].toList();
+
+  // ── B) Body focus (conditional if “muscle/toned” is relevant): simple checklist for v1
+  final List<String> _bodyParts = const [
+    'Chest', 'Back', 'Shoulders', 'Arms', 'Abs', 'Glutes', 'Quads', 'Hamstrings', 'Calves'
+  ];
+  final Set<String> _bodyFocus = <String>{};
+
+  // ── C) Injuries: checkboxes + per-item pain slider (1–10) when checked
+  final List<String> _injuryKeys = const [
+    'Lower back', 'Knees', 'Shoulders', 'Elbows', 'Neck', 'Wrists', 'Ankles'
+  ];
+  final Set<String> _injuries = <String>{};
+  final Map<String, double> _painSlider = {}; // store slider as double 1..10; round to int when saving
+
+  // ── D) Experience: radio
+  TrainingExperience? _experience;
+
+  // ── E) Optional best efforts (free text; we’ll parse “100 x 5” loosely)
+  final TextEditingController _benchCtrl = TextEditingController();
+  final TextEditingController _squatCtrl = TextEditingController();
+  final TextEditingController _pullCtrl  = TextEditingController(); // chinup/lat pulldown
+  final TextEditingController _deadCtrl  = TextEditingController();
+
+  bool _saving = false;
+
+  bool get _muscleOrTonedChosen {
+    // if “Build more muscle” OR “Get leaner” OR “Feel more toned” appears high, we can encourage body focus
+    return _goals.contains('Build more muscle') || _goals.contains('Get leaner');
+  }
+
+  bool _uiIsValid() {
+    // Required: goals (we’ll require that user has at least ordered them once — always true here)
+    final hasGoals = _goals.isNotEmpty;
+
+    // Required: injuries selection is allowed to be empty, but if any checked, pain 1–10 must exist.
+    final injuryPainOk = _injuries.every((i) => (_painSlider[i] ?? 0) >= 1);
+
+    // Required: experience must be selected.
+    final hasExperience = _experience != null;
+
+    // Conditional required: if muscle/toned relevant, we require at least one body focus.
+    final focusOk = !_muscleOrTonedChosen || _bodyFocus.isNotEmpty;
+
+    return hasGoals && injuryPainOk && hasExperience && focusOk;
+  }
+
+  @override
+  void dispose() {
+    _benchCtrl.dispose();
+    _squatCtrl.dispose();
+    _pullCtrl.dispose();
+    _deadCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _finish() async {
+    if (!_uiIsValid()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please complete the required bits first')),
+      );
+      return;
+    }
+
+    setState(() => _saving = true);
+
+    try {
+      // 1) Create account now (if not already signed in)
+      final auth = FirebaseAuth.instance;
+      UserCredential? cred;
+
+      if (auth.currentUser == null) {
+        cred = await auth.createUserWithEmailAndPassword(
+          email: widget.email,
+          password: widget.password,
+        );
+
+        // displayName = username (optional)
+        final user = auth.currentUser;
+        final username = (widget.username ?? '').trim();
+        if (user != null && username.isNotEmpty) {
+          await user.updateDisplayName(username);
+        }
+      }
+
+      final user = auth.currentUser;
+      if (user == null) {
+        throw Exception('No user after registration');
+      }
+
+      // 2) Write profile payload to users & users_public
+      final username = (widget.username ?? '').trim();
+      final payload = {
+        'email': user.email,
+        'username': username,
+        'usernameLower': username.toLowerCase(),
+        'fullName': widget.fullName,
+        'dob': widget.dob,    // yyyy-mm-dd string
+        'sex': widget.sex,    // 'M'|'F'|'N'
+        'createdAt': FieldValue.serverTimestamp(),
+      };
+
+      final db = FirebaseFirestore.instance;
+      await db.collection('users').doc(user.uid).set(payload, SetOptions(merge: true));
+      await db.collection('users_public').doc(user.uid).set(payload, SetOptions(merge: true));
+
+      // 3) Build & save onboarding answers
+      final answers = OnboardingAnswers(
+        goalsRanked: _goals.toList(),
+        bodyFocus: _bodyFocus.isEmpty ? null : _bodyFocus.toList(),
+        injuries: _injuries.isEmpty ? null : _injuries.toList(),
+        painNow: _injuries.isEmpty
+            ? null
+            : Map.fromEntries(_injuries.map((k) => MapEntry(k, (_painSlider[k] ?? 1).round()))),
+        experience: _experience,
+        bestEfforts: _collectBestEfforts(),
+        createdAt: DateTime.now(),
+        version: 'v1',
+      );
+
+      final onbRef = db.collection('users').doc(user.uid)
+          .collection('profile').doc('fitness_onboarding');
+      await onbRef.set(answers.toJson(), SetOptions(merge: true));
+
+      if (!mounted) return;
+      Navigator.pushReplacementNamed(context, '/home');
+    } catch (e, st) {
+      debugPrint('❌ [Onboarding Finish] $e\n$st');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not finish setup. Please try again.')),
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+
+  List<BestEffort> _collectBestEfforts() {
+    final out = <BestEffort>[];
+    void parseAndAdd(TextEditingController c, String liftKey) {
+      final raw = c.text.trim();
+      if (raw.isEmpty) return;
+      // Loose parse: "100 x 5" or "100x5" or "100 5"
+      final regex = RegExp(r'(\d+(\.\d+)?)\s*[xX]\s*(\d+)'); // kg x reps
+      final m = regex.firstMatch(raw);
+      if (m != null) {
+        final w = double.tryParse(m.group(1)!);
+        final r = int.tryParse(m.group(3)!);
+        if (w != null && r != null) {
+          out.add(BestEffort(liftKey: liftKey, weightKg: w, reps: r));
+          return;
+        }
+      }
+      // If no match, try single number (weight only)
+      final wOnly = double.tryParse(raw);
+      if (wOnly != null) out.add(BestEffort(liftKey: liftKey, weightKg: wOnly));
+    }
+
+    parseAndAdd(_benchCtrl, 'bench_or_db');
+    parseAndAdd(_squatCtrl, 'squat_or_legpress');
+    parseAndAdd(_pullCtrl,  'chinup_or_latpulldown');
+    parseAndAdd(_deadCtrl,  'deadlift');
+
+    return out.isEmpty ? [] : out;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.blueGrey.shade50,
+      body: Center(
+        child: Card(
+          elevation: 10,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          color: Colors.white.withOpacity(0.9),
+          margin: const EdgeInsets.all(20),
+          child: Padding(
+            padding: const EdgeInsets.all(20.0),
+            child: Form(
+              key: _formKey,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      "Tell us about your training",
+                      style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.black54),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // A) Goals (drag to rank)
+                    _SectionHeader("What matters most to you? (drag to rank)"),
+                    const SizedBox(height: 6),
+                    _GoalsRanker(
+                      items: _goals,
+                      onReorder: (from, to) {
+                        setState(() {
+                          final item = _goals.removeAt(from);
+                          _goals.insert(to, item);
+                        });
+                      },
+                    ),
+
+                    // B) Body Focus (conditional)
+                    if (_muscleOrTonedChosen) ...[
+                      const SizedBox(height: 16),
+                      _SectionHeader("Any areas you’d like to focus on first?"),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8, runSpacing: 8,
+                        children: _bodyParts.map((p) {
+                          final selected = _bodyFocus.contains(p);
+                          return ChoiceChip(
+                            label: Text(p),
+                            selected: selected,
+                            onSelected: (_) {
+                              setState(() {
+                                if (selected) { _bodyFocus.remove(p); } else { _bodyFocus.add(p); }
+                              });
+                            },
+                          );
+                        }).toList(),
+                      ),
+                      if (_bodyFocus.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 6),
+                          child: Text('Pick at least one area (since muscle/toned is a goal).',
+                              style: TextStyle(color: Colors.redAccent, fontSize: 12)),
+                        ),
+                    ],
+
+                    // C) Injuries (checkbox + pain slider)
+                    const SizedBox(height: 16),
+                    _SectionHeader("Any niggles or injuries?"),
+                    const SizedBox(height: 8),
+                    Column(
+                      children: _injuryKeys.map((k) {
+                        final checked = _injuries.contains(k);
+                        final val = _painSlider[k] ?? 5.0;
+                        return Column(
+                          children: [
+                            CheckboxListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: Text(k),
+                              value: checked,
+                              onChanged: (v) {
+                                setState(() {
+                                  if (v == true) { _injuries.add(k); _painSlider.putIfAbsent(k, () => 5.0); }
+                                  else { _injuries.remove(k); _painSlider.remove(k); }
+                                });
+                              },
+                            ),
+                            if (checked)
+                              Row(
+                                children: [
+                                  const SizedBox(width: 8),
+                                  const Text('Pain now:'),
+                                  Expanded(
+                                    child: Slider(
+                                      min: 1, max: 10, divisions: 9,
+                                      label: _painSlider[k]?.round().toString(),
+                                      value: val,
+                                      onChanged: (v) => setState(() => _painSlider[k] = v),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                          ],
+                        );
+                      }).toList(),
+                    ),
+
+                    // D) Experience
+                    const SizedBox(height: 16),
+                    _SectionHeader("Training experience"),
+                    Column(
+                      children: [
+                        RadioListTile<TrainingExperience>(
+                          title: const Text('Never trained before'),
+                          value: TrainingExperience.never,
+                          groupValue: _experience,
+                          onChanged: (v) => setState(() => _experience = v),
+                        ),
+                        RadioListTile<TrainingExperience>(
+                          title: const Text('< 6 months'),
+                          value: TrainingExperience.lt6mo,
+                          groupValue: _experience,
+                          onChanged: (v) => setState(() => _experience = v),
+                        ),
+                        RadioListTile<TrainingExperience>(
+                          title: const Text('~ 1 year'),
+                          value: TrainingExperience.oneYear,
+                          groupValue: _experience,
+                          onChanged: (v) => setState(() => _experience = v),
+                        ),
+                        RadioListTile<TrainingExperience>(
+                          title: const Text('2+ years'),
+                          value: TrainingExperience.twoPlus,
+                          groupValue: _experience,
+                          onChanged: (v) => setState(() => _experience = v),
+                        ),
+                      ],
+                    ),
+
+                    // E) Optional best efforts
+                    const SizedBox(height: 16),
+                    _SectionHeader("Optional: your best set (kg × reps)"),
+                    const SizedBox(height: 6),
+                    const Text(
+                      "To customise your starting weights, add any you remember (e.g. Bench 100 x 5). We use kg here in 🇳🇿",
+                      style: TextStyle(color: Colors.black54),
+                    ),
+                    const SizedBox(height: 8),
+                    _LabeledField(controller: _benchCtrl, label: 'Bench Press OR Flat DB Press', hint: 'e.g. 80 x 5'),
+                    const SizedBox(height: 8),
+                    _LabeledField(controller: _squatCtrl, label: 'Back Squat OR Leg Press', hint: 'e.g. 140 x 5'),
+                    const SizedBox(height: 8),
+                    _LabeledField(controller: _pullCtrl,  label: 'Chin Up OR Lat Pull Down', hint: 'e.g. BW + 10 x 6 / 60 x 8'),
+                    const SizedBox(height: 8),
+                    _LabeledField(controller: _deadCtrl,  label: 'Deadlift', hint: 'e.g. 160 x 3'),
+
+                    const SizedBox(height: 20),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: _saving ? null : (_uiIsValid() ? _finish : null),
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          backgroundColor: Colors.blueAccent,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                        child: _saving
+                            ? const CircularProgressIndicator(color: Colors.white)
+                            : const Text('Finish', style: TextStyle(fontSize: 18)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Small UI helpers (match your Page 1 look)
+class _SectionHeader extends StatelessWidget {
+  final String text;
+  const _SectionHeader(this.text);
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Text(
+        text,
+        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.black54),
+      ),
+    );
+  }
+}
+
+class _LabeledField extends StatelessWidget {
+  final TextEditingController controller;
+  final String label;
+  final String hint;
+  const _LabeledField({required this.controller, required this.label, required this.hint});
+  @override
+  Widget build(BuildContext context) {
+    return TextFormField(
+      controller: controller,
+      style: const TextStyle(color: Colors.black54),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(color: Colors.blueAccent),
+        hintText: hint,
+        hintStyle: TextStyle(color: Colors.blueAccent.withOpacity(0.6), fontSize: 16),
+        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Colors.blueAccent)),
+        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Colors.lightBlue, width: 2)),
+      ),
+    );
+  }
+}
+
+// Drag-to-rank goals (kept lightweight)
+class _GoalsRanker extends StatelessWidget {
+  final List<String> items;
+  final void Function(int from, int to) onReorder;
+  const _GoalsRanker({required this.items, required this.onReorder});
+
+  @override
+  Widget build(BuildContext context) {
+    // ReorderableListView must be constrained; wrap in SizedBox
+    return SizedBox(
+      height: 220,
+      child: ReorderableListView(
+        buildDefaultDragHandles: true,
+        children: [
+          for (int i = 0; i < items.length; i++)
+            ListTile(
+              key: ValueKey(items[i]),
+              title: Text(items[i]),
+              leading: const Icon(Icons.drag_handle),
+              tileColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+                side: BorderSide(color: Colors.blueGrey.shade100),
+              ),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            ),
+        ],
+        onReorder: (oldIndex, newIndex) {
+          int to = newIndex;
+          if (newIndex > oldIndex) to = newIndex - 1;
+          onReorder(oldIndex, to);
+        },
+      ),
+    );
+  }
+}
+
