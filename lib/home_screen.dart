@@ -455,6 +455,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
+    final swTotal = Stopwatch()..start();
+
     final uid = user.uid;
     final blocksRef = FirebaseFirestore.instance
         .collection('planned_blocks')
@@ -469,7 +471,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       final startDate = now;
       final endDate = now.add(const Duration(days: 42)); // 6 weeks
 
-      // ✅ seed only at block root (no per-day planning)
       const seededExerciseIds = <String>[
         'heeBViVINHO6tUScSd6y', // Back Squat, Barbell
         'zn5PgKNRrWo1MTE4wnCy', // Bayesian Biceps Curl
@@ -512,33 +513,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         'startDate': Timestamp.fromDate(startDate),
         'endDate': Timestamp.fromDate(endDate),
         'selectedDays': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-        // 👇 BP/WES read these lists
         'exercises': seededExerciseIds,
-        'plannedExercises': seededExerciseIds,
-        // 👇 minimal stub so readers depending on this field won't spin
-        'plannedExerciseDetails': {
-          'blockMeta': {
-            'blockStartDate': startDate.toIso8601String(),
-            'blockEndDate': endDate.toIso8601String(),
-            'selectedDays': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-          }
-        },
-      };
-
-      final newBlockRef = await blocksRef.add(defaultBlock);
-      final newBlockId = newBlockRef.id;
-      print('✅ [Home] Default block created with ID: $newBlockId');
-      // 🔗 Point BP to this new block and seed what BP._loadPlannedExercises() reads
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .collection('block_planner')
-          .doc('current_block')
-          .set({
-        'blockId': newBlockId,
-        'blockName': '1st Block',
-
-        // BP loader uses these:
         'plannedExercises': seededExerciseIds,
         'plannedExerciseDetails': {
           'blockMeta': {
@@ -547,67 +522,89 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
           }
         },
+      };
 
-        // (Optional legacy helper – some code paths still glance at this)
+      final swCreate = Stopwatch()..start();
+      final newBlockRef = await blocksRef.add(defaultBlock);
+      swCreate.stop();
+      final newBlockId = newBlockRef.id;
+      print('✅ [Home] Default block created with ID: $newBlockId '
+          '(create ${swCreate.elapsed.inMilliseconds} ms)');
+
+      // Pointer write (BP reads from here)
+      final swPtr = Stopwatch()..start();
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('block_planner')
+          .doc('current_block')
+          .set({
+        'blockId': newBlockId,
+        'blockName': '1st Block',
+        'plannedExercises': seededExerciseIds,
+        'plannedExerciseDetails': {
+          'blockMeta': {
+            'blockStartDate': startDate.toIso8601String(),
+            'blockEndDate': endDate.toIso8601String(),
+            'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
+          }
+        },
         'blockMeta': {
           'blockStartDate': startDate.toIso8601String(),
           'blockEndDate': endDate.toIso8601String(),
         },
       }, SetOptions(merge: true));
+      swPtr.stop();
+      print('📌 [Home] Set current_block pointer → $newBlockId '
+          '(pointer ${swPtr.elapsed.inMilliseconds} ms)');
 
-      print('📌 [Home] Set current_block pointer → $newBlockId');
+      // Scaffold weeks & days
+      // 🧱 [Home] Week/day scaffold via single WriteBatch
+      final swScaffold = Stopwatch()..start();
 
+      final batch = FirebaseFirestore.instance.batch();
 
-      // ✅ Scaffold weeks & days (days keep exercises: [] → no day planning yet)
+// Weeks + Days: 6 * (1 + 7) = 48 writes  ✅ well under 500
       for (int week = 0; week < 6; week++) {
         final weekRef = newBlockRef.collection('weeks').doc('week_$week');
-        await weekRef.set({'exists': true}, SetOptions(merge: true));
+        batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
 
         final daysRef = weekRef.collection('days');
         for (int day = 0; day < 7; day++) {
           final currentDate = now.add(Duration(days: week * 7 + day));
           final weekday = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day];
-          final monthName = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][currentDate.month - 1];
+          final monthName = [
+            'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'
+          ][currentDate.month - 1];
 
-          await daysRef.doc('day_$day').set({
+          final dayRef = daysRef.doc('day_$day');
+          batch.set(dayRef, {
             'date': Timestamp.fromDate(currentDate),
             'circuitStartIndices': [0],
             'exercises': [],
-            'workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}',
+            'workoutName':
+            '$weekday ${currentDate.day} $monthName - Week ${week + 1}',
             'exists': true,
           }, SetOptions(merge: true));
         }
       }
 
-      // ✅ Point the user to this new active block to avoid home spinner
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .collection('block_planner')
-          .doc('current_block')
-          .set({
-        'blockId': newBlockId,
-        'blockName': '1st Block',
+// (Optional) Mark scaffold readiness at block root for any listeners
+      batch.set(newBlockRef, {'scaffoldReady': true}, SetOptions(merge: true));
 
-        // 👇 This is what BP._loadPlannedExercises() reads
-        'plannedExercises': seededExerciseIds,
-        'plannedExerciseDetails': {
-          'blockMeta': {
-            'blockStartDate': startDate.toIso8601String(),
-            'blockEndDate': endDate.toIso8601String(),
-            'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
-          }
-        },
-        // (Optional legacy: some code also reads this)
-        'blockMeta': {
-          'blockStartDate': startDate.toIso8601String(),
-          'blockEndDate': endDate.toIso8601String(),
-        },
-      }, SetOptions(merge: true));
+      await batch.commit();
 
-      print('📌 [Home] Set current_block pointer → $newBlockId');
+      swScaffold.stop();
+      print('🧱 [Home] Week/day scaffold created (batched) '
+          '(${swScaffold.elapsed.inMilliseconds} ms)');
+
     }
+
+    swTotal.stop();
+    print('⏱️ [Home] _ensureAtLeastOneBlockExists total: '
+        '${swTotal.elapsed.inMilliseconds} ms');
   }
+
 
   void _onUserContextChange() {
     final uc = Provider.of<UserContext>(context, listen: false);
