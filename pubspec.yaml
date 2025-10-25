@@ -116,7 +116,6 @@ flutter:
   uses-material-design: true
 
   assets:
-
     - assets/google_sign_in.png
     - assets/google_sign_up.png
     - assets/login_fill.png
@@ -129,10 +128,8 @@ flutter:
     - assets/avatar.png
     - assets/InApp/Placeholder_profilepic.png
     - assets/lottie/sparkle_stars.json
-    - assets/anatomy/male_front.svg
-    - assets/anatomy/male_back.svg
-    - assets/anatomy/female_front.svg
-    - assets/anatomy/female_back.svg
+    - assets/branding/anatomy/male_anatomy.png
+    - assets/branding/anatomy/female_anatomy.png
 
 
 

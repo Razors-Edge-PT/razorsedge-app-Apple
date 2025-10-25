@@ -3,9 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:async'; // for Timer debounce
 import 'package:flutter/services.dart'; // for TextInputFormatter
-
-
-
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:localtest222/login_screen.dart';
 
 /// Formats as dd-mm-yyyy while typing. Only digits are accepted; adds '-' after 2 and 4 digits.
@@ -1325,28 +1323,30 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                       const SizedBox(height: 16),
                       _SectionHeader("Any areas you’d like to focus on first?"),
                       const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8, runSpacing: 8,
-                        children: _bodyParts.map((p) {
-                          final selected = _bodyFocus.contains(p);
-                          return ChoiceChip(
-                            label: Text(p),
-                            selected: selected,
-                            onSelected: (_) {
-                              setState(() {
-                                if (selected) { _bodyFocus.remove(p); } else { _bodyFocus.add(p); }
-                              });
-                            },
-                          );
-                        }).toList(),
+
+                      BodyFocusPickerPng(
+                        sex: widget.sex,            // 'M' | 'F' | 'N'
+                        initialSelection: _bodyFocus,
+                        frontOnLeft: true,          // if your PNG shows front on left
+                        onChanged: (s) {
+                          setState(() {
+                            _bodyFocus
+                              ..clear()
+                              ..addAll(s);
+                          });
+                        },
                       ),
+
                       if (_bodyFocus.isEmpty)
                         const Padding(
                           padding: EdgeInsets.only(top: 6),
-                          child: Text('Pick at least one area (since muscle/toned is a goal).',
-                              style: TextStyle(color: Colors.redAccent, fontSize: 12)),
+                          child: Text(
+                            'Pick at least one area (since muscle/toned is a goal).',
+                            style: TextStyle(color: Colors.redAccent, fontSize: 12),
+                          ),
                         ),
                     ],
+
 
                     // C) Injuries (checkbox + pain slider)
                     const SizedBox(height: 16),
@@ -1538,4 +1538,238 @@ class _GoalsRanker extends StatelessWidget {
     );
   }
 }
+
+
+class BodyFocusPickerPng extends StatefulWidget {
+  final String? sex; // 'M'|'F'|'N' (N defaults to M)
+  final Set<String> initialSelection;
+  final ValueChanged<Set<String>> onChanged;
+
+  /// Assumption: PNG shows FRONT on the LEFT half, BACK on the RIGHT half.
+  /// If yours is reversed, flip [frontOnLeft] to false.
+  final bool frontOnLeft;
+
+  const BodyFocusPickerPng({
+    super.key,
+    required this.onChanged,
+    this.sex,
+    this.initialSelection = const {},
+    this.frontOnLeft = true,
+  });
+
+  @override
+  State<BodyFocusPickerPng> createState() => _BodyFocusPickerPngState();
+}
+
+class _BodyFocusPickerPngState extends State<BodyFocusPickerPng> {
+  bool _front = true;
+  late Set<String> _selected;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = {...widget.initialSelection};
+  }
+
+  String get _sex => (widget.sex == 'F') ? 'F' : 'M';
+
+  String get _assetPath {
+    return _sex == 'F'
+        ? 'assets/branding/anatomy/female_anatomy.png'
+        : 'assets/branding/anatomy/male_anatomy.png';
+  }
+
+  // Rects are 0..1 relative to the HALF we display (not the full image).
+  Map<String, List<Rect>> get _zones {
+    if (_front) {
+      return {
+        'Shoulders': [Rect.fromLTWH(0.28, 0.10, 0.12, 0.08), Rect.fromLTWH(0.60, 0.10, 0.12, 0.08)],
+        'Chest':     [Rect.fromLTWH(0.38, 0.18, 0.24, 0.10)],
+        'Arms':      [Rect.fromLTWH(0.20, 0.20, 0.08, 0.28), Rect.fromLTWH(0.72, 0.20, 0.08, 0.28)],
+        'Abs':       [Rect.fromLTWH(0.42, 0.30, 0.16, 0.16)],
+        'Quads':     [Rect.fromLTWH(0.38, 0.50, 0.10, 0.20), Rect.fromLTWH(0.52, 0.50, 0.10, 0.20)],
+        'Calves':    [Rect.fromLTWH(0.40, 0.76, 0.08, 0.16), Rect.fromLTWH(0.52, 0.76, 0.08, 0.16)],
+      };
+    } else {
+      return {
+        'Back':       [Rect.fromLTWH(0.36, 0.20, 0.28, 0.14)],
+        'Shoulders':  [Rect.fromLTWH(0.28, 0.10, 0.12, 0.08), Rect.fromLTWH(0.60, 0.10, 0.12, 0.08)],
+        'Arms':       [Rect.fromLTWH(0.20, 0.20, 0.08, 0.28), Rect.fromLTWH(0.72, 0.20, 0.08, 0.28)],
+        'Glutes':     [Rect.fromLTWH(0.40, 0.44, 0.20, 0.10)],
+        'Hamstrings': [Rect.fromLTWH(0.38, 0.54, 0.10, 0.18), Rect.fromLTWH(0.52, 0.54, 0.10, 0.18)],
+        'Calves':     [Rect.fromLTWH(0.40, 0.76, 0.08, 0.16), Rect.fromLTWH(0.52, 0.76, 0.08, 0.16)],
+      };
+    }
+  }
+
+  void _toggle(String part) {
+    setState(() {
+      if (_selected.contains(part)) {
+        _selected.remove(part);
+      } else {
+        _selected.add(part);
+        HapticFeedback.selectionClick();
+      }
+    });
+    widget.onChanged(_selected);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Which half of the image should we show?
+    // If your PNG has front on RIGHT, set frontOnLeft=false in the constructor.
+    final showLeftHalf = widget.frontOnLeft ? _front : !_front;
+
+    return Column(
+      children: [
+        // Front/Back toggle
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.blueGrey.shade50,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _segButton(label: 'Front', active: _front, onTap: () => setState(() => _front = true)),
+              const SizedBox(width: 8),
+              _segButton(label: 'Back',  active: !_front, onTap: () => setState(() => _front = false)),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        AspectRatio(
+          aspectRatio: 3 / 5, // tweak to your image proportions if needed
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final w = constraints.maxWidth;
+              final h = constraints.maxHeight;
+
+              return Stack(
+                children: [
+                  // Show only half of the image
+                  Positioned.fill(
+                    child: ClipRect(
+                      child: Align(
+                        alignment: showLeftHalf ? Alignment.centerLeft : Alignment.centerRight,
+                        widthFactor: 0.5, // show half
+                        child: Image.asset(_assetPath, fit: BoxFit.contain),
+                      ),
+                    ),
+                  ),
+
+                  // Glow overlays for selected zones
+                  ..._zones.entries.expand((entry) {
+                    final name = entry.key;
+                    final rects = entry.value;
+                    final selected = _selected.contains(name);
+                    return rects.map((r) {
+                      final rr = Rect.fromLTWH(r.left * w, r.top * h, r.width * w, r.height * h);
+                      return AnimatedOpacity(
+                        key: ValueKey('glow_$name${rr.topLeft}'),
+                        duration: const Duration(milliseconds: 160),
+                        opacity: selected ? 0.23 : 0.0,
+                        child: Positioned.fromRect(
+                          rect: rr,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.cyanAccent,
+                              borderRadius: BorderRadius.circular(12),
+                              boxShadow: selected
+                                  ? [BoxShadow(color: Colors.cyanAccent.withOpacity(0.35), blurRadius: 12)]
+                                  : [],
+                            ),
+                          ),
+                        ),
+                      );
+                    });
+                  }).toList(),
+
+                  // Tap hitboxes
+                  ..._zones.entries.expand((entry) {
+                    final name = entry.key;
+                    final rects = entry.value;
+                    return rects.map((r) {
+                      final rr = Rect.fromLTWH(r.left * w, r.top * h, r.width * w, r.height * h);
+                      return Positioned.fromRect(
+                        key: ValueKey('tap_$name${rr.topLeft}'),
+                        rect: rr,
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(12),
+                            onTap: () => _toggle(name),
+                            splashColor: Colors.cyanAccent.withOpacity(0.2),
+                            child: Align(
+                              alignment: Alignment.topLeft,
+                              child: Padding(
+                                padding: const EdgeInsets.all(4),
+                                child: IgnorePointer(
+                                  child: AnimatedOpacity(
+                                    duration: const Duration(milliseconds: 160),
+                                    opacity: _selected.contains(name) ? 1 : 0.0,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black87,
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Text(
+                                        name,
+                                        style: const TextStyle(color: Colors.white, fontSize: 10),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    });
+                  }).toList(),
+                ],
+              );
+            },
+          ),
+        ),
+
+        const SizedBox(height: 12),
+
+        // Selected chips
+        Wrap(
+          spacing: 8, runSpacing: 8,
+          children: _selected.map((p) => Chip(
+            label: Text(p),
+            deleteIcon: const Icon(Icons.close, size: 16),
+            onDeleted: () => _toggle(p),
+          )).toList(),
+        ),
+      ],
+    );
+  }
+
+  Widget _segButton({required String label, required bool active, required VoidCallback onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: active ? Colors.blueAccent : Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: active ? Colors.lightBlue : Colors.blueGrey.shade200),
+          boxShadow: active ? [BoxShadow(color: Colors.lightBlue.withOpacity(0.25), blurRadius: 8, offset: const Offset(0, 2))] : [],
+        ),
+        child: Text(
+          label,
+          style: TextStyle(color: active ? Colors.white : Colors.black54, fontWeight: FontWeight.w600),
+        ),
+      ),
+    );
+  }
+}
+
 
