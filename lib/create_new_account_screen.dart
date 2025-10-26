@@ -5,6 +5,7 @@ import 'dart:async'; // for Timer debounce
 import 'package:flutter/services.dart'; // for TextInputFormatter
 import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:localtest222/login_screen.dart';
+import 'periodization_model_utils.dart';
 
 /// Formats as dd-mm-yyyy while typing. Only digits are accepted; adds '-' after 2 and 4 digits.
 class DobDashFormatter extends TextInputFormatter {
@@ -1124,8 +1125,17 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
   // ── C) Injuries: checkboxes + per-item pain slider (1–10) when checked
   final List<String> _injuryKeys = const [
-    'Lower back', 'Knees', 'Shoulders', 'Elbows', 'Neck', 'Wrists', 'Ankles'
+    'Lower back',
+    'Mid back',
+    'Upper back',
+    'Knees',
+    'Shoulders',
+    'Elbows',
+    'Neck',
+    'Wrists',
+    'Ankles',
   ];
+
   final Set<String> _injuries = <String>{};
   final Map<String, double> _painSlider = {}; // store slider as double 1..10; round to int when saving
 
@@ -1281,32 +1291,28 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
   List<BestEffort> _collectBestEfforts() {
     final out = <BestEffort>[];
-    void parseAndAdd(TextEditingController c, String liftKey) {
-      final raw = c.text.trim();
-      if (raw.isEmpty) return;
-      // Loose parse: "100 x 5" or "100x5" or "100 5"
-      final regex = RegExp(r'(\d+(\.\d+)?)\s*[xX]\s*(\d+)'); // kg x reps
-      final m = regex.firstMatch(raw);
-      if (m != null) {
-        final w = double.tryParse(m.group(1)!);
-        final r = int.tryParse(m.group(3)!);
-        if (w != null && r != null) {
-          out.add(BestEffort(liftKey: liftKey, weightKg: w, reps: r));
-          return;
-        }
+
+    void addIfPresent({
+      required String liftKey,
+      required TextEditingController weightCtrl,
+      required TextEditingController repsCtrl,
+    }) {
+      final w = double.tryParse(weightCtrl.text.trim());
+      final r = int.tryParse(repsCtrl.text.trim());
+      if (w != null) {
+        out.add(BestEffort(liftKey: liftKey, weightKg: w, reps: r));
       }
-      // If no match, try single number (weight only)
-      final wOnly = double.tryParse(raw);
-      if (wOnly != null) out.add(BestEffort(liftKey: liftKey, weightKg: wOnly));
     }
 
-    parseAndAdd(_benchCtrl, 'bench_or_db');
-    parseAndAdd(_squatCtrl, 'squat_or_legpress');
-    parseAndAdd(_pullCtrl,  'chinup_or_latpulldown');
-    parseAndAdd(_deadCtrl,  'deadlift');
+    // Keep the same liftKey values you’re already using downstream
+    addIfPresent(liftKey: 'bench_or_db',           weightCtrl: _benchWeightCtrl, repsCtrl: _benchRepsCtrl);
+    addIfPresent(liftKey: 'squat_or_legpress',     weightCtrl: _squatWeightCtrl, repsCtrl: _squatRepsCtrl);
+    addIfPresent(liftKey: 'chinup_or_latpulldown', weightCtrl: _pullWeightCtrl,  repsCtrl: _pullRepsCtrl);
+    addIfPresent(liftKey: 'deadlift',              weightCtrl: _deadWeightCtrl,  repsCtrl: _deadRepsCtrl);
 
-    return out.isEmpty ? [] : out;
+    return out;
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -1354,30 +1360,61 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                       const SizedBox(height: 8),
                       Wrap(
                         spacing: 8, runSpacing: 8,
-                        children: _bodyParts.map((p) {
-                          final selected = _bodyFocus.contains(p);
-                          return ChoiceChip(
-                            label: Text(p),
-                            selected: selected,
-                            onSelected: (_) {
-                              setState(() {
-                                if (selected) { _bodyFocus.remove(p); } else { _bodyFocus.add(p); }
-                              });
-                            },
-                          );
-                        }).toList(),
+                        children: [
+                          // ▼ Select all / Clear all chip (toggles everything)
+                          Builder(builder: (_) {
+                            final allSelected = _bodyFocus.length == _bodyParts.length && _bodyParts.isNotEmpty;
+                            return ChoiceChip(
+                              label: Text(
+                                allSelected ? 'Clear all' : 'Select ALL',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,        // ← makes it stand out
+                                  color: Colors.black,                // ← optional, ensures good contrast
+                                ),
+                              ),
+                              selected: allSelected,
+                              selectedColor: Colors.lightBlue.shade100,  // ← subtle highlight when active
+                              onSelected: (_) {
+                                setState(() {
+                                  if (allSelected) {
+                                    _bodyFocus.clear();
+                                  } else {
+                                    _bodyFocus
+                                      ..clear()
+                                      ..addAll(_bodyParts);
+                                  }
+                                });
+                              },
+                            );
+                          }),
+
+                          // ▼ The regular body-part chips
+                          ..._bodyParts.map((p) {
+                            final selected = _bodyFocus.contains(p);
+                            return ChoiceChip(
+                              label: Text(p),
+                              selected: selected,
+                              onSelected: (_) {
+                                setState(() {
+                                  if (selected) { _bodyFocus.remove(p); } else { _bodyFocus.add(p); }
+                                });
+                              },
+                            );
+                          }).toList(),
+                        ],
+
                       ),
                       if (_bodyFocus.isEmpty)
                         const Padding(
                           padding: EdgeInsets.only(top: 6),
-                          child: Text('Pick at least one area (since muscle/toned is a goal).',
+                          child: Text('Pick at least one!',
                               style: TextStyle(color: Colors.redAccent, fontSize: 12)),
                         ),
                     ],
 
                     // C) Injuries (checkbox + pain slider)
-                    const SizedBox(height: 16),
-                    _SectionHeader("Any niggles or injuries?"),
+                    const SizedBox(height: 19),
+                    _SectionHeader("Any existing niggles or injuries?"),
                     const SizedBox(height: 8),
                     Column(
                       children: _injuryKeys.map((k) {
@@ -1449,21 +1486,57 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                     ),
 
                     // E) Optional best efforts
-                    const SizedBox(height: 16),
-                    _SectionHeader("Optional: your best set (kg × reps)"),
+                    const SizedBox(height: 19),
+                    _SectionHeader("OPTIONAL:", color: Colors.black),
+
                     const SizedBox(height: 6),
                     const Text(
-                      "To customise your starting weights, add any you remember (e.g. Bench 100 x 5). We use kg here in 🇳🇿",
+                      "To customise your starting weights, add your best lift for any you remember (e.g. Bench 100 x 5). "
+                          "We use kg here in 🇳🇿\n"
+                          "No worries if you can't remember exactly right now — it will figure it out, and sharpen up for your strength level as you add workouts.",
                       style: TextStyle(color: Colors.black54),
                     ),
                     const SizedBox(height: 8),
-                    _LabeledField(controller: _benchCtrl, label: 'Bench Press OR Flat DB Press', hint: 'e.g. 80 x 5'),
+                    // Bench / DB
+                    _BestEffortRow(
+                      variants: const ['Bench Press', 'Flat DB Press'],
+                      selected: _benchVariant,
+                      onVariantChanged: (v) => setState(() => _benchVariant = v),
+                      weightCtrl: _benchWeightCtrl,
+                      repsCtrl: _benchRepsCtrl,
+                    ),
                     const SizedBox(height: 8),
-                    _LabeledField(controller: _squatCtrl, label: 'Back Squat OR Leg Press', hint: 'e.g. 140 x 5'),
+
+// Squat / Leg Press
+                    _BestEffortRow(
+                      variants: const ['Back Squat', 'Leg Press'],
+                      selected: _squatVariant,
+                      onVariantChanged: (v) => setState(() => _squatVariant = v),
+                      weightCtrl: _squatWeightCtrl,
+                      repsCtrl: _squatRepsCtrl,
+                    ),
                     const SizedBox(height: 8),
-                    _LabeledField(controller: _pullCtrl,  label: 'Chin Up OR Lat Pull Down', hint: 'e.g. BW + 10 x 6 / 60 x 8'),
+
+// Chin-up / Lat Pulldown
+                    _BestEffortRow(
+                      variants: const ['Chin Up', 'Lat Pull Down'],
+                      selected: _pullVariant,
+                      onVariantChanged: (v) => setState(() => _pullVariant = v),
+                      weightCtrl: _pullWeightCtrl,
+                      repsCtrl: _pullRepsCtrl,
+                    ),
                     const SizedBox(height: 8),
-                    _LabeledField(controller: _deadCtrl,  label: 'Deadlift', hint: 'e.g. 160 x 3'),
+
+// Deadlift (single option still supported)
+                    _BestEffortRow(
+                      variants: const ['Deadlift'],
+                      selected: _deadVariant,
+                      onVariantChanged: (v) => setState(() => _deadVariant = v),
+                      weightCtrl: _deadWeightCtrl,
+                      repsCtrl: _deadRepsCtrl,
+                    ),
+
+
 
                     const SizedBox(height: 20),
                     SizedBox(
@@ -1494,14 +1567,19 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 // ── Small UI helpers (match your Page 1 look)
 class _SectionHeader extends StatelessWidget {
   final String text;
-  const _SectionHeader(this.text);
+  final Color color; // ← add this
+  const _SectionHeader(this.text, {this.color = Colors.black54, super.key});
   @override
   Widget build(BuildContext context) {
     return Align(
       alignment: Alignment.centerLeft,
       child: Text(
         text,
-        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.black54),
+        style: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w600,
+          color: color,
+        ),
       ),
     );
   }
@@ -1566,7 +1644,182 @@ class _GoalsRanker extends StatelessWidget {
   }
 }
 
+class _BestEffortRow extends StatelessWidget {
+  final List<String> variants;
+  final String selected;
+  final ValueChanged<String> onVariantChanged;
+  final TextEditingController weightCtrl;
+  final TextEditingController repsCtrl;
 
+  const _BestEffortRow({
+    Key? key,
+    required this.variants,
+    required this.selected,
+    required this.onVariantChanged,
+    required this.weightCtrl,
+    required this.repsCtrl,
+  }) : super(key: key);
+
+  double? _calcE1RM(String wTxt, String rTxt) {
+    final w = double.tryParse(wTxt.trim());
+    final r = double.tryParse(rTxt.trim());
+    if (w == null || r == null) return null;
+    final val = PeriodizationModelUtils.calculateE1RM(w, r, null);
+    return double.parse(val.toStringAsFixed(1));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasDropdown = variants.length > 1;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // Adaptive widths based on screen size
+          final totalWidth = constraints.maxWidth;
+          final dropdownW = totalWidth * 0.28; // 28% for exercise picker
+          final fieldW = totalWidth * 0.13;    // 22% each for weight/reps
+          final chipW = totalWidth * 0.20;     // remaining for e1RM
+
+          return SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            physics: const ClampingScrollPhysics(),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.start,
+              children: [
+                // ▼ Dropdown (compact)
+                SizedBox(
+                  width: dropdownW.clamp(100, 200),
+                  child: hasDropdown
+                      ? DropdownButtonFormField<String>(
+                    value: selected,
+                    isExpanded: true,
+                    items: variants
+                        .map((v) => DropdownMenuItem(
+                      value: v,
+                      child: Text(v,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 12)),
+                    ))
+                        .toList(),
+                    onChanged: (v) {
+                      if (v != null) onVariantChanged(v);
+                    },
+                    decoration: InputDecoration(
+                      isDense: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(5),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal:3, vertical: 8),
+                    ),
+                  )
+                      : InputDecorator(
+                    decoration: InputDecoration(
+                      isDense: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 3, vertical: 8),
+                    ),
+                    child: Text(
+                      variants.first,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 2),
+
+                // ▼ Weight
+                SizedBox(
+                  width: fieldW.clamp(60, 120),
+                  child: TextFormField(
+                    controller: weightCtrl,
+                    keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))
+                    ],
+                    decoration: InputDecoration(
+                      isDense: true,
+                      hintText: 'kg',
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 8),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 2),
+
+                // ▼ Reps
+                SizedBox(
+                  width: fieldW.clamp(25, 100),
+                  child: TextFormField(
+                    controller: repsCtrl,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    decoration: InputDecoration(
+                      isDense: true,
+                      hintText: 'reps',
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 4, vertical: 8),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 2),
+
+                // ▼ e1RM chip (auto updates)
+                ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: weightCtrl,
+                  builder: (_, __, ___) {
+                    return ValueListenableBuilder<TextEditingValue>(
+                      valueListenable: repsCtrl,
+                      builder: (_, __, ___) {
+                        final e1 = _calcE1RM(weightCtrl.text, repsCtrl.text);
+                        return Container(
+                          width: chipW.clamp(80, 120),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 3, vertical: 8),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                                color: Colors.blueGrey.shade200, width: 1),
+                          ),
+                          child: Text(
+                            e1 == null
+                                ? 'e1RM'
+                                : '${e1.toStringAsFixed(1)}',
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: e1 == null
+                                  ? Colors.grey.shade600
+                                  : Colors.black87,
+                            ),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+
+
+//body part visual picker
 class BodyFocusPickerPng extends StatefulWidget {
   final String? sex; // 'M'|'F'|'N' (N defaults to M)
   final Set<String> initialSelection;
