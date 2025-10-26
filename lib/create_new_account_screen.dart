@@ -1138,6 +1138,24 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
   final TextEditingController _pullCtrl  = TextEditingController(); // chinup/lat pulldown
   final TextEditingController _deadCtrl  = TextEditingController();
 
+  String _benchVariant = 'Bench Press';
+  String _squatVariant = 'Back Squat';
+  String _pullVariant  = 'Chin Up';
+  String _deadVariant  = 'Deadlift';
+
+  // ▼ New: separate weight + reps controllers for each
+  final TextEditingController _benchWeightCtrl = TextEditingController();
+  final TextEditingController _benchRepsCtrl   = TextEditingController();
+
+  final TextEditingController _squatWeightCtrl = TextEditingController();
+  final TextEditingController _squatRepsCtrl   = TextEditingController();
+
+  final TextEditingController _pullWeightCtrl  = TextEditingController();
+  final TextEditingController _pullRepsCtrl    = TextEditingController();
+
+  final TextEditingController _deadWeightCtrl  = TextEditingController();
+  final TextEditingController _deadRepsCtrl    = TextEditingController();
+
   bool _saving = false;
 
   bool get _muscleOrTonedChosen {
@@ -1167,6 +1185,15 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
     _squatCtrl.dispose();
     _pullCtrl.dispose();
     _deadCtrl.dispose();
+    _benchWeightCtrl.dispose();
+    _benchRepsCtrl.dispose();
+    _squatWeightCtrl.dispose();
+    _squatRepsCtrl.dispose();
+    _pullWeightCtrl.dispose();
+    _pullRepsCtrl.dispose();
+    _deadWeightCtrl.dispose();
+    _deadRepsCtrl.dispose();
+
     super.dispose();
   }
 
@@ -1317,36 +1344,36 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                         });
                       },
                     ),
+                    const SizedBox(height: 6),
+
 
                     // B) Body Focus (conditional)
                     if (_muscleOrTonedChosen) ...[
                       const SizedBox(height: 16),
-                      _SectionHeader("Any areas you’d like to focus on first?"),
+                      _SectionHeader("Any areas you’d like to especially focus on? - we believe in whole body training, but with room for emphasis"),
                       const SizedBox(height: 8),
-
-                      BodyFocusPickerPng(
-                        sex: widget.sex,            // 'M' | 'F' | 'N'
-                        initialSelection: _bodyFocus,
-                        frontOnLeft: true,          // if your PNG shows front on left
-                        onChanged: (s) {
-                          setState(() {
-                            _bodyFocus
-                              ..clear()
-                              ..addAll(s);
-                          });
-                        },
+                      Wrap(
+                        spacing: 8, runSpacing: 8,
+                        children: _bodyParts.map((p) {
+                          final selected = _bodyFocus.contains(p);
+                          return ChoiceChip(
+                            label: Text(p),
+                            selected: selected,
+                            onSelected: (_) {
+                              setState(() {
+                                if (selected) { _bodyFocus.remove(p); } else { _bodyFocus.add(p); }
+                              });
+                            },
+                          );
+                        }).toList(),
                       ),
-
                       if (_bodyFocus.isEmpty)
                         const Padding(
                           padding: EdgeInsets.only(top: 6),
-                          child: Text(
-                            'Pick at least one area (since muscle/toned is a goal).',
-                            style: TextStyle(color: Colors.redAccent, fontSize: 12),
-                          ),
+                          child: Text('Pick at least one area (since muscle/toned is a goal).',
+                              style: TextStyle(color: Colors.redAccent, fontSize: 12)),
                         ),
                     ],
-
 
                     // C) Injuries (checkbox + pain slider)
                     const SizedBox(height: 16),
@@ -1512,7 +1539,7 @@ class _GoalsRanker extends StatelessWidget {
   Widget build(BuildContext context) {
     // ReorderableListView must be constrained; wrap in SizedBox
     return SizedBox(
-      height: 220,
+      height: 330,
       child: ReorderableListView(
         buildDefaultDragHandles: true,
         children: [
