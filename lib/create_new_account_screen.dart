@@ -1136,6 +1136,51 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
     'Ankles',
   ];
 
+  // ── Equipment / environment
+  String? _env; // 'commercial' | 'powerlifting' | 'home' | 'travelling'
+  final Set<String> _equipSelected = <String>{};
+  int? _dbMax; // dumbbell max (e.g., 40, 50, 60)
+
+// Label lists per environment
+  static const List<String> _powerEquip = [
+    'Micro Plates',
+    'Power Bands',
+    'Chains',
+    'Leg Extension Machine',
+    'Seated Leg Curl Machine',
+    'Standing Leg Curl Machine',
+    'lying Leg Curl Machine',
+    'Leg Press',
+    'Lat Pull Down',
+    'Cable Stack',
+    'Suspension Training system',
+  ];
+  static const List<int> _powerDb = [40, 50, 60];
+
+  static const List<String> _homeEquip = [
+    'Squat Rack, Barbell',
+    'Bench Press, Barbell',
+    'Smith Machine',
+    'Leg Extension Machine',
+    'Seated Leg Curl Machine',
+    'Standing Leg Curl Machine',
+    'lying Leg Curl Machine',
+    'Leg Press',
+    'Chest Press Machine',
+    'Seated Row',
+    'Lat Pull Down',
+    'Cable Stack',
+    'Suspension Training system',
+  ];
+  static const List<int> _homeDb = [10, 20, 30, 40, 50, 60];
+
+  static const List<String> _travelEquip = [
+    'Suspension training system',
+    'Resistance Bands',
+    'Back pack you can add weight to, or similar',
+  ];
+
+
   final Set<String> _injuries = <String>{};
   final Map<String, double> _painSlider = {}; // store slider as double 1..10; round to int when saving
 
@@ -1150,7 +1195,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
   String _benchVariant = 'Bench Press';
   String _squatVariant = 'Back Squat';
-  String _pullVariant  = 'Chin Up';
+  String _pullVariant  = 'Lat Pull Down, Supinated';
   String _deadVariant  = 'Deadlift';
 
   // ▼ New: separate weight + reps controllers for each
@@ -1185,8 +1230,9 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
     // Conditional required: if muscle/toned relevant, we require at least one body focus.
     final focusOk = !_muscleOrTonedChosen || _bodyFocus.isNotEmpty;
+    final envOk = _env != null; // require user to pick an environment
 
-    return hasGoals && injuryPainOk && hasExperience && focusOk;
+    return hasGoals && injuryPainOk && hasExperience && focusOk && envOk;
   }
 
   @override
@@ -1275,6 +1321,19 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
           .collection('profile').doc('fitness_onboarding');
       await onbRef.set(answers.toJson(), SetOptions(merge: true));
 
+      // Save equipment snapshot
+      final String? env = _env;
+      final List<String> items = _equipSelected.toList();
+
+      await onbRef.set({
+        'environment': env, // 'commercial' | 'powerlifting' | 'home' | 'travelling'
+        'equipment': {
+          'items': items,         // selected checkboxes
+          'dumbbellsMax': _dbMax, // nullable int (e.g., 40/50/60)
+        },
+      }, SetOptions(merge: true));
+
+
       if (!mounted) return;
       Navigator.pushReplacementNamed(context, '/home');
     } catch (e, st) {
@@ -1356,7 +1415,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                     // B) Body Focus (conditional)
                     if (_muscleOrTonedChosen) ...[
                       const SizedBox(height: 16),
-                      _SectionHeader("Any areas you’d like to especially focus on? - we believe in whole body training, but with room for emphasis"),
+                      _SectionHeader("Any areas you’d like to especially focus on? - we believe in whole body training, but if you would like to emphasise anything..."),
                       const SizedBox(height: 8),
                       Wrap(
                         spacing: 8, runSpacing: 8,
@@ -1485,6 +1544,166 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                       ],
                     ),
 
+
+                    // ── Equipment / Environment (REQUIRED)
+                    const SizedBox(height: 10),
+                    _SectionHeader("What kind of training equipment do you have available?", color: Colors.black),
+                    const SizedBox(height: 8),
+
+// Environment picker (compact chips)
+                    Wrap(
+                      spacing: 8, runSpacing: 8,
+                      children: [
+                        for (final entry in const [
+                          ['24 hour / commercial gym', 'commercial'],
+                          ['Powerlifting gym', 'powerlifting'],
+                          ['Home gym', 'home'],
+                          ['Travelling', 'travelling'],
+                        ])
+                          ChoiceChip(
+                            label: Text(
+                              entry[0],
+                              style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                color: _env == entry[1] ? Colors.blueAccent : Colors.black54,
+                                fontSize: 14,
+                              ),
+                            ),
+                            selected: _env == entry[1],
+                            selectedColor: Colors.lightBlue.shade50,
+                            backgroundColor: Colors.white,
+                            shape: StadiumBorder(
+                              side: BorderSide(
+                                color: _env == entry[1] ? Colors.lightBlue : Colors.blueAccent,
+                                width: 1,
+                              ),
+                            ),
+                            onSelected: (_) {
+                              setState(() {
+                                _env = entry[1];
+                                _equipSelected.clear();
+                                _dbMax = null;
+                              });
+                            },
+                          ),
+
+                      ],
+                    ),
+
+                    if (_env == null)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 2),
+                        child: Text(
+                          'Pick one (required).',
+                          style: TextStyle(color: Colors.redAccent, fontSize: 12),
+                        ),
+                      ),
+
+// Details per environment
+                    if (_env == 'powerlifting' || _env == 'home' || _env == 'travelling') ...[
+                      const SizedBox(height: 13),
+                      const _SectionHeader("Do you have access to the following? (tick those that apply)"),
+                      const SizedBox(height: 8),
+
+                      // Equipment checklist (single column, checkbox on the left)
+                      Builder(builder: (_) {
+                        final items = _env == 'powerlifting'
+                            ? _powerEquip
+                            : _env == 'home'
+                            ? _homeEquip
+                            : _travelEquip;
+
+                        return ListView.separated(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          padding: EdgeInsets.zero,                // 👈 remove outer padding
+                          itemCount: items.length,
+                          separatorBuilder: (_, __) => Divider(height: 1, color: Colors.blueGrey.shade100),
+                          itemBuilder: (_, i) {
+                            final label = items[i];
+                            final sel = _equipSelected.contains(label);
+                            return CheckboxListTile(
+                              dense: true,
+                              visualDensity: VisualDensity.compact,
+                              contentPadding: EdgeInsets.zero,
+                              controlAffinity: ListTileControlAffinity.leading,
+                              activeColor: Colors.blueAccent,      // <- blue tick
+                              checkColor: Colors.white,
+                              title: Text(
+                                label,
+                                style: const TextStyle(
+                                  color: Colors.black54,
+                                  fontSize: 15.5,  // 👈 change this number (e.g. 13–17) to your taste
+                                  fontWeight: FontWeight.w500, // optional: make it stand out a bit more
+                                ),
+                              ),
+                              value: sel,
+                              onChanged: (v) {
+                                setState(() {
+                                  if (v == true) { _equipSelected.add(label); } else { _equipSelected.remove(label); }
+                                });
+                              },
+                            );
+
+                          },
+                        );
+                      }),
+                      const SizedBox(height: 4),
+
+                      // Dumbbells picker (only for powerlifting/home)
+                      if (_env == 'powerlifting' || _env == 'home') ...[
+                        const SizedBox(height: 0),
+                        const _SectionHeader("Dumbbells… (pick one, if any)"),
+                        const SizedBox(height: 6),
+                        Column(
+                          children: [
+                            for (final n in (_env == 'powerlifting' ? _powerDb : _homeDb))
+                              RadioListTile<int>(
+                                dense: true,
+                                visualDensity: VisualDensity.compact,
+                                contentPadding: EdgeInsets.zero,
+                                activeColor: Colors.blueAccent,
+                                title: Text(
+                                  'up to $n',
+                                  style: const TextStyle(
+                                    color: Colors.black54,
+                                    fontSize: 15.5,       // 👈 same size as checklist
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                                value: n,
+                                groupValue: _dbMax,
+                                onChanged: (v) => setState(() => _dbMax = v),
+                              ),
+
+
+                            // ▼ Add explicit "None" option
+                            RadioListTile<int>(
+                              dense: true,
+                              visualDensity: VisualDensity.compact,
+                              contentPadding: EdgeInsets.zero,
+                              activeColor: Colors.blueAccent,
+                              title: const Text(
+                                'None',
+                                style: TextStyle(
+                                  color: Colors.black54,
+                                  fontSize: 15.5,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              value: -1,
+                              groupValue: _dbMax,
+                              onChanged: (_) => setState(() => _dbMax = -1),
+                            ),
+
+
+                          ],
+                        ),
+                      ],
+
+
+                    ],
+
                     // E) Optional best efforts
                     const SizedBox(height: 19),
                     _SectionHeader("OPTIONAL:", color: Colors.black),
@@ -1499,7 +1718,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                     const SizedBox(height: 8),
                     // Bench / DB
                     _BestEffortRow(
-                      variants: const ['Bench Press', 'Flat DB Press'],
+                      variants: const ['Bench Press', 'Flat DB Press', 'Chest Press'],
                       selected: _benchVariant,
                       onVariantChanged: (v) => setState(() => _benchVariant = v),
                       weightCtrl: _benchWeightCtrl,
@@ -1519,12 +1738,17 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
 // Chin-up / Lat Pulldown
                     _BestEffortRow(
-                      variants: const ['Chin Up', 'Lat Pull Down'],
+                      variants: const [
+                        'Lat Pull Down, Supinated',
+                        'Lat Pull Down, Wide Arm',
+                      ],
                       selected: _pullVariant,
                       onVariantChanged: (v) => setState(() => _pullVariant = v),
                       weightCtrl: _pullWeightCtrl,
                       repsCtrl: _pullRepsCtrl,
                     ),
+
+
                     const SizedBox(height: 8),
 
 // Deadlift (single option still supported)
@@ -1567,8 +1791,9 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 // ── Small UI helpers (match your Page 1 look)
 class _SectionHeader extends StatelessWidget {
   final String text;
-  final Color color; // ← add this
+  final Color color;
   const _SectionHeader(this.text, {this.color = Colors.black54, super.key});
+
   @override
   Widget build(BuildContext context) {
     return Align(
@@ -1577,13 +1802,14 @@ class _SectionHeader extends StatelessWidget {
         text,
         style: TextStyle(
           fontSize: 16,
-          fontWeight: FontWeight.w600,
-          color: color,
+          fontWeight: FontWeight.w600,     // stronger header
+          color: color,                    // default black54
         ),
       ),
     );
   }
 }
+
 
 class _LabeledField extends StatelessWidget {
   final TextEditingController controller;
@@ -1692,28 +1918,45 @@ class _BestEffortRow extends StatelessWidget {
                 SizedBox(
                   width: dropdownW.clamp(100, 200),
                   child: hasDropdown
-                      ? DropdownButtonFormField<String>(
-                    value: selected,
-                    isExpanded: true,
-                    items: variants
-                        .map((v) => DropdownMenuItem(
-                      value: v,
-                      child: Text(v,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 12)),
-                    ))
-                        .toList(),
-                    onChanged: (v) {
-                      if (v != null) onVariantChanged(v);
+                      ? Builder(
+                    builder: (_) {
+                      final effectiveSelected =
+                      variants.contains(selected) ? selected : variants.first;
+
+                      return DropdownButtonHideUnderline(
+                        child: DropdownButtonFormField<String>(
+                          value: effectiveSelected,
+                          isExpanded: true,
+                          menuMaxHeight: 300, // limit height if many options
+                          items: variants
+                              .map((v) => DropdownMenuItem(
+                            value: v,
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(
+                                minWidth: 240, // 👈 controls dropdown menu width
+                              ),
+                              child: Text(
+                                v,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ),
+                          ))
+                              .toList(),
+                          onChanged: (v) {
+                            if (v != null) onVariantChanged(v);
+                          },
+                          decoration: InputDecoration(
+                            isDense: true,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(5),
+                            ),
+                            contentPadding:
+                            const EdgeInsets.symmetric(horizontal: 3, vertical: 8),
+                          ),
+                        ),
+                      );
                     },
-                    decoration: InputDecoration(
-                      isDense: true,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(5),
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal:3, vertical: 8),
-                    ),
                   )
                       : InputDecorator(
                     decoration: InputDecoration(
@@ -1721,8 +1964,8 @@ class _BestEffortRow extends StatelessWidget {
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(6),
                       ),
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 3, vertical: 8),
+                      contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 3, vertical: 8),
                     ),
                     child: Text(
                       variants.first,
