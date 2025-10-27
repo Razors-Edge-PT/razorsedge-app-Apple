@@ -1451,14 +1451,34 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                           ..._bodyParts.map((p) {
                             final selected = _bodyFocus.contains(p);
                             return ChoiceChip(
-                              label: Text(p),
+                              label: Text(
+                                p,
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  color: selected ? Colors.blueAccent : Colors.black54,
+                                  fontSize: 14.5,
+                                ),
+                              ),
                               selected: selected,
+                              selectedColor: Colors.lightBlue.shade50,
+                              backgroundColor: Colors.white,
+                              shape: StadiumBorder(
+                                side: BorderSide(
+                                  color: selected ? Colors.lightBlue : Colors.blueAccent,
+                                  width: 1,
+                                ),
+                              ),
                               onSelected: (_) {
                                 setState(() {
-                                  if (selected) { _bodyFocus.remove(p); } else { _bodyFocus.add(p); }
+                                  if (selected) {
+                                    _bodyFocus.remove(p);
+                                  } else {
+                                    _bodyFocus.add(p);
+                                  }
                                 });
                               },
                             );
+
                           }).toList(),
                         ],
 
@@ -1695,13 +1715,9 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                               groupValue: _dbMax,
                               onChanged: (_) => setState(() => _dbMax = -1),
                             ),
-
-
                           ],
                         ),
                       ],
-
-
                     ],
 
                     // E) Optional best efforts
@@ -1712,9 +1728,15 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                     const Text(
                       "To customise your starting weights, add your best lift for any you remember (e.g. Bench 100 x 5). "
                           "We use kg here in 🇳🇿\n"
-                          "No worries if you can't remember exactly right now — it will figure it out, and sharpen up for your strength level as you add workouts.",
-                      style: TextStyle(color: Colors.black54),
+                          "No worries if you can't remember exactly right now — it’ll figure it out and sharpen up for your strength level as you add workouts.",
+                      style: TextStyle(
+                        color: Colors.black87,
+                        fontSize: 15,
+                        height: 1.35,
+                      ),
+                      textAlign: TextAlign.left,
                     ),
+
                     const SizedBox(height: 8),
                     // Bench / DB
                     _BestEffortRow(
@@ -1902,11 +1924,10 @@ class _BestEffortRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          // Adaptive widths based on screen size
           final totalWidth = constraints.maxWidth;
-          final dropdownW = totalWidth * 0.28; // 28% for exercise picker
-          final fieldW = totalWidth * 0.13;    // 22% each for weight/reps
-          final chipW = totalWidth * 0.20;     // remaining for e1RM
+          final dropdownW = totalWidth * 0.28;
+          final fieldW = totalWidth * 0.14;
+          final chipW = totalWidth * 0.20;
 
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
@@ -1927,33 +1948,52 @@ class _BestEffortRow extends StatelessWidget {
                         child: DropdownButtonFormField<String>(
                           value: effectiveSelected,
                           isExpanded: true,
-                          menuMaxHeight: 300, // limit height if many options
+                          menuMaxHeight: 300,
                           items: variants
-                              .map((v) => DropdownMenuItem(
-                            value: v,
-                            child: ConstrainedBox(
-                              constraints: const BoxConstraints(
-                                minWidth: 240, // 👈 controls dropdown menu width
-                              ),
-                              child: Text(
-                                v,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontSize: 12),
+                              .map(
+                                (v) => DropdownMenuItem(
+                              value: v,
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  minWidth: 240, // widen popup menu
+                                ),
+                                child: Text(
+                                  v,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.black87,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
                               ),
                             ),
-                          ))
+                          )
                               .toList(),
                           onChanged: (v) {
                             if (v != null) onVariantChanged(v);
                           },
                           decoration: InputDecoration(
                             isDense: true,
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(5),
-                            ),
                             contentPadding:
                             const EdgeInsets.symmetric(horizontal: 3, vertical: 8),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(6),
+                              borderSide: const BorderSide(color: Colors.blueAccent),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(6),
+                              borderSide: const BorderSide(color: Colors.blueAccent),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(6),
+                              borderSide:
+                              const BorderSide(color: Colors.lightBlue, width: 2),
+                            ),
+                            filled: true,
+                            fillColor: Colors.white.withOpacity(0.9),
                           ),
+                          dropdownColor: Colors.white,
                         ),
                       );
                     },
@@ -1961,15 +2001,32 @@ class _BestEffortRow extends StatelessWidget {
                       : InputDecorator(
                     decoration: InputDecoration(
                       isDense: true,
+                      contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(6),
+                        borderSide: const BorderSide(color: Colors.blueAccent),
                       ),
-                      contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 3, vertical: 8),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6),
+                        borderSide: const BorderSide(color: Colors.blueAccent),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6),
+                        borderSide:
+                        const BorderSide(color: Colors.lightBlue, width: 2),
+                      ),
+                      filled: true,
+                      fillColor: Colors.white.withOpacity(0.9),
                     ),
                     child: Text(
                       variants.first,
                       overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.black87,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
                   ),
                 ),
@@ -1985,13 +2042,28 @@ class _BestEffortRow extends StatelessWidget {
                     inputFormatters: [
                       FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))
                     ],
+                    style: const TextStyle(color: Colors.black87),
                     decoration: InputDecoration(
                       isDense: true,
                       hintText: 'kg',
+                      hintStyle: TextStyle(color: Colors.black54.withOpacity(0.7)),
+                      contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                       border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 8),
+                        borderRadius: BorderRadius.circular(6),
+                        borderSide: const BorderSide(color: Colors.blueAccent),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6),
+                        borderSide: const BorderSide(color: Colors.blueAccent),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6),
+                        borderSide:
+                        const BorderSide(color: Colors.lightBlue, width: 2),
+                      ),
+                      filled: true,
+                      fillColor: Colors.white.withOpacity(0.9),
                     ),
                   ),
                 ),
@@ -1999,18 +2071,33 @@ class _BestEffortRow extends StatelessWidget {
 
                 // ▼ Reps
                 SizedBox(
-                  width: fieldW.clamp(25, 100),
+                  width: fieldW.clamp(28, 100),
                   child: TextFormField(
                     controller: repsCtrl,
                     keyboardType: TextInputType.number,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    style: const TextStyle(color: Colors.black87),
                     decoration: InputDecoration(
                       isDense: true,
                       hintText: 'reps',
+                      hintStyle: TextStyle(color: Colors.black54.withOpacity(0.7)),
+                      contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
                       border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 4, vertical: 8),
+                        borderRadius: BorderRadius.circular(6),
+                        borderSide: const BorderSide(color: Colors.blueAccent),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6),
+                        borderSide: const BorderSide(color: Colors.blueAccent),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6),
+                        borderSide:
+                        const BorderSide(color: Colors.lightBlue, width: 2),
+                      ),
+                      filled: true,
+                      fillColor: Colors.white.withOpacity(0.9),
                     ),
                   ),
                 ),
@@ -2026,23 +2113,29 @@ class _BestEffortRow extends StatelessWidget {
                         final e1 = _calcE1RM(weightCtrl.text, repsCtrl.text);
                         return Container(
                           width: chipW.clamp(80, 120),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 3, vertical: 8),
+                          padding:
+                          const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
                           decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                                color: Colors.blueGrey.shade200, width: 1),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.blueAccent, width: 1.3),
+                            color: Colors.white.withOpacity(0.9),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.blueAccent.withOpacity(0.08),
+                                blurRadius: 4,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
                           ),
                           child: Text(
-                            e1 == null
-                                ? 'e1RM'
-                                : '${e1.toStringAsFixed(1)}',
+                            e1 == null ? 'E1RM' : e1.toStringAsFixed(1),
                             overflow: TextOverflow.ellipsis,
                             textAlign: TextAlign.center,
                             style: TextStyle(
-                              fontSize: 13,
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w600,
                               color: e1 == null
-                                  ? Colors.grey.shade600
+                                  ? Colors.black54
                                   : Colors.black87,
                             ),
                           ),
