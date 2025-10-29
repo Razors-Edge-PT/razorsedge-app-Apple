@@ -1109,12 +1109,14 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
   final _formKey = GlobalKey<FormState>();
 
   // ── A) Goals: start with full list; user reorders to set priority.
-  List<String> _goals = const [
+  List<String> _goals = [
     'Get stronger',
     'Build more muscle',
     'Get fitter',
     'Get leaner',
     'Feel healthier / move better',
+    'Tone and shape',
+    'Defeat my gym nemesis',
   ].toList();
 
   // ── B) Body focus (conditional if “muscle/toned” is relevant): simple checklist for v1
@@ -1408,32 +1410,15 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
                     _SectionHeader("What do you care about most? (drag to rank)", color: Colors.blueAccent),
                     const SizedBox(height: 8),
-
-// Goals ranker styled like other sections (white card + blue border)
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(.8),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.blueAccent, width: 1.3),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.blueAccent.withOpacity(0.06),
-                            blurRadius: 4,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      padding: const EdgeInsets.fromLTRB(6, 6, 4, 10),
-                      child: _GoalsRanker(
-                        items: _goals,
-                        onReorder: (from, to) {
-                          setState(() {
-                            final item = _goals.removeAt(from);
-                            _goals.insert(to, item);
-                          });
-                        },
-                      ),
+                    _GoalsRanker(
+                      items: _goals,
+                      onChanged: (main, notImportant) {
+                        setState(() {
+                          _goals = main + notImportant; // or however you want to store them
+                        });
+                      },
                     ),
+
 
                     const SizedBox(height: 6),
 
@@ -2051,41 +2036,256 @@ class _LabeledField extends StatelessWidget {
 }
 
 // Drag-to-rank goals (kept lightweight)
-class _GoalsRanker extends StatelessWidget {
+class _GoalsRanker extends StatefulWidget {
   final List<String> items;
-  final void Function(int from, int to) onReorder;
-  const _GoalsRanker({required this.items, required this.onReorder});
+  final void Function(List<String> main, List<String> notImportant) onChanged;
+
+  const _GoalsRanker({
+    required this.items,
+    required this.onChanged,
+    Key? key,
+  }) : super(key: key);
+
+  @override
+  State<_GoalsRanker> createState() => _GoalsRankerState();
+}
+
+class _GoalsRankerState extends State<_GoalsRanker> {
+  late List<String> mainGoals;
+  late List<String> notImportantGoals;
+
+  @override
+  void initState() {
+    super.initState();
+    mainGoals = List.from(widget.items);
+    notImportantGoals = [];
+  }
+
+  // (Old ReorderableListView callback no longer used)
+  void _onReorder(int oldIndex, int newIndex) {
+    // kept for compatibility; not used in the custom drag layout
+  }
 
   @override
   Widget build(BuildContext context) {
-    // ReorderableListView must be constrained; wrap in SizedBox
-    return SizedBox(
-      height: 330,
-      child: ReorderableListView(
-        buildDefaultDragHandles: true,
-        children: [
-          for (int i = 0; i < items.length; i++)
-            ListTile(
-              key: ValueKey(items[i]),
-              title: Text(items[i]),
-              leading: const Icon(Icons.drag_handle),
-              tileColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-                side: BorderSide(color: Colors.blueGrey.shade100),
+    return Column(
+      children: [
+        // --- Main "Important" Area (custom drag + insert slots) ---
+        Container(
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(.9),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.blueAccent, width: 1.3),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.blueAccent.withOpacity(0.08),
+                blurRadius: 4,
+                offset: const Offset(0, 2),
               ),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            ],
+          ),
+          padding: const EdgeInsets.fromLTRB(4, 4, 4, 6),
+          child: SizedBox(
+            height: 470,
+            child: Column(
+              children: [
+                // Top insert slot (drop here to put item at index 0)
+                _MainInsertSlot(
+                  onAccept: (item) {
+                    setState(() {
+                      notImportantGoals.remove(item);
+                      mainGoals.remove(item);
+                      mainGoals.insert(0, item);
+                      widget.onChanged(mainGoals, notImportantGoals);
+                    });
+                  },
+                ),
+
+                // For each goal: draggable tile + insert slot after it
+                for (int i = 0; i < mainGoals.length; i++) ...[
+                  LongPressDraggable<String>(
+                    data: mainGoals[i],
+                    feedback: Material(
+                      color: Colors.transparent,
+                      child: Card(
+                        elevation: 6,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          side: BorderSide(color: Colors.blueGrey.shade200),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          child: Text(
+                            mainGoals[i],
+                            style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ),
+                    ),
+                    childWhenDragging: Opacity(
+                      opacity: 0.4,
+                      child: _GoalTile(label: mainGoals[i]),
+                    ),
+                    child: _GoalTile(label: mainGoals[i]),
+                  ),
+
+                  // Insert slot after this item (drop here to place at i+1)
+                  _MainInsertSlot(
+                    onAccept: (item) {
+                      setState(() {
+                        notImportantGoals.remove(item);
+                        mainGoals.remove(item);
+                        final insertAt = (i + 1).clamp(0, mainGoals.length);
+                        mainGoals.insert(insertAt, item);
+                        widget.onChanged(mainGoals, notImportantGoals);
+                      });
+                    },
+                  ),
+                ],
+              ],
             ),
-        ],
-        onReorder: (oldIndex, newIndex) {
-          int to = newIndex;
-          if (newIndex > oldIndex) to = newIndex - 1;
-          onReorder(oldIndex, to);
-        },
+          ),
+
+        ),
+
+        const SizedBox(height: 11),
+
+        // --- Not Important Drop Area ---
+        DragTarget<String>(
+          onAccept: (item) {
+            setState(() {
+              if (mainGoals.remove(item) && !notImportantGoals.contains(item)) {
+                notImportantGoals.add(item);
+                widget.onChanged(mainGoals, notImportantGoals);
+              }
+            });
+          },
+          builder: (context, candidateData, rejectedData) {
+            final hovering = candidateData.isNotEmpty;
+            return Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: hovering ? Colors.grey.shade200 : Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.grey.shade400, width: 1),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.05),
+                    blurRadius: 3,
+                    offset: const Offset(0, 1),
+                  ),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Unimportant af - to me',
+                    style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black54),
+                  ),
+                  const SizedBox(height: 6),
+                  if (notImportantGoals.isEmpty)
+                    const Text(
+                      'Drag from above to here what you do not give to hoots about',
+                      style: TextStyle(color: Colors.black54, fontSize: 13),
+                    ),
+                  for (final item in notImportantGoals)
+                    LongPressDraggable<String>(
+                      data: item,
+                      feedback: Material(
+                        color: Colors.transparent,
+                        child: Card(
+                          elevation: 4,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            child: Text(item, style: const TextStyle(fontSize: 14)),
+                          ),
+                        ),
+                      ),
+                      childWhenDragging: Opacity(
+                        opacity: 0.5,
+                        child: ListTile(
+                          dense: true,
+                          title: Text(item),
+                          leading: const Icon(Icons.remove_circle_outline, color: Colors.grey),
+                        ),
+                      ),
+                      child: ListTile(
+                        dense: true,
+                        title: Text(item),
+                        leading: const Icon(Icons.remove_circle_outline, color: Colors.grey),
+                        // quick tap to move back up (adds to end of main list)
+                        onTap: () {
+                          setState(() {
+                            notImportantGoals.remove(item);
+                            if (!mainGoals.contains(item)) mainGoals.add(item);
+                            widget.onChanged(mainGoals, notImportantGoals);
+                          });
+                        },
+                      ),
+                    ),
+                ],
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+
+class _GoalTile extends StatelessWidget {
+  final String label;
+  const _GoalTile({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      dense: true,
+      visualDensity: const VisualDensity(horizontal: 0, vertical: -2), // 👈 tighter vertical layout
+      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0), // 👈 less inner padding
+      tileColor: Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(color: Colors.blueGrey.shade100),
+      ),
+      leading: const Icon(Icons.drag_indicator, color: Colors.black45),
+      title: Text(
+        label,
+        style: const TextStyle(fontSize: 15.5, color: Colors.black87, fontWeight: FontWeight.w600),
       ),
     );
   }
 }
+
+class _MainInsertSlot extends StatelessWidget {
+  final void Function(String item) onAccept;
+  const _MainInsertSlot({required this.onAccept});
+
+  @override
+  Widget build(BuildContext context) {
+    return DragTarget<String>(
+      onWillAccept: (d) => d != null,
+      onAccept: onAccept,
+      builder: (context, candidate, rejected) {
+        final isHover = candidate.isNotEmpty;
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          margin: const EdgeInsets.symmetric(vertical: 4),
+          height: 12,
+          decoration: BoxDecoration(
+            color: isHover ? Colors.lightBlue.withOpacity(0.25) : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+          ),
+        );
+      },
+    );
+  }
+}
+
+
 
 class _BestEffortRow extends StatelessWidget {
   final List<String> variants;
