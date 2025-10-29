@@ -1122,6 +1122,9 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
     'Chest', 'Back', 'Shoulders', 'Arms', 'Abs', 'Glutes', 'Quads', 'Hamstrings', 'Calves'
   ];
   final Set<String> _bodyFocus = <String>{};
+  // 0 = off, 1 = light emphasis, 2 = strong emphasis
+  final Map<String, int> _bodyFocusLevel = <String, int>{};
+
 
   // ── C) Injuries: checkboxes + per-item pain slider (1–10) when checked
   final List<String> _injuryKeys = const [
@@ -1393,22 +1396,43 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                   children: [
                     const Text(
                       "Tell us about your training",
-                      style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.black54),
+                      style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.black87,
+                      ),
                     ),
                     const SizedBox(height: 16),
 
-                    // A) Goals (drag to rank)
-                    _SectionHeader("What matters most to you? (drag to rank)"),
-                    const SizedBox(height: 6),
-                    _GoalsRanker(
-                      items: _goals,
-                      onReorder: (from, to) {
-                        setState(() {
-                          final item = _goals.removeAt(from);
-                          _goals.insert(to, item);
-                        });
-                      },
+                    _SectionHeader("What matters most to you? (drag to rank)", color: Colors.blueAccent),
+                    const SizedBox(height: 8),
+
+// Goals ranker styled like other sections (white card + blue border)
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(.8),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.blueAccent, width: 1.3),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.blueAccent.withOpacity(0.06),
+                            blurRadius: 4,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      padding: const EdgeInsets.fromLTRB(6, 6, 4, 10),
+                      child: _GoalsRanker(
+                        items: _goals,
+                        onReorder: (from, to) {
+                          setState(() {
+                            final item = _goals.removeAt(from);
+                            _goals.insert(to, item);
+                          });
+                        },
+                      ),
                     ),
+
                     const SizedBox(height: 6),
 
 
