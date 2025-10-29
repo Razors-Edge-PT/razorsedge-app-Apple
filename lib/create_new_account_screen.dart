@@ -1122,7 +1122,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
     'Chest', 'Back', 'Shoulders', 'Arms', 'Abs', 'Glutes', 'Quads', 'Hamstrings', 'Calves'
   ];
   final Set<String> _bodyFocus = <String>{};
-  // 0 = off, 1 = light emphasis, 2 = strong emphasis
+  // 0 = off, 1 = light, 2 = medium, 3 = strong
   final Map<String, int> _bodyFocusLevel = <String, int>{};
 
 
@@ -1232,7 +1232,9 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
     final hasExperience = _experience != null;
 
     // Conditional required: if muscle/toned relevant, we require at least one body focus.
-    final focusOk = !_muscleOrTonedChosen || _bodyFocus.isNotEmpty;
+    final hasAnyFocus = _bodyFocusLevel.values.any((lvl) => lvl > 0);
+    final focusOk = !_muscleOrTonedChosen || hasAnyFocus;
+
     final envOk = _env != null; // require user to pick an environment
 
     return hasGoals && injuryPainOk && hasExperience && focusOk && envOk;
@@ -1395,16 +1397,16 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     const Text(
-                      "Tell us about your training",
+                      "Tell us more pls!",
                       style: TextStyle(
                         fontSize: 24,
                         fontWeight: FontWeight.w700,
-                        color: Colors.black87,
+                        color: Colors.black54,
                       ),
                     ),
                     const SizedBox(height: 16),
 
-                    _SectionHeader("What matters most to you? (drag to rank)", color: Colors.blueAccent),
+                    _SectionHeader("What do you care about most? (drag to rank)", color: Colors.blueAccent),
                     const SizedBox(height: 8),
 
 // Goals ranker styled like other sections (white card + blue border)
@@ -1439,75 +1441,138 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                     // B) Body Focus (conditional)
                     if (_muscleOrTonedChosen) ...[
                       const SizedBox(height: 16),
-                      _SectionHeader("Any areas you’d like to especially focus on? - we believe in whole body training, but if you would like to emphasise anything..."),
+                      _SectionHeader(
+                        "Any areas you’d like to especially focus on?"
+                            "\nTap once, twice or thrice for extra emphasis",
+
+                      ),
+
+
                       const SizedBox(height: 8),
                       Wrap(
                         spacing: 8, runSpacing: 8,
                         children: [
-                          // ▼ Select all / Clear all chip (toggles everything)
-                          Builder(builder: (_) {
-                            final allSelected = _bodyFocus.length == _bodyParts.length && _bodyParts.isNotEmpty;
-                            return ChoiceChip(
-                              label: Text(
-                                allSelected ? 'Clear all' : 'Select ALL',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,        // ← makes it stand out
-                                  color: Colors.black,                // ← optional, ensures good contrast
-                                ),
-                              ),
-                              selected: allSelected,
-                              selectedColor: Colors.lightBlue.shade100,  // ← subtle highlight when active
-                              onSelected: (_) {
-                                setState(() {
-                                  if (allSelected) {
-                                    _bodyFocus.clear();
-                                  } else {
-                                    _bodyFocus
-                                      ..clear()
-                                      ..addAll(_bodyParts);
-                                  }
-                                });
-                              },
-                            );
-                          }),
+                          // ▼ Row: Select all / Clear all on its own line
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 8.0),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.start,
+                              children: [
+                                Builder(builder: (_) {
+                                  final anySelected = _bodyFocusLevel.values.any((lvl) => lvl > 0);
+                                  return ChoiceChip(
+                                    showCheckmark: false, // 👈 disables the default tick entirely
+                                    label: Text(
+                                      anySelected ? 'Clear all' : 'Select ALL',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.black,
+                                      ),
+                                    ),
+                                    selected: anySelected,
+                                    selectedColor: Colors.lightBlue.shade100,
+                                    backgroundColor: Colors.white,
+                                    shape: StadiumBorder(
+                                      side: BorderSide(
+                                        color: anySelected ? Colors.lightBlue : Colors.blueAccent,
+                                        width: 1.2,
+                                      ),
+                                    ),
+                                    onSelected: (_) {
+                                      setState(() {
+                                        if (anySelected) {
+                                          _bodyFocusLevel.clear();
+                                        } else {
+                                          _bodyFocusLevel
+                                            ..clear()
+                                            ..addEntries(_bodyParts.map((p) => MapEntry(p, 1)));
+                                        }
+                                      });
+                                    },
+                                  );
+                                }),
 
-                          // ▼ The regular body-part chips
+                              ],
+                            ),
+                          ),
+
+
+// ▼ Tri-state emphasis chips (tap cycles Off → Light → Strong → Off)
                           ..._bodyParts.map((p) {
-                            final selected = _bodyFocus.contains(p);
+                            final lvl = _bodyFocusLevel[p] ?? 0; // 0,1,2,3
+
+                            // Visuals per level
+                            late final Color borderColor;
+                            late final Color labelColor;
+                            late final Color bgColor;
+                            late final double borderW;
+                            late final FontWeight fw;
+
+                            switch (lvl) {
+                              case 1: // emphasised1 (light)
+                                borderColor = Colors.lightBlue;
+                                labelColor  = Colors.blue.shade700;
+                                bgColor     = Colors.lightBlue.shade50;
+                                borderW     = 1;
+                                fw          = FontWeight.w700;
+                                break;
+                              case 2:
+                                borderColor = Colors.blueAccent.shade100;
+                                labelColor  = Colors.blue.shade700;
+                                bgColor     = Colors.lightBlue.shade200;
+                                borderW     = 1.2;
+                                fw          = FontWeight.w800;
+                                break;
+
+                              case 3: // emphasised3 (strong)
+                                borderColor = Colors.blueAccent.shade100;
+                                labelColor  = Colors.blue.shade700;
+                                bgColor     = Colors.lightBlue.shade400;
+                                borderW     = 1.2;
+                                fw          = FontWeight.w800;
+                                break;
+                              default: // 0 off
+                                borderColor = Colors.blueAccent;
+                                labelColor  = Colors.black54;
+                                bgColor     = Colors.white;
+                                borderW     = 1;
+                                fw          = FontWeight.w600;
+                            }
+
                             return ChoiceChip(
                               label: Text(
                                 p,
                                 style: TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  color: selected ? Colors.blueAccent : Colors.black54,
+                                  fontWeight: fw,
+                                  color: labelColor,
                                   fontSize: 14.5,
                                 ),
                               ),
-                              selected: selected,
-                              selectedColor: Colors.lightBlue.shade50,
-                              backgroundColor: Colors.white,
+                              selected: lvl > 0,
+                              showCheckmark: false,                 // 👈 hide tick mark
+                              selectedColor: bgColor,               // when selected, use our bg per level
+                              backgroundColor: Colors.white,        // base
                               shape: StadiumBorder(
-                                side: BorderSide(
-                                  color: selected ? Colors.lightBlue : Colors.blueAccent,
-                                  width: 1,
-                                ),
+                                side: BorderSide(color: borderColor, width: borderW),
                               ),
                               onSelected: (_) {
                                 setState(() {
-                                  if (selected) {
-                                    _bodyFocus.remove(p);
+                                  final next = (lvl + 1) % 4;       // 0→1→2→3→0
+                                  if (next == 0) {
+                                    _bodyFocusLevel.remove(p);
                                   } else {
-                                    _bodyFocus.add(p);
+                                    _bodyFocusLevel[p] = next;
                                   }
                                 });
                               },
                             );
-
                           }).toList(),
+
+
                         ],
 
                       ),
-                      if (_bodyFocus.isEmpty)
+                      if (!_bodyFocusLevel.values.any((lvl) => lvl > 0))
                         const Padding(
                           padding: EdgeInsets.only(top: 6),
                           child: Text('Pick at least one!',
@@ -1517,76 +1582,180 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
                     // C) Injuries (checkbox + pain slider)
                     const SizedBox(height: 19),
-                    _SectionHeader("Any existing niggles or injuries?"),
+                    _SectionHeader("Any existing niggles or injuries?", color: Colors.blueAccent),
                     const SizedBox(height: 8),
-                    Column(
-                      children: _injuryKeys.map((k) {
-                        final checked = _injuries.contains(k);
-                        final val = _painSlider[k] ?? 5.0;
-                        return Column(
-                          children: [
-                            CheckboxListTile(
-                              contentPadding: EdgeInsets.zero,
-                              title: Text(k),
-                              value: checked,
-                              onChanged: (v) {
-                                setState(() {
-                                  if (v == true) { _injuries.add(k); _painSlider.putIfAbsent(k, () => 5.0); }
-                                  else { _injuries.remove(k); _painSlider.remove(k); }
-                                });
-                              },
-                            ),
-                            if (checked)
-                              Row(
-                                children: [
-                                  const SizedBox(width: 8),
-                                  const Text('Pain now:'),
-                                  Expanded(
-                                    child: Slider(
-                                      min: 1, max: 10, divisions: 9,
-                                      label: _painSlider[k]?.round().toString(),
-                                      value: val,
-                                      onChanged: (v) => setState(() => _painSlider[k] = v),
-                                    ),
+
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.9),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.blueAccent, width: 1.3),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.blueAccent.withOpacity(0.06),
+                            blurRadius: 4,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                      child: Column(
+                        children: _injuryKeys.map((k) {
+                          final checked = _injuries.contains(k);
+                          final val = _painSlider[k] ?? 5.0;
+
+                          return Column(
+                            children: [
+                              CheckboxListTile(
+                                dense: true,
+                                visualDensity: VisualDensity.compact,
+                                contentPadding: EdgeInsets.zero,
+                                controlAffinity: ListTileControlAffinity.leading,
+                                activeColor: Colors.blueAccent,
+                                checkColor: Colors.white,
+                                title: Text(
+                                  k,
+                                  style: const TextStyle(
+                                    color: Colors.black87,
+                                    fontSize: 15.5,
+                                    fontWeight: FontWeight.w600,
                                   ),
-                                ],
+                                ),
+                                value: checked,
+                                onChanged: (v) {
+                                  setState(() {
+                                    if (v == true) {
+                                      _injuries.add(k);
+                                      _painSlider.putIfAbsent(k, () => 5.0);
+                                    } else {
+                                      _injuries.remove(k);
+                                      _painSlider.remove(k);
+                                    }
+                                  });
+                                },
                               ),
-                          ],
-                        );
-                      }).toList(),
+
+                              if (checked) ...[
+                                const SizedBox(height: 2),
+                                Row(
+                                  children: [
+                                    const Text('Pain now:',
+                                        style: TextStyle(color: Colors.black54, fontSize: 13.5)),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: SliderTheme(
+                                        data: SliderTheme.of(context).copyWith(
+                                          trackHeight: 3.5,
+                                          activeTrackColor: Colors.blueAccent,
+                                          inactiveTrackColor: Colors.blueAccent.withOpacity(0.25),
+                                          thumbColor: Colors.lightBlue,
+                                          overlayColor: Colors.lightBlue.withOpacity(0.15),
+                                          valueIndicatorColor: Colors.blueAccent,
+                                          valueIndicatorTextStyle: const TextStyle(color: Colors.white),
+                                        ),
+                                        child: Slider(
+                                          min: 1,
+                                          max: 10,
+                                          divisions: 9,
+                                          label: _painSlider[k]?.round().toString(),
+                                          value: val,
+                                          onChanged: (v) => setState(() => _painSlider[k] = v),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+
+                              // divider between items
+                              const Divider(height: 10, color: Color(0xFFE3F2FD)),
+                            ],
+                          );
+                        }).toList(),
+                      ),
                     ),
+
 
                     // D) Experience
                     const SizedBox(height: 16),
-                    _SectionHeader("Training experience"),
-                    Column(
-                      children: [
-                        RadioListTile<TrainingExperience>(
-                          title: const Text('Never trained before'),
-                          value: TrainingExperience.never,
-                          groupValue: _experience,
-                          onChanged: (v) => setState(() => _experience = v),
-                        ),
-                        RadioListTile<TrainingExperience>(
-                          title: const Text('< 6 months'),
-                          value: TrainingExperience.lt6mo,
-                          groupValue: _experience,
-                          onChanged: (v) => setState(() => _experience = v),
-                        ),
-                        RadioListTile<TrainingExperience>(
-                          title: const Text('~ 1 year'),
-                          value: TrainingExperience.oneYear,
-                          groupValue: _experience,
-                          onChanged: (v) => setState(() => _experience = v),
-                        ),
-                        RadioListTile<TrainingExperience>(
-                          title: const Text('2+ years'),
-                          value: TrainingExperience.twoPlus,
-                          groupValue: _experience,
-                          onChanged: (v) => setState(() => _experience = v),
-                        ),
-                      ],
+                    _SectionHeader("Weights Training experience", color: Colors.blueAccent),
+                    const SizedBox(height: 6),
+
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.9),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.blueAccent, width: 1.3),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.blueAccent.withOpacity(0.06),
+                            blurRadius: 4,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+                      child: Column(
+                        children: [
+                          RadioListTile<TrainingExperience>(
+                            dense: true,
+                            visualDensity: VisualDensity.compact,
+                            contentPadding: EdgeInsets.zero,
+                            activeColor: Colors.blueAccent,
+                            title: const Text(
+                              'Never trained before',
+                              style: TextStyle(color: Colors.black87, fontSize: 15.5, fontWeight: FontWeight.w600),
+                            ),
+                            value: TrainingExperience.never,
+                            groupValue: _experience,
+                            onChanged: (v) => setState(() => _experience = v),
+                          ),
+                          const Divider(height: 6, color: Color(0xFFE3F2FD)),
+                          RadioListTile<TrainingExperience>(
+                            dense: true,
+                            visualDensity: VisualDensity.compact,
+                            contentPadding: EdgeInsets.zero,
+                            activeColor: Colors.blueAccent,
+                            title: const Text(
+                              '< 6 months',
+                              style: TextStyle(color: Colors.black87, fontSize: 15.5, fontWeight: FontWeight.w600),
+                            ),
+                            value: TrainingExperience.lt6mo,
+                            groupValue: _experience,
+                            onChanged: (v) => setState(() => _experience = v),
+                          ),
+                          const Divider(height: 6, color: Color(0xFFE3F2FD)),
+                          RadioListTile<TrainingExperience>(
+                            dense: true,
+                            visualDensity: VisualDensity.compact,
+                            contentPadding: EdgeInsets.zero,
+                            activeColor: Colors.blueAccent,
+                            title: const Text(
+                              '~ 1 year',
+                              style: TextStyle(color: Colors.black87, fontSize: 15.5, fontWeight: FontWeight.w600),
+                            ),
+                            value: TrainingExperience.oneYear,
+                            groupValue: _experience,
+                            onChanged: (v) => setState(() => _experience = v),
+                          ),
+                          const Divider(height: 6, color: Color(0xFFE3F2FD)),
+                          RadioListTile<TrainingExperience>(
+                            dense: true,
+                            visualDensity: VisualDensity.compact,
+                            contentPadding: EdgeInsets.zero,
+                            activeColor: Colors.blueAccent,
+                            title: const Text(
+                              '2+ years',
+                              style: TextStyle(color: Colors.black87, fontSize: 15.5, fontWeight: FontWeight.w600),
+                            ),
+                            value: TrainingExperience.twoPlus,
+                            groupValue: _experience,
+                            onChanged: (v) => setState(() => _experience = v),
+                          ),
+                        ],
+                      ),
                     ),
+
 
 
                     // ── Equipment / Environment (REQUIRED)
@@ -1750,9 +1919,9 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
                     const SizedBox(height: 6),
                     const Text(
-                      "To customise your starting weights, add your best lift for any you remember (e.g. Bench 100 x 5). "
-                          "We use kg here in 🇳🇿\n"
-                          "No worries if you can't remember exactly right now — it’ll figure it out and sharpen up for your strength level as you add workouts.",
+                      "To customise your starting strength level, add your best lift for any you remember, using Kgs"
+                          " 🇳🇿\n"
+                          "No worries if you can't remember right now — it’ll figure it out as you use the app.",
                       style: TextStyle(
                         color: Colors.black87,
                         fontSize: 15,
@@ -1838,7 +2007,8 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 class _SectionHeader extends StatelessWidget {
   final String text;
   final Color color;
-  const _SectionHeader(this.text, {this.color = Colors.black54, super.key});
+  final TextAlign textAlign;
+  const _SectionHeader(this.text, {this.color = Colors.black54,this.textAlign = TextAlign.left, super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -1846,6 +2016,7 @@ class _SectionHeader extends StatelessWidget {
       alignment: Alignment.centerLeft,
       child: Text(
         text,
+        textAlign: textAlign, // 👈 Add this
         style: TextStyle(
           fontSize: 16,
           fontWeight: FontWeight.w600,     // stronger header
