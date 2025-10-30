@@ -1119,6 +1119,8 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
     'Defeat my gym nemesis',
   ].toList();
 
+  List<String> _notImportantGoals = [];
+
   // ── B) Body focus (conditional if “muscle/toned” is relevant): simple checklist for v1
   final List<String> _bodyParts = const [
     'Chest', 'Back', 'Shoulders', 'Arms', 'Abs', 'Glutes', 'Quads', 'Hamstrings', 'Calves'
@@ -1328,6 +1330,18 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
           .collection('profile').doc('fitness_onboarding');
       await onbRef.set(answers.toJson(), SetOptions(merge: true));
 
+      await onbRef.set({
+        'bodyFocusLevel': _bodyFocusLevel,
+      }, SetOptions(merge: true));
+
+
+      // Persist final goals order + the "not important" bin
+      await onbRef.set({
+        'goalsRanked': _goals,                 // (already in answers; keep for clarity)
+        'goalsNotImportant': _notImportantGoals,
+      }, SetOptions(merge: true));
+
+
       // Save equipment snapshot
       final String? env = _env;
       final List<String> items = _equipSelected.toList();
@@ -1379,6 +1393,35 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
     return out;
   }
 
+  bool _isDobBefore1995Flexible(String? rawDob) {
+    if (rawDob == null || rawDob.isEmpty) return false;
+
+    // 1) try dd-mm-yyyy first (what you said you're using)
+    final parts = rawDob.split('-');
+    if (parts.length == 3) {
+      final dd = int.tryParse(parts[0]);
+      final mm = int.tryParse(parts[1]);
+      final yyyy = int.tryParse(parts[2]);
+      if (dd != null && mm != null && yyyy != null) {
+        try {
+          final dt = DateTime(yyyy, mm, dd);
+          return dt.isBefore(DateTime(1995, 1, 1));
+        } catch (_) {
+          // fall through to ISO attempt
+        }
+      }
+    }
+
+    // 2) fallback: try ISO yyyy-mm-dd
+    try {
+      final dt = DateTime.parse(rawDob);
+      return dt.isBefore(DateTime(1995, 1, 1));
+    } catch (_) {
+      return false;
+    }
+  }
+
+
 
   @override
   Widget build(BuildContext context) {
@@ -1403,7 +1446,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                       style: TextStyle(
                         fontSize: 24,
                         fontWeight: FontWeight.w700,
-                        color: Colors.black54,
+                        color: Colors.blueAccent,
                       ),
                     ),
                     const SizedBox(height: 16),
@@ -1414,10 +1457,15 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                       items: _goals,
                       onChanged: (main, notImportant) {
                         setState(() {
-                          _goals = main + notImportant; // or however you want to store them
+                          _goals = List.from(main);
+                          _notImportantGoals = List.from(notImportant);
                         });
                       },
+                      sex: widget.sex,   // 👈 pass through from page one
+                      dob: widget.dob,   // 👈 pass through from page one
                     ),
+
+
 
 
                     const SizedBox(height: 6),
@@ -1552,17 +1600,139 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                               },
                             );
                           }).toList(),
-
-
                         ],
-
                       ),
-                      if (!_bodyFocusLevel.values.any((lvl) => lvl > 0))
-                        const Padding(
-                          padding: EdgeInsets.only(top: 6),
-                          child: Text('Pick at least one!',
-                              style: TextStyle(color: Colors.redAccent, fontSize: 12)),
-                        ),
+                      // ▼ Body-focus feedback / fun messages
+                      Builder(
+                        builder: (_) {
+                          final hasAny = _bodyFocusLevel.values.any((lvl) => lvl > 0);
+
+                          // 1) If nothing picked → same as before
+                          if (!hasAny) {
+                            return const Padding(
+                              padding: EdgeInsets.only(top: 6),
+                              child: Text(
+                                'Pick at least one pls',
+                                style: TextStyle(color: Colors.redAccent, fontSize: 12),
+                              ),
+                            );
+                          }
+
+                          // ----- if something IS picked, we can get cheeky ↓ -----
+
+                          // convenience lookups
+                          int levelOf(String key) => _bodyFocusLevel[key] ?? 0;
+
+                          final glutesLvl = levelOf('Glutes');
+                          final chestLvl  = levelOf('Chest');
+                          final backLvl   = levelOf('Back');
+                          final shouldersLvl = levelOf('Shoulders');
+                          final armsLvl = levelOf('Arms');
+                          final quadsLvl = levelOf('Quads');
+                          final hammiesLvl = levelOf('Hamstrings');
+                          final calvesLvl = levelOf('Calves');
+
+                          // what user is
+                          final sex = (widget.sex ?? '').toUpperCase();
+                          final isMale = sex == 'M';
+                          final isOldEnoughForBrah = isMale && _isDobBefore1995Flexible(widget.dob);
+
+
+                          // 2) Special: maxed Glutes → booty message
+                          if (glutesLvl >= 3) {
+                            // Parse birth year safely (dd-mm-yyyy or yyyy-mm-dd)
+                            int? birthYear;
+                            if (widget.dob != null && widget.dob!.isNotEmpty) {
+                              final parts = widget.dob!.split('-');
+                              if (parts.length == 3) {
+                                // detect which format: if first part > 31, assume yyyy-mm-dd
+                                if (int.tryParse(parts[0]) != null && int.parse(parts[0]) > 31) {
+                                  birthYear = int.tryParse(parts[0]);
+                                } else {
+                                  birthYear = int.tryParse(parts[2]);
+                                }
+                              }
+                            }
+
+                            final isYounger = (birthYear ?? 2000) >= 2000;
+                            final bootyMsg = isYounger
+                                ? 'Certified cake architect 🍑🏗️'
+                                : 'Those jeans won’t know what hit ’em 🍑💥';
+
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 6),
+                              child: Text(
+                                bootyMsg,
+                                style: const TextStyle(color: Colors.green, fontSize: 12),
+                              ),
+                            );
+                          }
+
+
+                          // 3) Male, 90s kid, ALL upper-body, ZERO lower-body → bro callout
+                          final noLegs =
+                              quadsLvl == 0 && hammiesLvl == 0 && glutesLvl == 0 && calvesLvl == 0;
+                          final allUpperSelected =
+                              chestLvl > 0 && backLvl > 0 && shouldersLvl > 0 && armsLvl > 0;
+
+                          if (isOldEnoughForBrah && noLegs && allUpperSelected) {
+                            return const Padding(
+                              padding: EdgeInsets.only(top: 6),
+                              child: Text(
+                                'No leg days? Do you even lift brah? 😂',
+                                style: TextStyle(color: Colors.blueAccent, fontSize: 14),
+                              ),
+                            );
+                          }
+
+                          // 4) Typical bro upper-body emphasis (chest/shoulders/arms)
+                          // --- "Upper deck coming in nice" ---
+// Show only if ALL upper-body parts selected (chest, back, shoulders, arms)
+// AND at least two of them are MAX emphasis (level 3)
+
+                          final highUpperCount = [
+                            chestLvl >= 3,
+                            backLvl >= 3,
+                            shouldersLvl >= 3,
+                            armsLvl >= 3,
+                          ].where((x) => x).length;
+
+                          if (allUpperSelected && highUpperCount >= 2) {
+                            return const Padding(
+                              padding: EdgeInsets.only(top: 6),
+                              child: Text(
+                                'Upper deck coming in nice 💪',
+                                style: TextStyle(color: Colors.blueAccent, fontSize: 12),
+                              ),
+                            );
+                          }
+
+// --- Whole-body training encouragement ---
+// If *every* tracked body part is at least selected (lvl > 0)
+                          final allSelected = _bodyFocusLevel.values.isNotEmpty &&
+                              _bodyFocusLevel.values.every((lvl) => lvl > 0);
+                          // --- Whole-body training encouragement ---
+// show only if EVERY body part from _bodyParts is selected at > 0
+                          final allBodyPartsSelected = _bodyParts.every(
+                                (p) => (_bodyFocusLevel[p] ?? 0) > 0,
+                          );
+                          if (allBodyPartsSelected) {
+                            return const Padding(
+                              padding: EdgeInsets.only(top: 6),
+                              child: Text(
+                                'We love whole body training 🔥',
+                                style: TextStyle(color: Colors.green, fontSize: 12),
+                              ),
+                            );
+                          }
+
+
+
+                          // fallback = quiet
+                          return const SizedBox.shrink();
+                        },
+                      ),
+
                     ],
 
                     // C) Injuries (checkbox + pain slider)
@@ -2040,9 +2210,15 @@ class _GoalsRanker extends StatefulWidget {
   final List<String> items;
   final void Function(List<String> main, List<String> notImportant) onChanged;
 
+  // 👇 Add these two fields to the widget
+  final String? sex;
+  final String? dob;
+
   const _GoalsRanker({
     required this.items,
     required this.onChanged,
+    this.sex,
+    this.dob, // 👈 make sure both are optional but accepted
     Key? key,
   }) : super(key: key);
 
@@ -2065,6 +2241,19 @@ class _GoalsRankerState extends State<_GoalsRanker> {
   void _onReorder(int oldIndex, int newIndex) {
     // kept for compatibility; not used in the custom drag layout
   }
+
+  // 👇 The dynamic header based on sex
+  String get _unimportantHeader {
+    final s = (widget.sex ?? '').toUpperCase();
+
+    if (s == 'M') {
+      return "Couldn’t care less tbh";
+    } else {
+      return "Low-priority stuff 💅";
+    }
+  }
+
+
 
   @override
   Widget build(BuildContext context) {
@@ -2168,7 +2357,7 @@ class _GoalsRankerState extends State<_GoalsRanker> {
               decoration: BoxDecoration(
                 color: hovering ? Colors.grey.shade200 : Colors.grey.shade100,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.grey.shade400, width: 1),
+                border: Border.all(color: Colors.blueAccent, width: 1),
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black.withOpacity(0.05),
@@ -2180,14 +2369,18 @@ class _GoalsRankerState extends State<_GoalsRanker> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'Unimportant af - to me',
-                    style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black54),
+                  Text(
+                    _unimportantHeader,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
                   ),
+
                   const SizedBox(height: 6),
                   if (notImportantGoals.isEmpty)
                     const Text(
-                      'Drag from above to here what you do not give to hoots about',
+                      '🦉 Drag and drop any goals here you don’t give two hoots about.',
                       style: TextStyle(color: Colors.black54, fontSize: 13),
                     ),
                   for (final item in notImportantGoals)
