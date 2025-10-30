@@ -1029,12 +1029,13 @@ class BestEffort {
 }
 
 class OnboardingAnswers {
-  final List<String>? goalsRanked;      // ranked list, highest priority first
-  final List<String>? bodyFocus;        // selected areas
-  final Map<String, int>? painNow;      // {'lower_back': 4, 'knees': 2} (1–10)
-  final List<String>? injuries;         // ['lower_back','knees',...]
-  final TrainingExperience? experience; // radio selection
-  final List<BestEffort>? bestEfforts;  // optional
+  final List<String>? goalsRanked;
+  final List<String>? bodyFocus;
+  final Map<String, int>? painNow;
+  final List<String>? injuries;
+  final TrainingExperience? experience;
+  final List<BestEffort>? bestEfforts;
+  final int? minTrainingDaysPerWeek; // 👈 NEW
   final DateTime? createdAt;
   final String? version;
 
@@ -1045,6 +1046,7 @@ class OnboardingAnswers {
     this.injuries,
     this.experience,
     this.bestEfforts,
+    this.minTrainingDaysPerWeek,   // 👈 NEW
     this.createdAt,
     this.version,
   });
@@ -1056,9 +1058,11 @@ class OnboardingAnswers {
     'injuries': injuries,
     'experience': experience?.name,
     'bestEfforts': bestEfforts?.map((b) => b.toJson()).toList(),
+    'minTrainingDaysPerWeek': minTrainingDaysPerWeek, // 👈 NEW
     'createdAt': (createdAt ?? DateTime.now()).toUtc().toIso8601String(),
     'version': version ?? 'v1',
   };
+
 
   factory OnboardingAnswers.fromJson(Map<String, dynamic> j) => OnboardingAnswers(
     goalsRanked: (j['goalsRanked'] as List?)?.map((e) => e.toString()).toList(),
@@ -1069,9 +1073,11 @@ class OnboardingAnswers {
     bestEfforts: (j['bestEfforts'] as List?)
         ?.map((e) => BestEffort.fromJson(Map<String, dynamic>.from(e as Map)))
         .toList(),
+    minTrainingDaysPerWeek: (j['minTrainingDaysPerWeek'] as num?)?.toInt(), // 👈 NEW
     createdAt: (j['createdAt'] != null) ? DateTime.tryParse(j['createdAt'].toString()) : null,
     version: j['version']?.toString(),
   );
+
 
   static TrainingExperience? _expFromString(dynamic v) {
     final s = v?.toString();
@@ -1218,6 +1224,9 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
   final TextEditingController _deadWeightCtrl  = TextEditingController();
   final TextEditingController _deadRepsCtrl    = TextEditingController();
 
+  int? _minTrainingDays; // 2–7, chosen on this page
+
+
   bool _saving = false;
 
   bool get _muscleOrTonedChosen {
@@ -1322,9 +1331,11 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
             : Map.fromEntries(_injuries.map((k) => MapEntry(k, (_painSlider[k] ?? 1).round()))),
         experience: _experience,
         bestEfforts: _collectBestEfforts(),
+        minTrainingDaysPerWeek: _minTrainingDays,   // 👈 NEW
         createdAt: DateTime.now(),
         version: 'v1',
       );
+
 
       final onbRef = db.collection('users').doc(user.uid)
           .collection('profile').doc('fitness_onboarding');
@@ -2067,6 +2078,59 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                         ),
                       ],
                     ],
+
+                    // New: intended training frequency
+                    const SizedBox(height: 18),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(.8),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.blueAccent, width: 1.1),
+                      ),
+                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            "Minimum number of days you can commit to training each week?",
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.black87,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          const Text(
+                            "Don’t worry, you can change this later.",
+                            style: TextStyle(fontSize: 12.5, color: Colors.black45),
+                          ),
+                          const SizedBox(height: 8),
+
+                          // radio row/column
+                          Column(
+                            children: [2, 3, 4, 5, 6, 7].map((d) {
+                              return RadioListTile<int>(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                value: d,
+                                groupValue: _minTrainingDays,
+                                activeColor: Colors.blueAccent,
+                                onChanged: (v) {
+                                  setState(() {
+                                    _minTrainingDays = v;
+                                  });
+                                },
+                                title: Text(
+                                  '$d ${d == 1 ? '' : ''} X week',
+                                  style: const TextStyle(fontSize: 13.5),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ],
+                      ),
+                    ),
+
 
                     // E) Optional best efforts
                     const SizedBox(height: 19),
