@@ -1383,6 +1383,50 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
   List<BestEffort> _collectBestEfforts() {
     final out = <BestEffort>[];
 
+    // tiny helper to normalise UI text → backend-ish keys
+    String _mapBench(String v) {
+      switch (v) {
+        case 'Bench Press':
+          return 'bench_barbell';
+        case 'Flat DB Press':
+          return 'bench_db';
+        case 'Chest Press':
+          return 'chest_press';
+        default:
+          return v.replaceAll(' ', '_').toLowerCase();
+      }
+    }
+
+    String _mapSquat(String v) {
+      switch (v) {
+        case 'Back Squat':
+          return 'back_squat';
+        case 'Leg Press':
+          return 'leg_press';
+        default:
+          return v.replaceAll(' ', '_').toLowerCase();
+      }
+    }
+
+    String _mapPull(String v) {
+      switch (v) {
+        case 'Lat Pull Down, Supinated':
+          return 'lat_pulldown_supinated';
+        case 'Lat Pull Down, Wide Arm':
+          return 'lat_pulldown_wide';
+        case 'Chin Up':
+          return 'chinup';
+        default:
+          return v.replaceAll(' ', '_').toLowerCase();
+      }
+    }
+
+    String _mapDead(String v) {
+      // future-proofing if you add variants later
+      if (v == 'Deadlift') return 'deadlift';
+      return v.replaceAll(' ', '_').toLowerCase();
+    }
+
     void addIfPresent({
       required String liftKey,
       required TextEditingController weightCtrl,
@@ -1395,14 +1439,34 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       }
     }
 
-    // Keep the same liftKey values you’re already using downstream
-    addIfPresent(liftKey: 'bench_or_db',           weightCtrl: _benchWeightCtrl, repsCtrl: _benchRepsCtrl);
-    addIfPresent(liftKey: 'squat_or_legpress',     weightCtrl: _squatWeightCtrl, repsCtrl: _squatRepsCtrl);
-    addIfPresent(liftKey: 'chinup_or_latpulldown', weightCtrl: _pullWeightCtrl,  repsCtrl: _pullRepsCtrl);
-    addIfPresent(liftKey: 'deadlift',              weightCtrl: _deadWeightCtrl,  repsCtrl: _deadRepsCtrl);
+    // 👇 now use the ACTUAL selection instead of the generic names
+    addIfPresent(
+      liftKey: _mapBench(_benchVariant),
+      weightCtrl: _benchWeightCtrl,
+      repsCtrl: _benchRepsCtrl,
+    );
+
+    addIfPresent(
+      liftKey: _mapSquat(_squatVariant),
+      weightCtrl: _squatWeightCtrl,
+      repsCtrl: _squatRepsCtrl,
+    );
+
+    addIfPresent(
+      liftKey: _mapPull(_pullVariant),
+      weightCtrl: _pullWeightCtrl,
+      repsCtrl: _pullRepsCtrl,
+    );
+
+    addIfPresent(
+      liftKey: _mapDead(_deadVariant),
+      weightCtrl: _deadWeightCtrl,
+      repsCtrl: _deadRepsCtrl,
+    );
 
     return out;
   }
+
 
   bool _isDobBefore1995Flexible(String? rawDob) {
     if (rawDob == null || rawDob.isEmpty) return false;
