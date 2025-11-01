@@ -38,6 +38,9 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
   // when you hover/drop we can give a little highlight
   String? _draggingOverTemplateId;
+  // template.id -> extra circuit indices that have no exercises yet
+  final Map<String, Set<int>> _extraEmptyCircuits = {};
+
 
   final _formKey = GlobalKey<FormState>();
   final String _templateName = '';
@@ -109,6 +112,236 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     });
   }
 
+  // collect all circuit indices used in this template, sorted
+  List<int> _getCircuitIndices(Template template) {
+    final set = <int>{};
+    for (final ex in template.exercises) {
+      final ci = (ex['circuitIndex'] ?? 0) as int;
+      set.add(ci);
+    }
+
+    // also include explicit empty circuits we created via "+ Add circuit"
+    final extra = _extraEmptyCircuits[template.id];
+    if (extra != null) {
+      set.addAll(extra);
+    }
+
+    final list = set.toList()..sort();
+    return list.isEmpty ? [0] : list;
+  }
+
+  bool _isCircuitEmpty(Template template, int circuitIndex) {
+    // if any real exercise uses this circuit, it's not empty
+    final hasExercise = template.exercises.any(
+          (ex) => (ex['circuitIndex'] ?? 0) == circuitIndex,
+    );
+    if (hasExercise) return false;
+
+    // if it's one of our extra circuits, and has no exercises → it's empty
+    final extra = _extraEmptyCircuits[template.id];
+    if (extra != null && extra.contains(circuitIndex)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  void _removeEmptyCircuitForTemplate(Template template, int circuitIndex) {
+    setState(() {
+      final extra = _extraEmptyCircuits[template.id];
+      if (extra != null) {
+        extra.remove(circuitIndex);
+        if (extra.isEmpty) {
+          _extraEmptyCircuits.remove(template.id);
+        }
+      }
+      // no Firestore write needed – there were no exercises to persist
+    });
+  }
+
+
+
+  // given a GLOBAL index (position in template.exercises), tell me this exercise's position INSIDE its circuit
+  int _positionInCircuit(Template template, int circuitIndex, int globalIndex) {
+    int count = 0;
+    for (int i = 0; i < template.exercises.length; i++) {
+      final ex = template.exercises[i];
+      if ((ex['circuitIndex'] ?? 0) == circuitIndex) {
+        if (i == globalIndex) return count;
+        count++;
+      }
+    }
+    return count;
+  }
+
+  // find the GLOBAL index where we should insert something into the given circuit at the given circuit-position
+  int _findGlobalInsertIndexForCircuit(
+      Template template, {
+        required int circuitIndex,
+        required int positionInCircuit,
+      }) {
+    int seen = 0;
+    for (int i = 0; i < template.exercises.length; i++) {
+      final ex = template.exercises[i];
+      final ci = (ex['circuitIndex'] ?? 0) as int;
+      if (ci != circuitIndex) continue;
+
+      // we've reached the correct spot inside this circuit
+      if (seen == positionInCircuit) {
+        return i;
+      }
+      seen++;
+    }
+
+    // if we got here: we want to append to the END of that circuit
+    final lastIndexOfCircuit = template.exercises.lastIndexWhere(
+          (ex) => (ex['circuitIndex'] ?? 0) == circuitIndex,
+    );
+
+    if (lastIndexOfCircuit == -1) {
+      // circuit is currently empty → just dump at end of whole list
+      return template.exercises.length;
+    }
+
+    return lastIndexOfCircuit + 1;
+  }
+
+  void _addEmptyCircuitForTemplate(Template template) {
+    setState(() {
+      final existing = _getCircuitIndices(template);
+      final newCircuitIndex = (existing.isEmpty ? 0 : (existing.last + 1));
+      _extraEmptyCircuits.putIfAbsent(template.id, () => <int>{}).add(newCircuitIndex);
+      // no Firestore write yet — we persist when an exercise is dropped/added
+    });
+  }
+
+  void _deleteExerciseFromDragged(_DraggedExercise dragged) {
+    setState(() {
+      final sourceTemplate = templates.firstWhere((t) => t.id == dragged.sourceTemplateId);
+      if (dragged.sourceIndex < 0 || dragged.sourceIndex >= sourceTemplate.exercises.length) {
+        return;
+      }
+      sourceTemplate.exercises.removeAt(dragged.sourceIndex);
+
+      // persist
+      _saveTemplateExercises(
+        sourceTemplate.id,
+        List<Map<String, dynamic>>.from(sourceTemplate.exercises),
+      );
+    });
+  }
+
+
+  Future<void> _showExercisePickerDialogForTemplate(Template template) async {
+    // 1) load all exercises
+    final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
+    final allExercises = snapshot.docs.map((doc) {
+      return {
+        'id': doc.id,
+        'name': doc['name'] as String,
+        'category': (doc.data().containsKey('category') ? doc['category'] as String : ''),
+      };
+    }).toList()
+      ..sort((a, b) => a['name']!.toLowerCase().compareTo(b['name']!.toLowerCase()));
+
+    final List<Map<String, String>>? selected = await showDialog<List<Map<String, String>>>(
+      context: context,
+      builder: (ctx) {
+        String search = '';
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            final filtered = search.trim().isEmpty
+                ? allExercises
+                : allExercises
+                .where((ex) => ex['name']!.toLowerCase().contains(search.toLowerCase()))
+                .toList();
+            return AlertDialog(
+              backgroundColor: Colors.blueGrey.shade900,
+              title: const Text(
+                'Select exercises',
+                style: TextStyle(color: Colors.white, fontSize: 14),
+              ),
+              content: SizedBox(
+                width: 420,
+                height: 420,
+                child: Column(
+                  children: [
+                    TextField(
+                      onChanged: (v) => setLocal(() => search = v),
+                      decoration: InputDecoration(
+                        hintText: 'Search...',
+                        hintStyle: const TextStyle(color: Colors.white54),
+                        prefixIcon: const Icon(Icons.search, color: Colors.white70, size: 18),
+                        filled: true,
+                        fillColor: Colors.blueGrey.shade800,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: filtered.length,
+                        itemBuilder: (ctx, i) {
+                          final ex = filtered[i];
+                          return ListTile(
+                            dense: true,
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 6),
+                            title: Text(
+                              ex['name']!,
+                              style: const TextStyle(color: Colors.white),
+                            ),
+                            onTap: () {
+                              Navigator.pop(ctx, [ex]);
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cancel'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (selected == null || selected.isEmpty) return;
+
+    // 2) figure out the last circuit for this template
+    final circuits = _getCircuitIndices(template);
+    final lastCircuit = circuits.isEmpty ? 0 : circuits.last;
+
+    // 3) append to template + persist
+    setState(() {
+      for (final ex in selected) {
+        template.exercises.add({
+          'id': ex['id'],
+          'name': ex['name'],
+          'category': ex['category'] ?? '',
+          'circuitIndex': lastCircuit,
+        });
+      }
+    });
+
+    await _saveTemplateExercises(
+      template.id,
+      List<Map<String, dynamic>>.from(template.exercises),
+    );
+  }
+
+
+
+
   Future<void> _saveTemplateExercises(String templateId, List<Map<String, dynamic>> exercises) async {
     final userDoc = FirebaseFirestore.instance.collection('users').doc(userId);
     await userDoc.collection('templates').doc(templateId).update({
@@ -116,53 +349,69 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     });
   }
 
-  void _moveExercise({
+  void _moveExerciseToCircuit({
     required String targetTemplateId,
-    required int targetIndex,
+    required int targetCircuitIndex,
+    required int targetPositionInCircuit,
     required _DraggedExercise dragged,
   }) {
     setState(() {
-      // 1) find source + target
+      // 1) source template + exercise
       final sourceTemplate = templates.firstWhere((t) => t.id == dragged.sourceTemplateId);
-      final targetTemplate = templates.firstWhere((t) => t.id == targetTemplateId);
-
-      // 2) take the exercise out of source
       final movedExercise = sourceTemplate.exercises.removeAt(dragged.sourceIndex);
 
-      // 3) if moving within same template, adjust index if needed
-      int insertIndex = targetIndex;
-      if (dragged.sourceTemplateId == targetTemplateId && dragged.sourceIndex < targetIndex) {
-        insertIndex = targetIndex - 1;
-      }
+      // 2) target template
+      final targetTemplate = templates.firstWhere((t) => t.id == targetTemplateId);
 
-      // clamp
-      if (insertIndex < 0) insertIndex = 0;
-      if (insertIndex > targetTemplate.exercises.length) {
-        insertIndex = targetTemplate.exercises.length;
-      }
+      // 3) change the exercise's circuit to the target circuit
+      movedExercise['circuitIndex'] = targetCircuitIndex;
 
-      // 4) insert
-      targetTemplate.exercises.insert(insertIndex, movedExercise);
+      // 4) find CORRECT global insertion index inside target template
+      final insertAt = _findGlobalInsertIndexForCircuit(
+        targetTemplate,
+        circuitIndex: targetCircuitIndex,
+        positionInCircuit: targetPositionInCircuit,
+      );
+
+      targetTemplate.exercises.insert(insertAt, movedExercise);
 
       // 5) clear highlight
       _draggingOverTemplateId = null;
 
-      // 6) persist both if different
-      _saveTemplateExercises(sourceTemplate.id, List<Map<String, dynamic>>.from(sourceTemplate.exercises));
+      // 6) persist
+      _saveTemplateExercises(
+        sourceTemplate.id,
+        List<Map<String, dynamic>>.from(sourceTemplate.exercises),
+      );
+
+      // if moved across templates, persist target too
       if (sourceTemplate.id != targetTemplate.id) {
-        _saveTemplateExercises(targetTemplate.id, List<Map<String, dynamic>>.from(targetTemplate.exercises));
+        _saveTemplateExercises(
+          targetTemplate.id,
+          List<Map<String, dynamic>>.from(targetTemplate.exercises),
+        );
+      } else {
+        // same template but order changed
+        _saveTemplateExercises(
+          targetTemplate.id,
+          List<Map<String, dynamic>>.from(targetTemplate.exercises),
+        );
       }
     });
   }
 
+
   Widget _buildDraggableExerciseChip({
     required Template template,
-    required int exerciseIndex,
+    required int exerciseIndex, // GLOBAL index in template.exercises
   }) {
     final exercise = template.exercises[exerciseIndex];
     final name = (exercise['name'] ?? '').toString();
+    final circuitIndex = (exercise['circuitIndex'] ?? 0) as int;
 
-    // a drop *before* this chip
+    // how far down in THIS circuit is this exercise?
+    final positionInCircuit = _positionInCircuit(template, circuitIndex, exerciseIndex);
+
     return DragTarget<_DraggedExercise>(
       onWillAccept: (data) {
         setState(() {
@@ -176,9 +425,10 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         });
       },
       onAccept: (data) {
-        _moveExercise(
+        _moveExerciseToCircuit(
           targetTemplateId: template.id,
-          targetIndex: exerciseIndex,
+          targetCircuitIndex: circuitIndex,
+          targetPositionInCircuit: positionInCircuit,
           dragged: data,
         );
       },
@@ -212,6 +462,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     );
   }
 
+
   Widget _exerciseChipBody(String name) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -230,7 +481,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       ),
     );
   }
-  Widget _buildEndDropZone(Template template) {
+  Widget _buildEndDropZone(Template template, {required int circuitIndex}) {
     return DragTarget<_DraggedExercise>(
       onWillAccept: (data) {
         setState(() {
@@ -244,28 +495,32 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         });
       },
       onAccept: (data) {
-        _moveExercise(
+        // drop to END of this circuit
+        final pos = 9999; // big number → _findGlobalInsertIndexForCircuit will append
+        _moveExerciseToCircuit(
           targetTemplateId: template.id,
-          targetIndex: template.exercises.length,
+          targetCircuitIndex: circuitIndex,
+          targetPositionInCircuit: pos,
           dragged: data,
         );
       },
       builder: (context, candidate, rejected) {
         final isActive = _draggingOverTemplateId == template.id && candidate.isNotEmpty;
         return Container(
-          height: 30,
-          padding: const EdgeInsets.symmetric(horizontal: 8),
+          height: 28,
+          padding: const EdgeInsets.symmetric(horizontal: 6),
           margin: const EdgeInsets.only(right: 6, bottom: 4, top: 2),
           decoration: BoxDecoration(
             color: isActive ? Colors.blueGrey.shade300.withOpacity(0.5) : Colors.transparent,
             borderRadius: BorderRadius.circular(6),
-            border: isActive
-                ? Border.all(color: Colors.white54, width: 1)
-                : Border.all(color: Colors.white24, width: 0.5),
+            border: Border.all(
+              color: isActive ? Colors.white54 : Colors.white24,
+              width: isActive ? 1 : 0.5,
+            ),
           ),
           alignment: Alignment.centerLeft,
           child: Text(
-            isActive ? 'Drop to add here' : '+ drop exercise',
+            isActive ? 'Drop to add here' : '+ add to circuit',
             style: TextStyle(
               fontSize: 10,
               color: isActive ? Colors.white : Colors.white38,
@@ -275,10 +530,6 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       },
     );
   }
-
-
-
-
 
 
   Future<void> _undoDeleteTemplate() async {
@@ -532,36 +783,154 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                                   ),
                                 )
                                     : null,
-                                trailing: IconButton(
-                                  icon: Icon(
-                                    _expandedTemplateIds.contains(template.id)
-                                        ? Icons.expand_less
-                                        : Icons.expand_more,
-                                    color: Colors.white70,
-                                    size: 20,
-                                  ),
-                                  onPressed: () => _toggleExpanded(template.id),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (_expandedTemplateIds.contains(template.id))
+                                      TextButton(
+                                        onPressed: () => _showExercisePickerDialogForTemplate(template),
+                                        style: TextButton.styleFrom(
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
+                                          minimumSize: Size.zero,
+                                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                        ),
+                                        child: const Text(
+                                          '+ add exercise',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ),
+                                    IconButton(
+                                      icon: Icon(
+                                        _expandedTemplateIds.contains(template.id)
+                                            ? Icons.expand_less
+                                            : Icons.expand_more,
+                                        color: Colors.white70,
+                                        size: 20,
+                                      ),
+                                      onPressed: () => _toggleExpanded(template.id),
+                                    ),
+                                  ],
                                 ),
+
                                 onTap: () => _navigateToTemplateDetails(context, template),
                               ),
 
-                              // EXPANDED EXERCISES
+                              // EXPANDED EXERCISES (circuit view)
                               if (_expandedTemplateIds.contains(template.id))
                                 Padding(
                                   padding: const EdgeInsets.only(left: 12, right: 8, bottom: 8),
-                                  child: Wrap(
-                                    spacing: 0,
-                                    runSpacing: 0,
-                                    children: [
-                                      for (int exIndex = 0; exIndex < template.exercises.length; exIndex++)
-                                        _buildDraggableExerciseChip(
-                                          template: template,
-                                          exerciseIndex: exIndex,
+                                  child: Builder(
+                                    builder: (context) {
+                                      final circuitIndices = _getCircuitIndices(template);
+                                      final circuitCount = circuitIndices.length;
+
+                                      // 💡 rule:
+                                      // - 1 → act like 2 → 165
+                                      // - 2 → 165
+                                      // - 3+ → 110
+                                      const totalWidth = 320.0;
+                                      final divisor = circuitCount == 1
+                                          ? 2
+                                          : (circuitCount >= 3 ? 3 : circuitCount); // 1→2, 2→2, 3+→3
+                                      final columnWidth = totalWidth / divisor; // will be 165 or 110
+
+                                      return SingleChildScrollView(
+                                        scrollDirection: Axis.horizontal,
+                                        child: Row(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            for (int i = 0; i < circuitIndices.length; i++)
+                                              SizedBox(
+                                                width: columnWidth,
+                                                child: Builder(
+                                                  builder: (context) {
+                                                    final circuitIndex = circuitIndices[i];
+                                                    final isLast = i == circuitIndices.length - 1;
+
+                                                    return Column(
+                                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                                      children: [
+                                                        // HEADER ROW for this circuit
+                                                        Row(
+                                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                          children: [
+                                                            Row(
+                                                              mainAxisSize: MainAxisSize.min,
+                                                              children: [
+                                                                if (_isCircuitEmpty(template, circuitIndex))
+                                                                  InkWell(
+                                                                    onTap: () => _removeEmptyCircuitForTemplate(
+                                                                      template,
+                                                                      circuitIndex,
+                                                                    ),
+                                                                    child: const Padding(
+                                                                      padding: EdgeInsets.only(right: 4.0),
+                                                                      child: Text(
+                                                                        ' - ',
+                                                                        style: TextStyle(
+                                                                          fontSize: 11,
+                                                                          color: Colors.white54,
+                                                                          fontWeight: FontWeight.w500,
+                                                                        ),
+                                                                      ),
+                                                                    ),
+                                                                  ),
+                                                                Text(
+                                                                  'Circuit ${circuitIndex + 1}',
+                                                                  style: const TextStyle(
+                                                                    fontSize: 11,
+                                                                    fontWeight: FontWeight.w600,
+                                                                    color: Colors.white70,
+                                                                  ),
+                                                                ),
+                                                              ],
+                                                            ),
+                                                            if (isLast)
+                                                              InkWell(
+                                                                onTap: () => _addEmptyCircuitForTemplate(template),
+                                                                child: const Padding(
+                                                                  padding: EdgeInsets.only(left: 6.0),
+                                                                  child: Text(
+                                                                    '+ circuit',
+                                                                    style: TextStyle(
+                                                                      fontSize: 10,
+                                                                      color: Colors.white70,
+                                                                    ),
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                          ],
+                                                        ),
+                                                        const SizedBox(height: 4),
+
+                                                        // exercises in this circuit
+                                                        for (final entry in template.exercises.asMap().entries)
+                                                          if ((entry.value['circuitIndex'] ?? 0) == circuitIndex)
+                                                            _buildDraggableExerciseChip(
+                                                              template: template,
+                                                              exerciseIndex: entry.key,
+                                                            ),
+
+                                                        // drop zone
+                                                        _buildEndDropZone(
+                                                          template,
+                                                          circuitIndex: circuitIndex,
+                                                        ),
+                                                      ],
+                                                    );
+                                                  },
+                                                ),
+                                              ),
+                                          ],
                                         ),
-                                      _buildEndDropZone(template),
-                                    ],
+                                      );
+                                    },
                                   ),
                                 ),
+
                             ],
                           ),
                         ),
