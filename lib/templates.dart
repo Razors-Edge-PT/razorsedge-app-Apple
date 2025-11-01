@@ -531,6 +531,41 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     );
   }
 
+  Widget _buildHeaderDeleteDropZone(Template template) {
+    return DragTarget<_DraggedExercise>(
+      onWillAccept: (data) => true,
+      onAccept: (data) {
+        _deleteExerciseFromDragged(data);
+      },
+      builder: (context, candidate, rejected) {
+        final isActive = candidate.isNotEmpty;
+        return Container(
+          width: 32,
+          height: 26,
+          margin: const EdgeInsets.only(right: 4),
+          decoration: BoxDecoration(
+            color: isActive
+                ? Colors.redAccent.withOpacity(0.45)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: isActive ? Colors.redAccent : Colors.transparent,
+              width: isActive ? 1 : 0.3,
+            ),
+          ),
+          alignment: Alignment.center,
+          child: Icon(
+            Icons.delete_outline,
+            size: 14,
+            color: isActive ? Colors.white : Colors.white54,
+          ),
+        );
+      },
+    );
+  }
+
+
+
 
   Future<void> _undoDeleteTemplate() async {
     if (_lastDeletedTemplate == null) return;
@@ -786,6 +821,11 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                                 trailing: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
+                                    // 👇 show bin only when expanded
+                                    if (_expandedTemplateIds.contains(template.id))
+                                      _buildHeaderDeleteDropZone(template),
+
+                                    // 👇 your + add exercise, only when expanded
                                     if (_expandedTemplateIds.contains(template.id))
                                       TextButton(
                                         onPressed: () => _showExercisePickerDialogForTemplate(template),
@@ -802,6 +842,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                                           ),
                                         ),
                                       ),
+
+                                    // 👇 expand/collapse arrow (always)
                                     IconButton(
                                       icon: Icon(
                                         _expandedTemplateIds.contains(template.id)
@@ -818,116 +860,118 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                                 onTap: () => _navigateToTemplateDetails(context, template),
                               ),
 
-                              // EXPANDED EXERCISES (circuit view)
+                              // EXPANDED EXERCISES (circuit view + delete bin)
                               if (_expandedTemplateIds.contains(template.id))
                                 Padding(
                                   padding: const EdgeInsets.only(left: 12, right: 8, bottom: 8),
-                                  child: Builder(
-                                    builder: (context) {
-                                      final circuitIndices = _getCircuitIndices(template);
-                                      final circuitCount = circuitIndices.length;
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                                    children: [
+                                      Builder(
+                                        builder: (context) {
+                                          final circuitIndices = _getCircuitIndices(template);
+                                          final circuitCount = circuitIndices.length;
 
-                                      // 💡 rule:
-                                      // - 1 → act like 2 → 165
-                                      // - 2 → 165
-                                      // - 3+ → 110
-                                      const totalWidth = 320.0;
-                                      final divisor = circuitCount == 1
-                                          ? 2
-                                          : (circuitCount >= 3 ? 3 : circuitCount); // 1→2, 2→2, 3+→3
-                                      final columnWidth = totalWidth / divisor; // will be 165 or 110
+                                          const totalWidth = 330.0;
+                                          final divisor = circuitCount == 1
+                                              ? 2
+                                              : (circuitCount >= 3 ? 3 : circuitCount);
+                                          final columnWidth = totalWidth / divisor; // 165 or 110
 
-                                      return SingleChildScrollView(
-                                        scrollDirection: Axis.horizontal,
-                                        child: Row(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            for (int i = 0; i < circuitIndices.length; i++)
-                                              SizedBox(
-                                                width: columnWidth,
-                                                child: Builder(
-                                                  builder: (context) {
-                                                    final circuitIndex = circuitIndices[i];
-                                                    final isLast = i == circuitIndices.length - 1;
+                                          return SingleChildScrollView(
+                                            scrollDirection: Axis.horizontal,
+                                            child: Row(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                for (int i = 0; i < circuitIndices.length; i++)
+                                                  SizedBox(
+                                                    width: columnWidth,
+                                                    child: Builder(
+                                                      builder: (context) {
+                                                        final circuitIndex = circuitIndices[i];
+                                                        final isLast = i == circuitIndices.length - 1;
 
-                                                    return Column(
-                                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                                      children: [
-                                                        // HEADER ROW for this circuit
-                                                        Row(
-                                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                        return Column(
+                                                          crossAxisAlignment: CrossAxisAlignment.start,
                                                           children: [
+                                                            // header row
                                                             Row(
-                                                              mainAxisSize: MainAxisSize.min,
+                                                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                                               children: [
-                                                                if (_isCircuitEmpty(template, circuitIndex))
-                                                                  InkWell(
-                                                                    onTap: () => _removeEmptyCircuitForTemplate(
-                                                                      template,
-                                                                      circuitIndex,
+                                                                Row(
+                                                                  mainAxisSize: MainAxisSize.min,
+                                                                  children: [
+                                                                    if (_isCircuitEmpty(template, circuitIndex))
+                                                                      InkWell(
+                                                                        onTap: () => _removeEmptyCircuitForTemplate(
+                                                                          template,
+                                                                          circuitIndex,
+                                                                        ),
+                                                                        child: const Padding(
+                                                                          padding: EdgeInsets.only(right: 4.0),
+                                                                          child: Text(
+                                                                            ' - ',
+                                                                            style: TextStyle(
+                                                                              fontSize: 11,
+                                                                              color: Colors.white54,
+                                                                              fontWeight: FontWeight.w500,
+                                                                            ),
+                                                                          ),
+                                                                        ),
+                                                                      ),
+                                                                    Text(
+                                                                      'Circuit ${circuitIndex + 1}',
+                                                                      style: const TextStyle(
+                                                                        fontSize: 11,
+                                                                        fontWeight: FontWeight.w600,
+                                                                        color: Colors.white70,
+                                                                      ),
                                                                     ),
+                                                                  ],
+                                                                ),
+                                                                if (isLast)
+                                                                  InkWell(
+                                                                    onTap: () => _addEmptyCircuitForTemplate(template),
                                                                     child: const Padding(
-                                                                      padding: EdgeInsets.only(right: 4.0),
+                                                                      padding: EdgeInsets.only(left: 6.0),
                                                                       child: Text(
-                                                                        ' - ',
+                                                                        '+ circuit',
                                                                         style: TextStyle(
-                                                                          fontSize: 11,
-                                                                          color: Colors.white54,
-                                                                          fontWeight: FontWeight.w500,
+                                                                          fontSize: 10,
+                                                                          color: Colors.white70,
                                                                         ),
                                                                       ),
                                                                     ),
                                                                   ),
-                                                                Text(
-                                                                  'Circuit ${circuitIndex + 1}',
-                                                                  style: const TextStyle(
-                                                                    fontSize: 11,
-                                                                    fontWeight: FontWeight.w600,
-                                                                    color: Colors.white70,
-                                                                  ),
-                                                                ),
                                                               ],
                                                             ),
-                                                            if (isLast)
-                                                              InkWell(
-                                                                onTap: () => _addEmptyCircuitForTemplate(template),
-                                                                child: const Padding(
-                                                                  padding: EdgeInsets.only(left: 6.0),
-                                                                  child: Text(
-                                                                    '+ circuit',
-                                                                    style: TextStyle(
-                                                                      fontSize: 10,
-                                                                      color: Colors.white70,
-                                                                    ),
-                                                                  ),
+                                                            const SizedBox(height: 4),
+
+                                                            // exercises in this circuit
+                                                            for (final entry in template.exercises.asMap().entries)
+                                                              if ((entry.value['circuitIndex'] ?? 0) == circuitIndex)
+                                                                _buildDraggableExerciseChip(
+                                                                  template: template,
+                                                                  exerciseIndex: entry.key,
                                                                 ),
-                                                              ),
-                                                          ],
-                                                        ),
-                                                        const SizedBox(height: 4),
 
-                                                        // exercises in this circuit
-                                                        for (final entry in template.exercises.asMap().entries)
-                                                          if ((entry.value['circuitIndex'] ?? 0) == circuitIndex)
-                                                            _buildDraggableExerciseChip(
-                                                              template: template,
-                                                              exerciseIndex: entry.key,
+                                                            // drop zone
+                                                            _buildEndDropZone(
+                                                              template,
+                                                              circuitIndex: circuitIndex,
                                                             ),
+                                                          ],
+                                                        );
+                                                      },
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          );
+                                        },
+                                      ),
 
-                                                        // drop zone
-                                                        _buildEndDropZone(
-                                                          template,
-                                                          circuitIndex: circuitIndex,
-                                                        ),
-                                                      ],
-                                                    );
-                                                  },
-                                                ),
-                                              ),
-                                          ],
-                                        ),
-                                      );
-                                    },
+                                    ],
                                   ),
                                 ),
 
