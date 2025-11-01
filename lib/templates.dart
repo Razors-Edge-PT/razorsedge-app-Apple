@@ -9,6 +9,16 @@ import 'template_model.dart'; // Import Exercise model
 import 'package:provider/provider.dart';
 import 'user_context.dart';
 
+class _DraggedExercise {
+  final String sourceTemplateId;
+  final int sourceIndex;
+
+  _DraggedExercise({
+    required this.sourceTemplateId,
+    required this.sourceIndex,
+  });
+}
+
 class TemplatesScreen extends StatefulWidget {
   const TemplatesScreen({super.key, this.fromWorkoutPage = false});
 
@@ -23,7 +33,11 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   List<Template> templates = [];
   QuerySnapshot<Map<String, dynamic>>? templateSnapshot;
 
-  // ... other variables
+  // which template cards are currently expanded
+  final Set<String> _expandedTemplateIds = {};
+
+  // when you hover/drop we can give a little highlight
+  String? _draggingOverTemplateId;
 
   final _formKey = GlobalKey<FormState>();
   final String _templateName = '';
@@ -84,6 +98,187 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       });
     }
   }
+
+  void _toggleExpanded(String templateId) {
+    setState(() {
+      if (_expandedTemplateIds.contains(templateId)) {
+        _expandedTemplateIds.remove(templateId);
+      } else {
+        _expandedTemplateIds.add(templateId);
+      }
+    });
+  }
+
+  Future<void> _saveTemplateExercises(String templateId, List<Map<String, dynamic>> exercises) async {
+    final userDoc = FirebaseFirestore.instance.collection('users').doc(userId);
+    await userDoc.collection('templates').doc(templateId).update({
+      'exercises': exercises,
+    });
+  }
+
+  void _moveExercise({
+    required String targetTemplateId,
+    required int targetIndex,
+    required _DraggedExercise dragged,
+  }) {
+    setState(() {
+      // 1) find source + target
+      final sourceTemplate = templates.firstWhere((t) => t.id == dragged.sourceTemplateId);
+      final targetTemplate = templates.firstWhere((t) => t.id == targetTemplateId);
+
+      // 2) take the exercise out of source
+      final movedExercise = sourceTemplate.exercises.removeAt(dragged.sourceIndex);
+
+      // 3) if moving within same template, adjust index if needed
+      int insertIndex = targetIndex;
+      if (dragged.sourceTemplateId == targetTemplateId && dragged.sourceIndex < targetIndex) {
+        insertIndex = targetIndex - 1;
+      }
+
+      // clamp
+      if (insertIndex < 0) insertIndex = 0;
+      if (insertIndex > targetTemplate.exercises.length) {
+        insertIndex = targetTemplate.exercises.length;
+      }
+
+      // 4) insert
+      targetTemplate.exercises.insert(insertIndex, movedExercise);
+
+      // 5) clear highlight
+      _draggingOverTemplateId = null;
+
+      // 6) persist both if different
+      _saveTemplateExercises(sourceTemplate.id, List<Map<String, dynamic>>.from(sourceTemplate.exercises));
+      if (sourceTemplate.id != targetTemplate.id) {
+        _saveTemplateExercises(targetTemplate.id, List<Map<String, dynamic>>.from(targetTemplate.exercises));
+      }
+    });
+  }
+
+  Widget _buildDraggableExerciseChip({
+    required Template template,
+    required int exerciseIndex,
+  }) {
+    final exercise = template.exercises[exerciseIndex];
+    final name = (exercise['name'] ?? '').toString();
+
+    // a drop *before* this chip
+    return DragTarget<_DraggedExercise>(
+      onWillAccept: (data) {
+        setState(() {
+          _draggingOverTemplateId = template.id;
+        });
+        return true;
+      },
+      onLeave: (_) {
+        setState(() {
+          _draggingOverTemplateId = null;
+        });
+      },
+      onAccept: (data) {
+        _moveExercise(
+          targetTemplateId: template.id,
+          targetIndex: exerciseIndex,
+          dragged: data,
+        );
+      },
+      builder: (context, candidate, rejected) {
+        return LongPressDraggable<_DraggedExercise>(
+          data: _DraggedExercise(
+            sourceTemplateId: template.id,
+            sourceIndex: exerciseIndex,
+          ),
+          feedback: Material(
+            color: Colors.transparent,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.blueGrey.shade300,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                name,
+                style: const TextStyle(fontSize: 11, color: Colors.black),
+              ),
+            ),
+          ),
+          childWhenDragging: Opacity(
+            opacity: 0.35,
+            child: _exerciseChipBody(name),
+          ),
+          child: _exerciseChipBody(name),
+        );
+      },
+    );
+  }
+
+  Widget _exerciseChipBody(String name) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      margin: const EdgeInsets.only(right: 6, bottom: 6),
+      decoration: BoxDecoration(
+        color: Colors.blueGrey.shade500,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        name,
+        style: const TextStyle(
+          fontSize: 11,
+          color: Colors.white,
+          height: 1.1,
+        ),
+      ),
+    );
+  }
+  Widget _buildEndDropZone(Template template) {
+    return DragTarget<_DraggedExercise>(
+      onWillAccept: (data) {
+        setState(() {
+          _draggingOverTemplateId = template.id;
+        });
+        return true;
+      },
+      onLeave: (_) {
+        setState(() {
+          _draggingOverTemplateId = null;
+        });
+      },
+      onAccept: (data) {
+        _moveExercise(
+          targetTemplateId: template.id,
+          targetIndex: template.exercises.length,
+          dragged: data,
+        );
+      },
+      builder: (context, candidate, rejected) {
+        final isActive = _draggingOverTemplateId == template.id && candidate.isNotEmpty;
+        return Container(
+          height: 30,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          margin: const EdgeInsets.only(right: 6, bottom: 4, top: 2),
+          decoration: BoxDecoration(
+            color: isActive ? Colors.blueGrey.shade300.withOpacity(0.5) : Colors.transparent,
+            borderRadius: BorderRadius.circular(6),
+            border: isActive
+                ? Border.all(color: Colors.white54, width: 1)
+                : Border.all(color: Colors.white24, width: 0.5),
+          ),
+          alignment: Alignment.centerLeft,
+          child: Text(
+            isActive ? 'Drop to add here' : '+ drop exercise',
+            style: TextStyle(
+              fontSize: 10,
+              color: isActive ? Colors.white : Colors.white38,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+
+
+
 
 
   Future<void> _undoDeleteTemplate() async {
@@ -276,7 +471,6 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 child: ReorderableListView.builder(
-
                 itemCount: templates.length,
     onReorder: (oldIndex, newIndex) {
     setState(() {
@@ -286,77 +480,96 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     });
     },
     buildDefaultDragHandles: false,
-    itemBuilder: (context, index) {
-    final template = templates[index];
-            final first3Exercises = template.exercises
-                .take(3)
-                .map((e) => e['name'] ?? '')
-                .where((name) => name.isNotEmpty)
-                .join(', ');
+                  itemBuilder: (context, index) {
+                    final template = templates[index];
 
-            return ReorderableDelayedDragStartListener(
-              index: index,
-              key: ValueKey(template.id), // ✅ must match
-              child: Dismissible(
-                key: ValueKey(template.id),
-                direction: DismissDirection.endToStart,
-                confirmDismiss: (DismissDirection direction) async {
-                  return await _confirmDeleteTemplate(context, template.id);
-                },
-                background: Container(
-                  alignment: Alignment.centerLeft,
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  color: Colors.red,
-                  child: const Icon(Icons.delete, color: Colors.white),
-                ),
-                child: Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: Colors.blueGrey.shade700,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-                    title: Text(
-                      template.name,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                      ),
-                    ),
-                    subtitle: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (template.day != null)
-                          Text(
-                            template.day!,
-                            style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white,
-                            ),
+                    return ReorderableDelayedDragStartListener(
+                      index: index,
+                      key: ValueKey(template.id),
+                      child: Dismissible(
+                        key: ValueKey('dismiss_${template.id}'),
+                        direction: DismissDirection.endToStart,
+                        confirmDismiss: (DismissDirection direction) async {
+                          return await _confirmDeleteTemplate(context, template.id);
+                        },
+                        background: Container(
+                          alignment: Alignment.centerLeft,
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          color: Colors.red,
+                          child: const Icon(Icons.delete, color: Colors.white),
+                        ),
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: Colors.blueGrey.shade700,
+                            borderRadius: BorderRadius.circular(8),
+                            border: _draggingOverTemplateId == template.id
+                                ? Border.all(color: Colors.white60, width: 1)
+                                : null,
                           ),
-                        const SizedBox(height: 2),
-                        Text(
-                          template.exercises.take(2).map((e) => e['name']).join(', '),
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.white60,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // HEADER ROW
+                              ListTile(
+                                dense: true,
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                                title: Text(
+                                  template.name,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 15,
+                                  ),
+                                ),
+                                subtitle: template.day != null
+                                    ? Text(
+                                  template.day!,
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.white70,
+                                  ),
+                                )
+                                    : null,
+                                trailing: IconButton(
+                                  icon: Icon(
+                                    _expandedTemplateIds.contains(template.id)
+                                        ? Icons.expand_less
+                                        : Icons.expand_more,
+                                    color: Colors.white70,
+                                    size: 20,
+                                  ),
+                                  onPressed: () => _toggleExpanded(template.id),
+                                ),
+                                onTap: () => _navigateToTemplateDetails(context, template),
+                              ),
+
+                              // EXPANDED EXERCISES
+                              if (_expandedTemplateIds.contains(template.id))
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 12, right: 8, bottom: 8),
+                                  child: Wrap(
+                                    spacing: 0,
+                                    runSpacing: 0,
+                                    children: [
+                                      for (int exIndex = 0; exIndex < template.exercises.length; exIndex++)
+                                        _buildDraggableExerciseChip(
+                                          template: template,
+                                          exerciseIndex: exIndex,
+                                        ),
+                                      _buildEndDropZone(template),
+                                    ],
+                                  ),
+                                ),
+                            ],
                           ),
                         ),
-                      ],
-                    ),
-                    trailing: const Icon(Icons.chevron_right, size: 18, color: Colors.white54),
-                    onTap: () => _navigateToTemplateDetails(context, template),
-                  ),
+                      ),
+                    );
+                  },
+
                 ),
-              ),
-            );
-
-
-          },
-        ),
       ),
 
     ),
