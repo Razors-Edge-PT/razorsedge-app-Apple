@@ -1035,7 +1035,8 @@ class OnboardingAnswers {
   final List<String>? injuries;
   final TrainingExperience? experience;
   final List<BestEffort>? bestEfforts;
-  final int? minTrainingDaysPerWeek; // 👈 NEW
+  final int? minTrainingDaysPerWeek; // existing
+  final int? trainingEffort; // 👈 NEW
   final DateTime? createdAt;
   final String? version;
 
@@ -1046,7 +1047,8 @@ class OnboardingAnswers {
     this.injuries,
     this.experience,
     this.bestEfforts,
-    this.minTrainingDaysPerWeek,   // 👈 NEW
+    this.minTrainingDaysPerWeek,
+    this.trainingEffort, // 👈 NEW
     this.createdAt,
     this.version,
   });
@@ -1058,7 +1060,8 @@ class OnboardingAnswers {
     'injuries': injuries,
     'experience': experience?.name,
     'bestEfforts': bestEfforts?.map((b) => b.toJson()).toList(),
-    'minTrainingDaysPerWeek': minTrainingDaysPerWeek, // 👈 NEW
+    'minTrainingDaysPerWeek': minTrainingDaysPerWeek,
+    'trainingEffort': trainingEffort, // 👈 NEW
     'createdAt': (createdAt ?? DateTime.now()).toUtc().toIso8601String(),
     'version': version ?? 'v1',
   };
@@ -1234,6 +1237,10 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
     return _goals.contains('Build more muscle') || _goals.contains('Get leaner');
   }
 
+  int? _trainingEffort; // 1..4, optional
+  List<String> _trainingEffortLabels = const []; // built from sex + dob
+
+
   bool _uiIsValid() {
     // Required: goals (we’ll require that user has at least ordered them once — always true here)
     final hasGoals = _goals.isNotEmpty;
@@ -1270,6 +1277,15 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
     super.dispose();
   }
+
+  @override
+  void initState() {
+    super.initState();
+
+    // 🟦 Populate effort labels based on DOB + sex
+    _trainingEffortLabels = _buildEffortLabels(widget.sex, widget.dob);
+  }
+
 
   Future<void> _finish() async {
     if (!_uiIsValid()) {
@@ -1331,7 +1347,8 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
             : Map.fromEntries(_injuries.map((k) => MapEntry(k, (_painSlider[k] ?? 1).round()))),
         experience: _experience,
         bestEfforts: _collectBestEfforts(),
-        minTrainingDaysPerWeek: _minTrainingDays,   // 👈 NEW
+        minTrainingDaysPerWeek: _minTrainingDays,
+        trainingEffort: _trainingEffort,   // ✅ just add this line
         createdAt: DateTime.now(),
         version: 'v1',
       );
@@ -1467,6 +1484,60 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
     return out;
   }
 
+  List<String> _buildEffortLabels(String? sex, String? dob) {
+    // parse year from 'yyyy-mm-dd'
+    int? year;
+    if (dob != null && dob.length >= 4) {
+      year = int.tryParse(dob.substring(0, 4));
+    }
+
+    final isFemale = (sex == 'F');
+    final born2000OrLater = (year != null && year >= 2000);
+
+    // MALE < 1975 (block-level intensity tone)
+    if (!isFemale && year != null && year < 1975) {
+      return const [
+        'Taking it easy to begin',
+        'Steady work',
+        'Let’s make it count',
+        'Leave nothing behind',
+      ];
+    }
+
+    if (!isFemale && !born2000OrLater) {
+      // MALE < 2000 (your original)
+      return const [
+        'Cruise control',
+        'Breaking a sweat',
+        'Let’s suffer a bit',
+        'Full send',
+      ];
+    } else if (!isFemale && born2000OrLater) {
+      // MALE >= 2000
+      return const [
+        'Chill / easy',
+        'Pretty normal',
+        'Let’s work',
+        'Send it 🔥',
+      ];
+    } else if (isFemale && !born2000OrLater) {
+      // FEMALE < 2000
+      return const [
+        'Nice and easy',
+        'Steady / manageable',
+        'Push me a bit',
+        'Go hard',
+      ];
+    } else {
+      // FEMALE >= 2000
+      return const [
+        'Cruisy',
+        'Good session',
+        'Make me work',
+        'Smash it 💪',
+      ];
+    }
+  }
 
   bool _isDobBefore1995Flexible(String? rawDob) {
     if (rawDob == null || rawDob.isEmpty) return false;
@@ -2198,7 +2269,80 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
                     // E) Optional best efforts
                     const SizedBox(height: 19),
-                    _SectionHeader("OPTIONAL:", color: Colors.black),
+                    _SectionHeader("OPTIONAL Bits:", color: Colors.black),
+
+                    const SizedBox(height: 6),
+                    // 🟦 How hard would you like to train?
+                    Container(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            "How much do you want to be pushed?",
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.black87,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+
+                          // Styled radio options
+                          ...List.generate(_trainingEffortLabels.length, (index) {
+                            final label = _trainingEffortLabels[index];
+                            final value = index + 1; // 1..4
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 6),
+                              decoration: BoxDecoration(
+                                border: Border.all(
+                                  color: _trainingEffort == value
+                                      ? Colors.blueAccent
+                                      : Colors.grey.shade300,
+                                  width: _trainingEffort == value ? 2 : 1,
+                                ),
+                                borderRadius: BorderRadius.circular(12),
+                                color: _trainingEffort == value
+                                    ? Colors.blueAccent.withOpacity(0.08)
+                                    : Colors.white.withOpacity(0.9),
+                              ),
+                              child: RadioListTile<int>(
+                                dense: true,
+                                activeColor: Colors.blueAccent, // 👈 matches rest of UI
+                                contentPadding:
+                                const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                                value: value,
+                                groupValue: _trainingEffort,
+                                onChanged: (val) {
+                                  setState(() => _trainingEffort = val);
+                                },
+                                title: Text(
+                                  label,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: _trainingEffort == value
+                                        ? Colors.blueAccent
+                                        : Colors.black87,
+                                    fontWeight: _trainingEffort == value
+                                        ? FontWeight.w600
+                                        : FontWeight.normal,
+                                  ),
+                                ),
+                              ),
+                            );
+                          }),
+
+                          const SizedBox(height: 6),
+                          const Text(
+                            "Totally optional — you can change this later.",
+                            style: TextStyle(fontSize: 11, color: Colors.black45),
+                          ),
+                        ],
+                      ),
+                    ),
+
+
+
 
                     const SizedBox(height: 6),
                     const Text(
@@ -2363,6 +2507,7 @@ class _GoalsRankerState extends State<_GoalsRanker> {
     super.initState();
     mainGoals = List.from(widget.items);
     notImportantGoals = [];
+
   }
 
   // (Old ReorderableListView callback no longer used)
