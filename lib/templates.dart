@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'block_repository.dart'; // 👈 to get active block id + meta
 
 // Import the shared methods
 import 'create_template_screen.dart';
@@ -19,6 +20,16 @@ class _DraggedExercise {
   });
 }
 
+class _DraggedTemplateCard {
+  final String templateId;
+  final String? fromBlockId;
+  _DraggedTemplateCard({
+    required this.templateId,
+    required this.fromBlockId,
+  });
+}
+
+
 class TemplatesScreen extends StatefulWidget {
   const TemplatesScreen({super.key, this.fromWorkoutPage = false});
 
@@ -36,6 +47,22 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   // which template cards are currently expanded
   final Set<String> _expandedTemplateIds = {};
 
+  // 🔁 block-aware grouping
+  String? _activeBlockId;
+  final Map<String, Map<String, dynamic>> _blockMetaById = {}; // blockId -> {startDate, endDate, name?}
+  final Map<String, String?> _templateBlockIds = {}; // templateId -> blockId (from Firestore, may be null)
+
+  // which block groups are expanded (we always show active)
+  bool _showPreviousBlocks = false;
+  bool _showUpcomingBlocks = false;
+  bool _showActiveBlock = true;
+  final Set<String> _expandedPreviousBlockIds = {}; // for per-block expansion
+  final Set<String> _expandedUpcomingBlockIds = {};
+
+
+  bool _loadingBlocks = true;
+
+
   // when you hover/drop we can give a little highlight
   String? _draggingOverTemplateId;
   // template.id -> extra circuit indices that have no exercises yet
@@ -50,14 +77,12 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
   String get userId => UserContext.of(context, listen: false).currentUid;
 
-
-
-
   @override
   void initState() {
     super.initState();
-    _fetchTemplates();
+    _loadBlocksThenTemplates();
   }
+
 
   void _createTemplate() {
     Navigator.push(
@@ -69,6 +94,42 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       ),
     );
   }
+
+  Future<void> _loadBlocksThenTemplates() async {
+    // 1) get active block id (same source of truth as BB2/BP)
+    String? activeId;
+    try {
+      activeId = await BlockRepository().fetchActiveBlockId();
+    } catch (e) {
+      debugPrint('⚠️ [Templates] Could not fetch active block id: $e');
+    }
+
+    // 2) load block meta (dates) → we show under the headers
+    final uid = userId;
+    final blocksSnap = await FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(uid)
+        .collection('blocks')
+        .get();
+
+    final meta = <String, Map<String, dynamic>>{};
+    for (final doc in blocksSnap.docs) {
+      final data = doc.data();
+      meta[doc.id] = data;
+    }
+
+    // 3) load templates (as before)
+    await _fetchTemplates();
+
+    // 4) commit to state
+    setState(() {
+      _activeBlockId = activeId;
+      _blockMetaById.clear();
+      _blockMetaById.addAll(meta);
+      _loadingBlocks = false;
+    });
+  }
+
 
   Future<void> _fetchTemplates() async {
     final userDoc = FirebaseFirestore.instance.collection('users').doc(userId);
@@ -87,6 +148,13 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
             (rawExercises).map((e) => {'name': e, 'circuitIndex': 0})))
             : <Map<String, dynamic>>[];
 
+        // 👇 read blockId if it exists on the template doc
+        final String? blockIdFromDoc =
+        doc.data().containsKey('blockId') ? (doc.get('blockId') as String?) : null;
+
+        // store in side map so we can group later
+        _templateBlockIds[doc.id] = blockIdFromDoc;
+
         return Template(
           id: doc.id,
           name: doc.get('name') ?? 'Unnamed',
@@ -95,12 +163,29 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         );
       }).toList();
 
+
       setState(() {
         templates = templateList;
         print("✅ Parsed templates: ${templates.length}");
       });
     }
   }
+
+  List<Template> _templatesForBlock(String? blockId) {
+    // if we don't know the block, just return empty
+    if (blockId == null) return const [];
+
+    return templates.where((t) {
+      final tmplBlockId = _templateBlockIds[t.id];
+      return tmplBlockId == blockId;
+    }).toList();
+  }
+
+  List<Template> get _templatesWithoutBlock {
+    return templates.where((t) => _templateBlockIds[t.id] == null).toList();
+  }
+
+
 
   void _toggleExpanded(String templateId) {
     setState(() {
@@ -339,7 +424,39 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     );
   }
 
+  String _fmtDate(dynamic ts) {
+    // supports both Timestamp and String
+    if (ts == null) return '';
+    if (ts is Timestamp) {
+      final d = ts.toDate();
+      return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+    }
+    return ts.toString();
+  }
 
+  String _blockTitle(String blockId, Map<String, dynamic> meta) {
+    if (meta.containsKey('name') && (meta['name'] as String).isNotEmpty) {
+      return meta['name'] as String;
+    }
+    return 'Block $blockId';
+  }
+
+
+  Future<void> _reassignTemplateToBlock({
+    required String templateId,
+    required String? newBlockId,
+  }) async {
+    final userDoc = FirebaseFirestore.instance.collection('users').doc(userId);
+    final templateRef = userDoc.collection('templates').doc(templateId);
+
+    await templateRef.update({
+      'blockId': newBlockId,
+    });
+
+    setState(() {
+      _templateBlockIds[templateId] = newBlockId;
+    });
+  }
 
 
   Future<void> _saveTemplateExercises(String templateId, List<Map<String, dynamic>> exercises) async {
@@ -399,6 +516,786 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       }
     });
   }
+
+  Widget _buildActiveBlockHeader() {
+    final blockId = _activeBlockId;
+    final meta = blockId != null ? _blockMetaById[blockId] : null;
+
+    String subtitle = '';
+    if (meta != null) {
+      final start = meta['startDate'];
+      final end = meta['endDate'];
+      if (start != null && end != null) {
+        subtitle = '${_fmtDate(start)} → ${_fmtDate(end)}';
+      } else if (start != null) {
+        subtitle = 'from ${_fmtDate(start)}';
+      }
+    }
+
+    return DragTarget<_DraggedTemplateCard>(
+      onWillAccept: (data) => true,
+      onAccept: (data) async {
+        await _reassignTemplateToBlock(
+          templateId: data.templateId,
+          newBlockId: _activeBlockId,
+        );
+      },
+      builder: (context, candidate, rejected) {
+        final isDrop = candidate.isNotEmpty;
+        return InkWell(
+          onTap: () {
+            setState(() {
+              _showActiveBlock = !_showActiveBlock;
+            });
+          },
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: isDrop
+                  ? Colors.blueGrey.shade600.withOpacity(0.25)
+                  : Colors.blueGrey.shade900.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: isDrop ? Colors.cyanAccent.withOpacity(0.5) : Colors.white10,
+                width: 0.6,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  _showActiveBlock ? Icons.expand_less : Icons.expand_more,
+                  size: 16,
+                  color: Colors.cyanAccent.shade100,
+                ),
+                const SizedBox(width: 6),
+                const Text(
+                  'Active block',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13.5,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                if (subtitle.isNotEmpty)
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      color: Colors.white54,
+                      fontSize: 11,
+                    ),
+                  ),
+                const Spacer(),
+                // small pill on the right
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.tealAccent.withOpacity(0.05),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: Colors.tealAccent.withOpacity(0.25), width: 0.4),
+                  ),
+                  child: const Text(
+                    'current',
+                    style: TextStyle(
+                      color: Colors.tealAccent,
+                      fontSize: 9.8,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+
+
+
+  Widget _buildActiveBlockTemplatesList() {
+    // templates tied to the active block
+    final activeBlockTemplates =
+    _activeBlockId != null ? _templatesForBlock(_activeBlockId) : <Template>[];
+
+    // legacy / unassigned → show them in active too
+    final legacy = _templatesWithoutBlock;
+
+    final allToShow = [
+      ...activeBlockTemplates,
+      ...legacy,
+    ];
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 🔹 main list area (takes all the height)
+          Expanded(
+            child: allToShow.isEmpty
+                ? const Center(
+              child: Text(
+                'No workouts in active block',
+                style: TextStyle(color: Colors.white54),
+              ),
+            )
+                : ReorderableListView.builder(
+              itemCount: allToShow.length,
+              onReorder: (oldIndex, newIndex) {
+                setState(() {
+                  if (newIndex > oldIndex) newIndex--;
+                  final moved = allToShow.removeAt(oldIndex);
+                  allToShow.insert(newIndex, moved);
+
+                  // reflect in global list, simplest way:
+                  templates
+                    ..removeWhere((t) => t.id == moved.id)
+                    ..insert(newIndex, moved);
+                });
+              },
+              buildDefaultDragHandles: false,
+              itemBuilder: (context, index) {
+                final template = allToShow[index];
+                return _buildTemplateCard(template, index: index);
+              },
+            ),
+          ),
+
+          const SizedBox(height: 2),
+
+          // 🔹 now, AFTER the active list, show previous & upcoming
+          _buildPreviousBlocksSection(),
+          const SizedBox(height: 1),
+          _buildUpcomingBlocksSection(),
+
+          const SizedBox(height: 54),
+        ],
+      ),
+    );
+  }
+
+
+  Widget _buildTemplateCard(Template template, {int? index}) {
+    return ReorderableDelayedDragStartListener(
+      index: index ?? 0,
+      key: ValueKey(template.id),
+      child: Dismissible(
+        key: ValueKey('dismiss_${template.id}'),
+        direction: DismissDirection.endToStart,
+        confirmDismiss: (DismissDirection direction) async {
+          return await _confirmDeleteTemplate(context, template.id);
+        },
+        background: Container(
+          alignment: Alignment.centerLeft,
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          color: Colors.red,
+          child: const Icon(Icons.delete, color: Colors.white),
+        ),
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: Colors.blueGrey.shade700,
+            borderRadius: BorderRadius.circular(8),
+            border: _draggingOverTemplateId == template.id
+                ? Border.all(color: Colors.white60, width: 1)
+                : null,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ✅ paste your existing ListTile + expanded circuits here
+              // (everything you had inside before)
+              _buildTemplateHeaderRow(template),
+              if (_expandedTemplateIds.contains(template.id))
+                _buildTemplateExpandedBody(template),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTemplateHeaderRow(Template template) {
+    return ListTile(
+      dense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal:3, vertical: 0),
+      title: Text(
+        template.name,
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.bold,
+          fontSize: 15,
+        ),
+      ),
+      subtitle: template.day != null
+          ? Text(
+        template.day!,
+        style: const TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w500,
+          color: Colors.white70,
+        ),
+      )
+          : null,
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 🏁 cross-block drag handle
+          LongPressDraggable<_DraggedTemplateCard>(
+            data: _DraggedTemplateCard(
+              templateId: template.id,
+              fromBlockId: _templateBlockIds[template.id],
+            ),
+            feedback: Material(
+              color: Colors.transparent,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.blueGrey.shade300,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  template.name,
+                  style: const TextStyle(fontSize: 11, color: Colors.black),
+                ),
+              ),
+            ),
+            child: const Padding(
+              padding: EdgeInsets.only(right: 1.0),
+              child: Icon(
+                Icons.open_with,
+                size: 16,
+                color: Colors.white60,
+              ),
+            ),
+          ),
+
+          // 👇 show bin only when expanded
+          if (_expandedTemplateIds.contains(template.id))
+            _buildHeaderDeleteDropZone(template),
+
+          // 👇 your + add exercise, only when expanded
+          if (_expandedTemplateIds.contains(template.id))
+            TextButton(
+              onPressed: () => _showExercisePickerDialogForTemplate(template),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 1, vertical: 0),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text(
+                '+ add exercise',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+
+          // 👇 expand/collapse arrow (always)
+          IconButton(
+            icon: Icon(
+              _expandedTemplateIds.contains(template.id)
+                  ? Icons.expand_less
+                  : Icons.expand_more,
+              color: Colors.white70,
+              size: 20,
+            ),
+            onPressed: () => _toggleExpanded(template.id),
+          ),
+        ],
+      ),
+
+      onTap: () => _navigateToTemplateDetails(context, template),
+    );
+  }
+
+  Widget _buildTemplateExpandedBody(Template template) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 12, right: 8, bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Builder(
+            builder: (context) {
+              final circuitIndices = _getCircuitIndices(template);
+              final circuitCount = circuitIndices.length;
+
+              const totalWidth = 330.0;
+              final divisor = circuitCount == 1
+                  ? 2
+                  : (circuitCount >= 3 ? 3 : circuitCount);
+              final columnWidth = totalWidth / divisor; // 165 or 110
+
+              return SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (int i = 0; i < circuitIndices.length; i++)
+                      SizedBox(
+                        width: columnWidth,
+                        child: Builder(
+                          builder: (context) {
+                            final circuitIndex = circuitIndices[i];
+                            final isLast = i == circuitIndices.length - 1;
+
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // header row
+                                Row(
+                                  mainAxisAlignment:
+                                  MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        if (_isCircuitEmpty(
+                                            template, circuitIndex))
+                                          InkWell(
+                                            onTap: () =>
+                                                _removeEmptyCircuitForTemplate(
+                                                  template,
+                                                  circuitIndex,
+                                                ),
+                                            child: const Padding(
+                                              padding:
+                                              EdgeInsets.only(right: 4.0),
+                                              child: Text(
+                                                ' - ',
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  color: Colors.white54,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        Text(
+                                          'Circuit ${circuitIndex + 1}',
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w600,
+                                            color: Colors.white70,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    if (isLast)
+                                      InkWell(
+                                        onTap: () =>
+                                            _addEmptyCircuitForTemplate(template),
+                                        child: const Padding(
+                                          padding: EdgeInsets.only(left: 6.0),
+                                          child: Text(
+                                            '+ circuit',
+                                            style: TextStyle(
+                                              fontSize: 10,
+                                              color: Colors.white70,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+
+                                // exercises in this circuit
+                                for (final entry
+                                in template.exercises.asMap().entries)
+                                  if ((entry.value['circuitIndex'] ?? 0) ==
+                                      circuitIndex)
+                                    _buildDraggableExerciseChip(
+                                      template: template,
+                                      exerciseIndex: entry.key,
+                                    ),
+
+                                // drop zone
+                                _buildEndDropZone(
+                                  template,
+                                  circuitIndex: circuitIndex,
+                                ),
+                              ],
+                            );
+                          },
+                        ),
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+
+  Widget _buildPreviousBlocksSection() {
+    final List<Widget> blockWidgets = [];
+
+    // active block date
+    final activeMeta = _activeBlockId != null ? _blockMetaById[_activeBlockId] : null;
+    final activeStartTs = activeMeta != null ? activeMeta['startDate'] : null;
+    final DateTime? activeStart =
+    (activeStartTs is Timestamp) ? activeStartTs.toDate() : null;
+
+    _blockMetaById.forEach((blockId, meta) {
+      if (blockId == _activeBlockId) return;
+
+      final startTs = meta['startDate'];
+      final DateTime? thisStart = (startTs is Timestamp) ? startTs.toDate() : null;
+
+      // classify as previous
+      final isPrevious = () {
+        if (activeStart != null && thisStart != null) {
+          return thisStart.isBefore(activeStart);
+        }
+        if (activeStart == null && thisStart == null) return true;
+        if (activeStart != null && thisStart == null) return true;
+        return false;
+      }();
+
+      if (!isPrevious) return;
+
+      final templatesForThisBlock = _templatesForBlock(blockId);
+
+      blockWidgets.add(
+        DragTarget<_DraggedTemplateCard>(
+          onWillAccept: (data) => true,
+          onAccept: (data) async {
+            await _reassignTemplateToBlock(
+              templateId: data.templateId,
+              newBlockId: blockId,
+            );
+          },
+          builder: (context, candidate, rejected) {
+            final isDrop = candidate.isNotEmpty;
+            return Container(
+              // 🔽 small indent, not 24
+              margin: const EdgeInsets.only(left: 0, right: 1, bottom: 1),
+              decoration: BoxDecoration(
+                color: isDrop
+                    ? Colors.blueGrey.shade700.withOpacity(0.25)
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  InkWell(
+                    onTap: () {
+                      setState(() {
+                        if (_expandedPreviousBlockIds.contains(blockId)) {
+                          _expandedPreviousBlockIds.remove(blockId);
+                        } else {
+                          _expandedPreviousBlockIds.add(blockId);
+                        }
+                      });
+                    },
+                    child: Padding(
+                      // 🔽 very light padding to keep height same
+                      padding: const EdgeInsets.symmetric(horizontal: 1, vertical: 2),
+                      child: Row(
+                        children: [
+                          Icon(
+                            _expandedPreviousBlockIds.contains(blockId)
+                                ? Icons.expand_less
+                                : Icons.expand_more,
+                            size: 14,
+                            color: Colors.white54,
+                          ),
+                          const SizedBox(width: 2),
+                          Text(
+                            _blockTitle(blockId, meta),
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          if (meta['startDate'] != null)
+                            Text(
+                              _fmtDate(meta['startDate']),
+                              style: const TextStyle(
+                                color: Colors.white38,
+                                fontSize: 10,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (_expandedPreviousBlockIds.contains(blockId))
+                  // 🔽 NO extra left padding here so templates line up with active ones
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: templatesForThisBlock
+                          .map(
+                            (t) => Container(
+                          margin: const EdgeInsets.only(bottom: 1),
+                          child: _buildTemplateCard(t),
+                        ),
+                      )
+                          .toList(),
+                    ),
+                ],
+              ),
+            );
+          },
+        ),
+      );
+    });
+
+    return DragTarget<_DraggedTemplateCard>(
+      onWillAccept: (data) => true,
+      onAccept: (data) async {
+        // optional
+      },
+      builder: (context, candidate, rejected) {
+        final isDrop = candidate.isNotEmpty;
+        return Container(
+          // 🔽 slightly smaller margin so it hugs the card stack
+          margin: const EdgeInsets.symmetric(horizontal: 0, vertical: 2),
+          padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 2),
+          decoration: BoxDecoration(
+            color: isDrop
+                ? Colors.blueGrey.shade800.withOpacity(0.25)
+                : Colors.blueGrey.shade900.withOpacity(0.02),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.white10, width: 0.4),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              InkWell(
+                onTap: () {
+                  setState(() {
+                    _showPreviousBlocks = !_showPreviousBlocks;
+                  });
+                },
+                child: Row(
+                  children: [
+                    Icon(
+                      _showPreviousBlocks ? Icons.expand_less : Icons.expand_more,
+                      size: 15,
+                      color: Colors.white70,
+                    ),
+                    const SizedBox(width: 6),
+                    const Text(
+                      'Previous blocks',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (_showPreviousBlocks)
+                (blockWidgets.isEmpty)
+                    ? const Padding(
+                  padding: EdgeInsets.only(left: 2, top: 3, bottom: 1),
+                  child: Text(
+                    'No previous blocks',
+                    style: TextStyle(color: Colors.white30, fontSize: 11),
+                  ),
+                )
+                    : Column(children: blockWidgets),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+
+
+  Widget _buildUpcomingBlocksSection() {
+    final List<Widget> blockWidgets = [];
+
+    final activeMeta = _activeBlockId != null ? _blockMetaById[_activeBlockId] : null;
+    final activeStartTs = activeMeta != null ? activeMeta['startDate'] : null;
+    final DateTime? activeStart =
+    (activeStartTs is Timestamp) ? activeStartTs.toDate() : null;
+
+    _blockMetaById.forEach((blockId, meta) {
+      if (blockId == _activeBlockId) return;
+
+      final startTs = meta['startDate'];
+      final DateTime? thisStart = (startTs is Timestamp) ? startTs.toDate() : null;
+
+      final isUpcoming = () {
+        if (activeStart != null && thisStart != null) {
+          return thisStart.isAfter(activeStart);
+        }
+        if (activeStart == null && thisStart != null) {
+          return true;
+        }
+        return false;
+      }();
+
+      if (!isUpcoming) return;
+
+      final templatesForThisBlock = _templatesForBlock(blockId);
+
+      blockWidgets.add(
+        DragTarget<_DraggedTemplateCard>(
+          onWillAccept: (data) => true,
+          onAccept: (data) async {
+            await _reassignTemplateToBlock(
+              templateId: data.templateId,
+              newBlockId: blockId,
+            );
+          },
+          builder: (context, candidate, rejected) {
+            final isDrop = candidate.isNotEmpty;
+            return Container(
+              // 🔽 was 24, now 12
+              margin: const EdgeInsets.only(left: 0, right: 1, bottom: 1),
+              decoration: BoxDecoration(
+                color: isDrop
+                    ? Colors.blueGrey.shade700.withOpacity(0.25)
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  InkWell(
+                    onTap: () {
+                      setState(() {
+                        if (_expandedUpcomingBlockIds.contains(blockId)) {
+                          _expandedUpcomingBlockIds.remove(blockId);
+                        } else {
+                          _expandedUpcomingBlockIds.add(blockId);
+                        }
+                      });
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                      child: Row(
+                        children: [
+                          Icon(
+                            _expandedUpcomingBlockIds.contains(blockId)
+                                ? Icons.expand_less
+                                : Icons.expand_more,
+                            size: 14,
+                            color: Colors.white54,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            _blockTitle(blockId, meta),
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          if (meta['startDate'] != null)
+                            Text(
+                              _fmtDate(meta['startDate']),
+                              style: const TextStyle(
+                                color: Colors.white38,
+                                fontSize: 10,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (_expandedUpcomingBlockIds.contains(blockId))
+                  // 🔽 no extra left padding → templates full width
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: templatesForThisBlock
+                          .map(
+                            (t) => Container(
+                          margin: const EdgeInsets.only(bottom: 4),
+                          child: _buildTemplateCard(t),
+                        ),
+                      )
+                          .toList(),
+                    ),
+                ],
+              ),
+            );
+          },
+        ),
+      );
+    });
+
+    return DragTarget<_DraggedTemplateCard>(
+      onWillAccept: (data) => true,
+      onAccept: (data) async {},
+      builder: (context, candidate, rejected) {
+        final isDrop = candidate.isNotEmpty;
+        return Container(
+          // 🔽 match previous
+          margin: const EdgeInsets.symmetric(horizontal: 0, vertical: 2),
+          padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 2),
+          decoration: BoxDecoration(
+            color: isDrop
+                ? Colors.blueGrey.shade800.withOpacity(0.25)
+                : Colors.blueGrey.shade900.withOpacity(0.02),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.white10, width: 0.4),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              InkWell(
+                onTap: () {
+                  setState(() {
+                    _showUpcomingBlocks = !_showUpcomingBlocks;
+                  });
+                },
+                child: Row(
+                  children: [
+                    Icon(
+                      _showUpcomingBlocks ? Icons.expand_less : Icons.expand_more,
+                      size: 15,
+                      color: Colors.white70,
+                    ),
+                    const SizedBox(width: 6),
+                    const Text(
+                      'Upcoming blocks',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (_showUpcomingBlocks)
+                (blockWidgets.isEmpty)
+                    ? const Padding(
+                  padding: EdgeInsets.only(left: 14, top: 3, bottom: 3),
+                  child: Text(
+                    'No upcoming blocks',
+                    style: TextStyle(color: Colors.white30, fontSize: 11),
+                  ),
+                )
+                    : Column(children: blockWidgets),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+
+
+
 
 
   Widget _buildDraggableExerciseChip({
@@ -723,7 +1620,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
       body: Column(
         children: [
-          const SizedBox(height: 8),
+          const SizedBox(height: 2),
           Center(
             child: ElevatedButton.icon(
               icon: const Icon(Icons.add),
@@ -731,7 +1628,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.blueGrey.shade700,
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8),
                 ),
@@ -739,255 +1636,35 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
               onPressed: _createTemplate,
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 8),
 
-          if (templates.isEmpty)
-            const Text(
-              'No workouts created yet,\ntap Create New Workout to get started',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Colors.white70,
-                fontSize: 18,
-                fontStyle: FontStyle.italic,
+          // 👇 always show block sections (once blocks & templates loaded)
+          if (_loadingBlocks)
+            const Expanded(
+              child: Center(
+                child: CircularProgressIndicator(),
+              ),
+            )
+          else
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildActiveBlockHeader(),
+                  const SizedBox(height: 4),
+                  if (_showActiveBlock)
+                    Expanded(
+                      child: _buildActiveBlockTemplatesList(),
+                    )
+                  else
+                    const SizedBox.shrink(),
+
+                ],
               ),
             ),
-
-          if (templates.isNotEmpty)
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: ReorderableListView.builder(
-                itemCount: templates.length,
-    onReorder: (oldIndex, newIndex) {
-    setState(() {
-    if (newIndex > oldIndex) newIndex--;
-    final moved = templates.removeAt(oldIndex);
-    templates.insert(newIndex, moved);
-    });
-    },
-    buildDefaultDragHandles: false,
-                  itemBuilder: (context, index) {
-                    final template = templates[index];
-
-                    return ReorderableDelayedDragStartListener(
-                      index: index,
-                      key: ValueKey(template.id),
-                      child: Dismissible(
-                        key: ValueKey('dismiss_${template.id}'),
-                        direction: DismissDirection.endToStart,
-                        confirmDismiss: (DismissDirection direction) async {
-                          return await _confirmDeleteTemplate(context, template.id);
-                        },
-                        background: Container(
-                          alignment: Alignment.centerLeft,
-                          padding: const EdgeInsets.symmetric(horizontal: 20),
-                          color: Colors.red,
-                          child: const Icon(Icons.delete, color: Colors.white),
-                        ),
-                        child: Container(
-                          margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: Colors.blueGrey.shade700,
-                            borderRadius: BorderRadius.circular(8),
-                            border: _draggingOverTemplateId == template.id
-                                ? Border.all(color: Colors.white60, width: 1)
-                                : null,
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // HEADER ROW
-                              ListTile(
-                                dense: true,
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-                                title: Text(
-                                  template.name,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 15,
-                                  ),
-                                ),
-                                subtitle: template.day != null
-                                    ? Text(
-                                  template.day!,
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w500,
-                                    color: Colors.white70,
-                                  ),
-                                )
-                                    : null,
-                                trailing: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    // 👇 show bin only when expanded
-                                    if (_expandedTemplateIds.contains(template.id))
-                                      _buildHeaderDeleteDropZone(template),
-
-                                    // 👇 your + add exercise, only when expanded
-                                    if (_expandedTemplateIds.contains(template.id))
-                                      TextButton(
-                                        onPressed: () => _showExercisePickerDialogForTemplate(template),
-                                        style: TextButton.styleFrom(
-                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
-                                          minimumSize: Size.zero,
-                                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                        ),
-                                        child: const Text(
-                                          '+ add exercise',
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            color: Colors.white,
-                                          ),
-                                        ),
-                                      ),
-
-                                    // 👇 expand/collapse arrow (always)
-                                    IconButton(
-                                      icon: Icon(
-                                        _expandedTemplateIds.contains(template.id)
-                                            ? Icons.expand_less
-                                            : Icons.expand_more,
-                                        color: Colors.white70,
-                                        size: 20,
-                                      ),
-                                      onPressed: () => _toggleExpanded(template.id),
-                                    ),
-                                  ],
-                                ),
-
-                                onTap: () => _navigateToTemplateDetails(context, template),
-                              ),
-
-                              // EXPANDED EXERCISES (circuit view + delete bin)
-                              if (_expandedTemplateIds.contains(template.id))
-                                Padding(
-                                  padding: const EdgeInsets.only(left: 12, right: 8, bottom: 8),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                                    children: [
-                                      Builder(
-                                        builder: (context) {
-                                          final circuitIndices = _getCircuitIndices(template);
-                                          final circuitCount = circuitIndices.length;
-
-                                          const totalWidth = 330.0;
-                                          final divisor = circuitCount == 1
-                                              ? 2
-                                              : (circuitCount >= 3 ? 3 : circuitCount);
-                                          final columnWidth = totalWidth / divisor; // 165 or 110
-
-                                          return SingleChildScrollView(
-                                            scrollDirection: Axis.horizontal,
-                                            child: Row(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              children: [
-                                                for (int i = 0; i < circuitIndices.length; i++)
-                                                  SizedBox(
-                                                    width: columnWidth,
-                                                    child: Builder(
-                                                      builder: (context) {
-                                                        final circuitIndex = circuitIndices[i];
-                                                        final isLast = i == circuitIndices.length - 1;
-
-                                                        return Column(
-                                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                                          children: [
-                                                            // header row
-                                                            Row(
-                                                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                                              children: [
-                                                                Row(
-                                                                  mainAxisSize: MainAxisSize.min,
-                                                                  children: [
-                                                                    if (_isCircuitEmpty(template, circuitIndex))
-                                                                      InkWell(
-                                                                        onTap: () => _removeEmptyCircuitForTemplate(
-                                                                          template,
-                                                                          circuitIndex,
-                                                                        ),
-                                                                        child: const Padding(
-                                                                          padding: EdgeInsets.only(right: 4.0),
-                                                                          child: Text(
-                                                                            ' - ',
-                                                                            style: TextStyle(
-                                                                              fontSize: 11,
-                                                                              color: Colors.white54,
-                                                                              fontWeight: FontWeight.w500,
-                                                                            ),
-                                                                          ),
-                                                                        ),
-                                                                      ),
-                                                                    Text(
-                                                                      'Circuit ${circuitIndex + 1}',
-                                                                      style: const TextStyle(
-                                                                        fontSize: 11,
-                                                                        fontWeight: FontWeight.w600,
-                                                                        color: Colors.white70,
-                                                                      ),
-                                                                    ),
-                                                                  ],
-                                                                ),
-                                                                if (isLast)
-                                                                  InkWell(
-                                                                    onTap: () => _addEmptyCircuitForTemplate(template),
-                                                                    child: const Padding(
-                                                                      padding: EdgeInsets.only(left: 6.0),
-                                                                      child: Text(
-                                                                        '+ circuit',
-                                                                        style: TextStyle(
-                                                                          fontSize: 10,
-                                                                          color: Colors.white70,
-                                                                        ),
-                                                                      ),
-                                                                    ),
-                                                                  ),
-                                                              ],
-                                                            ),
-                                                            const SizedBox(height: 4),
-
-                                                            // exercises in this circuit
-                                                            for (final entry in template.exercises.asMap().entries)
-                                                              if ((entry.value['circuitIndex'] ?? 0) == circuitIndex)
-                                                                _buildDraggableExerciseChip(
-                                                                  template: template,
-                                                                  exerciseIndex: entry.key,
-                                                                ),
-
-                                                            // drop zone
-                                                            _buildEndDropZone(
-                                                              template,
-                                                              circuitIndex: circuitIndex,
-                                                            ),
-                                                          ],
-                                                        );
-                                                      },
-                                                    ),
-                                                  ),
-                                              ],
-                                            ),
-                                          );
-                                        },
-                                      ),
-
-                                    ],
-                                  ),
-                                ),
-
-                            ],
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-
-                ),
+        ],
       ),
 
-    ),
-    ],
-    ),
     );
   }
 
