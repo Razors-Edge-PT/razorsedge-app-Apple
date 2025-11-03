@@ -29,6 +29,7 @@ import 'main.dart';
 import 're_daily.dart';
 import 'dart:math';
 import 'leaderboard_page.dart';
+import 'template_bootstrapper.dart';
 
  import 'dart:convert';
  import 'package:cloud_firestore/cloud_firestore.dart';
@@ -380,6 +381,50 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         }
       });
     });
+
+    // 🔧 One-time default template bootstrap (non-blocking)
+    if (actingUid != null && actingUid.isNotEmpty) {
+      // ⬇️ Insert here (replaces the single-line unawaited call)
+      unawaited(() async {
+        debugPrint('🧰 [HOME] Bootstrap kick → uid=$actingUid');
+        try {
+          await TemplatesBootstrapper.ensureInitialTemplatesForUser(actingUid);
+          debugPrint('🧰 [HOME] Bootstrap returned (no throw) for uid=$actingUid');
+        } catch (e, st) {
+          debugPrint('🧰 [HOME] Bootstrap threw: $e\n$st');
+        }
+      }()); // 👈 call it immediately
+
+
+// (Optional) Subscribe once to the user’s templates to see live counts
+      try {
+        final uidForWatch = actingUid;
+        if (uidForWatch != null && uidForWatch.isNotEmpty) {
+          FirebaseFirestore.instance
+              .collection('users')
+              .doc(uidForWatch)
+              .collection('templates')
+              .limit(1) // tiny noop read to trigger permission errors quickly
+              .get()
+              .then((_) => debugPrint('📦 [HOME] templates read OK for uid=$uidForWatch'))
+              .catchError((e) => debugPrint('📦 [HOME] templates read ERR: $e'));
+
+          FirebaseFirestore.instance
+              .collection('users')
+              .doc(uidForWatch)
+              .collection('templates')
+              .snapshots()
+              .listen((snap) {
+            debugPrint('📦 [HOME] templates now=${snap.docs.length} (uid=$uidForWatch)');
+          });
+        }
+      } catch (e) {
+        debugPrint('📦 [HOME] watcher setup failed: $e');
+      }
+
+
+    }
+
 
   }
 
