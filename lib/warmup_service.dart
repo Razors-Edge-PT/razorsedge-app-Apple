@@ -194,7 +194,6 @@ class WarmupService {
 
     if (cached != null && _cacheMatchesSelectedDate) {
 
-      print('🗂️ [Warmup:3] cache HIT → ${cached.length} exercises');
 
       // merge wesPlannedExercises + exercises for selectedDate into the cached list
       final merged = List<Map<String, dynamic>>.from(cached);
@@ -655,7 +654,6 @@ class WarmupService {
         .collection('days');
 
     // 1) Load & print the entire week (day_0..day_6)
-    print('📅 [Warmup:5] week_$weekIndex plan snapshot:');
     final weekDocs = <int, Map<String, dynamic>>{};
     for (int di = 0; di < 7; di++) {
       final snap = await daysCol.doc('day_$di').get(const GetOptions(source: Source.server));
@@ -690,7 +688,6 @@ class WarmupService {
     }
 
     if (matchDi == null) {
-      print('🎯 [Warmup:5] no BB2 day matches selected date → overrides = {}');
       return <String, Map<String, dynamic>>{}; // empty overrides
     }
 
@@ -863,10 +860,7 @@ class WarmupService {
         final ds = v['date'] as String; // already YYYY-MM-DD
         return '$ds ${v['weight']}×${v['reps']}@${v['rir']} (e1=${(v['__e1rm'] as double).toStringAsFixed(1)})';
       }).join(', ');
-      print('🔍 [Step6/topSets] $exerciseName → [$dbg]');
     });
-
-    print('📈 [Warmup:6] topSetsByExercise (best-per-day, JSON-safe) → $exCount exercises');
   }
 
 
@@ -1309,8 +1303,6 @@ class WarmupService {
                 }
 
                 _completedHintsByKey[_rowKeyBy(i)] = entry;
-                print('✅ [Warmup:3c] will skip row#$i "$pName"|ci=$pCi (completed in WES); '
-                    'S1 ready + completed flags + ${sets.length} set(s).');
               }
             }
           }

@@ -421,9 +421,22 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       } catch (e) {
         debugPrint('📦 [HOME] watcher setup failed: $e');
       }
-
-
     }
+
+// 🧩 Temporary ID resolver (for development only)
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _debugResolveExerciseIds([
+        'Seated Row',
+        'SpiderGirl Plank',
+        'Suspended Leg Curl, Weighted',
+        'Triceps Push Down',
+        'Unilateral Hip Thrust',
+        'Unilateral Lat Pull Down',
+        'Wide Arm Lat Pull Down',
+      ]);
+    });
+
+
 
 
   }
@@ -511,48 +524,158 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     final existingBlocks = await blocksRef.get();
 
     if (existingBlocks.docs.isEmpty) {
-      print('🆕 [Home] No blocks found — creating default "1st Block"...');
+      // ── Fetch username & sex from /users/{uid} ──────────────────────────────────
+      // ── Fetch user doc for the *logged-in* user ───────────────────────────────
+      final uid = FirebaseAuth.instance.currentUser!.uid;
+      final usersRef = FirebaseFirestore.instance.collection('users').doc(uid);
+
+      final userSnap = await usersRef.get();
+      print('🔎 [Home] Reading /users/$uid  exists=${userSnap.exists}');
+
+      final data = userSnap.data() ?? {};
+      print('🔎 [Home] /users/$uid keys=${data.keys.toList()}');
+
+      final usernameFromDoc = (data['username'] as String?)?.trim();
+      final sexRawFromDoc   = (data['sex'] as String?)?.trim();
+
+// Fallbacks so we still name the block if the user doc isn't ready yet:
+      final auth = FirebaseAuth.instance.currentUser!;
+      final fallbackUsername = (auth.displayName?.trim().isNotEmpty == true)
+          ? auth.displayName!.trim()
+          : (auth.email?.split('@').first ?? '').trim();
+
+      final username = (usernameFromDoc?.isNotEmpty == true)
+          ? usernameFromDoc
+          : (fallbackUsername.isNotEmpty ? fallbackUsername : null);
+
+      final sex = (sexRawFromDoc == null || sexRawFromDoc.isEmpty)
+          ? 'N'  // default → treated as female branch per your rules
+          : sexRawFromDoc.toUpperCase();
+
+      print('🧬 [Home] Using uid=$uid username="$username" sex="$sex"');
+
+// Optional: log which template branch will be used
+      final isFemale = sex == 'F' || sex == 'N';
+      print('🧬 [Home] Template branch = ${isFemale ? 'FEMALE' : 'MALE'}');
+
+// Block name later:
+      final blockOwnerName = (username != null && username.isNotEmpty)
+          ? "${username}'s First Block"
+          : "1st Block";
+
+
+
+      print('🆕 [Home] No blocks found — creating default "$blockOwnerName"...');
+
+      // ── Dates: 8-week block (56 days) ───────────────────────────────────────────
       final now = DateTime.now();
       final startDate = now;
-      final endDate = now.add(const Duration(days: 42)); // 6 weeks
+      final endDate = now.add(const Duration(days: 56)); // 8 weeks
 
-      const seededExerciseIds = <String>[
-        'heeBViVINHO6tUScSd6y', // Back Squat, Barbell
-        'zn5PgKNRrWo1MTE4wnCy', // Bayesian Biceps Curl
+      // ── Seeded exercise IDs by sex ──────────────────────────────────────────────
+      // Male / default template (unchanged from your current code)
+      const maleSeededExerciseIds = <String>[
         'AmfUWbF1DH3I7qPAdh5k', // Bench Press, Barbell
-        'eyh76KELuuO805rZBpMa', // 45 Degree Hip Extension
-        'MsGl7e9yanDeEnYX0e4X', // Deadlift, Conventional
-        '0dZrCqZ8M7Q1sAn0zeeb', // Dumbbell Biceps Curl
         'kTs5fLSTKjUkUZL10iii', // Flat Bench Dumbbell Press
-        'BpO7e9KsDJsvwhfo09uU', // Hanging Knee Raise
-        'P88Vj5pBydqmiEzFowag', // Hanging Straight Leg Raise
-        'LGhFj8o0sG3X12296UAh', // Hip Thrust, Barbell
-        'eeEXnmSXv90q0rUgGECq', // KP Face Pull
-        '1XOIXxeLFhgmgjZS9Cyq', // Lat Pull Down, Supinated
-        'JbthLLjMF6xRvvaUY8PU', // Lat Pull Down, Unilateral
-        'Url65Q2RxZa00dkDpUdl', // Lat Pull Down, Wide Arm
-        'ZKpGshMxFl2dxNmYSATj', // Leg Extension, Unilateral
-        'LVMQEQl6ZWBcgEUdk2tP', // Leg Press Calf Raise
-        '8CIXN12uS2xwF4JzVLq3', // Long Lever Plank
-        'wIcMsf2J9cswJRs1GuYX', // Lying Leg Curl
-        '7WBffXwK7vJcMi3mtJTF', // Machine Hip Abduction
-        'YaQ0FCQEUAk4ALwAPhv2', // Machine Hip Thrust
-        'ocNWJv7xLrlinGmjG6cV', // Machine Row, Supported
-        'lVDG90yN6Z8aPjRNV2wc', // Overhead Barbell Press
-        'z5gs1ilr4DpKlSZaRNG5', // Overhead Cable Triceps Extension, Unilateral
-        'RdsGazgdH0xgpjek0n3u', // Overhead Dumbbell Press, Unilateral
-        'xU7MNEvnaoSwz5jy3uHw', // Plank
-        '63ryIPxgXVPX7jLtAecC', // Pull-Up, Wide Arm
+        '6d9Ud7ffAHpljWsSKrFe', // Seated Face Pull
+        'TBSudbow1OLdX6mSCC6S', // Machine Chest Fly
+        '72HAT6Od4iJodEFxzw62', // Machine Reverse Fly
+        'heeBViVINHO6tUScSd6y', // Back Squat, Barbell
         'y5q9OU9OBzZQMkfPzFrf', // Romanian Deadlift
-        'spGqXXReJNHMcc62YgZX', // Seated Calf Raise
+        'v2XlZUvFfBUhogOdKtJ8', // Leg Press
+        '2yJSfLMfOnNDSeZ7DqZT', // Overhead Dumbbell Press
+        'lVDG90yN6Z8aPjRNV2wc', // Overhead Barbell Press
+        'igNo9pSuaOFt0GVX0zBG', // Cable Lateral Raise
+        '9siQpXF2KLCj7M9kCy2m', // Seated Shoulder Dumbbell Press
+        '1XOIXxeLFhgmgjZS9Cyq', // Lat Pull Down, Supinated
+        'Url65Q2RxZa00dkDpUdl', // Lat Pull Down, Wide Arm
+        '7x7nEW5Goq8fu8fggUNL', // Straight Arm Lat Pull Down
+        '6SGWrCKfe7KQLThRYXQ6', // One Arm Row, Dumbbell
+        'JbthLLjMF6xRvvaUY8PU', // Lat Pull Down, Unilateral
         'ETm055bydWtUCxTMu3MR', // Seated Leg Curl
+        'wIcMsf2J9cswJRs1GuYX', // Lying Leg Curl
+        'QkEgE8gnIva2kkNJEfxw', // Leg Extension
+        'ZKpGshMxFl2dxNmYSATj', // Leg Extension, Unilateral
         'ci3KpMTEacH4bw8ZumJW', // Standing Calf Raise
+        'spGqXXReJNHMcc62YgZX', // Seated Calf Raise
+        'BpO7e9KsDJsvwhfo09uU', // Hanging Knee Raise
+        'FtayDmR5BVnGS1FX1XLL', // Triceps Dip
+        'E6jPE8YYR0KA3xtVaKJo', // Triceps Push Down
+        'WPb8rtRTupKIBzgydB5k', // Cable Biceps Curl
+        '0dZrCqZ8M7Q1sAn0zeeb', // Dumbbell Biceps Curl
+        'zn5PgKNRrWo1MTE4wnCy', // Bayesian Biceps Curl
+        'ZKrfhPhJIiC1hRuwBEw1', // Bayesian Fly
+        'RcC48r0oLsNCH798d3jc', // Butterfly Dumbbell Raise
+        'ewJBWuDzj1CxfQ3vI3QS', // Reverse Bayesian Fly
+        'eeEXnmSXv90q0rUgGECq', // KP Face Pull
         'KPewxxYYrhsOp84lIQr5', // Suspended High Row
-        'FtayDmR5BVnGS1FXlXLL', // Triceps Dip
+        '8saP9lWMoQffuh30A99K', // Lat Prayer
+        'OJaMXFKgMnM0X5xttBE1', // Cable Face Pull
+        '0s4yMXygBXZZJH66Yi6h', // Seated Face Pull, Unilateral
       ];
 
+
+      // Female template (you asked for these three specifically; we treat "N" as female)
+      const femaleSeededExerciseIds = <String>[
+        'uY8uJaSFK9czKIX4TLc4', // Machine Chest Press
+        'wIcMsf2J9cswJRs1GuYX', // Lying Leg Curl
+        'heeBViVINHO6tUScSd6y', // Back Squat, Barbell
+        '1XOIXxeLFhgmgjZS9Cyq', // Lat Pull Down, Supinated
+        'YaQ0FCQEUAk4ALwAPhv2', // Machine Hip Thrust
+        'WPb8rtRTupKIBzgydB5k', // Cable Biceps Curl
+        'QacImADmlpljltUvB0dD', // Overhead Cable Triceps Extension
+        '', // Machine Shoulder Press, Pronated (missing)
+        'eyh76KELuuO805rZBpMa', // 45 Degree Hip Extension
+        '', // Leg Extension (missing)
+        'ocNWJv7xLrlinGmjG6cV', // Machine Row, Supported
+        'visub8iG0LIXYYCv5Qom', // Hip Thrust, Unilateral
+        'BpO7e9KsDJsvwhfo09uU', // Hanging Knee Raise
+        'FtayDmR5BVnGS1FXlXLL', // Triceps Dip Machine
+        '7WBffXwK7vJcMi3mtJTF', // Machine Hip Abduction
+        'kTs5fLSTKjUkUZL10iii', // Flat Bench Dumbbell Press
+        '', // One Arm Row (missing)
+        '', // Leg Press (missing)
+        'SoHQVtsCQreaHM8LUI5F', // Bicycle Crunch
+        'hCpQR1NgeEAp31lVRWLw', // Machine Hip Adduction
+        'LVMQEQl6ZWBcgEUdk2tP', // Leg Press Calf Raise
+        'Url65Q2RxZa00dkDpUdl', // Lat Pull Down, Wide Arm
+        'LGhFj8o0sG3X12296UAh', // Barbell Hip Thrust
+        '9siQpXF2KLCj7M9kCy2m', // Seated Shoulder Dumbbell Press
+        'spGqXXReJNHMcc62YgZX', // Seated Calf Raise
+        'AmfUWbF1DH3I7qPAdh5k', // Bench Press, Barbell
+        'ETm055bydWtUCxTMu3MR', // Seated Leg Curl
+        '7x7nEW5Goq8fu8fggUNL', // Straight Arm Lat Pull Down
+        '8CIXN12uS2xwF4JzVLq3', // Long Lever Plank
+        'ZKpGshMxFl2dxNmYSATj', // Leg Extension, Unilateral
+        'yiTmu2Ul6TwYs3XiXauz', // Seated Row, Cable
+        'P88Vj5pBydqmiEzFowag', // Hanging Straight Leg Raise
+        'Z1LpfaEBvHBDMsJ54pgw', // Hack Squat
+        'zn5PgKNRrWo1MTE4wnCy', // Bayesian Biceps Curl
+        'kxgQUX7Cr75l1kOwRaqc', // Spider-Girl Plank
+        'E6jPE8YYR0KA3xtVaKJo', // Triceps Push Down
+        'ci3KpMTEacH4bw8ZumJW', // Standing Calf Raise
+        'lVDG90yN6Z8aPjRNV2wc', // Overhead Barbell Press
+        'JbthLLjMF6xRvvaUY8PU', // Unilateral Lat Pull Down
+        'y5q9OU9OBzZQMkfPzFrf', // Romanian Deadlift
+        'BiJsmBeyrAX2ot8CQkxa', // Romanian Deadlift, Unilateral
+        'hCpQR1NgeEAp31lVRWLw', // Machine Hip Adduction
+        '7WBffXwK7vJcMi3mtJTF', // Machine Hip Abduction
+        'QacImADmlpljltUvB0dD', // Overhead Cable Triceps Extension
+        'ci3KpMTEacH4bw8ZumJW', // Standing Calf Raise
+        '9siQpXF2KLCj7M9kCy2m', // Seated Shoulder Dumbbell Press
+        'spGqXXReJNHMcc62YgZX', // Seated Calf Raise
+        'E6jPE8YYR0KA3xtVaKJo', // Triceps Push Down
+        'P88Vj5pBydqmiEzFowag', // Hanging Straight Leg Raise
+
+      ];
+
+
+      final seededExerciseIds =
+      isFemale ? femaleSeededExerciseIds : maleSeededExerciseIds;
+
+      // ── Block doc ────────────────────────────────────────────────────────────────
       final defaultBlock = {
-        'name': '1st Block',
+        'name': blockOwnerName,
         'isActive': true,
         'createdAt': Timestamp.now(),
         'startDate': Timestamp.fromDate(startDate),
@@ -585,7 +708,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           .doc('current_block')
           .set({
         'blockId': newBlockId,
-        'blockName': '1st Block',
+        'blockName': blockOwnerName,
         'plannedExercises': seededExerciseIds,
         'plannedExerciseDetails': {
           'blockMeta': {
@@ -603,14 +726,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       print('📌 [Home] Set current_block pointer → $newBlockId '
           '(pointer ${swPtr.elapsed.inMilliseconds} ms)');
 
-      // Scaffold weeks & days
-      // 🧱 [Home] Week/day scaffold via single WriteBatch
+      // ── Scaffold weeks & days (8 weeks) ─────────────────────────────────────────
       final swScaffold = Stopwatch()..start();
-
       final batch = FirebaseFirestore.instance.batch();
 
-// Weeks + Days: 6 * (1 + 7) = 48 writes  ✅ well under 500
-      for (int week = 0; week < 6; week++) {
+      for (int week = 0; week < 8; week++) {
         final weekRef = newBlockRef.collection('weeks').doc('week_$week');
         batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
 
@@ -627,27 +747,37 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             'date': Timestamp.fromDate(currentDate),
             'circuitStartIndices': [0],
             'exercises': [],
-            'workoutName':
-            '$weekday ${currentDate.day} $monthName - Week ${week + 1}',
+            'workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}',
             'exists': true,
           }, SetOptions(merge: true));
         }
       }
 
-// (Optional) Mark scaffold readiness at block root for any listeners
+      // Optional marker
       batch.set(newBlockRef, {'scaffoldReady': true}, SetOptions(merge: true));
-
       await batch.commit();
 
       swScaffold.stop();
       print('🧱 [Home] Week/day scaffold created (batched) '
           '(${swScaffold.elapsed.inMilliseconds} ms)');
-
     }
 
     swTotal.stop();
     print('⏱️ [Home] _ensureAtLeastOneBlockExists total: '
         '${swTotal.elapsed.inMilliseconds} ms');
+  }
+
+
+  Future<void> _debugResolveExerciseIds(List<String> names) async {
+    final col = FirebaseFirestore.instance.collection('exercises');
+    for (final n in names) {
+      final qs = await col.where('name', isEqualTo: n).limit(1).get();
+      if (qs.docs.isNotEmpty) {
+        debugPrint('✅ $n → ${qs.docs.first.id}');
+      } else {
+        debugPrint('🟥 Not found: $n');
+      }
+    }
   }
 
 
