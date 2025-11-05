@@ -19,7 +19,6 @@ class TemplatesBootstrapper {
     debugPrint('🧩 [TB] user exists=${userSnap.exists}');
     debugPrint('🧩 [TB] user data keys=${userSnap.data()?.keys.toList()}');
 
-
     final flag = userSnap.data()?[_flagField] == true;
     debugPrint('🧰 [TB] userDoc exists=${userSnap.exists} flag=$_flagField=$flag');
 
@@ -29,7 +28,8 @@ class TemplatesBootstrapper {
     }
 
     // ---- Demographic parse (sex + dob → age) --------------------------------
-    final sex = userSnap.data()?['sex'] as String?;
+    final sexRaw = userSnap.data()?['sex'] as String?;
+    final sex = sexRaw?.trim();
     DateTime? dob;
     final dobRaw = userSnap.data()?['dob'];
     if (dobRaw is String) {
@@ -61,15 +61,19 @@ class TemplatesBootstrapper {
     if (dob != null) {
       age = now.year - dob.year - ((now.month < dob.month || (now.month == dob.month && now.day < dob.day)) ? 1 : 0);
     }
-    debugPrint('🧰 [TB] demographics: sex="$sex" age=$age');
+    final sexU = sex?.toUpperCase();
+    debugPrint('🧰 [TB] demographics: sex="$sexU" age=$age');
 
-    final eligible = (sex == 'M') && (age != null && age >= 27 && age <= 39);
-    debugPrint('🧰 [TB] eligible? sexM=${sex == 'M'} age27to39=${age != null && age >= 27 && age <= 39} → $eligible');
+    // Branch eligibility
+    final femaleEligible = (sexU == 'F' || sexU == 'N') && (age != null && age >= 13 && age <= 30);
+    final maleEligible   = (sexU == 'M') && (age != null && age >= 27 && age <= 39);
 
-    if (!eligible) {
-      debugPrint('🧰 [TB] not eligible → set flag and exit');
+    debugPrint('🧰 [TB] eval femaleEligible=$femaleEligible (F/N & 13–30), maleEligible=$maleEligible (M & 27–39)');
+
+    if (!femaleEligible && !maleEligible) {
+      debugPrint('🧰 [TB] not eligible for any branch → set flag and exit');
       await userRef.set(
-        { _flagField: true, 'templatesBootstrappedAt': FieldValue.serverTimestamp() },
+        {_flagField: true, 'templatesBootstrappedAt': FieldValue.serverTimestamp()},
         SetOptions(merge: true),
       );
       return;
@@ -81,12 +85,21 @@ class TemplatesBootstrapper {
     try {
       final existing = await templatesCol.limit(5).get();
       debugPrint('🧰 [TB] existing templates found=${existing.size}');
+      if (existing.size > 0) {
+        debugPrint('🧰 [TB] templates already exist → set flag & exit');
+        await userRef.set(
+          {_flagField: true, 'templatesBootstrappedAt': FieldValue.serverTimestamp()},
+          SetOptions(merge: true),
+        );
+        return;
+      }
     } catch (e, st) {
       debugPrint('🧰 [TB] warn: failed to count existing templates: $e\n$st');
     }
 
-    // ---------------- BLOCK 1 ----------------
-    final b1d1 = {
+    // ---------------- PAYLOADS ----------------
+    // Male payloads = your original
+    final male_b1d1 = {
       'name': 'B1 Day 1',
       'exercises': [
         {'name': 'Bench Press, Barbell', 'circuitIndex': 0},
@@ -97,8 +110,7 @@ class TemplatesBootstrapper {
         {'name': 'Lying Leg Curl', 'circuitIndex': 1},
       ],
     };
-
-    final b1d2 = {
+    final male_b1d2 = {
       'name': 'B1 Day 2',
       'exercises': [
         {'name': 'Flat Bench Dumbbell Press', 'circuitIndex': 0},
@@ -109,8 +121,7 @@ class TemplatesBootstrapper {
         {'name': 'Leg Extension', 'circuitIndex': 1},
       ],
     };
-
-    final b1d3 = {
+    final male_b1d3 = {
       'name': 'B1 Day 3',
       'exercises': [
         {'name': 'Bench Press, Barbell', 'circuitIndex': 0},
@@ -121,8 +132,7 @@ class TemplatesBootstrapper {
         {'name': 'Triceps Push down', 'circuitIndex': 1},
       ],
     };
-
-    final b1d4 = {
+    final male_b1d4 = {
       'name': 'B1 Day 4',
       'exercises': [
         {'name': 'Leg Press', 'circuitIndex': 0},
@@ -131,9 +141,7 @@ class TemplatesBootstrapper {
         {'name': 'Standing Calf Raise', 'circuitIndex': 1},
       ],
     };
-
-    // ---------------- BLOCK 2 ----------------
-    final b2d1 = {
+    final male_b2d1 = {
       'name': 'B2 Day 1',
       'exercises': [
         {'name': 'Bench Press, Barbell', 'circuitIndex': 0},
@@ -144,8 +152,7 @@ class TemplatesBootstrapper {
         {'name': 'Seated Leg Curl', 'circuitIndex': 1},
       ],
     };
-
-    final b2d2 = {
+    final male_b2d2 = {
       'name': 'B2 Day 2',
       'exercises': [
         {'name': 'Incline Bench Dumbbell Press', 'circuitIndex': 0},
@@ -156,8 +163,7 @@ class TemplatesBootstrapper {
         {'name': 'Leg Extension, Unilateral', 'circuitIndex': 1},
       ],
     };
-
-    final b2d3 = {
+    final male_b2d3 = {
       'name': 'B2 Day 3',
       'exercises': [
         {'name': 'Bench Press, Barbell', 'circuitIndex': 0},
@@ -168,8 +174,7 @@ class TemplatesBootstrapper {
         {'name': 'Standing Calf Raise', 'circuitIndex': 1},
       ],
     };
-
-    final b2d4 = {
+    final male_b2d4 = {
       'name': 'B2 Day 4',
       'exercises': [
         {'name': 'Bayesian Fly', 'circuitIndex': 0},
@@ -181,8 +186,117 @@ class TemplatesBootstrapper {
       ],
     };
 
-    final payloads = [b1d1, b1d2, b1d3, b1d4, b2d1, b2d2, b2d3, b2d4];
-    debugPrint('🧰 [TB] prepared ${payloads.length} templates to create');
+    // Female payloads (from your screenshots; explicit circuitIndex)
+    final female_b1d1 = {
+      'name': 'B1 Day 1',
+      'exercises': [
+        {'name': 'Machine Chest Press', 'circuitIndex': 0},
+        {'name': 'Lying Leg Curl', 'circuitIndex': 0},
+        {'name': 'Back Squat, Barbell', 'circuitIndex': 0},
+        {'name': 'Lat Pull Down, Supinated', 'circuitIndex': 1},
+        {'name': 'Machine Hip Thrust', 'circuitIndex': 1},
+        {'name': 'SpiderGirl Plank', 'circuitIndex': 1},
+        {'name': 'Cable Biceps Curl', 'circuitIndex': 2},
+        {'name': 'Overhead Cable Triceps Extension', 'circuitIndex': 2},
+      ],
+    };
+    final female_b1d2 = {
+      'name': 'B1 Day 2',
+      'exercises': [
+        {'name': 'Machine Shoulder Press, Pronated', 'circuitIndex': 0},
+        {'name': '45 Degree Hip Extension', 'circuitIndex': 0},
+        {'name': 'Leg Extension', 'circuitIndex': 0},
+        {'name': 'Machine Row, Supported', 'circuitIndex': 1},
+        {'name': 'Hip Thrust, Unilateral', 'circuitIndex': 1},
+        {'name': 'Hanging Knee Raise', 'circuitIndex': 1},
+        {'name': 'Triceps Dip Machine', 'circuitIndex': 2},
+        {'name': 'Machine Hip Abduction', 'circuitIndex': 2},
+      ],
+    };
+    final female_b1d3 = {
+      'name': 'B1 Day 3',
+      'exercises': [
+        {'name': 'Flat Bench Dumbbell Press', 'circuitIndex': 0},
+        {'name': 'Cable One Arm Row', 'circuitIndex': 0},
+        {'name': 'Leg Press', 'circuitIndex': 0},
+        {'name': 'Machine Hip Thrust', 'circuitIndex': 1},
+        {'name': 'Cable Biceps Curl', 'circuitIndex': 1},
+        {'name': 'Bicycle Crunch', 'circuitIndex': 1},
+        {'name': 'Machine Hip Adduction', 'circuitIndex': 2},
+        {'name': 'Leg Press Calf Raise', 'circuitIndex': 2},
+      ],
+    };
+    final female_b1d4 = {
+      'name': 'B1 Day 4',
+      'exercises': [
+        {'name': 'Machine Shoulder Press, Pronated', 'circuitIndex': 0},
+        {'name': 'Lat Pull Down, Wide Arm', 'circuitIndex': 0},
+        {'name': 'Barbell Hip Thrust', 'circuitIndex': 0},
+        {'name': 'Seated Shoulder Dumbbell Press', 'circuitIndex': 1},
+        {'name': 'Machine Hip Abduction', 'circuitIndex': 1},
+        {'name': 'Seated Calf Raise', 'circuitIndex': 1},
+        {'name': 'Triceps Dip Machine', 'circuitIndex': 2},
+        {'name': 'Hanging Knee Raise', 'circuitIndex': 2},
+      ],
+    };
+    final female_b2d1 = {
+      'name': 'B2 Day 1',
+      'exercises': [
+        {'name': 'Bench Press, Barbell', 'circuitIndex': 0},
+        {'name': 'Seated Leg Curl', 'circuitIndex': 0},
+        {'name': 'Back Squat, Barbell', 'circuitIndex': 0},
+        {'name': 'Straight Arm Lat Pull Down', 'circuitIndex': 1},
+        {'name': 'Barbell Hip Thrust', 'circuitIndex': 1},
+        {'name': 'Long Lever Plank', 'circuitIndex': 1},
+        {'name': 'Glute Cable Kick Back', 'circuitIndex': 2},
+        {'name': 'Overhead Cable Triceps Extension, Unilateral', 'circuitIndex': 2},
+      ],
+    };
+    final female_b2d2 = {
+      'name': 'B2 Day 2',
+      'exercises': [
+        {'name': 'Flat Bench Dumbbell Press', 'circuitIndex': 0},
+        {'name': 'Romanian Deadlift', 'circuitIndex': 0},
+        {'name': 'Leg Extension, Unilateral', 'circuitIndex': 0},
+        {'name': 'Seated Row, Cable', 'circuitIndex': 1},
+        {'name': 'Hip Thrust, Unilateral', 'circuitIndex': 1},
+        {'name': 'Hanging Straight Leg Raise', 'circuitIndex': 1},
+        {'name': 'Machine Hip Adduction', 'circuitIndex': 2},
+        {'name': 'Machine Hip Abduction', 'circuitIndex': 2},
+      ],
+    };
+    final female_b2d3 = {
+      'name': 'B2 Day 3',
+      'exercises': [
+        {'name': 'Bench Press, Barbell', 'circuitIndex': 0},
+        {'name': 'Cable One Arm Row', 'circuitIndex': 0},
+        {'name': 'Hack Squat', 'circuitIndex': 0},
+        {'name': 'Barbell Hip Thrust', 'circuitIndex': 1},
+        {'name': 'Dumbbell Biceps Curl', 'circuitIndex': 1},
+        {'name': 'Decline Crunch', 'circuitIndex': 1},
+        {'name': 'Overhead Cable Triceps Extension', 'circuitIndex': 2},
+        {'name': 'Standing Calf Raise', 'circuitIndex': 2},
+      ],
+    };
+    final female_b2d4 = {
+      'name': 'B2 Day 4',
+      'exercises': [
+        {'name': 'Overhead Barbell Press', 'circuitIndex': 0},
+        {'name': 'Lat Pull Down, Unilateral', 'circuitIndex': 0},
+        {'name': 'Machine Hip Thrust', 'circuitIndex': 0},
+        {'name': 'Seated Shoulder Dumbbell Press', 'circuitIndex': 1},
+        {'name': 'Seated Calf Raise', 'circuitIndex': 1},
+        {'name': 'Triceps Push Down', 'circuitIndex': 2},
+        {'name': 'Hanging Straight Leg Raise', 'circuitIndex': 2},
+      ],
+    };
+
+    final payloads = femaleEligible
+        ? [female_b1d1, female_b1d2, female_b1d3, female_b1d4, female_b2d1, female_b2d2, female_b2d3, female_b2d4]
+        : [male_b1d1, male_b1d2, male_b1d3, male_b1d4, male_b2d1, male_b2d2, male_b2d3, male_b2d4];
+
+    debugPrint('🧰 [TB] prepared ${payloads.length} templates to create '
+        '(branch=${femaleEligible ? 'FEMALE_13_30' : 'MALE_27_39'})');
 
     try {
       final batch = FirebaseFirestore.instance.batch();
@@ -194,6 +308,7 @@ class TemplatesBootstrapper {
       batch.update(userRef, {
         _flagField: true,
         'templatesBootstrappedAt': FieldValue.serverTimestamp(),
+        'templatesBranch': femaleEligible ? 'FEMALE_13_30' : 'MALE_27_39',
       });
 
       await batch.commit();
@@ -207,4 +322,5 @@ class TemplatesBootstrapper {
       rethrow;
     }
   }
+
 }
