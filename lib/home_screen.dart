@@ -382,57 +382,96 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       });
     });
 
-    // 🔧 One-time default template bootstrap (non-blocking)
+    // 🔧 One-time default template bootstrap (non-blocking) — gated on users + fitness_onboarding
     if (actingUid != null && actingUid.isNotEmpty) {
-      // ⬇️ Insert here (replaces the single-line unawaited call)
-      unawaited(() async {
-        debugPrint('🧰 [HOME] Bootstrap kick → uid=$actingUid');
+      final usersRef    = FirebaseFirestore.instance.collection('users').doc(actingUid);
+      final onboardRef  = FirebaseFirestore.instance
+          .collection('users')
+          .doc(actingUid)
+          .collection('profile')
+          .doc('fitness_onboarding');
+
+      bool fired = false;
+
+      Future<void> maybeRun() async {
+        if (fired || !mounted) return;
         try {
+          fired = true;
+
+          // ✅ Run bootstrap now that data is ready
           await TemplatesBootstrapper.ensureInitialTemplatesForUser(actingUid);
-          debugPrint('🧰 [HOME] Bootstrap returned (no throw) for uid=$actingUid');
+
+          // ✅ Let the user know without blocking UI
+          if (mounted && ScaffoldMessenger.maybeOf(context) != null) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Programs ready')),
+            );
+          }
+
+          debugPrint('🧰 [HOME] Template bootstrap complete (gated) for $actingUid');
         } catch (e, st) {
-          debugPrint('🧰 [HOME] Bootstrap threw: $e\n$st');
+          debugPrint('🧰 [HOME] Gated bootstrap threw: $e\n$st');
+          fired = false; // allow retry if something transient failed
         }
-      }()); // 👈 call it immediately
-
-
-// (Optional) Subscribe once to the user’s templates to see live counts
-      try {
-        final uidForWatch = actingUid;
-        if (uidForWatch != null && uidForWatch.isNotEmpty) {
-          FirebaseFirestore.instance
-              .collection('users')
-              .doc(uidForWatch)
-              .collection('templates')
-              .limit(1) // tiny noop read to trigger permission errors quickly
-              .get()
-              .then((_) => debugPrint('📦 [HOME] templates read OK for uid=$uidForWatch'))
-              .catchError((e) => debugPrint('📦 [HOME] templates read ERR: $e'));
-
-          FirebaseFirestore.instance
-              .collection('users')
-              .doc(uidForWatch)
-              .collection('templates')
-              .snapshots()
-              .listen((snap) {
-            debugPrint('📦 [HOME] templates now=${snap.docs.length} (uid=$uidForWatch)');
-          });
-        }
-      } catch (e) {
-        debugPrint('📦 [HOME] watcher setup failed: $e');
       }
+
+      StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? userSub;
+      StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? onboardSub;
+
+
+      // Non-blocking listeners; auto-cancel after first success
+      userSub = usersRef.snapshots().listen((u) async {
+        if (!u.exists) return;
+        final d = u.data();
+        final hasCore =
+            d != null &&
+                d['sex'] != null &&
+                d['dob'] != null &&
+                d['username'] != null;
+
+        if (!hasCore) return;
+
+        // Check onboarding doc in parallel
+        final oSnap = await onboardRef.get();
+        final onboardingReady = oSnap.exists && (oSnap.data()?.isNotEmpty ?? false);
+
+        if (onboardingReady) {
+          await maybeRun();
+          await userSub?.cancel();
+          // onboardSub might be null if we never attached (see below)
+        }
+      });
+
+      // Also watch onboarding; if onboarding arrives first, verify user core then run
+      onboardSub = onboardRef.snapshots().listen((o) async {
+        if (!o.exists || (o.data()?.isNotEmpty != true)) return;
+
+        final u = await usersRef.get();
+        final d = u.data();
+        final hasCore =
+            u.exists &&
+                d != null &&
+                d['sex'] != null &&
+                d['dob'] != null &&
+                d['username'] != null;
+
+        if (hasCore) {
+          await maybeRun();
+          await onboardSub?.cancel();
+          // userSub will be cancelled by maybeRun() path above when it fires from user stream,
+          // but if we fire from onboarding first, also cancel userSub here:
+          try { await userSub?.cancel(); } catch (_) {}
+        }
+      });
+
+      // (Keep your templates watcher block below if you want live counts)
     }
+
 
 // 🧩 Temporary ID resolver (for development only)
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _debugResolveExerciseIds([
-        'Seated Row',
-        'SpiderGirl Plank',
-        'Suspended Leg Curl, Weighted',
-        'Triceps Push Down',
-        'Unilateral Hip Thrust',
-        'Unilateral Lat Pull Down',
-        'Wide Arm Lat Pull Down',
+        'Lat Pull Down, Wide Arm',
       ]);
     });
 
@@ -525,15 +564,29 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
     if (existingBlocks.docs.isEmpty) {
       // ── Fetch username & sex from /users/{uid} ──────────────────────────────────
-      // ── Fetch user doc for the *logged-in* user ───────────────────────────────
       final uid = FirebaseAuth.instance.currentUser!.uid;
       final usersRef = FirebaseFirestore.instance.collection('users').doc(uid);
 
       final userSnap = await usersRef.get();
-      print('🔎 [Home] Reading /users/$uid  exists=${userSnap.exists}');
-
       final data = userSnap.data() ?? {};
+
+      // 🔒 Gate: wait until /users has core fields (prevents female default)
+      final hasCore = userSnap.exists &&
+          (data['sex'] != null) &&
+          (data['username'] != null || data['fullName'] != null);
+
+      if (!hasCore) {
+        debugPrint('🛑 [Home] Block gate: /users/$uid incomplete → retry in 800ms');
+        // tiny, non-blocking retry; won’t slow first paint
+        unawaited(Future.delayed(const Duration(milliseconds: 800), () async {
+          await _ensureAtLeastOneBlockExists();
+        }));
+        return;
+      }
+
+      print('🔎 [Home] Reading /users/$uid  exists=${userSnap.exists}');
       print('🔎 [Home] /users/$uid keys=${data.keys.toList()}');
+
 
       final usernameFromDoc = (data['username'] as String?)?.trim();
       final sexRawFromDoc   = (data['sex'] as String?)?.trim();
@@ -620,52 +673,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         'uY8uJaSFK9czKIX4TLc4', // Machine Chest Press
         'wIcMsf2J9cswJRs1GuYX', // Lying Leg Curl
         'heeBViVINHO6tUScSd6y', // Back Squat, Barbell
-        '1XOIXxeLFhgmgjZS9Cyq', // Lat Pull Down, Supinated
-        'YaQ0FCQEUAk4ALwAPhv2', // Machine Hip Thrust
-        'WPb8rtRTupKIBzgydB5k', // Cable Biceps Curl
-        'QacImADmlpljltUvB0dD', // Overhead Cable Triceps Extension
-        '', // Machine Shoulder Press, Pronated (missing)
-        'eyh76KELuuO805rZBpMa', // 45 Degree Hip Extension
-        '', // Leg Extension (missing)
-        'ocNWJv7xLrlinGmjG6cV', // Machine Row, Supported
-        'visub8iG0LIXYYCv5Qom', // Hip Thrust, Unilateral
-        'BpO7e9KsDJsvwhfo09uU', // Hanging Knee Raise
-        'FtayDmR5BVnGS1FXlXLL', // Triceps Dip Machine
-        '7WBffXwK7vJcMi3mtJTF', // Machine Hip Abduction
-        'kTs5fLSTKjUkUZL10iii', // Flat Bench Dumbbell Press
-        '', // One Arm Row (missing)
-        '', // Leg Press (missing)
-        'SoHQVtsCQreaHM8LUI5F', // Bicycle Crunch
-        'hCpQR1NgeEAp31lVRWLw', // Machine Hip Adduction
-        'LVMQEQl6ZWBcgEUdk2tP', // Leg Press Calf Raise
-        'Url65Q2RxZa00dkDpUdl', // Lat Pull Down, Wide Arm
-        'LGhFj8o0sG3X12296UAh', // Barbell Hip Thrust
-        '9siQpXF2KLCj7M9kCy2m', // Seated Shoulder Dumbbell Press
-        'spGqXXReJNHMcc62YgZX', // Seated Calf Raise
-        'AmfUWbF1DH3I7qPAdh5k', // Bench Press, Barbell
-        'ETm055bydWtUCxTMu3MR', // Seated Leg Curl
-        '7x7nEW5Goq8fu8fggUNL', // Straight Arm Lat Pull Down
-        '8CIXN12uS2xwF4JzVLq3', // Long Lever Plank
-        'ZKpGshMxFl2dxNmYSATj', // Leg Extension, Unilateral
-        'yiTmu2Ul6TwYs3XiXauz', // Seated Row, Cable
-        'P88Vj5pBydqmiEzFowag', // Hanging Straight Leg Raise
-        'Z1LpfaEBvHBDMsJ54pgw', // Hack Squat
-        'zn5PgKNRrWo1MTE4wnCy', // Bayesian Biceps Curl
-        'kxgQUX7Cr75l1kOwRaqc', // Spider-Girl Plank
-        'E6jPE8YYR0KA3xtVaKJo', // Triceps Push Down
-        'ci3KpMTEacH4bw8ZumJW', // Standing Calf Raise
-        'lVDG90yN6Z8aPjRNV2wc', // Overhead Barbell Press
-        'JbthLLjMF6xRvvaUY8PU', // Unilateral Lat Pull Down
-        'y5q9OU9OBzZQMkfPzFrf', // Romanian Deadlift
-        'BiJsmBeyrAX2ot8CQkxa', // Romanian Deadlift, Unilateral
-        'hCpQR1NgeEAp31lVRWLw', // Machine Hip Adduction
-        '7WBffXwK7vJcMi3mtJTF', // Machine Hip Abduction
-        'QacImADmlpljltUvB0dD', // Overhead Cable Triceps Extension
-        'ci3KpMTEacH4bw8ZumJW', // Standing Calf Raise
-        '9siQpXF2KLCj7M9kCy2m', // Seated Shoulder Dumbbell Press
-        'spGqXXReJNHMcc62YgZX', // Seated Calf Raise
-        'E6jPE8YYR0KA3xtVaKJo', // Triceps Push Down
-        'P88Vj5pBydqmiEzFowag', // Hanging Straight Leg Raise
 
       ];
 

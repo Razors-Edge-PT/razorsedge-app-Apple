@@ -16,6 +16,10 @@ class TemplatesBootstrapper {
 
     // Read user doc + flag
     final userSnap = await userRef.get();
+    debugPrint('🧩 [TB] user exists=${userSnap.exists}');
+    debugPrint('🧩 [TB] user data keys=${userSnap.data()?.keys.toList()}');
+
+
     final flag = userSnap.data()?[_flagField] == true;
     debugPrint('🧰 [TB] userDoc exists=${userSnap.exists} flag=$_flagField=$flag');
 
