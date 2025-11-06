@@ -659,6 +659,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       final startDate2 = endDate1.add(const Duration(days: 1)); // day after block 1 completes
       final endDate2   = startDate2.add(const Duration(days: 56));
 
+      // ── Dates: third 8-week block (starts day after block 2 completes) ────────────
+      final startDate3 = endDate2.add(const Duration(days: 1));
+      final endDate3   = startDate3.add(const Duration(days: 56));
+
+
       // ── Base exercise IDs (shared by both sexes) ─────────────────────────────
       const baseExercises = <String>[
         'AmfUWbF1DH3I7qPAdh5k', // Bench Press, Barbell
@@ -698,6 +703,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         'eyh76KELuuO805rZBpMa', // 45 Degree Hip Extension
         'RdsGazgdH0xgpjek0n3u', // Overhead Dumbbell Press, Unilateral
         'xWpCQO504iGfU3LKLZlD', // Cable High Row, Unilateral
+        'XM9026peNIu0R8qh7UqY', // Chin-Up
+        'WPb8rtRTupKIBzgydB5k', // Cable Biceps Curl
+
       ];
 
       // ── Male-specific exercises ─────────────────────────────────────────────
@@ -735,6 +743,68 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         ...baseExercises,
         if (isFemale) ...femaleSpecificExercises else ...maleSpecificExercises,
       ];
+
+      // ── Block 2 exercise adjustments (sex-specific ± tweaks) ─────────────────────
+// Base = all exercises from Block 1. Then apply -exclusions +additions.
+
+      const femaleAdditionsB2 = <String>[
+        // e.g., 'LGhFj8o0sG3X12296UAh', // Hip Thrust, Barbell
+        // e.g., 'F76PnvlLLVF6hviuhRfH', // Seated Dumbbell Biceps Curl
+      ];
+
+      const maleAdditionsB2 = <String>[
+        // e.g., '6d9Ud7ffAHpljWsSKrFe', // Seated Face Pull
+      ];
+
+      const femaleExclusionsB2 = <String>[
+        // e.g., 'heeBViVINHO6tUScSd6y', // Back Squat, Barbell
+      ];
+
+      const maleExclusionsB2 = <String>[
+        // e.g., 'wIcMsf2J9cswJRs1GuYX', // Lying Leg Curl
+      ];
+
+// Apply Block 2 adjustments dynamically
+      final block2ExerciseIds = <String>{
+        ...seededExerciseIds.where(
+              (id) => !(isFemale ? femaleExclusionsB2 : maleExclusionsB2).contains(id),
+        ),
+        ...(isFemale ? femaleAdditionsB2 : maleAdditionsB2),
+      }.toList(growable: false);
+
+
+      // ── Block 3 exercise adjustments (sex-specific ± tweaks) ───────────────────────
+// Use these four lists to easily fine-tune Block 3 composition.
+// Base = all exercises from Block 1/2. Then apply -exclusions +additions.
+
+      const femaleAdditions = <String>[
+        'I4021icWTx3EAnAe1eHf', // Box Jump Squat
+        // e.g., 'zpNb7HgXjtcrzR14F3iF', // Cable One Arm Row
+      ];
+
+      const maleAdditions = <String>[
+        'EFbQl9i9NdYi13F3DqHr', // Push Up, Suspended
+        'Ah9XLjbWvLJOWxb6e1H0', // Triceps Push Down, Unilateral
+
+      ];
+
+      const femaleExclusions = <String>[
+        'uY8uJaSFK9czKIX4TLc4', // Machine Chest Press
+      ];
+
+      const maleExclusions = <String>[
+        'eyh76KELuuO805rZBpMa', // 45 Degree Hip Extension
+      ];
+
+// Compute Block 3 exercises dynamically
+      final block3ExerciseIds = <String>{
+        ...seededExerciseIds.where(
+              (id) => !(isFemale ? femaleExclusions : maleExclusions).contains(id),
+        ),
+        ...(isFemale ? femaleAdditions : maleAdditions),
+      }.toList(growable: false);
+
+
 
       // Helper to build a block payload
       Map<String, dynamic> buildBlock({
@@ -842,8 +912,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         isActive: false, // keep only 1 active block
         start: startDate2,
         end: endDate2,
-        exerciseIds: seededExerciseIds,
+        exerciseIds: block2ExerciseIds, // ✅ now uses sex-specific adjusted list
       );
+
 
       final swCreate2 = Stopwatch()..start();
       final block2Ref = await blocksRef.add(block2Payload);
@@ -882,7 +953,71 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       }
       swScaffold2.stop();
       print('🧱 [Home] Block 2 scaffold ready (${swScaffold2.elapsed.inMilliseconds} ms)');
+
+      debugPrint('🧪[B3 pre-add] seed=${seededExerciseIds.length} adj=${block3ExerciseIds.length} '
+          'hasAdd(EFbQl9i9NdYi13F3DqHr)=${block3ExerciseIds.contains('EFbQl9i9NdYi13F3DqHr')} '
+          'hasEx(eyh76KELuuO805rZBpMa)=${block3ExerciseIds.contains('eyh76KELuuO805rZBpMa')}');
+
+      // ── Create Block 3 (upcoming, not active) ─────────────────────────────────────
+      final block3Name = (username != null && username.isNotEmpty)
+          ? "${username}'s 3rd Block"
+          : "3rd Block";
+
+      final block3Payload = buildBlock(
+        name: block3Name,
+        isActive: false, // keep only 1 active block
+        start: startDate3,
+        end: endDate3,
+        exerciseIds: block3ExerciseIds,
+      );
+
+      final swCreate3 = Stopwatch()..start();
+      final block3Ref = await blocksRef.add(block3Payload);
+      final _savedB3 = await block3Ref.get();
+      final _savedPlanned = List<String>.from((_savedB3.data() ?? const {})['plannedExercises'] ?? const <String>[]);
+      debugPrint('🔎[B3 saved] planned=${_savedPlanned.length} '
+          'hasAdd(EFbQl9i9NdYi13F3DqHr)=${_savedPlanned.contains('EFbQl9i9NdYi13F3DqHr')} '
+          'hasEx(eyh76KELuuO805rZBpMa)=${_savedPlanned.contains('eyh76KELuuO805rZBpMa')}');
+
+      swCreate3.stop();
+      final block3Id = block3Ref.id;
+      print('✅ [Home] Block 3 created id=$block3Id (${swCreate3.elapsed.inMilliseconds} ms)');
+
+// Scaffold weeks & days for Block 3
+      final swScaffold3 = Stopwatch()..start();
+      {
+        final batch = FirebaseFirestore.instance.batch();
+        for (int week = 0; week < 8; week++) {
+          final weekRef = block3Ref.collection('weeks').doc('week_$week');
+          batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
+
+          final daysRef = weekRef.collection('days');
+          for (int day = 0; day < 7; day++) {
+            final currentDate = startDate3.add(Duration(days: week * 7 + day));
+            final weekday = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day];
+            final monthName = [
+              'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'
+            ][currentDate.month - 1];
+
+            final dayRef = daysRef.doc('day_$day');
+            batch.set(dayRef, {
+              'date': Timestamp.fromDate(currentDate),
+              'circuitStartIndices': [0],
+              'exercises': [],
+              'workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}',
+              'exists': true,
+            }, SetOptions(merge: true));
+          }
+        }
+        batch.set(block3Ref, {'scaffoldReady': true}, SetOptions(merge: true));
+        await batch.commit();
+      }
+      swScaffold3.stop();
+      print('🧱 [Home] Block 3 scaffold ready (${swScaffold3.elapsed.inMilliseconds} ms)');
+
     }
+
+
 
     swTotal.stop();
     print('⏱️ [Home] _ensureAtLeastOneBlockExists total: ${swTotal.elapsed.inMilliseconds} ms');

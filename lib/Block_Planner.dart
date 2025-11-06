@@ -57,6 +57,7 @@ class _BlockPlannerState extends State<Block_Planner> {
   bool _isSavedBlock = false;
   bool _didRunInitOnce = false;
   bool _initialBlockIsActive = false;
+  bool _hasLocalEdits = false;
 
   String get userId => UserContext.of(context, listen: false).currentUid;
 
@@ -75,6 +76,11 @@ class _BlockPlannerState extends State<Block_Planner> {
 
         // 1) Persist the full block doc (planned_blocks/{uid}/blocks/{blockId})
         await _savePlannedExercises(suppressSnack: true);
+
+        print('🧪[BP.dispose pre] blockId=$blockIdToUse '
+            'exercises.len=${exercises.length} '
+            'hasAdd(EFbQl9i9NdYi13F3DqHr)=${exercises.contains('EFbQl9i9NdYi13F3DqHr')} '
+            'hasEx(eyh76KELuuO805rZBpMa)=${exercises.contains('eyh76KELuuO805rZBpMa')}');
 
         print("💾 [BP.dispose] _savePlannedExercises() completed");
 
@@ -238,7 +244,6 @@ class _BlockPlannerState extends State<Block_Planner> {
       if (args != null && args['blockId'] != null) {
         // Explicit block → load its dates/scaffold, then planned IDs & settings
         await _loadBlockFromFirestore(args['blockId']);
-        await _loadPlannedExercises();
         await _seedDefaultsFor(_idsWithoutSettings(exercises)); // mirror “Save” in picker
       } else if (args != null && args['newBlock'] == true) {
         // New block created via Home.ensure → hydrate from pointer and finish like picker Save
@@ -1442,59 +1447,69 @@ class _BlockPlannerState extends State<Block_Planner> {
 
   Future<void> _loadPlannedExercises() async {
     final userId = UserContext.of(context, listen: false).currentUid;
-    if (userId == null) return;
+    if (userId == null || blockIdToUse == null) return;
 
-    final snapshot = await FirebaseFirestore.instance
-        .collection('users')
+    // If there are unsaved local edits, do NOT clobber them with remote
+    if (_hasLocalEdits) {
+      debugPrint('🛑 [BP.load] Skipping remote load (has local edits)');
+      return;
+    }
+
+    final docRef = FirebaseFirestore.instance
+        .collection('planned_blocks')
         .doc(userId)
-        .collection('block_planner')
-        .doc('current_block')
-        .get();
+        .collection('blocks')
+        .doc(blockIdToUse); // ✅ read the actual block being edited
 
+    final snapshot = await docRef.get();
 
-// INSERT UNDER THIS LINE
-    print('🧪 [BP.load] current_block exists=${snapshot.exists}');
+    // INSERT UNDER THIS LINE
+    debugPrint('🧪 [BP.load] block=$blockIdToUse exists=${snapshot.exists}');
     if (snapshot.exists) {
       final dd = snapshot.data();
-      print('🧪 [BP.load] keys=${dd?.keys.toList()}');
-      print('🧪 [BP.load] plannedExercises.len=${(dd?['plannedExercises'] as List?)?.length ?? -1}');
+      debugPrint('🧪 [BP.load] keys=${dd?.keys.toList()}');
+      debugPrint('🧪 [BP.load] plannedExercises.len=${(dd?['plannedExercises'] as List?)?.length ?? -1}');
     }
 
+    if (!snapshot.exists) return;
 
-    if (snapshot.exists) {
-      final data = snapshot.data();
-      print('🧪 [BP.load] plannedExercises at runtime → ${data?['plannedExercises']}');
-      if (data != null) {
-        // ✅ Restore planned exercise IDs
-        if (data.containsKey('plannedExercises')) {
-          setState(() {
-            exercises = List<String>.from(data['plannedExercises']);
-          });
+    final data = snapshot.data();
+    if (data == null) return;
+
+    // ✅ Restore planned exercise IDs (only if no local edits)
+    if (data.containsKey('plannedExercises') && !_hasLocalEdits) {
+      final remote = List<String>.from(data['plannedExercises'] ?? const <String>[]);
+      setState(() {
+        exercises = remote;
+      });
+      debugPrint('📋 [BP.load] Applied plannedExercises from block ($blockIdToUse): ${exercises.length}');
+    }
+
+    // ✅ Restore detailed settings, skipping blockMeta and guarding local edits
+    if (data.containsKey('plannedExerciseDetails') && !_hasLocalEdits) {
+      final raw = Map<String, dynamic>.from(data['plannedExerciseDetails'] ?? const {});
+      final Map<String, Map<String, dynamic>> converted = {};
+
+      raw.forEach((exerciseId, value) {
+        if (exerciseId == 'blockMeta') return; // 🚫 skip metadata
+        if (value is Map) {
+          converted[exerciseId] = Map<String, dynamic>.from(value);
         }
+      });
 
-        // ✅ Restore detailed settings
-        if (data.containsKey('plannedExerciseDetails')) {
-          final raw = Map<String, dynamic>.from(data['plannedExerciseDetails']);
-          final Map<String, Map<String, dynamic>> converted = {};
+      setState(() {
+        exerciseSettings = converted;
+      });
 
-          raw.forEach((exerciseId, value) {
-            converted[exerciseId] = Map<String, dynamic>.from(value as Map);
-          });
-
-          setState(() {
-            exerciseSettings = converted;
-          });
-          final rir = exerciseSettings.entries.firstWhere(
-                (e) => e.value.containsKey('rirPlan'),
-            orElse: () => MapEntry('none', {}),
-          );
-          print('🧪 [DEBUG] Found rirPlan under: ${rir.key}');
-          print(
-              "📋 Loaded plannedExerciseDetails for ${converted.length} exercises");
-        }
-      }
+      final rir = exerciseSettings.entries.firstWhere(
+            (e) => e.value.containsKey('rirPlan'),
+        orElse: () => const MapEntry('none', {}),
+      );
+      debugPrint('🧪 [BP.load] Found rirPlan under: ${rir.key}');
+      debugPrint('📋 [BP.load] Loaded plannedExerciseDetails for ${converted.length} exercises');
     }
   }
+
 
   @override
   Widget build(BuildContext context) {
