@@ -293,6 +293,30 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     }
   }
 
+  Future<void> _waitUntilBothBlocksExist(String uid) async {
+    final blocksCol = FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(uid)
+        .collection('blocks');
+
+    for (int i = 0; i < 20; i++) { // 20×500 ms = max 10 s wait
+      final snap = await blocksCol.get();
+      final hasActive = snap.docs.any((d) => d.data()['isActive'] == true);
+      final hasUpcoming = snap.docs.any((d) => d.data()['isActive'] == false);
+
+      if (hasActive && hasUpcoming) {
+        debugPrint('🟢 [HOME] Both active & upcoming blocks detected');
+        return;
+      }
+
+      debugPrint('⏳ [HOME] Waiting for both blocks to exist... ($i)');
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+
+    debugPrint('🟥 [HOME] Timed out waiting for both blocks');
+  }
+
+
 
   @override
   void initState() {
@@ -399,7 +423,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           fired = true;
 
           // ✅ Run bootstrap now that data is ready
+          await _waitUntilBothBlocksExist(actingUid);
           await TemplatesBootstrapper.ensureInitialTemplatesForUser(actingUid);
+
 
           // ✅ Let the user know without blocking UI
           if (mounted && ScaffoldMessenger.maybeOf(context) != null) {
@@ -475,8 +501,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       ]);
     });
 
-
-
+    // 🧱 Debug: print all blocks for this user on Home startup
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final userContext = Provider.of<UserContext>(context, listen: false);
+      final actingUid = userContext.actingAsUid ?? userContext.actorUid;
+      if (actingUid != null && actingUid.isNotEmpty) {
+        await TemplatesBootstrapper.debugPrintAllBlocks(actingUid);
+      } else {
+        debugPrint('🟨 [HOME] Skipping block debug — no actingUid found');
+      }
+    });
 
   }
 

@@ -170,6 +170,10 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       setState(() {
         templates = templateList;
         print("✅ Parsed templates: ${templates.length}");
+        for (final t in templates) {
+          debugPrint('🧾 tmpl "${t.name}" id=${t.id} blockId=${_templateBlockIds[t.id]} assign=${t.blockId}');
+        }
+
       });
     }
   }
@@ -631,12 +635,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     _activeBlockId != null ? _templatesForBlock(_activeBlockId) : <Template>[];
 
     // legacy / unassigned → show them in active too
-    final legacy = _templatesWithoutBlock;
+    final allToShow = activeBlockTemplates; // only those tied to the active block
 
-    final allToShow = [
-      ...activeBlockTemplates,
-      ...legacy,
-    ];
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),

@@ -11,51 +11,83 @@ class TemplatesBootstrapper {
         .collection('blocks');
 
     final snap = await blocksCol.get();
-    String? activeId;
-    DateTime? activeStart;
+    if (snap.docs.isEmpty) {
+      debugPrint('🧱 [TB] no blocks found!');
+      return (activeId: null, upcomingId: null);
+    }
 
-    final candidates = <({String id, DateTime? start})>[];
-
-    for (final d in snap.docs) {
-      final data = d.data();
+    // 🔹 Extract all block docs
+    final blocks = snap.docs.map((doc) {
+      final data = doc.data();
       final isActive = data['isActive'] == true;
-      final startTs = data['startDate'];
-      final start = (startTs is Timestamp) ? startTs.toDate() : null;
+      final start = (data['startDate'] is Timestamp)
+          ? (data['startDate'] as Timestamp).toDate()
+          : null;
+      final created = (data['createdAt'] is Timestamp)
+          ? (data['createdAt'] as Timestamp).toDate()
+          : null;
+      return {
+        'id': doc.id,
+        'isActive': isActive,
+        'startDate': start,
+        'createdAt': created,
+      };
+    }).toList();
 
-      if (isActive) {
-        activeId = d.id;
-        activeStart = start;
-      }
-      candidates.add((id: d.id, start: start));
-    }
+    // 🔹 Identify active block
+    final activeBlock = blocks.firstWhere(
+          (b) => b['isActive'] == true,
+      orElse: () => {},
+    );
 
-    // upcoming = first block that starts AFTER the active start; else the latest future start
-    String? upcomingId;
-    if (activeStart != null) {
-      candidates.sort((a, b) {
-        final aa = a.start ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final bb = b.start ?? DateTime.fromMillisecondsSinceEpoch(0);
-        return aa.compareTo(bb);
-      });
-      for (final c in candidates) {
-        if (c.start != null && c.start!.isAfter(activeStart)) {
-          upcomingId = c.id;
-          break;
-        }
-      }
-    } else {
-      // No active: fallback to the max start as "upcoming"
-      DateTime? maxStart;
-      for (final c in candidates) {
-        if (c.start != null && (maxStart == null || c.start!.isAfter(maxStart))) {
-          maxStart = c.start;
-          upcomingId = c.id;
-        }
-      }
-    }
+    final activeId = activeBlock['id'] as String?;
+    DateTime? activeStart = activeBlock['startDate'] as DateTime?;
 
+    // 🔹 Identify upcoming block (the one created immediately after Block 1)
+    // Since _ensureAtLeastOneBlockExists always creates both blocks together,
+    // just pick the one that's not active.
+    final upcomingBlock = blocks.firstWhere(
+          (b) => b['isActive'] == false,
+      orElse: () => {},
+    );
+
+    final upcomingId = upcomingBlock['id'] as String?;
+
+    debugPrint('🧰 [TB] resolved blocks → active=$activeId upcoming=$upcomingId');
     return (activeId: activeId, upcomingId: upcomingId);
   }
+
+
+  /// Debug utility: lists all blocks for a given user
+  static Future<void> debugPrintAllBlocks(String uid) async {
+    final blocksCol = FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(uid)
+        .collection('blocks');
+
+    final snap = await blocksCol.get();
+
+    if (snap.docs.isEmpty) {
+      debugPrint('🧱 [TB] No blocks found for uid=$uid');
+      return;
+    }
+
+    debugPrint('📋 [TB] ====== BLOCK LIST for $uid ======');
+    for (final doc in snap.docs) {
+      final data = doc.data();
+      final id = doc.id;
+      final isActive = data['isActive'] == true;
+      final start = (data['startDate'] is Timestamp)
+          ? (data['startDate'] as Timestamp).toDate()
+          : null;
+      final end = (data['endDate'] is Timestamp)
+          ? (data['endDate'] as Timestamp).toDate()
+          : null;
+      debugPrint('🧩 id=$id | active=$isActive | start=$start | end=$end');
+    }
+    debugPrint('📋 [TB] ==================================');
+  }
+
 
   static Future<void> ensureInitialTemplatesForUser(String? uid) async {
     debugPrint('🧰 [TB] ensureInitialTemplatesForUser() called uid="$uid"');
@@ -382,20 +414,26 @@ class TemplatesBootstrapper {
           'exercises': filtered,
         };
 
-        // Tag for human/debug
-        if (t['name'].toString().startsWith('B1')) {
+        // 🧠 Tag for debug + persist real block link
+        final nameStr = t['name'].toString();
+        if (nameStr.startsWith('B1')) {
           toWrite['blockAssignment'] = 'B1';
           if (activeBlockId != null) {
-            toWrite['blockId'] = activeBlockId; // ✅ persist the actual block link
+            toWrite['blockId'] = activeBlockId; // ✅ tie B1 to active block
+          } else {
+            debugPrint('🟨 [TB] no activeBlockId; B1 will be unassigned (blockId null)');
           }
-        } else if (t['name'].toString().startsWith('B2')) {
+        } else if (nameStr.startsWith('B2')) {
           toWrite['blockAssignment'] = 'B2';
           if (upcomingBlockId != null) {
-            toWrite['blockId'] = upcomingBlockId; // ✅ tie to upcoming
+            toWrite['blockId'] = upcomingBlockId; // ✅ tie B2 to upcoming block
+          } else {
+            debugPrint('🟨 [TB] no upcomingBlockId; B2 will be unassigned (blockId null)');
           }
         } else {
           toWrite['blockAssignment'] = 'unspecified';
         }
+
 
 
 
