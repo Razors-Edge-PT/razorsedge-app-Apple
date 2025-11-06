@@ -563,10 +563,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     final existingBlocks = await blocksRef.get();
 
     if (existingBlocks.docs.isEmpty) {
-      // ── Fetch username & sex from /users/{uid} ──────────────────────────────────
-      final uid = FirebaseAuth.instance.currentUser!.uid;
+      // ── Fetch username & sex from /users/{uid} ───────────────────────────────
       final usersRef = FirebaseFirestore.instance.collection('users').doc(uid);
-
       final userSnap = await usersRef.get();
       final data = userSnap.data() ?? {};
 
@@ -587,11 +585,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       print('🔎 [Home] Reading /users/$uid  exists=${userSnap.exists}');
       print('🔎 [Home] /users/$uid keys=${data.keys.toList()}');
 
-
       final usernameFromDoc = (data['username'] as String?)?.trim();
       final sexRawFromDoc   = (data['sex'] as String?)?.trim();
 
-// Fallbacks so we still name the block if the user doc isn't ready yet:
+      // Fallbacks so we still name the block if the user doc isn't ready yet:
       final auth = FirebaseAuth.instance.currentUser!;
       final fallbackUsername = (auth.displayName?.trim().isNotEmpty == true)
           ? auth.displayName!.trim()
@@ -607,43 +604,39 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
       print('🧬 [Home] Using uid=$uid username="$username" sex="$sex"');
 
-// Optional: log which template branch will be used
       final isFemale = sex == 'F' || sex == 'N';
       print('🧬 [Home] Template branch = ${isFemale ? 'FEMALE' : 'MALE'}');
 
-// Block name later:
-      final blockOwnerName = (username != null && username.isNotEmpty)
+      // Block names
+      final block1Name = (username != null && username.isNotEmpty)
           ? "${username}'s First Block"
           : "1st Block";
+      final block2Name = (username != null && username.isNotEmpty)
+          ? "${username}'s 2nd Block"
+          : "2nd Block";
 
+      print('🆕 [Home] No blocks found — creating "$block1Name" and "$block2Name"...');
 
-
-      print('🆕 [Home] No blocks found — creating default "$blockOwnerName"...');
-
-      // ── Dates: 8-week block (56 days) ───────────────────────────────────────────
+      // ── Dates: two 8-week blocks (56 days each) ──────────────────────────────
       final now = DateTime.now();
-      final startDate = now;
-      final endDate = now.add(const Duration(days: 56)); // 8 weeks
+      final startDate1 = now;
+      final endDate1   = startDate1.add(const Duration(days: 56));
 
-      // ── Seeded exercise IDs by sex ──────────────────────────────────────────────
-      // Male / default template (unchanged from your current code)
-      const maleSeededExerciseIds = <String>[
+      final startDate2 = endDate1.add(const Duration(days: 1)); // day after block 1 completes
+      final endDate2   = startDate2.add(const Duration(days: 56));
+
+      // ── Base exercise IDs (shared by both sexes) ─────────────────────────────
+      const baseExercises = <String>[
         'AmfUWbF1DH3I7qPAdh5k', // Bench Press, Barbell
         'kTs5fLSTKjUkUZL10iii', // Flat Bench Dumbbell Press
-        '6d9Ud7ffAHpljWsSKrFe', // Seated Face Pull
-        'TBSudbow1OLdX6mSCC6S', // Machine Chest Fly
-        '72HAT6Od4iJodEFxzw62', // Machine Reverse Fly
         'heeBViVINHO6tUScSd6y', // Back Squat, Barbell
         'y5q9OU9OBzZQMkfPzFrf', // Romanian Deadlift
         'v2XlZUvFfBUhogOdKtJ8', // Leg Press
-        '2yJSfLMfOnNDSeZ7DqZT', // Overhead Dumbbell Press
         'lVDG90yN6Z8aPjRNV2wc', // Overhead Barbell Press
-        'igNo9pSuaOFt0GVX0zBG', // Cable Lateral Raise
+        '2yJSfLMfOnNDSeZ7DqZT', // Overhead Dumbbell Press
         '9siQpXF2KLCj7M9kCy2m', // Seated Shoulder Dumbbell Press
         '1XOIXxeLFhgmgjZS9Cyq', // Lat Pull Down, Supinated
         'Url65Q2RxZa00dkDpUdl', // Lat Pull Down, Wide Arm
-        '7x7nEW5Goq8fu8fggUNL', // Straight Arm Lat Pull Down
-        '6SGWrCKfe7KQLThRYXQ6', // One Arm Row, Dumbbell
         'JbthLLjMF6xRvvaUY8PU', // Lat Pull Down, Unilateral
         'ETm055bydWtUCxTMu3MR', // Seated Leg Curl
         'wIcMsf2J9cswJRs1GuYX', // Lying Leg Curl
@@ -651,62 +644,107 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         'ZKpGshMxFl2dxNmYSATj', // Leg Extension, Unilateral
         'ci3KpMTEacH4bw8ZumJW', // Standing Calf Raise
         'spGqXXReJNHMcc62YgZX', // Seated Calf Raise
-        'BpO7e9KsDJsvwhfo09uU', // Hanging Knee Raise
-        'FtayDmR5BVnGS1FX1XLL', // Triceps Dip
-        'E6jPE8YYR0KA3xtVaKJo', // Triceps Push Down
         'WPb8rtRTupKIBzgydB5k', // Cable Biceps Curl
         '0dZrCqZ8M7Q1sAn0zeeb', // Dumbbell Biceps Curl
         'zn5PgKNRrWo1MTE4wnCy', // Bayesian Biceps Curl
+        'E6jPE8YYR0KA3xtVaKJo', // Triceps Push Down
+        'QacImADmlpljltUvB0dD', // Overhead Cable Triceps Extension
+        'eeEXnmSXv90q0rUgGECq', // KP Face Pull
+        'KPewxxYYrhsOp84lIQr5', // Suspended High Row
+        'P88Vj5pBydqmiEzFowag', // Hanging Straight Leg Raise
+        'uY8uJaSFK9czKIX4TLc4', // Machine Chest Press
+        'FtayDmR5BVnGS1FX1XLL', // Triceps Dip
+        'OJaMXFKgMnM0X5xttBE1', // Cable Face Pull
+        '6SGWrCKfe7KQLThRYXQ6', // One Arm Row, Dumbbell
+        'Z1LpfaEBvHBDMsJ54pgw', // Hack Squat
+        'z5gs1ilr4DpKlSZaRNG5', // Overhead Cable Triceps Extension, Unilateral
+        'LVMQEQl6ZWBcgEUdk2tP', // Leg Press Calf Raise
+        'ISXQqOEXLjMrPEs0xjgJ', // Bulgarian Split Squat
+        'ocNWJv7xLrlinGmjG6cV', // Machine Row, Supported
+        'eyh76KELuuO805rZBpMa', // 45 Degree Hip Extension
+        'RdsGazgdH0xgpjek0n3u', // Overhead Dumbbell Press, Unilateral
+        'xWpCQO504iGfU3LKLZlD', // Cable High Row, Unilateral
+      ];
+
+      // ── Male-specific exercises ─────────────────────────────────────────────
+      const maleSpecificExercises = <String>[
+        '6d9Ud7ffAHpljWsSKrFe', // Seated Face Pull
+        'TBSudbow1OLdX6mSCC6S', // Machine Chest Fly
+        '72HAT6Od4iJodEFxzw62', // Machine Reverse Fly
+        'igNo9pSuaOFt0GVX0zBG', // Cable Lateral Raise
         'ZKrfhPhJIiC1hRuwBEw1', // Bayesian Fly
         'RcC48r0oLsNCH798d3jc', // Butterfly Dumbbell Raise
         'ewJBWuDzj1CxfQ3vI3QS', // Reverse Bayesian Fly
-        'eeEXnmSXv90q0rUgGECq', // KP Face Pull
-        'KPewxxYYrhsOp84lIQr5', // Suspended High Row
         '8saP9lWMoQffuh30A99K', // Lat Prayer
-        'OJaMXFKgMnM0X5xttBE1', // Cable Face Pull
         '0s4yMXygBXZZJH66Yi6h', // Seated Face Pull, Unilateral
       ];
 
-
-      // Female template (you asked for these three specifically; we treat "N" as female)
-      const femaleSeededExerciseIds = <String>[
-        'uY8uJaSFK9czKIX4TLc4', // Machine Chest Press
-        'wIcMsf2J9cswJRs1GuYX', // Lying Leg Curl
-        'heeBViVINHO6tUScSd6y', // Back Squat, Barbell
-
+      // ── Female-specific exercises ───────────────────────────────────────────
+      const femaleSpecificExercises = <String>[
+        'vrSYibzR5DHzl6Gzp4ER', // Machine Shoulder Press, Pin Loaded
+        '3dWgorRmtgzsV0U4qu47', // Glute Cable Kick Back
+        'kxgQUX7Cr75l1kOwRaqc', // Spider-Girl Plank
+        'YaQ0FCQEUAk4ALwAPhv2', // Machine Hip Thrust
+        'visub8iG0LIXYYCv5Qom', // Hip Thrust, Unilateral
+        'LGhFj8o0sG3X12296UAh', // Hip Thrust, Barbell
+        'hCpQR1NgeEAp31lVRWLw', // Machine Hip Adduction
+        '7WBffXwK7vJcMi3mtJTF', // Machine Hip Abduction
+        't66qeWQqnuEtaoyZqRp0', // Triceps Dip Machine
+        'zpNb7HgXjtcrzR14F3iF', // Cable One Arm Row
+        '8CIXN12uS2xwF4JzVLq3', // Long Lever Plank
+        'SoHQVtsCQreaHM8LUI5F', // Bicycle Crunch
+        'qU2wXMth4duOhhzTUWet', // Decline Crunch
       ];
 
+      // ── Build merged list based on sex ─────────────────────────────────────
+      final seededExerciseIds = [
+        ...baseExercises,
+        if (isFemale) ...femaleSpecificExercises else ...maleSpecificExercises,
+      ];
 
-      final seededExerciseIds =
-      isFemale ? femaleSeededExerciseIds : maleSeededExerciseIds;
+      // Helper to build a block payload
+      Map<String, dynamic> buildBlock({
+        required String name,
+        required bool isActive,
+        required DateTime start,
+        required DateTime end,
+        required List<String> exerciseIds,
+      }) {
+        return {
+          'name': name,
+          'isActive': isActive,
+          'createdAt': Timestamp.now(),
+          'startDate': Timestamp.fromDate(start),
+          'endDate': Timestamp.fromDate(end),
+          'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
+          'exercises': exerciseIds,
+          'plannedExercises': exerciseIds,
+          'plannedExerciseDetails': {
+            'blockMeta': {
+              'blockStartDate': start.toIso8601String(),
+              'blockEndDate': end.toIso8601String(),
+              'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
+            }
+          },
+        };
+      }
 
-      // ── Block doc ────────────────────────────────────────────────────────────────
-      final defaultBlock = {
-        'name': blockOwnerName,
-        'isActive': true,
-        'createdAt': Timestamp.now(),
-        'startDate': Timestamp.fromDate(startDate),
-        'endDate': Timestamp.fromDate(endDate),
-        'selectedDays': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-        'exercises': seededExerciseIds,
-        'plannedExercises': seededExerciseIds,
-        'plannedExerciseDetails': {
-          'blockMeta': {
-            'blockStartDate': startDate.toIso8601String(),
-            'blockEndDate': endDate.toIso8601String(),
-            'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
-          }
-        },
-      };
+      // ── Create Block 1 (active) ─────────────────────────────────────────────
+      final block1Payload = buildBlock(
+        name: block1Name,
+        isActive: true,
+        start: startDate1,
+        end: endDate1,
+        exerciseIds: seededExerciseIds,
+      );
 
-      final swCreate = Stopwatch()..start();
-      final newBlockRef = await blocksRef.add(defaultBlock);
-      swCreate.stop();
-      final newBlockId = newBlockRef.id;
-      print('✅ [Home] Default block created with ID: $newBlockId '
-          '(create ${swCreate.elapsed.inMilliseconds} ms)');
+      final swCreate1 = Stopwatch()..start();
+      final block1Ref = await blocksRef.add(block1Payload);
+      swCreate1.stop();
+      final block1Id = block1Ref.id;
+      print('✅ [Home] Block 1 created id=$block1Id (${swCreate1.elapsed.inMilliseconds} ms)');
 
-      // Pointer write (BP reads from here)
+      // Pointer write to current_block → Block 1
       final swPtr = Stopwatch()..start();
       await FirebaseFirestore.instance
           .collection('users')
@@ -714,65 +752,109 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           .collection('block_planner')
           .doc('current_block')
           .set({
-        'blockId': newBlockId,
-        'blockName': blockOwnerName,
+        'blockId': block1Id,
+        'blockName': block1Name,
         'plannedExercises': seededExerciseIds,
         'plannedExerciseDetails': {
           'blockMeta': {
-            'blockStartDate': startDate.toIso8601String(),
-            'blockEndDate': endDate.toIso8601String(),
+            'blockStartDate': startDate1.toIso8601String(),
+            'blockEndDate': endDate1.toIso8601String(),
             'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
           }
         },
         'blockMeta': {
-          'blockStartDate': startDate.toIso8601String(),
-          'blockEndDate': endDate.toIso8601String(),
+          'blockStartDate': startDate1.toIso8601String(),
+          'blockEndDate': endDate1.toIso8601String(),
         },
       }, SetOptions(merge: true));
       swPtr.stop();
-      print('📌 [Home] Set current_block pointer → $newBlockId '
-          '(pointer ${swPtr.elapsed.inMilliseconds} ms)');
+      print('📌 [Home] Set current_block pointer → $block1Id (${swPtr.elapsed.inMilliseconds} ms)');
 
-      // ── Scaffold weeks & days (8 weeks) ─────────────────────────────────────────
-      final swScaffold = Stopwatch()..start();
-      final batch = FirebaseFirestore.instance.batch();
+      // Scaffold weeks & days for Block 1
+      final swScaffold1 = Stopwatch()..start();
+      {
+        final batch = FirebaseFirestore.instance.batch();
+        for (int week = 0; week < 8; week++) {
+          final weekRef = block1Ref.collection('weeks').doc('week_$week');
+          batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
 
-      for (int week = 0; week < 8; week++) {
-        final weekRef = newBlockRef.collection('weeks').doc('week_$week');
-        batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
+          final daysRef = weekRef.collection('days');
+          for (int day = 0; day < 7; day++) {
+            final currentDate = startDate1.add(Duration(days: week * 7 + day));
+            final weekday = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day];
+            final monthName = [
+              'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'
+            ][currentDate.month - 1];
 
-        final daysRef = weekRef.collection('days');
-        for (int day = 0; day < 7; day++) {
-          final currentDate = now.add(Duration(days: week * 7 + day));
-          final weekday = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day];
-          final monthName = [
-            'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'
-          ][currentDate.month - 1];
-
-          final dayRef = daysRef.doc('day_$day');
-          batch.set(dayRef, {
-            'date': Timestamp.fromDate(currentDate),
-            'circuitStartIndices': [0],
-            'exercises': [],
-            'workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}',
-            'exists': true,
-          }, SetOptions(merge: true));
+            final dayRef = daysRef.doc('day_$day');
+            batch.set(dayRef, {
+              'date': Timestamp.fromDate(currentDate),
+              'circuitStartIndices': [0],
+              'exercises': [],
+              'workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}',
+              'exists': true,
+            }, SetOptions(merge: true));
+          }
         }
+        batch.set(block1Ref, {'scaffoldReady': true}, SetOptions(merge: true));
+        await batch.commit();
       }
+      swScaffold1.stop();
+      print('🧱 [Home] Block 1 scaffold ready (${swScaffold1.elapsed.inMilliseconds} ms)');
 
-      // Optional marker
-      batch.set(newBlockRef, {'scaffoldReady': true}, SetOptions(merge: true));
-      await batch.commit();
+      // ── Create Block 2 (upcoming, not active) ───────────────────────────────
+      final block2Payload = buildBlock(
+        name: block2Name,
+        isActive: false, // keep only 1 active block
+        start: startDate2,
+        end: endDate2,
+        exerciseIds: seededExerciseIds,
+      );
 
-      swScaffold.stop();
-      print('🧱 [Home] Week/day scaffold created (batched) '
-          '(${swScaffold.elapsed.inMilliseconds} ms)');
+      final swCreate2 = Stopwatch()..start();
+      final block2Ref = await blocksRef.add(block2Payload);
+      swCreate2.stop();
+      final block2Id = block2Ref.id;
+      print('✅ [Home] Block 2 created id=$block2Id (${swCreate2.elapsed.inMilliseconds} ms)');
+
+      // Scaffold weeks & days for Block 2
+      final swScaffold2 = Stopwatch()..start();
+      {
+        final batch = FirebaseFirestore.instance.batch();
+        for (int week = 0; week < 8; week++) {
+          final weekRef = block2Ref.collection('weeks').doc('week_$week');
+          batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
+
+          final daysRef = weekRef.collection('days');
+          for (int day = 0; day < 7; day++) {
+            final currentDate = startDate2.add(Duration(days: week * 7 + day));
+            final weekday = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day];
+            final monthName = [
+              'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'
+            ][currentDate.month - 1];
+
+            final dayRef = daysRef.doc('day_$day');
+            batch.set(dayRef, {
+              'date': Timestamp.fromDate(currentDate),
+              'circuitStartIndices': [0],
+              'exercises': [],
+              'workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}',
+              'exists': true,
+            }, SetOptions(merge: true));
+          }
+        }
+        batch.set(block2Ref, {'scaffoldReady': true}, SetOptions(merge: true));
+        await batch.commit();
+      }
+      swScaffold2.stop();
+      print('🧱 [Home] Block 2 scaffold ready (${swScaffold2.elapsed.inMilliseconds} ms)');
     }
 
     swTotal.stop();
-    print('⏱️ [Home] _ensureAtLeastOneBlockExists total: '
-        '${swTotal.elapsed.inMilliseconds} ms');
+    print('⏱️ [Home] _ensureAtLeastOneBlockExists total: ${swTotal.elapsed.inMilliseconds} ms');
   }
+
+
 
 
   Future<void> _debugResolveExerciseIds(List<String> names) async {
