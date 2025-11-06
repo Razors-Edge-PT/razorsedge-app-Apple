@@ -4,6 +4,59 @@ import 'package:flutter/foundation.dart';
 class TemplatesBootstrapper {
   static const _flagField = 'templatesBootstrapped_v1';
 
+  static Future<({String? activeId, String? upcomingId})> _resolveBlockIds(String uid) async {
+    final blocksCol = FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(uid)
+        .collection('blocks');
+
+    final snap = await blocksCol.get();
+    String? activeId;
+    DateTime? activeStart;
+
+    final candidates = <({String id, DateTime? start})>[];
+
+    for (final d in snap.docs) {
+      final data = d.data();
+      final isActive = data['isActive'] == true;
+      final startTs = data['startDate'];
+      final start = (startTs is Timestamp) ? startTs.toDate() : null;
+
+      if (isActive) {
+        activeId = d.id;
+        activeStart = start;
+      }
+      candidates.add((id: d.id, start: start));
+    }
+
+    // upcoming = first block that starts AFTER the active start; else the latest future start
+    String? upcomingId;
+    if (activeStart != null) {
+      candidates.sort((a, b) {
+        final aa = a.start ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final bb = b.start ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return aa.compareTo(bb);
+      });
+      for (final c in candidates) {
+        if (c.start != null && c.start!.isAfter(activeStart)) {
+          upcomingId = c.id;
+          break;
+        }
+      }
+    } else {
+      // No active: fallback to the max start as "upcoming"
+      DateTime? maxStart;
+      for (final c in candidates) {
+        if (c.start != null && (maxStart == null || c.start!.isAfter(maxStart))) {
+          maxStart = c.start;
+          upcomingId = c.id;
+        }
+      }
+    }
+
+    return (activeId: activeId, upcomingId: upcomingId);
+  }
+
   static Future<void> ensureInitialTemplatesForUser(String? uid) async {
     debugPrint('🧰 [TB] ensureInitialTemplatesForUser() called uid="$uid"');
     if (uid == null || uid.isEmpty) {
@@ -80,6 +133,11 @@ class TemplatesBootstrapper {
     }
 
     final templatesCol = userRef.collection('templates');
+    final ids = await _resolveBlockIds(uid);
+    final String? activeBlockId   = ids.activeId;
+    final String? upcomingBlockId = ids.upcomingId;
+    debugPrint('🧰 [TB] resolved blocks → active=$activeBlockId upcoming=$upcomingBlockId');
+
 
     // For visibility: how many currently exist
     try {
@@ -324,14 +382,21 @@ class TemplatesBootstrapper {
           'exercises': filtered,
         };
 
-        // 🧠 Tag each template with its intended block assignment
+        // Tag for human/debug
         if (t['name'].toString().startsWith('B1')) {
           toWrite['blockAssignment'] = 'B1';
+          if (activeBlockId != null) {
+            toWrite['blockId'] = activeBlockId; // ✅ persist the actual block link
+          }
         } else if (t['name'].toString().startsWith('B2')) {
           toWrite['blockAssignment'] = 'B2';
+          if (upcomingBlockId != null) {
+            toWrite['blockId'] = upcomingBlockId; // ✅ tie to upcoming
+          }
         } else {
           toWrite['blockAssignment'] = 'unspecified';
         }
+
 
 
         final docRef = templatesCol.doc();

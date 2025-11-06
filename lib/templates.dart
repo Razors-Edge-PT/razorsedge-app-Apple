@@ -90,6 +90,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       MaterialPageRoute(
         builder: (context) => CreateTemplateScreen(
           onTemplateCreated: _fetchTemplates, // Pass the refresh function
+
         ),
       ),
     );
@@ -152,7 +153,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         final String? blockIdFromDoc =
         doc.data().containsKey('blockId') ? (doc.get('blockId') as String?) : null;
 
-        // store in side map so we can group later
+// store in side map so we can group later
         _templateBlockIds[doc.id] = blockIdFromDoc;
 
         return Template(
@@ -160,7 +161,9 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
           name: doc.get('name') ?? 'Unnamed',
           day: doc.data().containsKey('day') ? doc.get('day') : null,
           exercises: parsedExercises,
+          blockId: blockIdFromDoc, // ✅ add this line so the Template itself keeps it
         );
+
       }).toList();
 
 
@@ -172,14 +175,21 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   }
 
   List<Template> _templatesForBlock(String? blockId) {
-    // if we don't know the block, just return empty
     if (blockId == null) return const [];
 
-    return templates.where((t) {
+    final results = templates.where((t) {
       final tmplBlockId = _templateBlockIds[t.id];
       return tmplBlockId == blockId;
     }).toList();
+
+    // 👀 Debug only – check assignments
+    for (final t in results) {
+      debugPrint('📄 Template "${t.name}" → blockId=${_templateBlockIds[t.id]}');
+    }
+
+    return results;
   }
+
 
   List<Template> get _templatesWithoutBlock {
     return templates.where((t) => _templateBlockIds[t.id] == null).toList();
