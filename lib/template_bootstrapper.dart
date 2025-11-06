@@ -324,6 +324,16 @@ class TemplatesBootstrapper {
           'exercises': filtered,
         };
 
+        // 🧠 Tag each template with its intended block assignment
+        if (t['name'].toString().startsWith('B1')) {
+          toWrite['blockAssignment'] = 'B1';
+        } else if (t['name'].toString().startsWith('B2')) {
+          toWrite['blockAssignment'] = 'B2';
+        } else {
+          toWrite['blockAssignment'] = 'unspecified';
+        }
+
+
         final docRef = templatesCol.doc();
         batch.set(docRef, toWrite);
         debugPrint('🧰 [TB] queued template "${t['name']}" (${filtered.length} exercises)');
