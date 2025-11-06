@@ -4,7 +4,8 @@ import 'package:flutter/foundation.dart';
 class TemplatesBootstrapper {
   static const _flagField = 'templatesBootstrapped_v1';
 
-  static Future<({String? activeId, String? upcomingId})> _resolveBlockIds(String uid) async {
+  /// Returns the active blockId and a startDate-ordered list of all upcoming (non-active) blockIds.
+  static Future<({String? activeId, List<String> upcomingIds})> _resolveOrderedBlockIds(String uid) async {
     final blocksCol = FirebaseFirestore.instance
         .collection('planned_blocks')
         .doc(uid)
@@ -13,49 +14,40 @@ class TemplatesBootstrapper {
     final snap = await blocksCol.get();
     if (snap.docs.isEmpty) {
       debugPrint('🧱 [TB] no blocks found!');
-      return (activeId: null, upcomingId: null);
+      return (activeId: null, upcomingIds: const <String>[]);
+
     }
 
-    // 🔹 Extract all block docs
-    final blocks = snap.docs.map((doc) {
-      final data = doc.data();
+    final all = snap.docs.map((d) {
+      final data = d.data();
       final isActive = data['isActive'] == true;
       final start = (data['startDate'] is Timestamp)
           ? (data['startDate'] as Timestamp).toDate()
           : null;
-      final created = (data['createdAt'] is Timestamp)
-          ? (data['createdAt'] as Timestamp).toDate()
-          : null;
-      return {
-        'id': doc.id,
-        'isActive': isActive,
-        'startDate': start,
-        'createdAt': created,
-      };
+      return {'id': d.id, 'isActive': isActive, 'start': start};
     }).toList();
 
-    // 🔹 Identify active block
-    final activeBlock = blocks.firstWhere(
-          (b) => b['isActive'] == true,
-      orElse: () => {},
-    );
+    final active = all.firstWhere((b) => b['isActive'] == true, orElse: () => {});
+    final activeId = active.isEmpty ? null : active['id'] as String?;
 
-    final activeId = activeBlock['id'] as String?;
-    DateTime? activeStart = activeBlock['startDate'] as DateTime?;
+    final upcoming = all
+        .where((b) => b['isActive'] != true)
+        .toList()
+      ..sort((a, b) {
+        final as = a['start'] as DateTime?;
+        final bs = b['start'] as DateTime?;
+        if (as == null && bs == null) return 0;
+        if (as == null) return 1;  // nulls last
+        if (bs == null) return -1;
+        return as.compareTo(bs);   // earliest first
+      });
 
-    // 🔹 Identify upcoming block (the one created immediately after Block 1)
-    // Since _ensureAtLeastOneBlockExists always creates both blocks together,
-    // just pick the one that's not active.
-    final upcomingBlock = blocks.firstWhere(
-          (b) => b['isActive'] == false,
-      orElse: () => {},
-    );
+    final upcomingIds = upcoming.map((b) => b['id'] as String).toList();
 
-    final upcomingId = upcomingBlock['id'] as String?;
-
-    debugPrint('🧰 [TB] resolved blocks → active=$activeId upcoming=$upcomingId');
-    return (activeId: activeId, upcomingId: upcomingId);
+    debugPrint('🧰 [TB] ordered blocks → active=$activeId upcoming=$upcomingIds');
+    return (activeId: activeId, upcomingIds: upcomingIds);
   }
+
 
 
   /// Debug utility: lists all blocks for a given user
@@ -165,10 +157,11 @@ class TemplatesBootstrapper {
     }
 
     final templatesCol = userRef.collection('templates');
-    final ids = await _resolveBlockIds(uid);
-    final String? activeBlockId   = ids.activeId;
-    final String? upcomingBlockId = ids.upcomingId;
-    debugPrint('🧰 [TB] resolved blocks → active=$activeBlockId upcoming=$upcomingBlockId');
+    final ordered = await _resolveOrderedBlockIds(uid);
+    final String? activeBlockId = ordered.activeId;
+    final List<String> upcomingIds = ordered.upcomingIds;
+    debugPrint('🧰 [TB] ordered → active=$activeBlockId upcoming=${upcomingIds.join(', ')}');
+
 
 
     // For visibility: how many currently exist
@@ -415,24 +408,36 @@ class TemplatesBootstrapper {
         };
 
         // 🧠 Tag for debug + persist real block link
-        final nameStr = t['name'].toString();
-        if (nameStr.startsWith('B1')) {
-          toWrite['blockAssignment'] = 'B1';
-          if (activeBlockId != null) {
-            toWrite['blockId'] = activeBlockId; // ✅ tie B1 to active block
-          } else {
-            debugPrint('🟨 [TB] no activeBlockId; B1 will be unassigned (blockId null)');
-          }
-        } else if (nameStr.startsWith('B2')) {
-          toWrite['blockAssignment'] = 'B2';
-          if (upcomingBlockId != null) {
-            toWrite['blockId'] = upcomingBlockId; // ✅ tie B2 to upcoming block
-          } else {
-            debugPrint('🟨 [TB] no upcomingBlockId; B2 will be unassigned (blockId null)');
-          }
-        } else {
+        final nameStr = (t['name'] ?? '').toString().trim();
+
+// Extract the block number (e.g., "B1 Day 2" → 1), default to null if not matched.
+        final match = RegExp(r'^B(\d+)\b', caseSensitive: false).firstMatch(nameStr);
+        final int? bNum = match != null ? int.tryParse(match.group(1)!) : null;
+
+        if (bNum == null) {
           toWrite['blockAssignment'] = 'unspecified';
+          debugPrint('🟨 [TB] could not parse block number from "$nameStr" → leaving blockId null');
+        } else {
+          toWrite['blockAssignment'] = 'B$bNum';
+
+          if (bNum == 1) {
+            // B1 → active
+            if (activeBlockId != null) {
+              toWrite['blockId'] = activeBlockId;
+            } else {
+              debugPrint('🟥 [TB] activeBlockId missing for "$nameStr"');
+            }
+          } else {
+            // B2 → upcomingIds[0], B3 → upcomingIds[1], etc.
+            final idx = bNum - 2;
+            if (idx >= 0 && idx < upcomingIds.length) {
+              toWrite['blockId'] = upcomingIds[idx];
+            } else {
+              debugPrint('🟥 [TB] missing upcoming block for "$nameStr": need index=$idx in $upcomingIds');
+            }
+          }
         }
+
 
 
 
