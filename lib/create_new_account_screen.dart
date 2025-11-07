@@ -2405,6 +2405,23 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
 
                     const SizedBox(height: 20),
+
+                    // Back (smaller, same family, sits above Finish)
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(context),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          side: const BorderSide(color: Colors.blueAccent),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          foregroundColor: Colors.blueAccent,
+                        ),
+                        child: const Text('Back', style: TextStyle(fontSize: 16)),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
