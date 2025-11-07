@@ -186,88 +186,158 @@ class TemplatesBootstrapper {
       'name': 'B1 Day 1',
       'exercises': [
         {'exerciseId': 'AmfUWbF1DH3I7qPAdh5k', 'name': 'Bench Press, Barbell', 'circuitIndex': 0},
-        {'exerciseId': 'eeEXnmSXv90q0rUgGECq', 'name': 'KP Face Pull', 'circuitIndex': 0},
+        {'exerciseId': 'OJaMXFKgMnM0X5xttBE1', 'name': 'Cable Face Pull', 'circuitIndex': 0},
         {'exerciseId': 'heeBViVINHO6tUScSd6y', 'name': 'Back Squat, Barbell', 'circuitIndex': 0},
-        {'exerciseId': '2yJSfLMfOnNDSeZ7DqZT', 'name': 'Overhead Dumbbell Press', 'circuitIndex': 1},
+
+        {'exerciseId': '9siQpXF2KLCj7M9kCy2m', 'name': 'Seated Shoulder Dumbbell Press', 'circuitIndex': 1},
         {'exerciseId': '1XOIXxeLFhgmgjZS9Cyq', 'name': 'Lat Pull Down, Supinated', 'circuitIndex': 1},
         {'exerciseId': 'wIcMsf2J9cswJRs1GuYX', 'name': 'Lying Leg Curl', 'circuitIndex': 1},
       ],
     };
+
     final male_b1d2 = {
       'name': 'B1 Day 2',
       'exercises': [
         {'exerciseId': 'kTs5fLSTKjUkUZL10iii', 'name': 'Flat Bench Dumbbell Press', 'circuitIndex': 0},
-        {'exerciseId': 'ocNWJv7xLrlinGmjG6cV', 'name': 'Machine Row, Supported', 'circuitIndex': 0},
-        {'exerciseId': 'eyh76KELuuO805rZBpMa', 'name': '45 Degree Hip Extension', 'circuitIndex': 0},
+        {'exerciseId': '6SGWrCKfe7KQLThRYXQ6', 'name': 'One Arm Row, Dumbbell', 'circuitIndex': 0},
+
         {'exerciseId': 'lVDG90yN6Z8aPjRNV2wc', 'name': 'Overhead Barbell Press', 'circuitIndex': 1},
         {'exerciseId': 'Url65Q2RxZa00dkDpUdl', 'name': 'Lat Pull Down, Wide Arm', 'circuitIndex': 1},
         {'exerciseId': 'QkEgE8gnIva2kkNJEfxw', 'name': 'Leg Extension', 'circuitIndex': 1},
       ],
     };
+
     final male_b1d3 = {
       'name': 'B1 Day 3',
       'exercises': [
-        {'exerciseId': 'AmfUWbF1DH3I7qPAdh5k', 'name': 'Bench Press, Barbell', 'circuitIndex': 0},
+        {'exerciseId': 'uY8uJaSFK9czKIX4TLc4', 'name': 'Machine Chest Press', 'circuitIndex': 0},
         {'exerciseId': 'eeEXnmSXv90q0rUgGECq', 'name': 'KP Face Pull', 'circuitIndex': 0},
-        {'exerciseId': 'heeBViVINHO6tUScSd6y', 'name': 'Back Squat, Barbell', 'circuitIndex': 0},
+        {'exerciseId': 'v2XlZUvFfBUhogOdKtJ8', 'name': 'Leg Press', 'circuitIndex': 0},
+
         {'exerciseId': 'igNo9pSuaOFt0GVX0zBG', 'name': 'Cable Lateral Raise', 'circuitIndex': 1},
         {'exerciseId': '7x7nEW5Goq8fu8fggUNL', 'name': 'Straight Arm Lat Pull Down', 'circuitIndex': 1},
-        {'exerciseId': 'E6jPE8YYR0KA3xtVaKJo', 'name': 'Triceps Push Down', 'circuitIndex': 1},
+        {'exerciseId': 'LVMQEQl6ZWBcgEUdk2tP', 'name': 'Leg Press Calf Raise', 'circuitIndex': 1},
       ],
     };
+
     final male_b1d4 = {
       'name': 'B1 Day 4',
       'exercises': [
-        {'exerciseId': 'v2XlZUvFfBUhogOdKtJ8', 'name': 'Leg Press', 'circuitIndex': 0},
-        {'exerciseId': '9siQpXF2KLCj7M9kCy2m', 'name': 'Seated Shoulder Dumbbell Press', 'circuitIndex': 1},
-        {'exerciseId': '0dZrCqZ8M7Q1sAn0zeeb', 'name': 'Dumbbell Biceps Curl', 'circuitIndex': 1},
-        {'exerciseId': 'ci3KpMTEacH4bw8ZumJW', 'name': 'Standing Calf Raise', 'circuitIndex': 1},
+        {'exerciseId': 'TBSudbow1OLdX6mSCC6S', 'name': 'Machine Chest Fly', 'circuitIndex': 0},
+        {'exerciseId': '72HAT6Od4iJodEFxzw62', 'name': 'Machine Reverse Fly', 'circuitIndex': 0},
+        {'exerciseId': 'Z1LpfaEBvHBDMsJ54pgw', 'name': 'Hack Squat', 'circuitIndex': 0},
+
+        {'exerciseId': 'RcC48r0oLsNCH798d3jc', 'name': 'Butterfly Dumbbell Raise', 'circuitIndex': 1},
+        {'exerciseId': 'JbthLLjMF6xRvvaUY8PU', 'name': 'Lat Pull Down, Unilateral', 'circuitIndex': 1},
+        {'exerciseId': 'spGqXXReJNHMcc62YgZX', 'name': 'Seated Calf Raise', 'circuitIndex': 1},
       ],
     };
+
     final male_b2d1 = {
       'name': 'B2 Day 1',
       'exercises': [
         {'exerciseId': 'AmfUWbF1DH3I7qPAdh5k', 'name': 'Bench Press, Barbell', 'circuitIndex': 0},
-        {'exerciseId': 'KPewxxYYrhsOp84lIQr5', 'name': 'Suspended High Row', 'circuitIndex': 0},
+        {'exerciseId': '6d9Ud7ffAHpljWsSKrFe', 'name': 'Seated Face Pull', 'circuitIndex': 0},
         {'exerciseId': 'heeBViVINHO6tUScSd6y', 'name': 'Back Squat, Barbell', 'circuitIndex': 0},
+
         {'exerciseId': 'RdsGazgdH0xgpjek0n3u', 'name': 'Overhead Dumbbell Press, Unilateral', 'circuitIndex': 1},
-        {'exerciseId': 'JbthLLjMF6xRvvaUY8PU', 'name': 'Lat Pull Down, Unilateral', 'circuitIndex': 1},
+        {'exerciseId': 'XM9026peNIu0R8qh7UqY', 'name': 'Chin-Up', 'circuitIndex': 1},
         {'exerciseId': 'ETm055bydWtUCxTMu3MR', 'name': 'Seated Leg Curl', 'circuitIndex': 1},
       ],
     };
+
     final male_b2d2 = {
       'name': 'B2 Day 2',
       'exercises': [
-        {'exerciseId': 'kTs5fLSTKjUkUZL10iii', 'name': 'Flat Bench Dumbbell Press', 'circuitIndex': 0},
+        {'exerciseId': 'jtMoW3Nht1k97YgweteC', 'name': 'Incline Bench Dumbbell Press', 'circuitIndex': 0},
         {'exerciseId': '6SGWrCKfe7KQLThRYXQ6', 'name': 'One Arm Row, Dumbbell', 'circuitIndex': 0},
         {'exerciseId': 'y5q9OU9OBzZQMkfPzFrf', 'name': 'Romanian Deadlift', 'circuitIndex': 0},
-        {'exerciseId': 'lVDG90yN6Z8aPjRNV2wc', 'name': 'Overhead Barbell Press', 'circuitIndex': 1},
+
+        {'exerciseId': 'lVDG90yN6Z8aPjRNV2wc', 'name': 'Barbell Overhead Press', 'circuitIndex': 1},
         {'exerciseId': 'Url65Q2RxZa00dkDpUdl', 'name': 'Lat Pull Down, Wide Arm', 'circuitIndex': 1},
         {'exerciseId': 'ZKpGshMxFl2dxNmYSATj', 'name': 'Leg Extension, Unilateral', 'circuitIndex': 1},
       ],
     };
+
     final male_b2d3 = {
       'name': 'B2 Day 3',
       'exercises': [
         {'exerciseId': 'AmfUWbF1DH3I7qPAdh5k', 'name': 'Bench Press, Barbell', 'circuitIndex': 0},
-        {'exerciseId': 'xWpCQO504iGfU3LKLZlD', 'name': 'Cable High Row, Unilateral', 'circuitIndex': 0},
-        {'exerciseId': 'heeBViVINHO6tUScSd6y', 'name': 'Back Squat, Barbell', 'circuitIndex': 0},
-        {'exerciseId': 'RcC48r0oLsNCH798d3jc', 'name': 'Butterfly Dumbbell Raise', 'circuitIndex': 1},
-        {'exerciseId': '7x7nEW5Goq8fu8fggUNL', 'name': 'Straight Arm Lat Pull Down', 'circuitIndex': 1},
-        {'exerciseId': 'ci3KpMTEacH4bw8ZumJW', 'name': 'Standing Calf Raise', 'circuitIndex': 1},
+        {'exerciseId': 'eeEXnmSXv90q0rUgGECq', 'name': 'KP Face Pull', 'circuitIndex': 0},
+        {'exerciseId': 'heeBViVINHO6tUScSd6y', 'name': 'Barbell Back Squat', 'circuitIndex': 0},
+
+        {'exerciseId': 'igNo9pSuaOFt0GVX0zBG', 'name': 'Cable Lateral Raise', 'circuitIndex': 1},
+        {'exerciseId': '8saP9lWMoQffuh30A99K', 'name': 'Lat Prayer', 'circuitIndex': 1},
+        {'exerciseId': 'LVMQEQl6ZWBcgEUdk2tP', 'name': 'Leg Press Calf Raise', 'circuitIndex': 1},
       ],
     };
+
     final male_b2d4 = {
       'name': 'B2 Day 4',
       'exercises': [
         {'exerciseId': 'ZKrfhPhJIiC1hRuwBEw1', 'name': 'Bayesian Fly', 'circuitIndex': 0},
-        {'exerciseId': 'ewJBWuDzj1CxfQ3vI3QS', 'name': 'Reverse Bayesian Fly', 'circuitIndex': 0},
+        {'exerciseId': 'qU2wXMth4duOhhzTUWet', 'name': 'Decline Crunch', 'circuitIndex': 0},
         {'exerciseId': 'ISXQqOEXLjMrPEs0xjgJ', 'name': 'Bulgarian Split Squat', 'circuitIndex': 0},
-        {'exerciseId': '9siQpXF2KLCj7M9kCy2m', 'name': 'Seated Shoulder Dumbbell Press', 'circuitIndex': 1},
-        {'exerciseId': 'zn5PgKNRrWo1MTE4wnCy', 'name': 'Bayesian Biceps Curl', 'circuitIndex': 1},
-        {'exerciseId': 'QacImADmlpljltUvB0dD', 'name': 'Overhead Cable Triceps Extension', 'circuitIndex': 1},
+
+        {'exerciseId': 'RcC48r0oLsNCH798d3jc', 'name': 'Butterfly Dumbbell Raise', 'circuitIndex': 1},
+        {'exerciseId': 'JbthLLjMF6xRvvaUY8PU', 'name': 'Lat Pull Down, Unilateral', 'circuitIndex': 1},
+        {'exerciseId': '9Oovma2yszjmSm420awp', 'name': 'Suspended Triceps Extension', 'circuitIndex': 1},
       ],
     };
+
+    final male_b3d1 = {
+      'name': 'B3 Day 1',
+      'exercises': [
+        {'exerciseId': 'AmfUWbF1DH3I7qPAdh5k', 'name': 'Bench Press, Barbell', 'circuitIndex': 0},
+        {'exerciseId': 'KPewxxYYrhsOp84lIQr5', 'name': 'Suspended High Row', 'circuitIndex': 0},
+        {'exerciseId': 'heeBViVINHO6tUScSd6y', 'name': 'Barbell Back Squat', 'circuitIndex': 0},
+
+        {'exerciseId': 'RdsGazgdH0xgpjek0n3u', 'name': 'Overhead Dumbbell Press, Unilateral', 'circuitIndex': 1},
+        {'exerciseId': 'XM9026peNIu0R8qh7UqY', 'name': 'Chin-Up', 'circuitIndex': 1},
+        {'exerciseId': 'PXqhBA8ib7FWAcPjDlES', 'name': 'Suspended Leg Curl', 'circuitIndex': 1},
+      ],
+    };
+
+    final male_b3d2 = {
+      'name': 'B3 Day 2',
+      'exercises': [
+        {'exerciseId': 'kTs5fLSTKjUkUZL10iii', 'name': 'Flat Bench Dumbbell Press', 'circuitIndex': 0},
+        {'exerciseId': '6SGWrCKfe7KQLThRYXQ6', 'name': 'One Arm Row, Dumbbell', 'circuitIndex': 0},
+        {'exerciseId': 'MsGl7e9yanDeEnYX0e4X', 'name': 'Deadlift, Conventional', 'circuitIndex': 0},
+
+        {'exerciseId': 'lVDG90yN6Z8aPjRNV2wc', 'name': 'Barbell Overhead Press', 'circuitIndex': 1},
+        {'exerciseId': 'Url65Q2RxZa00dkDpUdl', 'name': 'Lat Pull Down, Wide Arm', 'circuitIndex': 1},
+        {'exerciseId': 'ZKpGshMxFl2dxNmYSATj', 'name': 'Leg Extension, Unilateral', 'circuitIndex': 1},
+      ],
+    };
+
+    final male_b3d3 = {
+      'name': 'B3 Day 3',
+      'exercises': [
+        {'exerciseId': 'AmfUWbF1DH3I7qPAdh5k', 'name': 'Bench Press, Barbell', 'circuitIndex': 0},
+        {'exerciseId': 'P88Vj5pBydqmiEzFowag', 'name': 'Hanging Straight Leg Raise', 'circuitIndex': 0},
+        {'exerciseId': 'heeBViVINHO6tUScSd6y', 'name': 'Barbell Back Squat', 'circuitIndex': 0},
+
+        {'exerciseId': 'igNo9pSuaOFt0GVX0zBG', 'name': 'Cable Lateral Raise', 'circuitIndex': 1},
+        {'exerciseId': '8saP9lWMoQffuh30A99K', 'name': 'Lat Prayer', 'circuitIndex': 1},
+        {'exerciseId': 'LVMQEQl6ZWBcgEUdk2tP', 'name': 'Leg Press Calf Raise', 'circuitIndex': 1},
+      ],
+    };
+
+    final male_b3d4 = {
+      'name': 'B3 Day 4',
+      'exercises': [
+        {'exerciseId': 'EFbQl9i9NdYi13F3DqHr', 'name': 'Suspended Push Up', 'circuitIndex': 0},
+        {'exerciseId': 'ewJBWuDzj1CxfQ3vI3QS', 'name': 'Reverse Bayesian Fly', 'circuitIndex': 0},
+        {'exerciseId': 'xbePAZEtQIFEjvu2YaPV', 'name': 'Bulgarian Split Squat, Deficit', 'circuitIndex': 0},
+
+        {'exerciseId': 'RcC48r0oLsNCH798d3jc', 'name': 'Butterfly Dumbbell Raise', 'circuitIndex': 1},
+        {'exerciseId': 'JbthLLjMF6xRvvaUY8PU', 'name': 'Lat Pull Down, Unilateral', 'circuitIndex': 1},
+        {'exerciseId': 'FtayDmR5BVnGS1FXlXLL', 'name': 'Triceps Dip', 'circuitIndex': 1},
+      ],
+    };
+
+
 
     // FEMALE (IDs where known; unknowns will be skipped+logged)
     final female_b1d1 = {
@@ -374,9 +444,81 @@ class TemplatesBootstrapper {
       ],
     };
 
+    final female_b3d1 = {
+      'name': 'B3 Day 1',
+      'exercises': [
+        {'exerciseId': 'AmfUWbF1DH3I7qPAdh5k', 'name': 'Bench Press, Barbell', 'circuitIndex': 0},
+        {'exerciseId': 'ETm055bydWtUCxTMu3MR', 'name': 'Seated Leg Curl', 'circuitIndex': 0},
+        {'exerciseId': 'heeBViVINHO6tUScSd6y', 'name': 'Back Squat, Barbell', 'circuitIndex': 0},
+
+        {'exerciseId': 'Url65Q2RxZa00dkDpUdl', 'name': 'Lat Pull Down, Wide Arm', 'circuitIndex': 1},
+        {'exerciseId': 'y5q9OU9OBzZQMkfPzFrf', 'name': 'Romanian Deadlift', 'circuitIndex': 1},
+        {'exerciseId': 'ci3KpMTEacH4bw8ZumJW', 'name': 'Standing Calf Raise', 'circuitIndex': 1},
+
+        {'exerciseId': 'QacImADmlpljltUvB0dD', 'name': 'Overhead Cable Triceps Extension', 'circuitIndex': 2},
+      ],
+    };
+
+    final female_b3d2 = {
+      'name': 'B3 Day 2',
+      'exercises': [
+        {'exerciseId': 'Da2xWZqbeCsbGCwdbwbs', 'name': 'Push Up, Deficit', 'circuitIndex': 0},
+        {'exerciseId': 'y5q9OU9OBzZQMkfPzFrf', 'name': 'Romanian Deadlift', 'circuitIndex': 0},
+        {'exerciseId': 'ZKpGshMxFl2dxNmYSATj', 'name': 'Leg Extension, Unilateral', 'circuitIndex': 0},
+
+        {'exerciseId': 'OJaMXFKgMnM0X5xttBE1', 'name': 'Cable Face Pull', 'circuitIndex': 1},
+        {'exerciseId': 'BiJsmBeyrAX2ot8CQkxa', 'name': 'Romanian Deadlift, Unilateral', 'circuitIndex': 1},
+        {'exerciseId': 'P88Vj5pBydqmiEzFowag', 'name': 'Hanging Straight Leg Raise', 'circuitIndex': 1},
+
+        {'exerciseId': 'hCpQR1NgeEAp31lVRWLw', 'name': 'Machine Hip Adduction', 'circuitIndex': 2},
+        {'exerciseId': '7WBffXwK7vJcMi3mtJTF', 'name': 'Machine Hip Abduction', 'circuitIndex': 2},
+      ],
+    };
+
+    final female_b3d3 = {
+      'name': 'B3 Day 3',
+      'exercises': [
+        {'exerciseId': 'AmfUWbF1DH3I7qPAdh5k', 'name': 'Bench Press, Barbell', 'circuitIndex': 0},
+        {'exerciseId': 'zpNb7HgXjtcrzR14F3iF', 'name': 'Cable One Arm Row', 'circuitIndex': 0},
+        {'exerciseId': 'heeBViVINHO6tUScSd6y', 'name': 'Back Squat, Barbell', 'circuitIndex': 0},
+
+        {'exerciseId': 'LGhFj8o0sG3X12296UAh', 'name': 'Hip Thrust, Barbell', 'circuitIndex': 1},
+        {'exerciseId': 'zn5PgKNRrWo1MTE4wnCy', 'name': 'Bayesian Biceps Curl', 'circuitIndex': 1},
+        {'exerciseId': 'kxgQUX7Cr75l1kOwRaqc', 'name': 'Spider-Girl Plank', 'circuitIndex': 1},
+
+        {'exerciseId': 'E6jPE8YYR0KA3xtVaKJo', 'name': 'Triceps Push Down', 'circuitIndex': 2},
+        {'exerciseId': 'visub8iG0LIXYYCv5Qom', 'name': 'Hip Thrust, Unilateral', 'circuitIndex': 2},
+      ],
+    };
+
+    final female_b3d4 = {
+      'name': 'B3 Day 4',
+      'exercises': [
+        {'exerciseId': 'lVDG90yN6Z8aPjRNV2wc', 'name': 'Overhead Barbell Press', 'circuitIndex': 0},
+        {'exerciseId': 'y5q9OU9OBzZQMkfPzFrf', 'name': 'Romanian Deadlift', 'circuitIndex': 0},
+        {'exerciseId': 'XM9026peNIu0R8qh7UqY', 'name': 'Chin-Up', 'circuitIndex': 0},
+
+        {'exerciseId': '9siQpXF2KLCj7M9kCy2m', 'name': 'Seated Shoulder Dumbbell Press', 'circuitIndex': 1},
+        {'exerciseId': 'JbthLLjMF6xRvvaUY8PU', 'name': 'Lat Pull Down, Unilateral', 'circuitIndex': 1},
+        {'exerciseId': 't66qeWQqnuEtaoyZqRp0', 'name': 'Triceps Dip Machine', 'circuitIndex': 1},
+
+        {'exerciseId': 'P88Vj5pBydqmiEzFowag', 'name': 'Hanging Straight Leg Raise', 'circuitIndex': 2},
+      ],
+    };
+
+
     final payloads = femaleEligible
-        ? [female_b1d1, female_b1d2, female_b1d3, female_b1d4, female_b2d1, female_b2d2, female_b2d3, female_b2d4]
-        : [male_b1d1, male_b1d2, male_b1d3, male_b1d4, male_b2d1, male_b2d2, male_b2d3, male_b2d4];
+        ? [
+      female_b1d1, female_b1d2, female_b1d3, female_b1d4,
+      female_b2d1, female_b2d2, female_b2d3, female_b2d4,
+      female_b3d1, female_b3d2, female_b3d3, female_b3d4, // ✅ new for block 3
+    ]
+        : [
+      male_b1d1, male_b1d2, male_b1d3, male_b1d4,
+      male_b2d1, male_b2d2, male_b2d3, male_b2d4,
+      male_b3d1, male_b3d2, male_b3d3, male_b3d4, // ✅ new for block 3
+    ];
+
 
     debugPrint('🧰 [TB] prepared ${payloads.length} templates to create (branch=${femaleEligible ? 'FEMALE_13_30' : 'MALE_27_39'})');
 
@@ -437,10 +579,6 @@ class TemplatesBootstrapper {
             }
           }
         }
-
-
-
-
 
         final docRef = templatesCol.doc();
         batch.set(docRef, toWrite);

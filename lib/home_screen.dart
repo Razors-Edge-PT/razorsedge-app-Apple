@@ -293,28 +293,29 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     }
   }
 
-  Future<void> _waitUntilBothBlocksExist(String uid) async {
+  Future<void> _waitUntilThreeBlocksExist(String uid) async {
     final blocksCol = FirebaseFirestore.instance
         .collection('planned_blocks')
         .doc(uid)
         .collection('blocks');
 
-    for (int i = 0; i < 20; i++) { // 20×500 ms = max 10 s wait
+    for (int i = 0; i < 40; i++) { // 40×500ms ≈ 20s max
       final snap = await blocksCol.get();
-      final hasActive = snap.docs.any((d) => d.data()['isActive'] == true);
-      final hasUpcoming = snap.docs.any((d) => d.data()['isActive'] == false);
+      final activeCount   = snap.docs.where((d) => d.data()['isActive'] == true).length;
+      final upcomingCount = snap.docs.where((d) => d.data()['isActive'] != true).length;
 
-      if (hasActive && hasUpcoming) {
-        debugPrint('🟢 [HOME] Both active & upcoming blocks detected');
+      if (activeCount >= 1 && upcomingCount >= 2) {
+        debugPrint('🟢 [HOME] 3 blocks ready (active=$activeCount, upcoming=$upcomingCount)');
         return;
       }
 
-      debugPrint('⏳ [HOME] Waiting for both blocks to exist... ($i)');
+      debugPrint('⏳ [HOME] Waiting for 3 blocks… have active=$activeCount, upcoming=$upcomingCount');
       await Future.delayed(const Duration(milliseconds: 500));
     }
 
-    debugPrint('🟥 [HOME] Timed out waiting for both blocks');
+    debugPrint('🟥 [HOME] Timed out waiting for 3 blocks');
   }
+
 
 
 
@@ -423,7 +424,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           fired = true;
 
           // ✅ Run bootstrap now that data is ready
-          await _waitUntilBothBlocksExist(actingUid);
+          await _waitUntilThreeBlocksExist(actingUid);
           await TemplatesBootstrapper.ensureInitialTemplatesForUser(actingUid);
 
 
@@ -492,26 +493,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
       // (Keep your templates watcher block below if you want live counts)
     }
-
-
-// 🧩 Temporary ID resolver (for development only)
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await _debugResolveExerciseIds([
-        'Lat Pull Down, Wide Arm',
-      ]);
-    });
-
-    // 🧱 Debug: print all blocks for this user on Home startup
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final userContext = Provider.of<UserContext>(context, listen: false);
-      final actingUid = userContext.actingAsUid ?? userContext.actorUid;
-      if (actingUid != null && actingUid.isNotEmpty) {
-        await TemplatesBootstrapper.debugPrintAllBlocks(actingUid);
-      } else {
-        debugPrint('🟨 [HOME] Skipping block debug — no actingUid found');
-      }
-    });
-
   }
 
   Future<void> _persistAvatarLocalIfNeeded(BuildContext context, {
@@ -1026,17 +1007,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
 
 
-  Future<void> _debugResolveExerciseIds(List<String> names) async {
-    final col = FirebaseFirestore.instance.collection('exercises');
-    for (final n in names) {
-      final qs = await col.where('name', isEqualTo: n).limit(1).get();
-      if (qs.docs.isNotEmpty) {
-        debugPrint('✅ $n → ${qs.docs.first.id}');
-      } else {
-        debugPrint('🟥 Not found: $n');
-      }
-    }
-  }
+
 
 
   void _onUserContextChange() {
