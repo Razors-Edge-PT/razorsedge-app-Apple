@@ -1196,6 +1196,29 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
     'Back pack you can add weight to, or similar',
   ];
 
+  // ── Commercial gym equipment (full list shown)
+  final List<String> _commercialEquip = const [
+    'Seated leg curl',
+    '45 Degree Hip Extension',
+    'Hack Squat',
+    'Triceps Dip Machine',
+    'Hip Thrust Machine',
+    'Suspension Training System (like TRX)',
+    // add any other commercial items you want to show here...
+  ];
+
+// ── Defaults pre-selected for commercial gyms
+  final Set<String> _commercialDefaults = const {
+    'Seated leg curl',
+    '45 Degree Hip Extension',
+    'Hack Squat',
+    'Triceps Dip Machine',
+    'Hip Thrust Machine',
+    'Suspension Training System (like TRX)',
+  };
+
+
+  int? _ptHistory; // 0..3 (null = not chosen)
 
   final Set<String> _injuries = <String>{};
   final Map<String, double> _painSlider = {}; // store slider as double 1..10; round to int when saving
@@ -1382,6 +1405,22 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
         },
       }, SetOptions(merge: true));
 
+      // 3a) Save PT experience (if answered)
+      if (_ptHistory != null) {
+        // Map selection 0..3 to stable buckets + canonical text
+        const buckets = ['none', 'lt3', '4to16', 'gt16'];
+        const canonicalText = ['No', '<3 sessions', '4–16 sessions', '16+ sessions'];
+
+        await onbRef.set({
+          'ptHistory': {
+            'index': _ptHistory,                // 0..3
+            'bucket': buckets[_ptHistory!],     // 'none' | 'lt3' | '4to16' | 'gt16'
+            'text': canonicalText[_ptHistory!], // canonical, UI-agnostic
+            'savedAt': FieldValue.serverTimestamp(),
+          },
+        }, SetOptions(merge: true));
+      }
+
 
       if (!mounted) return;
       Navigator.pushReplacementNamed(context, '/home');
@@ -1485,13 +1524,16 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
   }
 
   List<String> _buildEffortLabels(String? sex, String? dob) {
-    // parse year from 'yyyy-mm-dd'
     int? year;
-    if (dob != null && dob.length >= 4) {
-      year = int.tryParse(dob.substring(0, 4));
+    if (dob != null && dob.length >= 10) {
+      // 👇 handles dd-mm-yyyy correctly
+      final parts = dob.split('-');
+      if (parts.length == 3) {
+        year = int.tryParse(parts[2]); // dd-mm-yyyy → [0]=dd, [1]=mm, [2]=yyyy
+      }
     }
 
-    final isFemale = (sex == 'F');
+    final isFemale = (sex ?? '').toUpperCase() == 'F';
     final born2000OrLater = (year != null && year >= 2000);
 
     // MALE < 1975 (block-level intensity tone)
@@ -1505,7 +1547,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
     }
 
     if (!isFemale && !born2000OrLater) {
-      // MALE < 2000 (your original)
+      // MALE < 2000
       return const [
         'Cruise control',
         'Breaking a sweat',
@@ -1532,12 +1574,13 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       // FEMALE >= 2000
       return const [
         'Cruisy',
-        'Good session',
+        'Steady progress',
         'Make me work',
         'Smash it 💪',
       ];
     }
   }
+
 
   bool _isDobBefore1995Flexible(String? rawDob) {
     if (rawDob == null || rawDob.isEmpty) return false;
@@ -1769,33 +1812,49 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                           // convenience lookups
                           int levelOf(String key) => _bodyFocusLevel[key] ?? 0;
 
-                          final glutesLvl = levelOf('Glutes');
-                          final chestLvl  = levelOf('Chest');
-                          final backLvl   = levelOf('Back');
-                          final shouldersLvl = levelOf('Shoulders');
-                          final armsLvl = levelOf('Arms');
-                          final quadsLvl = levelOf('Quads');
-                          final hammiesLvl = levelOf('Hamstrings');
-                          final calvesLvl = levelOf('Calves');
+                          final glutesLvl     = levelOf('Glutes');
+                          final chestLvl      = levelOf('Chest');
+                          final backLvl       = levelOf('Back');
+                          final shouldersLvl  = levelOf('Shoulders');
+                          final armsLvl       = levelOf('Arms');
+                          final quadsLvl      = levelOf('Quads');
+                          final hammiesLvl    = levelOf('Hamstrings');
+                          final calvesLvl     = levelOf('Calves');
+                          final absLvl = levelOf('Abs'); // If your key is 'Core', change to levelOf('Core')
 
                           // what user is
                           final sex = (widget.sex ?? '').toUpperCase();
                           final isMale = sex == 'M';
                           final isOldEnoughForBrah = isMale && _isDobBefore1995Flexible(widget.dob);
 
+                          // Compute the "whole body" condition first (this will be row #1 if true)
+                          final allBodyPartsSelected = _bodyParts.every(
+                                (p) => (_bodyFocusLevel[p] ?? 0) > 0,
+                          );
 
-                          // 2) Special: maxed Glutes → booty message
-                          if (glutesLvl >= 3) {
+                          // Now compute ONE secondary message (row #2) based on your priority rules
+
+                          // --- Resolve secondary messages, then prefer based on sex ---
+// Assumes: sex, glutesLvl, chestLvl, backLvl, shouldersLvl, armsLvl,
+//          quadsLvl, hammiesLvl, calvesLvl, allUpperSelected are already defined.
+
+                          Widget? bootyCandidate;
+                          Widget? otherCandidate;
+                          Widget? priorityCandidate; // 👈 all-max message goes here (highest priority)
+
+
+// 2) Glutes emphasis → booty message (tier 2+)
+                          if (glutesLvl >= 2) {
                             // Parse birth year safely (dd-mm-yyyy or yyyy-mm-dd)
                             int? birthYear;
                             if (widget.dob != null && widget.dob!.isNotEmpty) {
                               final parts = widget.dob!.split('-');
                               if (parts.length == 3) {
-                                // detect which format: if first part > 31, assume yyyy-mm-dd
-                                if (int.tryParse(parts[0]) != null && int.parse(parts[0]) > 31) {
-                                  birthYear = int.tryParse(parts[0]);
+                                final first = int.tryParse(parts[0]);
+                                if (first != null && first > 31) {
+                                  birthYear = first;                 // yyyy-mm-dd
                                 } else {
-                                  birthYear = int.tryParse(parts[2]);
+                                  birthYear = int.tryParse(parts[2]); // dd-mm-yyyy
                                 }
                               }
                             }
@@ -1805,7 +1864,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                                 ? 'Certified cake architect 🍑🏗️'
                                 : 'Those jeans won’t know what hit ’em 🍑💥';
 
-                            return Padding(
+                            bootyCandidate = Padding(
                               padding: const EdgeInsets.only(top: 6),
                               child: Text(
                                 bootyMsg,
@@ -1814,15 +1873,14 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                             );
                           }
 
-
-                          // 3) Male, 90s kid, ALL upper-body, ZERO lower-body → bro callout
+// 3) Male, 90s kid, ALL upper-body, ZERO lower-body → bro callout
                           final noLegs =
                               quadsLvl == 0 && hammiesLvl == 0 && glutesLvl == 0 && calvesLvl == 0;
-                          final allUpperSelected =
+                          final allUpperSelectedLocal =
                               chestLvl > 0 && backLvl > 0 && shouldersLvl > 0 && armsLvl > 0;
 
-                          if (isOldEnoughForBrah && noLegs && allUpperSelected) {
-                            return const Padding(
+                          if (isOldEnoughForBrah && noLegs && allUpperSelectedLocal) {
+                            otherCandidate ??= const Padding(
                               padding: EdgeInsets.only(top: 6),
                               child: Text(
                                 'No leg days? Do you even lift brah? 😂',
@@ -1831,42 +1889,79 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                             );
                           }
 
-                          // 4) Typical bro upper-body emphasis (chest/shoulders/arms)
-                          // --- "Upper deck coming in nice" ---
-// Show only if ALL upper-body parts selected (chest, back, shoulders, arms)
-// AND at least two of them are MAX emphasis (level 3)
-
-                          final highUpperCount = [
-                            chestLvl >= 3,
-                            backLvl >= 3,
-                            shouldersLvl >= 3,
-                            armsLvl >= 3,
+// 4) Typical upper-body emphasis (chest/shoulders/arms)
+// Show only if ALL upper-body parts selected AND ≥2 of them are tier 2+
+                          final twoOrMoreAtLeastTier2 = [
+                            chestLvl >= 2,
+                            backLvl >= 2,
+                            shouldersLvl >= 2,
+                            armsLvl >= 2,
                           ].where((x) => x).length;
 
-                          if (allUpperSelected && highUpperCount >= 2) {
-                            return const Padding(
-                              padding: EdgeInsets.only(top: 6),
+                          if (allUpperSelectedLocal && twoOrMoreAtLeastTier2 >= 2) {
+                            final isFemale = (sex == 'F');
+                            final line = isFemale
+                                ? 'That upper-body glow-up is official 🌸'
+                                : 'Upper-body arc unlocked ✅';
+
+                            otherCandidate ??= Padding(
+                              padding: const EdgeInsets.only(top: 6),
                               child: Text(
-                                'Upper deck coming in nice 💪',
-                                style: TextStyle(color: Colors.blueAccent, fontSize: 12),
+                                line,
+                                style: const TextStyle(color: Colors.green, fontSize: 12),
                               ),
                             );
                           }
 
-// --- Whole-body training encouragement ---
-// If *every* tracked body part is at least selected (lvl > 0)
-                          final allSelected = _bodyFocusLevel.values.isNotEmpty &&
-                              _bodyFocusLevel.values.every((lvl) => lvl > 0);
-                          // --- Whole-body training encouragement ---
-// show only if EVERY body part from _bodyParts is selected at > 0
-                          final allBodyPartsSelected = _bodyParts.every(
-                                (p) => (_bodyFocusLevel[p] ?? 0) > 0,
-                          );
-                          if (allBodyPartsSelected) {
-                            return const Padding(
+
+
+                          // 5) All muscle groups selected AND all at tier 3 (max)
+// This should override other candidates (highest priority).
+                          final allSelectedAllTier3 = _bodyParts.isNotEmpty &&
+                              _bodyParts.every((p) => (_bodyFocusLevel[p] ?? 0) >= 3);
+
+                          if (allSelectedAllTier3) {
+                            final isFemaleLocal = (sex == 'F');
+                            final line = isFemaleLocal
+                                ? 'Heroine era initializing 🎞️⚡'
+                                : 'Boss-fight physique loading ⚔️💪';
+
+                            priorityCandidate = Padding(
+                              padding: const EdgeInsets.only(top: 6),
+                              child: Text(
+                                line,
+                                style: const TextStyle(color: Colors.green, fontSize: 12),
+                              ),
+                            );
+                          }
+
+
+
+                          // 4b) Female-focused: ≥2 of (Glutes, Hamstrings, Quads, Abs) are tier 2+
+// Typical lower-body/core goals
+                          final lowerOrCoreTwoPlus = [
+                            glutesLvl >= 2,
+                            hammiesLvl >= 2,
+                            quadsLvl >= 2,
+                            absLvl >= 2,
+                          ].where((x) => x).length;
+
+                          if (sex == 'F' && lowerOrCoreTwoPlus >= 2) {
+                            otherCandidate ??= const Padding(
                               padding: EdgeInsets.only(top: 6),
                               child: Text(
-                                'We love whole body training 🔥',
+                                'Lower half about to trend 📈🩷',
+                                style: TextStyle(color: Colors.green, fontSize: 12),
+                              ),
+                            );
+                          }
+                          // 4c) Male-focused: ≥2 of (Glutes, Hamstrings, Quads, Abs) are tier 2+
+// Lower-body/core emphasis
+                          if (sex == 'M' && lowerOrCoreTwoPlus >= 2) {
+                            otherCandidate ??= const Padding(
+                              padding: EdgeInsets.only(top: 6),
+                              child: Text(
+                                'Leg day loyalty detected 🦵🔥',
                                 style: TextStyle(color: Colors.green, fontSize: 12),
                               ),
                             );
@@ -1874,10 +1969,63 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
 
 
-                          // fallback = quiet
-                          return const SizedBox.shrink();
+// --- Preference resolution ---
+// Females: prefer booty → then other
+// Males:   prefer other → then booty
+                          // --- Preference resolution ---
+                          Widget? secondaryMsg;
+                          final isFemale = (sex == 'F');
+
+                          if (priorityCandidate != null) {
+                            // All-max wins (shows regardless of sex)
+                            secondaryMsg = priorityCandidate;
+                          } else {
+                            // Otherwise: Females prefer booty; males prefer other
+                            secondaryMsg = isFemale ? (bootyCandidate ?? otherCandidate)
+                                : (otherCandidate ?? bootyCandidate);
+                          }
+
+
+// Use `secondaryMsg` below as before.
+
+
+                          // Build the two-row output:
+                          // Row 1: whole-body (if applicable)
+                          // Row 2: whichever secondary applied (if any)
+                          final children = <Widget>[];
+
+                          if (allBodyPartsSelected) {
+                            children.add(const Padding(
+                              padding: EdgeInsets.only(top: 6),
+                              child: Text(
+                                'We love whole body training 🔥',
+                                style: TextStyle(color: Colors.green, fontSize: 12),
+                              ),
+                            ));
+                          }
+
+                          if (secondaryMsg != null) {
+                            // If whole-body row is shown above, tighten spacing a bit
+                            children.add(Padding(
+                              padding: EdgeInsets.only(top: allBodyPartsSelected ? 4 : 6),
+                              child: (secondaryMsg as Padding).child, // reuse inner Text with its style
+                            ));
+                          }
+
+                          if (children.isEmpty) {
+                            return const SizedBox.shrink();
+                          }
+
+                          return Center(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: children,
+                            ),
+                          );
+
                         },
-                      ),
+                      )
+
 
                     ],
 
@@ -2055,7 +2203,152 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                           ),
                         ],
                       ),
+
+
                     ),
+
+                    /// ─────────────────────────────────────────────────────────────────────────────
+// Personal training history (conditional on NOT 'Never trained before')
+// ─────────────────────────────────────────────────────────────────────────────
+                    if (_experience != null && _experience != TrainingExperience.never) ...[
+                      const SizedBox(height: 14),
+                      const _SectionHeader(
+                        "Have you ever had personal training before?",
+                        color: Colors.blueAccent, // ✅ make this one blue
+                      ),
+                      const SizedBox(height: 10),
+
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.9),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.blueAccent, width: 1.3),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.blueAccent.withOpacity(0.06),
+                              blurRadius: 4,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        padding: const EdgeInsets.fromLTRB(4, 4, 4, 4),
+                        child: Builder(
+                          builder: (_) {
+                            // 🔹 PT labels depend ONLY on sex + age (1998 cutoff), not on training experience.
+                            List<String> ptLabelsFor({
+                              required String? sex,
+                              required String? dob,
+                            }) {
+                              int? year;
+                              if (dob != null && dob.isNotEmpty) {
+                                final parts = dob.split('-');
+                                if (parts.length == 3) {
+                                  year = int.tryParse(parts[2]) ?? int.tryParse(parts[0]);
+                                }
+                              }
+
+                              final isFemale = (sex ?? '').toUpperCase() == 'F';
+                              final is1998Plus = (year != null && year >= 1998);
+
+                              // FEMALE 1998+
+                              if (isFemale && is1998Plus) {
+                                return const [
+                                  'Not yet 👀',
+                                  'Just a taste (Less than 3 sessions)',
+                                  'Had some help (4–16 sessions)',
+                                  'Seasoned PT queen (16+ sessions)',
+                                ];
+                              }
+
+                              // FEMALE <1998
+                              if (isFemale && !is1998Plus) {
+                                return const [
+                                  'No',
+                                  'Intro pack (<3)',
+                                  'Short block (4–16)',
+                                  'Ongoing (16+)',
+                                ];
+                              }
+
+                              // MALE 1998+
+                              if (!isFemale && is1998Plus) {
+                                return const [
+                                  'Nah',
+                                  'Tried a couple (Less than 3 sessions)',
+                                  'Some PT (4–16 sessions)',
+                                  'Dialled in with a coach (16+ sessions)',
+                                ];
+                              }
+
+                              // MALE <1998
+                              return const [
+                                'No',
+                                'Intro (Less than 3 sessions)',
+                                '4–16 sessions',
+                                '16+ sessions',
+                              ];
+                            }
+
+                            final labels = ptLabelsFor(
+                              sex: widget.sex,
+                              dob: widget.dob,
+                            );
+
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Padding(
+                                  padding: EdgeInsets.only(bottom: 6),
+                                  child: Center(
+                                    child: Text(
+                                      'Pick one (helps us tailor your plan)',
+                                      style: TextStyle(fontSize: 12, color: Colors.black45),
+                                    ),
+                                  ),
+                                ),
+
+                                ...List.generate(4, (i) {
+                                  final selected = _ptHistory == i;
+                                  return Container(
+                                    margin: const EdgeInsets.only(bottom: 6),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(
+                                        color: selected ? Colors.blueAccent : Colors.grey.shade300,
+                                        width: selected ? 2 : 1,
+                                      ),
+                                      borderRadius: BorderRadius.circular(12),
+                                      color: selected
+                                          ? Colors.blueAccent.withOpacity(0.08)
+                                          : Colors.white.withOpacity(0.9),
+                                    ),
+                                    child: RadioListTile<int>(
+                                      dense: true,
+                                      visualDensity: VisualDensity.compact,
+                                      contentPadding: EdgeInsets.zero,
+                                      activeColor: Colors.blueAccent,
+                                      value: i,
+                                      groupValue: _ptHistory,
+                                      onChanged: (v) => setState(() => _ptHistory = v),
+                                      title: Text(
+                                        labels[i],
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          color: selected ? Colors.blueAccent : Colors.black87,
+                                          fontWeight:
+                                          selected ? FontWeight.w600 : FontWeight.normal,
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                }),
+                              ],
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+
+
 
 
 
@@ -2069,7 +2362,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                       spacing: 8, runSpacing: 8,
                       children: [
                         for (final entry in const [
-                          ['24 hour / commercial gym', 'commercial'],
+                          ['Typical gym in NZ', 'commercial'],
                           ['Powerlifting gym', 'powerlifting'],
                           ['Home gym', 'home'],
                           ['Travelling', 'travelling'],
@@ -2097,7 +2390,14 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                                 _env = entry[1];
                                 _equipSelected.clear();
                                 _dbMax = null;
+
+                                // 👇 Prefill defaults if commercial; otherwise leave empty
+                                if (_env == 'commercial') {
+                                  _equipSelected.addAll(_commercialEquip); // ✅ select all machines by default
+                                }
+
                               });
+
                             },
                           ),
 
@@ -2213,6 +2513,57 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                         ),
                       ],
                     ],
+
+                    // Details for COMMERCIAL (24 hr / commercial gym)
+                    if (_env == 'commercial') ...[
+                      const SizedBox(height: 13),
+                      const _SectionHeader("Deselect any you do not have access to"),
+                      const SizedBox(height: 8),
+
+                      Builder(builder: (_) {
+                        final items = _commercialEquip;
+
+                        return ListView.separated(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          padding: EdgeInsets.zero,
+                          itemCount: items.length,
+                          separatorBuilder: (_, __) => Divider(height: 1, color: Colors.blueGrey.shade100),
+                          itemBuilder: (_, i) {
+                            final label = items[i];
+                            final sel = _equipSelected.contains(label);
+                            return CheckboxListTile(
+                              dense: true,
+                              visualDensity: VisualDensity.compact,
+                              contentPadding: EdgeInsets.zero,
+                              controlAffinity: ListTileControlAffinity.leading,
+                              activeColor: Colors.blueAccent,
+                              checkColor: Colors.white,
+                              title: Text(
+                                label,
+                                style: const TextStyle(
+                                  color: Colors.black54,
+                                  fontSize: 15.5,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              value: sel,
+                              onChanged: (v) {
+                                setState(() {
+                                  if (v == true) {
+                                    _equipSelected.add(label);
+                                  } else {
+                                    _equipSelected.remove(label);
+                                  }
+                                });
+                              },
+                            );
+                          },
+                        );
+                      }),
+                      const SizedBox(height: 4),
+                    ],
+
 
                     // New: intended training frequency
                     const SizedBox(height: 18),
