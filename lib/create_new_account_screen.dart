@@ -1464,6 +1464,19 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
         }, SetOptions(merge: true));
       }
 
+      // 3b) Save weekly training frequency (explicit mirror of answers.minTrainingDaysPerWeek)
+      await onbRef.set({
+        'weeklyFrequency': _minTrainingDays,        // int 2..7
+        'minTrainingDaysPerWeek': _minTrainingDays, // legacy/alias for backward compatibility
+        'weeklyFrequencySavedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+// (Optional but handy) also surface it on the top-level users doc for fast reads
+      await db.collection('users').doc(user.uid).set({
+        'weeklyFrequency': _minTrainingDays,
+      }, SetOptions(merge: true));
+
+
 
       if (!mounted) return;
       Navigator.pushReplacementNamed(context, '/home');

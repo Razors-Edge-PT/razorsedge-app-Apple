@@ -30,6 +30,7 @@ import 're_daily.dart';
 import 'dart:math';
 import 'leaderboard_page.dart';
 import 'template_bootstrapper.dart';
+import 'debug_utils.dart';
 
  import 'dart:convert';
  import 'package:cloud_firestore/cloud_firestore.dart';
@@ -2499,6 +2500,40 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                           ),
                         ),
 
+                        const SizedBox(width: 8),
+
+                        // 🔧 Sneaky debug button (one-time Firestore dump)
+                        TextButton.icon(
+                          onPressed: () async {
+                            try {
+                              // 👇 enable file output
+                              final result = await dumpExercisesByCategory(writeFile: true);
+                              debugPrint('🗂️ [DumpExercises] categories: ${result.keys.length}');
+                              if (!mounted) return;
+
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('✅ Exercise dump saved — check debug log for file path'),
+                                  duration: Duration(seconds: 3),
+                                ),
+                              );
+                            } catch (e) {
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Dump failed: $e')),
+                              );
+                            }
+                          },
+
+                          icon: const Icon(Icons.bug_report, size: 16, color: Colors.white),
+                          label: const Text('Sneaky', style: TextStyle(color: Colors.white)),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            backgroundColor: Colors.white12,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            foregroundColor: Colors.white,
+                          ),
+                        ),
 
 
                         // ── Home Feed ──────────────────────────────────────────────────────────
