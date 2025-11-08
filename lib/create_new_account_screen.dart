@@ -1704,6 +1704,336 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
 
                     // B) Body Focus (conditional)
+
+
+                    // C) Injuries (checkbox + pain slider)
+                    const SizedBox(height: 19),
+                    _SectionHeader("Any existing niggles or injuries?", color: Colors.blueAccent),
+                    const SizedBox(height: 8),
+
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.9),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.blueAccent, width: 1.3),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.blueAccent.withOpacity(0.06),
+                            blurRadius: 4,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                      child: Column(
+                        children: _injuryKeys.map((k) {
+                          final checked = _injuries.contains(k);
+                          final val = _painSlider[k] ?? 5.0;
+
+                          return Column(
+                            children: [
+                              CheckboxListTile(
+                                dense: true,
+                                visualDensity: VisualDensity.compact,
+                                contentPadding: EdgeInsets.zero,
+                                controlAffinity: ListTileControlAffinity.leading,
+                                activeColor: Colors.blueAccent,
+                                checkColor: Colors.white,
+                                title: Text(
+                                  k,
+                                  style: const TextStyle(
+                                    color: Colors.black87,
+                                    fontSize: 15.5,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                value: checked,
+                                onChanged: (v) {
+                                  setState(() {
+                                    if (v == true) {
+                                      _injuries.add(k);
+                                      _painSlider.putIfAbsent(k, () => 5.0);
+                                    } else {
+                                      _injuries.remove(k);
+                                      _painSlider.remove(k);
+                                    }
+                                  });
+                                },
+                              ),
+
+                              if (checked) ...[
+                                const SizedBox(height: 2),
+                                Row(
+                                  children: [
+                                    const Text('Pain now:',
+                                        style: TextStyle(color: Colors.black54, fontSize: 13.5)),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: SliderTheme(
+                                        data: SliderTheme.of(context).copyWith(
+                                          trackHeight: 3.5,
+                                          activeTrackColor: Colors.blueAccent,
+                                          inactiveTrackColor: Colors.blueAccent.withOpacity(0.25),
+                                          thumbColor: Colors.lightBlue,
+                                          overlayColor: Colors.lightBlue.withOpacity(0.15),
+                                          valueIndicatorColor: Colors.blueAccent,
+                                          valueIndicatorTextStyle: const TextStyle(color: Colors.white),
+                                        ),
+                                        child: Slider(
+                                          min: 1,
+                                          max: 10,
+                                          divisions: 9,
+                                          label: _painSlider[k]?.round().toString(),
+                                          value: val,
+                                          onChanged: (v) => setState(() => _painSlider[k] = v),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+
+                              // divider between items
+                              const Divider(height: 10, color: Color(0xFFE3F2FD)),
+                            ],
+                          );
+                        }).toList(),
+                      ),
+                    ),
+
+
+                    // D) Experience
+                    const SizedBox(height: 16),
+                    _SectionHeader("Weights Training experience", color: Colors.blueAccent),
+                    const SizedBox(height: 6),
+
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.9),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.blueAccent, width: 1.3),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.blueAccent.withOpacity(0.06),
+                            blurRadius: 4,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+                      child: Column(
+                        children: [
+                          RadioListTile<TrainingExperience>(
+                            dense: true,
+                            visualDensity: VisualDensity.compact,
+                            contentPadding: EdgeInsets.zero,
+                            activeColor: Colors.blueAccent,
+                            title: const Text(
+                              'Never trained before',
+                              style: TextStyle(color: Colors.black87, fontSize: 15.5, fontWeight: FontWeight.w600),
+                            ),
+                            value: TrainingExperience.never,
+                            groupValue: _experience,
+                            onChanged: (v) => setState(() {
+                              _experience = v;
+                              _moreSpecific = false; // hide/disable advanced control
+                            }),
+
+                          ),
+                          const Divider(height: 6, color: Color(0xFFE3F2FD)),
+                          RadioListTile<TrainingExperience>(
+                            dense: true,
+                            visualDensity: VisualDensity.compact,
+                            contentPadding: EdgeInsets.zero,
+                            activeColor: Colors.blueAccent,
+                            title: const Text(
+                              '< 6 months',
+                              style: TextStyle(color: Colors.black87, fontSize: 15.5, fontWeight: FontWeight.w600),
+                            ),
+                            value: TrainingExperience.lt6mo,
+                            groupValue: _experience,
+                            onChanged: (v) => setState(() {
+                              _experience = v;
+                              _moreSpecific = false; // hide/disable advanced control
+                            }),
+
+                          ),
+                          const Divider(height: 6, color: Color(0xFFE3F2FD)),
+                          RadioListTile<TrainingExperience>(
+                            dense: true,
+                            visualDensity: VisualDensity.compact,
+                            contentPadding: EdgeInsets.zero,
+                            activeColor: Colors.blueAccent,
+                            title: const Text(
+                              '~ 1 year',
+                              style: TextStyle(color: Colors.black87, fontSize: 15.5, fontWeight: FontWeight.w600),
+                            ),
+                            value: TrainingExperience.oneYear,
+                            groupValue: _experience,
+                            onChanged: (v) => setState(() => _experience = v),
+                          ),
+                          const Divider(height: 6, color: Color(0xFFE3F2FD)),
+                          RadioListTile<TrainingExperience>(
+                            dense: true,
+                            visualDensity: VisualDensity.compact,
+                            contentPadding: EdgeInsets.zero,
+                            activeColor: Colors.blueAccent,
+                            title: const Text(
+                              '2+ years',
+                              style: TextStyle(color: Colors.black87, fontSize: 15.5, fontWeight: FontWeight.w600),
+                            ),
+                            value: TrainingExperience.twoPlus,
+                            groupValue: _experience,
+                            onChanged: (v) => setState(() => _experience = v),
+                          ),
+                        ],
+                      ),
+
+
+                    ),
+
+                    /// ─────────────────────────────────────────────────────────────────────────────
+// Personal training history (conditional on NOT 'Never trained before')
+// ─────────────────────────────────────────────────────────────────────────────
+                    if (_experience != null && _experience != TrainingExperience.never) ...[
+                      const SizedBox(height: 14),
+                      const _SectionHeader(
+                        "Have you ever had personal training before?",
+                        color: Colors.blueAccent, // ✅ make this one blue
+                      ),
+                      const SizedBox(height: 10),
+
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.9),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.blueAccent, width: 1.3),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.blueAccent.withOpacity(0.06),
+                              blurRadius: 4,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        padding: const EdgeInsets.fromLTRB(4, 4, 4, 4),
+                        child: Builder(
+                          builder: (_) {
+                            // 🔹 PT labels depend ONLY on sex + age (1998 cutoff), not on training experience.
+                            List<String> ptLabelsFor({
+                              required String? sex,
+                              required String? dob,
+                            }) {
+                              int? year;
+                              if (dob != null && dob.isNotEmpty) {
+                                final parts = dob.split('-');
+                                if (parts.length == 3) {
+                                  year = int.tryParse(parts[2]) ?? int.tryParse(parts[0]);
+                                }
+                              }
+
+                              final isFemale = (sex ?? '').toUpperCase() == 'F';
+                              final is1998Plus = (year != null && year >= 1998);
+
+                              // FEMALE 1998+
+                              if (isFemale && is1998Plus) {
+                                return const [
+                                  'Not yet 👀',
+                                  'Just a taste (Less than 3 sessions)',
+                                  'Had some help (4–16 sessions)',
+                                  'Seasoned PT queen (16+ sessions)',
+                                ];
+                              }
+
+                              // FEMALE <1998
+                              if (isFemale && !is1998Plus) {
+                                return const [
+                                  'No',
+                                  'Intro pack (<3)',
+                                  'Short block (4–16)',
+                                  'Ongoing (16+)',
+                                ];
+                              }
+
+                              // MALE 1998+
+                              if (!isFemale && is1998Plus) {
+                                return const [
+                                  'Nah',
+                                  'Tried a couple (Less than 3 sessions)',
+                                  'Some PT (4–16 sessions)',
+                                  'Dialled in with a coach (16+ sessions)',
+                                ];
+                              }
+
+                              // MALE <1998
+                              return const [
+                                'No',
+                                'Intro (Less than 3 sessions)',
+                                '4–16 sessions',
+                                '16+ sessions',
+                              ];
+                            }
+
+                            final labels = ptLabelsFor(
+                              sex: widget.sex,
+                              dob: widget.dob,
+                            );
+
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Padding(
+                                  padding: EdgeInsets.only(bottom: 6),
+                                  child: Center(
+                                    child: Text(
+                                      'Pick one (helps us tailor your plan)',
+                                      style: TextStyle(fontSize: 12, color: Colors.black45),
+                                    ),
+                                  ),
+                                ),
+
+                                ...List.generate(4, (i) {
+                                  final selected = _ptHistory == i;
+                                  return Container(
+                                    margin: const EdgeInsets.only(bottom: 6),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(
+                                        color: selected ? Colors.blueAccent : Colors.grey.shade300,
+                                        width: selected ? 2 : 1,
+                                      ),
+                                      borderRadius: BorderRadius.circular(12),
+                                      color: selected
+                                          ? Colors.blueAccent.withOpacity(0.08)
+                                          : Colors.white.withOpacity(0.9),
+                                    ),
+                                    child: RadioListTile<int>(
+                                      dense: true,
+                                      visualDensity: VisualDensity.compact,
+                                      contentPadding: EdgeInsets.zero,
+                                      activeColor: Colors.blueAccent,
+                                      value: i,
+                                      groupValue: _ptHistory,
+                                      onChanged: (v) => setState(() => _ptHistory = v),
+                                      title: Text(
+                                        labels[i],
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          color: selected ? Colors.blueAccent : Colors.black87,
+                                          fontWeight:
+                                          selected ? FontWeight.w600 : FontWeight.normal,
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                }),
+                              ],
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+
+
                     if (_muscleOrTonedChosen) ...[
                       const SizedBox(height: 16),
                       _SectionHeader(
@@ -1785,47 +2115,48 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
                                     const SizedBox(width: 10),
 
-                                    // More specific toggle (highlight when ON)
-                                    ChoiceChip(
-                                      showCheckmark: false,
-                                      label: const Text(
-                                        'More specific',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.black,
+                                    // Show the advanced toggle only for ~1 year or 2+ years experience
+                                    if (_experience == TrainingExperience.oneYear || _experience == TrainingExperience.twoPlus)
+                                      ChoiceChip(
+                                        showCheckmark: false,
+                                        label: const Text(
+                                          'More specific',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.black,
+                                          ),
                                         ),
-                                      ),
-                                      selected: _moreSpecific,
-                                      selectedColor: Colors.lightBlue.shade100, // highlighted when ON
-                                      backgroundColor: Colors.white, // de-highlighted when OFF
-                                      shape: StadiumBorder(
-                                        side: BorderSide(
-                                          color:
-                                          _moreSpecific ? Colors.lightBlue : Colors.blueAccent,
-                                          width: 1.2,
+                                        selected: _moreSpecific,
+                                        selectedColor: Colors.lightBlue.shade100, // highlighted when ON
+                                        backgroundColor: Colors.white,            // de-highlighted when OFF
+                                        shape: StadiumBorder(
+                                          side: BorderSide(
+                                            color: _moreSpecific ? Colors.lightBlue : Colors.blueAccent,
+                                            width: 1.2,
+                                          ),
                                         ),
-                                      ),
-                                      onSelected: (_) {
-                                        setState(() {
-                                          _moreSpecific = !_moreSpecific;
+                                        onSelected: (_) {
+                                          setState(() {
+                                            _moreSpecific = !_moreSpecific;
 
-                                          // When turning ON, seed children for any already-selected parents
-                                          if (_moreSpecific) {
-                                            for (final parent in _subGroups.keys) {
-                                              final pLvl = _bodyFocusLevel[parent] ?? 0;
-                                              if (pLvl > 0) {
-                                                final kids = _subGroups[parent]!;
-                                                _childFocusLevel[parent] ??= {};
-                                                for (final k in kids) {
-                                                  _childFocusLevel[parent]![k] ??= pLvl;
+                                            // When turning ON, seed children for any already-selected parents
+                                            if (_moreSpecific) {
+                                              for (final parent in _subGroups.keys) {
+                                                final pLvl = _bodyFocusLevel[parent] ?? 0;
+                                                if (pLvl > 0) {
+                                                  final kids = _subGroups[parent]!;
+                                                  _childFocusLevel[parent] ??= {};
+                                                  for (final k in kids) {
+                                                    _childFocusLevel[parent]![k] ??= pLvl;
+                                                  }
                                                 }
                                               }
                                             }
-                                          }
-                                          // When turning OFF, keep _childFocusLevel in memory
-                                        });
-                                      },
-                                    ),
+                                            // When turning OFF, keep _childFocusLevel in memory (no change)
+                                          });
+                                        },
+                                      ),
+
                                   ],
                                 ),
                               ),
@@ -2158,328 +2489,6 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
 
                     ],
-
-                    // C) Injuries (checkbox + pain slider)
-                    const SizedBox(height: 19),
-                    _SectionHeader("Any existing niggles or injuries?", color: Colors.blueAccent),
-                    const SizedBox(height: 8),
-
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.9),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.blueAccent, width: 1.3),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.blueAccent.withOpacity(0.06),
-                            blurRadius: 4,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                      child: Column(
-                        children: _injuryKeys.map((k) {
-                          final checked = _injuries.contains(k);
-                          final val = _painSlider[k] ?? 5.0;
-
-                          return Column(
-                            children: [
-                              CheckboxListTile(
-                                dense: true,
-                                visualDensity: VisualDensity.compact,
-                                contentPadding: EdgeInsets.zero,
-                                controlAffinity: ListTileControlAffinity.leading,
-                                activeColor: Colors.blueAccent,
-                                checkColor: Colors.white,
-                                title: Text(
-                                  k,
-                                  style: const TextStyle(
-                                    color: Colors.black87,
-                                    fontSize: 15.5,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                value: checked,
-                                onChanged: (v) {
-                                  setState(() {
-                                    if (v == true) {
-                                      _injuries.add(k);
-                                      _painSlider.putIfAbsent(k, () => 5.0);
-                                    } else {
-                                      _injuries.remove(k);
-                                      _painSlider.remove(k);
-                                    }
-                                  });
-                                },
-                              ),
-
-                              if (checked) ...[
-                                const SizedBox(height: 2),
-                                Row(
-                                  children: [
-                                    const Text('Pain now:',
-                                        style: TextStyle(color: Colors.black54, fontSize: 13.5)),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: SliderTheme(
-                                        data: SliderTheme.of(context).copyWith(
-                                          trackHeight: 3.5,
-                                          activeTrackColor: Colors.blueAccent,
-                                          inactiveTrackColor: Colors.blueAccent.withOpacity(0.25),
-                                          thumbColor: Colors.lightBlue,
-                                          overlayColor: Colors.lightBlue.withOpacity(0.15),
-                                          valueIndicatorColor: Colors.blueAccent,
-                                          valueIndicatorTextStyle: const TextStyle(color: Colors.white),
-                                        ),
-                                        child: Slider(
-                                          min: 1,
-                                          max: 10,
-                                          divisions: 9,
-                                          label: _painSlider[k]?.round().toString(),
-                                          value: val,
-                                          onChanged: (v) => setState(() => _painSlider[k] = v),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-
-                              // divider between items
-                              const Divider(height: 10, color: Color(0xFFE3F2FD)),
-                            ],
-                          );
-                        }).toList(),
-                      ),
-                    ),
-
-
-                    // D) Experience
-                    const SizedBox(height: 16),
-                    _SectionHeader("Weights Training experience", color: Colors.blueAccent),
-                    const SizedBox(height: 6),
-
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.9),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.blueAccent, width: 1.3),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.blueAccent.withOpacity(0.06),
-                            blurRadius: 4,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
-                      child: Column(
-                        children: [
-                          RadioListTile<TrainingExperience>(
-                            dense: true,
-                            visualDensity: VisualDensity.compact,
-                            contentPadding: EdgeInsets.zero,
-                            activeColor: Colors.blueAccent,
-                            title: const Text(
-                              'Never trained before',
-                              style: TextStyle(color: Colors.black87, fontSize: 15.5, fontWeight: FontWeight.w600),
-                            ),
-                            value: TrainingExperience.never,
-                            groupValue: _experience,
-                            onChanged: (v) => setState(() => _experience = v),
-                          ),
-                          const Divider(height: 6, color: Color(0xFFE3F2FD)),
-                          RadioListTile<TrainingExperience>(
-                            dense: true,
-                            visualDensity: VisualDensity.compact,
-                            contentPadding: EdgeInsets.zero,
-                            activeColor: Colors.blueAccent,
-                            title: const Text(
-                              '< 6 months',
-                              style: TextStyle(color: Colors.black87, fontSize: 15.5, fontWeight: FontWeight.w600),
-                            ),
-                            value: TrainingExperience.lt6mo,
-                            groupValue: _experience,
-                            onChanged: (v) => setState(() => _experience = v),
-                          ),
-                          const Divider(height: 6, color: Color(0xFFE3F2FD)),
-                          RadioListTile<TrainingExperience>(
-                            dense: true,
-                            visualDensity: VisualDensity.compact,
-                            contentPadding: EdgeInsets.zero,
-                            activeColor: Colors.blueAccent,
-                            title: const Text(
-                              '~ 1 year',
-                              style: TextStyle(color: Colors.black87, fontSize: 15.5, fontWeight: FontWeight.w600),
-                            ),
-                            value: TrainingExperience.oneYear,
-                            groupValue: _experience,
-                            onChanged: (v) => setState(() => _experience = v),
-                          ),
-                          const Divider(height: 6, color: Color(0xFFE3F2FD)),
-                          RadioListTile<TrainingExperience>(
-                            dense: true,
-                            visualDensity: VisualDensity.compact,
-                            contentPadding: EdgeInsets.zero,
-                            activeColor: Colors.blueAccent,
-                            title: const Text(
-                              '2+ years',
-                              style: TextStyle(color: Colors.black87, fontSize: 15.5, fontWeight: FontWeight.w600),
-                            ),
-                            value: TrainingExperience.twoPlus,
-                            groupValue: _experience,
-                            onChanged: (v) => setState(() => _experience = v),
-                          ),
-                        ],
-                      ),
-
-
-                    ),
-
-                    /// ─────────────────────────────────────────────────────────────────────────────
-// Personal training history (conditional on NOT 'Never trained before')
-// ─────────────────────────────────────────────────────────────────────────────
-                    if (_experience != null && _experience != TrainingExperience.never) ...[
-                      const SizedBox(height: 14),
-                      const _SectionHeader(
-                        "Have you ever had personal training before?",
-                        color: Colors.blueAccent, // ✅ make this one blue
-                      ),
-                      const SizedBox(height: 10),
-
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.9),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.blueAccent, width: 1.3),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.blueAccent.withOpacity(0.06),
-                              blurRadius: 4,
-                              offset: const Offset(0, 2),
-                            ),
-                          ],
-                        ),
-                        padding: const EdgeInsets.fromLTRB(4, 4, 4, 4),
-                        child: Builder(
-                          builder: (_) {
-                            // 🔹 PT labels depend ONLY on sex + age (1998 cutoff), not on training experience.
-                            List<String> ptLabelsFor({
-                              required String? sex,
-                              required String? dob,
-                            }) {
-                              int? year;
-                              if (dob != null && dob.isNotEmpty) {
-                                final parts = dob.split('-');
-                                if (parts.length == 3) {
-                                  year = int.tryParse(parts[2]) ?? int.tryParse(parts[0]);
-                                }
-                              }
-
-                              final isFemale = (sex ?? '').toUpperCase() == 'F';
-                              final is1998Plus = (year != null && year >= 1998);
-
-                              // FEMALE 1998+
-                              if (isFemale && is1998Plus) {
-                                return const [
-                                  'Not yet 👀',
-                                  'Just a taste (Less than 3 sessions)',
-                                  'Had some help (4–16 sessions)',
-                                  'Seasoned PT queen (16+ sessions)',
-                                ];
-                              }
-
-                              // FEMALE <1998
-                              if (isFemale && !is1998Plus) {
-                                return const [
-                                  'No',
-                                  'Intro pack (<3)',
-                                  'Short block (4–16)',
-                                  'Ongoing (16+)',
-                                ];
-                              }
-
-                              // MALE 1998+
-                              if (!isFemale && is1998Plus) {
-                                return const [
-                                  'Nah',
-                                  'Tried a couple (Less than 3 sessions)',
-                                  'Some PT (4–16 sessions)',
-                                  'Dialled in with a coach (16+ sessions)',
-                                ];
-                              }
-
-                              // MALE <1998
-                              return const [
-                                'No',
-                                'Intro (Less than 3 sessions)',
-                                '4–16 sessions',
-                                '16+ sessions',
-                              ];
-                            }
-
-                            final labels = ptLabelsFor(
-                              sex: widget.sex,
-                              dob: widget.dob,
-                            );
-
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Padding(
-                                  padding: EdgeInsets.only(bottom: 6),
-                                  child: Center(
-                                    child: Text(
-                                      'Pick one (helps us tailor your plan)',
-                                      style: TextStyle(fontSize: 12, color: Colors.black45),
-                                    ),
-                                  ),
-                                ),
-
-                                ...List.generate(4, (i) {
-                                  final selected = _ptHistory == i;
-                                  return Container(
-                                    margin: const EdgeInsets.only(bottom: 6),
-                                    decoration: BoxDecoration(
-                                      border: Border.all(
-                                        color: selected ? Colors.blueAccent : Colors.grey.shade300,
-                                        width: selected ? 2 : 1,
-                                      ),
-                                      borderRadius: BorderRadius.circular(12),
-                                      color: selected
-                                          ? Colors.blueAccent.withOpacity(0.08)
-                                          : Colors.white.withOpacity(0.9),
-                                    ),
-                                    child: RadioListTile<int>(
-                                      dense: true,
-                                      visualDensity: VisualDensity.compact,
-                                      contentPadding: EdgeInsets.zero,
-                                      activeColor: Colors.blueAccent,
-                                      value: i,
-                                      groupValue: _ptHistory,
-                                      onChanged: (v) => setState(() => _ptHistory = v),
-                                      title: Text(
-                                        labels[i],
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          color: selected ? Colors.blueAccent : Colors.black87,
-                                          fontWeight:
-                                          selected ? FontWeight.w600 : FontWeight.normal,
-                                        ),
-                                      ),
-                                    ),
-                                  );
-                                }),
-                              ],
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-
-
-
 
 
                     // ── Equipment / Environment (REQUIRED)
