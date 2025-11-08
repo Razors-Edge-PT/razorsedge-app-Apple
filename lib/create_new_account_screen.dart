@@ -1134,9 +1134,34 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
   final List<String> _bodyParts = const [
     'Chest', 'Back', 'Shoulders', 'Arms', 'Abs', 'Glutes', 'Quads', 'Hamstrings', 'Calves'
   ];
+  // Order to use when "More specific" is ON
+  static const List<String> _bodyPartsSpecificOrder = [
+    'Chest','Abs','Hamstrings','Quads','Calves','Glutes','Back','Shoulders','Arms',
+  ];
+
   final Set<String> _bodyFocus = <String>{};
   // 0 = off, 1 = light, 2 = medium, 3 = strong
   final Map<String, int> _bodyFocusLevel = <String, int>{};
+
+  // Toggle to reveal child muscles
+  bool _moreSpecific = false;
+
+// Parent → child muscles
+  final Map<String, List<String>> _subGroups = const {
+    // Back
+    'Back': ['Lats', 'Mid traps & rear delts', 'Lower back 🎄'],
+    // Shoulders
+    'Shoulders': ['Anterior delts', 'Lateral delts', 'Upper traps'],
+    // Arms
+    'Arms': ['Biceps', 'Triceps', 'Forearms'],
+    // Glutes
+    'Glutes': ['Glute Maximus', 'Glute Medius'],
+    // (You can add more later if you want)
+  };
+
+// Child emphasis levels: parent → (child → 0..3)
+  final Map<String, Map<String, int>> _childFocusLevel = {};
+
 
 
   // ── C) Injuries: checkboxes + per-item pain slider (1–10) when checked
@@ -1384,6 +1409,24 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       await onbRef.set({
         'bodyFocusLevel': _bodyFocusLevel,
       }, SetOptions(merge: true));
+
+      // Save child/sub-group levels (if any)
+      if (_childFocusLevel.isNotEmpty) {
+        final filtered = <String, Map<String, int>>{};
+        _childFocusLevel.forEach((parent, kidsMap) {
+          final pruned = Map.fromEntries(
+              kidsMap.entries.where((e) => (e.value as int) > 0)
+          );
+          if (pruned.isNotEmpty) filtered[parent] = pruned;
+        });
+
+        if (filtered.isNotEmpty) {
+          await onbRef.set({
+            'bodyFocusChildren': filtered, // parent → (child → 1..3)
+          }, SetOptions(merge: true));
+        }
+      }
+
 
 
       // Persist final goals order + the "not important" bin
@@ -1671,126 +1714,213 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
 
                       const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8, runSpacing: 8,
-                        children: [
-                          // ▼ Row: Select all / Clear all on its own line
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 8.0),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.start,
-                              children: [
-                                Builder(builder: (_) {
-                                  final anySelected = _bodyFocusLevel.values.any((lvl) => lvl > 0);
-                                  return ChoiceChip(
-                                    showCheckmark: false, // 👈 disables the default tick entirely
-                                    label: Text(
-                                      anySelected ? 'Clear all' : 'Select ALL',
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.black,
+                      Builder(
+                        builder: (_) {
+                          // ✅ Hoisted so BOTH the row and the chips below can see it
+                          final bodyPartsToShow =
+                          _moreSpecific ? _bodyPartsSpecificOrder : _bodyParts;
+
+                          return Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              // ▼ Row: Select all / Clear all + More specific toggle
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 8.0),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.start,
+                                  children: [
+                                    // Select ALL / Clear all
+                                    Builder(builder: (_) {
+                                      final anySelected =
+                                      _bodyFocusLevel.values.any((lvl) => lvl > 0);
+
+                                      return ChoiceChip(
+                                        showCheckmark: false,
+                                        label: Text(
+                                          anySelected ? 'Clear all' : 'Select ALL',
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.black,
+                                          ),
+                                        ),
+                                        selected: anySelected,
+                                        selectedColor: Colors.lightBlue.shade100,
+                                        backgroundColor: Colors.white,
+                                        shape: StadiumBorder(
+                                          side: BorderSide(
+                                            color:
+                                            anySelected ? Colors.lightBlue : Colors.blueAccent,
+                                            width: 1.2,
+                                          ),
+                                        ),
+                                        onSelected: (_) {
+                                          setState(() {
+                                            if (anySelected) {
+                                              // Clear parents + children
+                                              _bodyFocusLevel.clear();
+                                              _childFocusLevel.clear();
+                                            } else {
+                                              // Select all parents at level 1
+                                              _bodyFocusLevel
+                                                ..clear()
+                                                ..addEntries(
+                                                  bodyPartsToShow.map((p) => MapEntry(p, 1)),
+                                                );
+
+                                              // If more-specific view is ON, seed all children to 1
+                                              if (_moreSpecific) {
+                                                for (final parent in _subGroups.keys) {
+                                                  final kids = _subGroups[parent]!;
+                                                  _childFocusLevel[parent] = {
+                                                    for (final k in kids) k: 1,
+                                                  };
+                                                }
+                                              }
+                                            }
+                                          });
+                                        },
+                                      );
+                                    }),
+
+                                    const SizedBox(width: 10),
+
+                                    // More specific toggle (highlight when ON)
+                                    ChoiceChip(
+                                      showCheckmark: false,
+                                      label: const Text(
+                                        'More specific',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.black,
+                                        ),
                                       ),
-                                    ),
-                                    selected: anySelected,
-                                    selectedColor: Colors.lightBlue.shade100,
-                                    backgroundColor: Colors.white,
-                                    shape: StadiumBorder(
-                                      side: BorderSide(
-                                        color: anySelected ? Colors.lightBlue : Colors.blueAccent,
-                                        width: 1.2,
+                                      selected: _moreSpecific,
+                                      selectedColor: Colors.lightBlue.shade100, // highlighted when ON
+                                      backgroundColor: Colors.white, // de-highlighted when OFF
+                                      shape: StadiumBorder(
+                                        side: BorderSide(
+                                          color:
+                                          _moreSpecific ? Colors.lightBlue : Colors.blueAccent,
+                                          width: 1.2,
+                                        ),
                                       ),
+                                      onSelected: (_) {
+                                        setState(() {
+                                          _moreSpecific = !_moreSpecific;
+
+                                          // When turning ON, seed children for any already-selected parents
+                                          if (_moreSpecific) {
+                                            for (final parent in _subGroups.keys) {
+                                              final pLvl = _bodyFocusLevel[parent] ?? 0;
+                                              if (pLvl > 0) {
+                                                final kids = _subGroups[parent]!;
+                                                _childFocusLevel[parent] ??= {};
+                                                for (final k in kids) {
+                                                  _childFocusLevel[parent]![k] ??= pLvl;
+                                                }
+                                              }
+                                            }
+                                          }
+                                          // When turning OFF, keep _childFocusLevel in memory
+                                        });
+                                      },
                                     ),
-                                    onSelected: (_) {
-                                      setState(() {
-                                        if (anySelected) {
-                                          _bodyFocusLevel.clear();
-                                        } else {
-                                          _bodyFocusLevel
-                                            ..clear()
-                                            ..addEntries(_bodyParts.map((p) => MapEntry(p, 1)));
-                                        }
-                                      });
-                                    },
-                                  );
-                                }),
-
-                              ],
-                            ),
-                          ),
-
-
-// ▼ Tri-state emphasis chips (tap cycles Off → Light → Strong → Off)
-                          ..._bodyParts.map((p) {
-                            final lvl = _bodyFocusLevel[p] ?? 0; // 0,1,2,3
-
-                            // Visuals per level
-                            late final Color borderColor;
-                            late final Color labelColor;
-                            late final Color bgColor;
-                            late final double borderW;
-                            late final FontWeight fw;
-
-                            switch (lvl) {
-                              case 1: // emphasised1 (light)
-                                borderColor = Colors.lightBlue;
-                                labelColor  = Colors.blue.shade700;
-                                bgColor     = Colors.lightBlue.shade50;
-                                borderW     = 1;
-                                fw          = FontWeight.w700;
-                                break;
-                              case 2:
-                                borderColor = Colors.blueAccent.shade100;
-                                labelColor  = Colors.blue.shade700;
-                                bgColor     = Colors.lightBlue.shade200;
-                                borderW     = 1.2;
-                                fw          = FontWeight.w800;
-                                break;
-
-                              case 3: // emphasised3 (strong)
-                                borderColor = Colors.blueAccent.shade100;
-                                labelColor  = Colors.blue.shade700;
-                                bgColor     = Colors.lightBlue.shade400;
-                                borderW     = 1.2;
-                                fw          = FontWeight.w800;
-                                break;
-                              default: // 0 off
-                                borderColor = Colors.blueAccent;
-                                labelColor  = Colors.black54;
-                                bgColor     = Colors.white;
-                                borderW     = 1;
-                                fw          = FontWeight.w600;
-                            }
-
-                            return ChoiceChip(
-                              label: Text(
-                                p,
-                                style: TextStyle(
-                                  fontWeight: fw,
-                                  color: labelColor,
-                                  fontSize: 14.5,
+                                  ],
                                 ),
                               ),
-                              selected: lvl > 0,
-                              showCheckmark: false,                 // 👈 hide tick mark
-                              selectedColor: bgColor,               // when selected, use our bg per level
-                              backgroundColor: Colors.white,        // base
-                              shape: StadiumBorder(
-                                side: BorderSide(color: borderColor, width: borderW),
-                              ),
-                              onSelected: (_) {
-                                setState(() {
-                                  final next = (lvl + 1) % 4;       // 0→1→2→3→0
-                                  if (next == 0) {
-                                    _bodyFocusLevel.remove(p);
-                                  } else {
-                                    _bodyFocusLevel[p] = next;
-                                  }
-                                });
-                              },
-                            );
-                          }).toList(),
-                        ],
+
+                              // ▼ Tri-state emphasis chips (tap cycles 0→1→2→3→0)
+                              ...bodyPartsToShow.map((p) {
+                                final lvl = _bodyFocusLevel[p] ?? 0; // 0,1,2,3
+
+                                // Visuals per level (unchanged)
+                                late final Color borderColor;
+                                late final Color labelColor;
+                                late final Color bgColor;
+                                late final double borderW;
+                                late final FontWeight fw;
+
+                                switch (lvl) {
+                                  case 1:
+                                    borderColor = Colors.lightBlue;
+                                    labelColor = Colors.blue.shade700;
+                                    bgColor = Colors.lightBlue.shade50;
+                                    borderW = 1;
+                                    fw = FontWeight.w700;
+                                    break;
+                                  case 2:
+                                    borderColor = Colors.blueAccent.shade100;
+                                    labelColor = Colors.blue.shade700;
+                                    bgColor = Colors.lightBlue.shade200;
+                                    borderW = 1.2;
+                                    fw = FontWeight.w800;
+                                    break;
+                                  case 3:
+                                    borderColor = Colors.blueAccent.shade100;
+                                    labelColor = Colors.blue.shade700;
+                                    bgColor = Colors.lightBlue.shade400;
+                                    borderW = 1.2;
+                                    fw = FontWeight.w800;
+                                    break;
+                                  default:
+                                    borderColor = Colors.blueAccent;
+                                    labelColor = Colors.black54;
+                                    bgColor = Colors.white;
+                                    borderW = 1;
+                                    fw = FontWeight.w600;
+                                }
+
+                                return _ParentWithChildrenChip(
+                                  parent: p,
+                                  parentLevel: lvl,
+                                  onParentCycle: () {
+                                    final next = (lvl + 1) % 4; // 0→1→2→3→0
+                                    setState(() {
+                                      if (next == 0) {
+                                        _bodyFocusLevel.remove(p);
+                                      } else {
+                                        _bodyFocusLevel[p] = next;
+                                      }
+                                    });
+
+                                    // Keep children in sync when "More specific" is ON
+                                    if (_moreSpecific && _subGroups.containsKey(p)) {
+                                      final kids = _subGroups[p]!;
+                                      if ((_bodyFocusLevel[p] ?? 0) == 0) {
+                                        _childFocusLevel.remove(p);
+                                      } else {
+                                        final pLvlNow = _bodyFocusLevel[p]!;
+                                        _childFocusLevel[p] = {for (final k in kids) k: pLvlNow};
+                                      }
+                                    }
+                                  },
+                                  moreSpecific: _moreSpecific,
+                                  subGroups: _subGroups[p] ?? const [],
+                                  getChildLevel: (child) => _childFocusLevel[p]?[child] ?? 0,
+                                  onChildCycle: (child, current) {
+                                    final next = (current + 1) % 4; // 0→1→2→3→0
+                                    setState(() {
+                                      _childFocusLevel[p] ??= {};
+                                      _childFocusLevel[p]![child] = next;
+
+                                      // Parent = max(children) or 0 if all 0
+                                      final maxLvl = _childFocusLevel[p]!.values
+                                          .fold<int>(0, (m, v) => v > m ? v : m);
+                                      if (maxLvl == 0) {
+                                        _bodyFocusLevel.remove(p);
+                                      } else {
+                                        _bodyFocusLevel[p] = maxLvl;
+                                      }
+                                    });
+                                  },
+                                );
+                              }).toList(),
+                            ],
+                          );
+                        },
                       ),
+
                       // ▼ Body-focus feedback / fun messages
                       Builder(
                         builder: (_) {
@@ -2358,6 +2488,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                     const SizedBox(height: 8),
 
 // Environment picker (compact chips)
+
                     Wrap(
                       spacing: 8, runSpacing: 8,
                       children: [
@@ -3615,6 +3746,216 @@ class _BodyFocusPickerPngState extends State<BodyFocusPickerPng> {
       ),
     );
   }
+}
+class _ParentWithChildrenChip extends StatelessWidget {
+  final String parent;
+  final int parentLevel; // 0..3
+  final VoidCallback onParentCycle;
+
+  final bool moreSpecific;
+  final List<String> subGroups;
+  final int Function(String child) getChildLevel;
+  final void Function(String child, int current) onChildCycle;
+
+  const _ParentWithChildrenChip({
+    super.key,
+    required this.parent,
+    required this.parentLevel,
+    required this.onParentCycle,
+    required this.moreSpecific,
+    required this.subGroups,
+    required this.getChildLevel,
+    required this.onChildCycle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // Parent visuals (same as your switch)
+    final pv = _chipVisuals(parentLevel);
+
+    // Compact child chip visuals builder (same palette, smaller)
+    Widget _childChip(String child, int lvl) {
+      late final Color borderColor;
+      late final Color labelColor;
+      late final Color bgColor;
+      late final double borderW;
+      late final FontWeight fw;
+
+      switch (lvl) {
+        case 1:
+          borderColor = Colors.lightBlue;
+          labelColor  = Colors.blue.shade700;
+          bgColor     = Colors.lightBlue.shade50;
+          borderW     = 1;
+          fw          = FontWeight.w600;
+          break;
+        case 2:
+          borderColor = Colors.blueAccent.shade100;
+          labelColor  = Colors.blue.shade700;
+          bgColor     = Colors.lightBlue.shade200;
+          borderW     = 1.2;
+          fw          = FontWeight.w700;
+          break;
+        case 3:
+          borderColor = Colors.blueAccent.shade100;
+          labelColor  = Colors.blue.shade700;
+          bgColor     = Colors.lightBlue.shade400;
+          borderW     = 1.2;
+          fw          = FontWeight.w800;
+          break;
+        default:
+          borderColor = Colors.blueAccent;
+          labelColor  = Colors.black54;
+          bgColor     = Colors.white;
+          borderW     = 1;
+          fw          = FontWeight.w500;
+      }
+
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 1), // ✅ tighter vertical spacing
+        child: Transform.scale(
+          scale: 0.9, // ✅ reduce overall height/size by ~10%
+          alignment: Alignment.centerLeft,
+          child: ChoiceChip(
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap, // ✅ reduce tap height
+            label: Text(
+              child,
+              style: TextStyle(
+                fontWeight: fw,
+                color: labelColor,
+                fontSize: 13, // ✅ smaller font
+                height: 1.0,  // ✅ tighter line height
+              ),
+            ),
+            selected: lvl > 0,
+            showCheckmark: false,
+            selectedColor: bgColor,
+            backgroundColor: Colors.white,
+            shape: StadiumBorder(side: BorderSide(color: borderColor, width: borderW)),
+            onSelected: (_) => onChildCycle(child, lvl),
+          ),
+        ),
+      );
+    }
+
+
+    // Parent chip
+    final parentChip = ChoiceChip(
+      label: Text(
+        parent,
+        style: TextStyle(fontWeight: pv.fw, color: pv.labelColor, fontSize: 14.5),
+      ),
+      showCheckmark: false,
+      selected: parentLevel > 0,
+      selectedColor: pv.bgColor,
+      backgroundColor: Colors.white,
+      shape: StadiumBorder(side: BorderSide(color: pv.borderColor, width: pv.borderW)),
+      onSelected: (_) => onParentCycle(),
+    );
+
+    if (!moreSpecific || subGroups.isEmpty) {
+      // Default: just the parent chip
+      return parentChip;
+    }
+
+    // Inline cluster: Parent chip + short connectors + compact child chips
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        parentChip,
+        const SizedBox(width: 8),
+        // Child column, each with a short (possibly diagonal) connector
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: subGroups.asMap().entries.map((entry) {
+            final i = entry.key;
+            final child = entry.value;
+            final lvl = getChildLevel(child);
+
+            // Decide connector angle based on position in the list:
+            // - top items tilt downward (positive angle)
+            // - bottom items tilt upward (negative angle)
+            // - middle item stays horizontal (0)
+            final mid = (subGroups.length - 1) / 2.0;
+            double rel = subGroups.length > 1 ? (i - mid) / mid : 0.0; // -1..0..+1
+            if (rel.isNaN || rel.isInfinite) rel = 0.0;
+            // Scale + clamp to a nice subtle tilt (≈ ±22°)
+            final angle = (rel.clamp(-1.0, 1.0) as double) * 0.45; // radians (~22° max)
+
+            final connectorColor = Colors.blueAccent.withOpacity(0.6);
+
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Diagonal segment
+                  Transform.rotate(
+                    angle: angle,
+                    alignment: Alignment.centerLeft,
+                    child: Container(width: 18, height: 2, color: connectorColor),
+                  ),
+                  const SizedBox(width: 6),
+                  _childChip(child, lvl),
+
+                ],
+              ),
+            );
+          }).toList(),
+        ),
+
+      ],
+    );
+  }
+
+  // Visual pack identical to your switch cases
+  _Vis _chipVisuals(int lvl) {
+    late final Color borderColor;
+    late final Color labelColor;
+    late final Color bgColor;
+    late final double borderW;
+    late final FontWeight fw;
+
+    switch (lvl) {
+      case 1:
+        borderColor = Colors.lightBlue;
+        labelColor  = Colors.blue.shade700;
+        bgColor     = Colors.lightBlue.shade50;
+        borderW     = 1;
+        fw          = FontWeight.w700;
+        break;
+      case 2:
+        borderColor = Colors.blueAccent.shade100;
+        labelColor  = Colors.blue.shade700;
+        bgColor     = Colors.lightBlue.shade200;
+        borderW     = 1.2;
+        fw          = FontWeight.w800;
+        break;
+      case 3:
+        borderColor = Colors.blueAccent.shade100;
+        labelColor  = Colors.blue.shade700;
+        bgColor     = Colors.lightBlue.shade400;
+        borderW     = 1.2;
+        fw          = FontWeight.w800;
+        break;
+      default:
+        borderColor = Colors.blueAccent;
+        labelColor  = Colors.black54;
+        bgColor     = Colors.white;
+        borderW     = 1;
+        fw          = FontWeight.w600;
+    }
+    return _Vis(borderColor, labelColor, bgColor, borderW, fw);
+  }
+}
+
+class _Vis {
+  final Color borderColor, labelColor, bgColor;
+  final double borderW;
+  final FontWeight fw;
+  _Vis(this.borderColor, this.labelColor, this.bgColor, this.borderW, this.fw);
 }
 
 
