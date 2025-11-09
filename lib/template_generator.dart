@@ -1,6 +1,8 @@
 // lib/bootstrap/template_generator.dart
 import 'dart:convert';
 import 'package:flutter/foundation.dart'; // for debugPrint
+import 'package:cloud_firestore/cloud_firestore.dart'; // 🆕 for plannedExercises fetch
+
 
 import 'package:flutter/services.dart' show rootBundle;
 
@@ -85,9 +87,26 @@ class TemplateGenerator {
     required String? sexU,
     required int? age,
     required Map<String, dynamic> onboarding,
+    bool plannedOnly = false, // 🆕
   }) async {
     // 1) Load library
     final lib = await _loadExerciseLibrary();
+// 🆕 Planned-only filter (from Block Planner current_block)
+    List<ExLite> workingLib = lib;
+    if (plannedOnly) {
+      final plannedIds = await _fetchPlannedExerciseIds(uid);
+      if (plannedIds.isNotEmpty) {
+        final filtered = workingLib.where((e) => plannedIds.contains(e.id)).toList();
+        if (filtered.isEmpty) {
+          debugPrint('⚠️ [GEN] planned-only produced 0 matches; falling back to full library');
+        } else {
+          workingLib = filtered;
+          debugPrint('✅ [GEN] planned-only active: ${workingLib.length} exercises remain');
+        }
+      } else {
+        debugPrint('⚠️ [GEN] no plannedExercises; falling back to full library');
+      }
+    }
 
     // 2) Read knobs from onboarding
     final int weeklyFrequency = _readWeeklyFrequency(onboarding) ?? 4; // default to 4
@@ -106,7 +125,7 @@ class TemplateGenerator {
 
     // 4) Build a per-category pick list from the library (no duplicates)
     final byCat = <String, List<ExLite>>{};
-    for (final e in lib) {
+    for (final e in workingLib) {               // ← use workingLib
       byCat.putIfAbsent(e.category, () => <ExLite>[]).add(e);
     }
 
@@ -329,6 +348,35 @@ class TemplateGenerator {
     return items.map((m) => ExLite.fromMap(m)).toList();
   }
 
+// 🆕 Fetch planned exercise IDs from Block Planner → /users/{uid}/block_planner/current_block
+  static Future<Set<String>> _fetchPlannedExerciseIds(String uid) async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('block_planner')
+          .doc('current_block')
+          .get();
+
+      if (!doc.exists) {
+        debugPrint('🧩 [GEN] planned-only: current_block missing for uid=$uid');
+        return const {};
+      }
+
+      final data = doc.data();
+      if (data == null) return const {};
+
+      // plannedExercises is expected to be an array of exercise IDs
+      final list = (data['plannedExercises'] as List?)?.map((e) => e.toString()).toList() ?? const [];
+      final ids = Set<String>.from(list);
+
+      debugPrint('🧩 [GEN] planned-only: fetched ${ids.length} planned exercise ids');
+      return ids;
+    } catch (e, st) {
+      debugPrint('❌ [GEN] planned-only fetch failed: $e\n$st');
+      return const {};
+    }
+  }
 
 
   static int? _readWeeklyFrequency(Map<String, dynamic> onb) {
@@ -614,8 +662,6 @@ class TemplateGenerator {
     required String category,
     required List<_DayPlan> allDays, // 🆕 add this
   }) {
-
-
     // Avoid pairing agonists / overlapping prime movers within same circuit/day:
     // - Any Horizontal Press cannot pair with Vertical Press or Arm Extension
     // - Any Horizontal Pull cannot pair with Vertical Pull or Arm Curl
@@ -667,7 +713,6 @@ class TemplateGenerator {
       }
     }
 
-
     // ✅ Bench-first preference SECOND:
     // If this is the FIRST Horizontal Press of the day, prefer Barbell Bench Press.
     if (category == 'Horizontal Press' && (day.countByCategory['Horizontal Press'] ?? 0) == 0) {
@@ -684,6 +729,14 @@ class TemplateGenerator {
     for (final ex in pool) {
       if (day.hasExercise(ex.id)) continue;
       if (day.isBanned(ex, category)) continue;
+// 🔒 Per-exercise weekly cap (e.g. Bulgarian Split Squat)
+      if (allDays != null) {
+        final maxPerWeek = _perExerciseWeeklyMaxById[ex.id];
+        if (maxPerWeek != null) {
+          final used = _weeklyCountForExercise(ex.id, allDays);
+          if (used >= maxPerWeek) continue; // skip, already at cap
+        }
+      }
 
       // 🧠 pre-check: must be able to join at least one current circuit, or we start a new one if under cap
       bool canJoinAny = false;
@@ -694,7 +747,6 @@ class TemplateGenerator {
 
       return ex;
     }
-
 
     return null;
   }
@@ -1002,6 +1054,24 @@ class TemplateGenerator {
     return false;
   }
 
+  // 🚫 Weekly per-exercise caps
+  static const Map<String, int> _perExerciseWeeklyMaxById = {
+    'ISXQqOEXLjMrPEs0xjgJ': 1, // Bulgarian Split Squat
+    'xbePAZEtQIFEjvu2YaPV': 1, // Bulgarian Split Squat, Deficit
+  };
+
+  static int _weeklyCountForExercise(String exId, List<_DayPlan> allDays) {
+    int count = 0;
+    for (final d in allDays) {
+      for (final circ in d.circuits) {
+        for (final p in circ) {
+          if (p.ex.id == exId) count++;
+        }
+      }
+    }
+    return count;
+  }
+
 
 
   /// Produce alternate versions for Block-2 by swapping in different exercises
@@ -1025,19 +1095,6 @@ class TemplateGenerator {
       out.add(clone);
     }
     return out;
-  }
-
-  // === ADD THIS INSIDE class TemplateGenerator, near the end ===
-  static Future<void> debugPrintExerciseAsset() async {
-    try {
-      final lib = await _loadExerciseLibrary();
-      debugPrint('📦 [GEN] parsed ${lib.length} exercises from bundled asset');
-      for (final e in lib.take(10)) {
-        debugPrint('   → ${e.name} (${e.category})');
-      }
-    } catch (e, st) {
-      debugPrint('❌ [TEST] loadExerciseLibrary failed: $e\n$st');
-    }
   }
 
 }

@@ -83,9 +83,12 @@ class TemplatesBootstrapper {
   }
 
 
-  static Future<void> ensureInitialTemplatesForUser(String? uid, {bool force = false}) async {
+  static Future<void> ensureInitialTemplatesForUser(String? uid, {bool force = false, bool plannedOnly = false}) async {
+
 
     debugPrint('🧰 [TB] ensureInitialTemplatesForUser() called uid="$uid"');
+    debugPrint('🧰 [TB] plannedOnly=$plannedOnly');
+
     if (uid == null || uid.isEmpty) {
       debugPrint('🧰 [TB] abort: uid is null/empty');
       return;
@@ -214,8 +217,9 @@ class TemplatesBootstrapper {
           sexU: sexU,
           age: age,
           onboarding: onb,
-          // you do NOT need to pass blockIds; we reuse your existing name→block mapping below
+          plannedOnly: plannedOnly, // 🧩 propagate toggle
         );
+
 
         if (genPayloads.isNotEmpty) {
           const branchLabel = 'GEN_V1';

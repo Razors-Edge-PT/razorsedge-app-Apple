@@ -37,6 +37,7 @@ class TemplatesScreen extends StatefulWidget {
   final bool
       fromWorkoutPage; // Add flag to determine if navigated from WorkoutPage
 
+
   @override
   State<TemplatesScreen> createState() => _TemplatesScreenState();
 }
@@ -57,6 +58,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   bool _showPreviousBlocks = false;
   bool _showUpcomingBlocks = false;
   bool _showActiveBlock = true;
+  bool _plannedOnly = false;
+
   final Set<String> _expandedPreviousBlockIds = {}; // for per-block expansion
   final Set<String> _expandedUpcomingBlockIds = {};
 
@@ -145,8 +148,13 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
 
 
-      // 3️⃣ Force-run the generator path
-      await TemplatesBootstrapper.ensureInitialTemplatesForUser(uid, force: true);
+      // 3️⃣ Force-run the generator path (respect planned-only toggle)
+      await TemplatesBootstrapper.ensureInitialTemplatesForUser(
+        uid,
+        force: true,
+        plannedOnly: _plannedOnly, // 🧩 new
+      );
+
 
       // 4️⃣ ✅ Refresh your UI list using your actual method
       await _fetchTemplates();
@@ -163,9 +171,6 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       if (mounted) setState(() => _loadingBlocks = false);
     }
   }
-
-
-
 
   Future<void> _loadBlocksThenTemplates() async {
     // 1) get active block id (same source of truth as BB2/BP)
@@ -1707,12 +1712,43 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
             spacing: 12,
             runSpacing: 8,
             children: [
-              // Regenerate Templates
+              // 🧩 Toggle Planned-Only Mode
+              StatefulBuilder(
+                builder: (context, setLocalState) {
+                  return ElevatedButton.icon(
+                    icon: Icon(_plannedOnly ? Icons.checklist : Icons.list_alt),
+                    label: Text(_plannedOnly ? "Planned Exercises" : "Wild Stuff"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _plannedOnly
+                          ? Colors.blueGrey.shade700 // 🩵 Text Book → blue-grey
+                          : Colors.pink.shade200,    // 💗 Wild Stuff → light pink
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+
+                    onPressed: () {
+                      setLocalState(() => _plannedOnly = !_plannedOnly);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(_plannedOnly
+                              ? "Planned-only mode enabled"
+                              : "All exercises enabled"),
+                          duration: const Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+
+              // 🔁 Regenerate Templates
               ElevatedButton.icon(
                 icon: const Icon(Icons.refresh),
                 label: const Text("Regen Templates"),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.orange.shade700,
+                  backgroundColor: Colors.blueGrey.shade700,
+
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
@@ -1720,7 +1756,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                 onPressed: _regenerateAllTemplates,
               ),
 
-              // Create New Workout (existing)
+              // ➕ Create New Workout (existing)
               ElevatedButton.icon(
                 icon: const Icon(Icons.add),
                 label: const Text("Create New Workout"),
