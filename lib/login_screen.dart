@@ -4,6 +4,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'create_new_account_screen.dart';
+import 'template_generator.dart';
 
 
 
@@ -293,6 +294,21 @@ class _LoginScreenState extends State<LoginScreen> {
                                   ),
                                 ),
                                 const SizedBox(height: 12),
+
+                               /* TextButton(
+                                  onPressed: () async {
+                                    await TemplateGenerator.debugPrintExerciseAsset();
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text('Exercise JSON test: see console')),
+                                    );
+                                  },
+                                  child: const Text(
+                                    "Test Exercise JSON",
+                                    style: TextStyle(color: Colors.green, fontSize: 16),
+                                  ),
+                                ),
+*/
+
                                 TextButton(
                                   onPressed: () {
                                     // TODO: Navigate to Forgot Password Screen

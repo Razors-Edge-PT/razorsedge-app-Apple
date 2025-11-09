@@ -127,7 +127,8 @@ flutter:
     - assets/lottie/sparkle_stars.json
     - assets/branding/anatomy/male_anatomy.png
     - assets/branding/anatomy/female_anatomy.png
-    - assets/exercises.json
+    - assets/exercise_dump_20251109_112626.json
+
 
 
 

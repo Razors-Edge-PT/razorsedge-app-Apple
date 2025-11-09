@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'block_repository.dart'; // 👈 to get active block id + meta
+import 'template_bootstrapper.dart';
 
 // Import the shared methods
 import 'create_template_screen.dart';
@@ -95,6 +96,76 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       ),
     );
   }
+
+  Future<void> _regenerateAllTemplates() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No user logged in')),
+      );
+      return;
+    }
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Regenerate templates?'),
+        content: const Text(
+          'This will delete all current templates for this user and rebuild them from your onboarding settings.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Regenerate')),
+        ],
+      ),
+    ) ?? false;
+
+    if (!ok) return;
+
+    try {
+      setState(() => _loadingBlocks = true);
+
+      final db = FirebaseFirestore.instance;
+      final userRef = db.collection('users').doc(uid);
+      final templatesCol = userRef.collection('templates');
+
+      // 1️⃣ Delete existing templates in batches
+      while (true) {
+        final snap = await templatesCol.limit(300).get();
+        if (snap.docs.isEmpty) break;
+        final batch = db.batch();
+        for (final d in snap.docs) {
+          batch.delete(d.reference);
+        }
+        await batch.commit();
+      }
+
+      // 2️⃣ Clear the bootstrap flag
+      await userRef.set({'templatesBootstrapped': FieldValue.delete()}, SetOptions(merge: true));
+
+
+
+      // 3️⃣ Force-run the generator path
+      await TemplatesBootstrapper.ensureInitialTemplatesForUser(uid, force: true);
+
+      // 4️⃣ ✅ Refresh your UI list using your actual method
+      await _fetchTemplates();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Templates regenerated successfully ✅')),
+      );
+    } catch (e, st) {
+      debugPrint('❌ regenerate failed: $e\n$st');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Regenerate failed: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _loadingBlocks = false);
+    }
+  }
+
+
+
 
   Future<void> _loadBlocksThenTemplates() async {
     // 1) get active block id (same source of truth as BB2/BP)
@@ -1631,21 +1702,39 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       body: Column(
         children: [
           const SizedBox(height: 2),
-          Center(
-            child: ElevatedButton.icon(
-              icon: const Icon(Icons.add),
-              label: const Text("Create New Workout"),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blueGrey.shade700,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 12,
+            runSpacing: 8,
+            children: [
+              // Regenerate Templates
+              ElevatedButton.icon(
+                icon: const Icon(Icons.refresh),
+                label: const Text("Regen Templates"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.orange.shade700,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
+                onPressed: _regenerateAllTemplates,
               ),
-              onPressed: _createTemplate,
-            ),
+
+              // Create New Workout (existing)
+              ElevatedButton.icon(
+                icon: const Icon(Icons.add),
+                label: const Text("Create New Workout"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blueGrey.shade700,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: _createTemplate,
+              ),
+            ],
           ),
+
           const SizedBox(height: 8),
 
           // 👇 always show block sections (once blocks & templates loaded)

@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
+import 'auto_circuit_planner.dart';
+import'template_generator.dart';
 
 class TemplatesBootstrapper {
   static const _flagField = 'templatesBootstrapped_v1';
@@ -81,7 +83,8 @@ class TemplatesBootstrapper {
   }
 
 
-  static Future<void> ensureInitialTemplatesForUser(String? uid) async {
+  static Future<void> ensureInitialTemplatesForUser(String? uid, {bool force = false}) async {
+
     debugPrint('🧰 [TB] ensureInitialTemplatesForUser() called uid="$uid"');
     if (uid == null || uid.isEmpty) {
       debugPrint('🧰 [TB] abort: uid is null/empty');
@@ -99,10 +102,11 @@ class TemplatesBootstrapper {
     final flag = userSnap.data()?[_flagField] == true;
     debugPrint('🧰 [TB] userDoc exists=${userSnap.exists} flag=$_flagField=$flag');
 
-    if (userSnap.exists && flag) {
+    if (!force && userSnap.exists && flag) {
       debugPrint('🧰 [TB] early-exit: bootstrap flag already set → skipping');
       return;
     }
+
 
     // ---- Demographic parse (sex + dob → age) --------------------------------
     final sexRaw = userSnap.data()?['sex'] as String?;
@@ -141,10 +145,10 @@ class TemplatesBootstrapper {
     final sexU = sex?.toUpperCase();
     debugPrint('🧰 [TB] demographics: sex="$sexU" age=$age');
 
-    // Branch eligibility
-    final femaleEligible   = (sexU == 'F' || sexU == 'N') && (age != null && age >= 13 && age <= 30);
-    final male27to39       = (sexU == 'M') && (age != null && age >= 27 && age <= 39);
-    final male16to26       = (sexU == 'M') && (age != null && age >= 16 && age <= 26);
+    // Branch eligibility (legacy fallbacks still use this)
+    final femaleEligible = (sexU == 'F' || sexU == 'N') && (age != null && age >= 13 && age <= 30);
+    final male27to39     = (sexU == 'M') && (age != null && age >= 27 && age <= 39);
+    final male16to26     = (sexU == 'M') && (age != null && age >= 16 && age <= 26);
 
     debugPrint('🧰 [TB] eval femaleEligible=$femaleEligible, male27to39=$male27to39, male16to26=$male16to26');
 
@@ -163,13 +167,11 @@ class TemplatesBootstrapper {
     final List<String> upcomingIds = ordered.upcomingIds;
     debugPrint('🧰 [TB] ordered → active=$activeBlockId upcoming=${upcomingIds.join(', ')}');
 
-
-
     // For visibility: how many currently exist
     try {
       final existing = await templatesCol.limit(5).get();
       debugPrint('🧰 [TB] existing templates found=${existing.size}');
-      if (existing.size > 0) {
+      if (!force && existing.size > 0) {
         debugPrint('🧰 [TB] templates already exist → set flag & exit');
         await userRef.set(
           {_flagField: true, 'templatesBootstrappedAt': FieldValue.serverTimestamp()},
@@ -177,9 +179,131 @@ class TemplatesBootstrapper {
         );
         return;
       }
+
     } catch (e, st) {
       debugPrint('🧰 [TB] warn: failed to count existing templates: $e\n$st');
     }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // NEW: Try generator path using onboarding data. If successful, write and return.
+    // ──────────────────────────────────────────────────────────────────────────
+    try {
+      final onbSnap = await userRef.collection('profile').doc('fitness_onboarding').get();
+      final onb = onbSnap.data();
+
+      // Minimal validity: have either frequency or any body-focus info.
+      final hasUsefulOnb = onbSnap.exists && onb != null && (
+          onb.containsKey('weeklyFrequency') ||
+              onb.containsKey('minTrainingDaysPerWeek') ||
+              onb.containsKey('bodyFocusLevel') ||
+              onb.containsKey('bodyFocusChildren') ||
+              onb.containsKey('experience') ||
+              onb.containsKey('environment') ||
+              onb.containsKey('equipment')
+      );
+
+      if (hasUsefulOnb) {
+        debugPrint('🧰 [GEN] onboarding found → attempting generator path');
+
+        // NOTE: implement this class elsewhere (as we discussed).
+        // It must return a List<Map<String,dynamic>> with entries like:
+        // { 'name': 'B1 Day 1', 'exercises': [ {exerciseId,name,circuitIndex}, ... ] }
+        final List<Map<String, dynamic>> genPayloads =
+        await TemplateGenerator.generateFromOnboarding(
+          uid: uid,
+          sexU: sexU,
+          age: age,
+          onboarding: onb,
+          // you do NOT need to pass blockIds; we reuse your existing name→block mapping below
+        );
+
+        if (genPayloads.isNotEmpty) {
+          const branchLabel = 'GEN_V1';
+
+          // Write exactly like your legacy path does, including name→blockId routing.
+          final batch = FirebaseFirestore.instance.batch();
+
+          for (final t in genPayloads) {
+            final exercises = (t['exercises'] as List).cast<Map<String, dynamic>>();
+            final filtered = <Map<String, dynamic>>[];
+            for (final ex in exercises) {
+              final exId = (ex['exerciseId'] as String?)?.trim();
+              final exName = (ex['name'] as String?) ?? '(unnamed)';
+              if (exId == null || exId.isEmpty) {
+                debugPrint('🟥 [GEN] skipping exercise without ID → "$exName" in template "${t['name']}"');
+                continue;
+              }
+              filtered.add(ex);
+            }
+
+            if (filtered.isEmpty) {
+              debugPrint('🟨 [GEN] template "${t['name']}" has no valid exercises after filtering → skipping create');
+              continue;
+            }
+
+            final toWrite = {
+              'name': t['name'],
+              'exercises': filtered,
+            };
+
+            final nameStr = (t['name'] ?? '').toString().trim();
+            final match = RegExp(r'^B(\d+)\b', caseSensitive: false).firstMatch(nameStr);
+            final int? bNum = match != null ? int.tryParse(match.group(1)!) : null;
+
+            if (bNum == null) {
+              toWrite['blockAssignment'] = 'unspecified';
+              debugPrint('🟨 [GEN] could not parse block number from "$nameStr" → leaving blockId null');
+            } else {
+              toWrite['blockAssignment'] = 'B$bNum';
+
+              if (bNum == 1) {
+                if (activeBlockId != null) {
+                  toWrite['blockId'] = activeBlockId;
+                } else {
+                  debugPrint('🟥 [GEN] activeBlockId missing for "$nameStr"');
+                }
+              } else {
+                final idx = bNum - 2;
+                if (idx >= 0 && idx < upcomingIds.length) {
+                  toWrite['blockId'] = upcomingIds[idx];
+                } else {
+                  debugPrint('🟥 [GEN] missing upcoming block for "$nameStr": need index=$idx in $upcomingIds');
+                }
+              }
+            }
+
+            final docRef = templatesCol.doc();
+            batch.set(docRef, toWrite);
+            debugPrint('🧰 [GEN] queued template "${t['name']}" (${filtered.length} exercises)');
+          }
+
+          batch.update(userRef, {
+            _flagField: true,
+            'templatesBootstrappedAt': FieldValue.serverTimestamp(),
+            'templatesBranch': branchLabel,
+            'templatesBootstrappedVersion': 1,
+          });
+
+          await batch.commit();
+          debugPrint('🧰 [GEN] batch.commit OK (created ${genPayloads.length} + flag set)');
+
+          final verifySnap = await templatesCol.get();
+          debugPrint('🧰 [GEN] post-commit templates count=${verifySnap.size}');
+          return; // ✅ done – do not fall through to legacy payloads
+        } else {
+          debugPrint('🧰 [GEN] generator returned 0 payloads → falling back to legacy branch');
+        }
+      } else {
+        debugPrint('🧰 [GEN] onboarding missing/insufficient → using legacy branch');
+      }
+    } catch (e, st) {
+      debugPrint('🧰 [GEN] generator path failed: $e\n$st\n→ falling back to legacy branch');
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // LEGACY PATH continues below (your existing hard-coded payloads)
+    // ──────────────────────────────────────────────────────────────────────────
+
 
     // ---------------- PAYLOADS (IDs primary; names kept) ----------------
     // MALE (unchanged content, now as IDs)
