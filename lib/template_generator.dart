@@ -126,12 +126,16 @@ class TemplateGenerator {
     }
 
     // Ensure weekly minimums by sex (after we’ve built the first pass of weeklyPlan).
+    final categoryEmphasis = _buildCategoryEmphasis(onboarding);
+
     _enforceWeeklyMinimums(
       isFemale: isFemale,
       weeklyPlan: weeklyPlan,
       freqCaps: freqCaps,
       byCat: byCat,
+      categoryEmphasis: categoryEmphasis, // 🆕
     );
+
 
 
     // Core categories first so we don’t starve them (sex-specific ordering)
@@ -335,6 +339,41 @@ class TemplateGenerator {
     return null;
   }
 
+  // Read emphasis level (0..3) from onboarding. Accepts { emphasis: { key: 0..3 } } or strings.
+  static int _readEmphasisLevel(Map<String, dynamic> onb, String key) {
+    final raw = onb['emphasis'] ?? onb['bodyFocus'] ?? onb['muscleEmphasis'];
+    if (raw is Map) {
+      final v = raw[key];
+      if (v is int) return v.clamp(0, 3);
+      if (v is String) {
+        final p = int.tryParse(v);
+        if (p != null) return p.clamp(0, 3);
+      }
+    }
+    return 0; // default = no emphasis
+  }
+
+// Map categories to emphasis levels (0..3). Start with Calves only.
+  static Map<String, int> _buildCategoryEmphasis(Map<String, dynamic> onb) {
+    // Extend here later: e.g., 'Arm Curl' from 'biceps', 'Arm Extension' from 'triceps', etc.
+    return <String, int>{
+      'Calf Raise': _readEmphasisLevel(onb, 'calves'),
+      'Arm Curl': _readEmphasisLevel(onb, 'biceps'),
+      'Arm Extension': _readEmphasisLevel(onb, 'triceps'),
+      'Horizontal Press': _readEmphasisLevel(onb, 'chest'),
+      'Vertical Pull': _readEmphasisLevel(onb, 'lats'),
+
+    };
+  }
+
+  // Max emphasis-driven minimums per category (default ceiling = 3)
+  static const Map<String, int> _emphasisMinCeilByCat = {
+    'Horizontal Press': 4, // chest can scale up to 4
+    // everything else defaults to 3
+  };
+
+
+
   // Frequency caps by sex, for ≥4 days/wk baseline; we’ll reduce max if fewer days.
   static Map<String, Map<String, int>> _capsFor({required bool isFemale}) {
     if (isFemale) {
@@ -419,7 +458,9 @@ class TemplateGenerator {
     required Map<String, int> weeklyPlan,
     required Map<String, Map<String, int>> freqCaps,
     required Map<String, List<ExLite>> byCat,
+    Map<String, int> categoryEmphasis = const {}, // 🆕 emphasis per category (0..3)
   }) {
+
     void bump(String cat, int min) {
       final cap = freqCaps[cat];
       if (cap == null) return;
@@ -429,36 +470,60 @@ class TemplateGenerator {
       weeklyPlan[cat] = desired.clamp(cap['min']!, cap['max']!);
     }
 
+
+    // Helper: bump with emphasis (min = clamp(baseMin + level, baseMin..ceiling)), then respect caps & availability
+    void bumpWithEmphasis(String cat, int baseMin) {
+      final cap = freqCaps[cat];
+      if (cap == null) return;
+      if ((byCat[cat]?.isEmpty ?? true)) return;
+
+      final level   = (categoryEmphasis[cat] ?? 0).clamp(0, 3); // 0..3 from onboarding
+      final ceiling = _emphasisMinCeilByCat[cat] ?? 3;          // default emphasis ceiling = 3
+      final boosted = (baseMin + level).clamp(baseMin, ceiling);
+
+      final current = weeklyPlan[cat] ?? 0;
+      final desired = current < boosted ? boosted : current;
+
+      weeklyPlan[cat] = desired.clamp(cap['min']!, cap['max']!);
+    }
+
+
+
     if (isFemale) {
-      // Female weekly minimums (existing)
+      // Female weekly minimums (existing fixed mins)
       bump('Squat Pattern', 2);
       bump('Hip Hinge', 1);
       bump('Leg Curl', 2);
       bump('Core', 2);
 
-      // 🆕 Both sexes
-      bump('Calf Raise', 1);
-      bump('Arm Curl', 1);
-      bump('Arm Extension', 1);
+// Both sexes (now emphasis-aware)
+      bumpWithEmphasis('Calf Raise', 1);     // base 1 → +level, ceiling 3
+      bumpWithEmphasis('Arm Curl', 1);       // base 1 → +level, ceiling 3
+      bumpWithEmphasis('Arm Extension', 1);  // base 1 → +level, ceiling 3
+      bumpWithEmphasis('Horizontal Press', 0); // female base 0 → +level, chest ceiling 4
+      bumpWithEmphasis('Vertical Pull', 0);    // base 0 → +level, ceiling 3
 
-      // 🆕 Female-specific
+// Female-specific fixed minimums
       bump('Hip Abduction', 2);
+
     } else {
       // Male weekly minimums (existing)
+      // Male weekly minimums (fixed mins)
       bump('Squat Pattern', 2);
       bump('Hip Hinge', 1);
       bump('Core', 2);
 
-      // 🆕 Both sexes
-      bump('Calf Raise', 1);
-      bump('Arm Curl', 1);
-      bump('Arm Extension', 1);
+// Both sexes (now emphasis-aware)
+      bumpWithEmphasis('Calf Raise', 1);     // base 1 → +level, ceiling 3
+      bumpWithEmphasis('Arm Curl', 1);       // base 1 → +level, ceiling 3
+      bumpWithEmphasis('Arm Extension', 1);  // base 1 → +level, ceiling 3
 
-      // 🆕 Male-specific
-      bump('Horizontal Press', 2);
-      bump('Horizontal Pull', 1);
-      bump('Vertical Pull', 1);
+// Male-specific: keep base mins but allow emphasis to push higher (within ceilings)
+      bumpWithEmphasis('Horizontal Press', 2); // base 2 → +level, chest ceiling 4
+      bumpWithEmphasis('Horizontal Pull', 1);  // base 1 → +level, ceiling 3
+      bumpWithEmphasis('Vertical Pull', 1);    // base 1 → +level, ceiling 3
     }
+
 
   }
 
@@ -615,12 +680,21 @@ class TemplateGenerator {
       // If no barbell bench is available/allowed, we fall through to normal logic.
     }
 
-    // Default chooser
+    // Default chooser (only pick if it can legally join some circuit)
     for (final ex in pool) {
-      if (day.hasExercise(ex.id)) continue;      // 🚫 already used today
-      if (day.isBanned(ex, category)) continue;  // existing rule checks
+      if (day.hasExercise(ex.id)) continue;
+      if (day.isBanned(ex, category)) continue;
+
+      // 🧠 pre-check: must be able to join at least one current circuit, or we start a new one if under cap
+      bool canJoinAny = false;
+      for (int ci = 0; ci < day.circuits.length; ci++) {
+        if (_canJoin(day, ci, ex)) { canJoinAny = true; break; }
+      }
+      if (!canJoinAny && day.circuits.length >= 5) continue; // skip if no spot and we've hit circuit cap
+
       return ex;
     }
+
 
     return null;
   }
@@ -677,6 +751,12 @@ class TemplateGenerator {
       // Horizontal Press vs Vertical Press/Arm Extension
       if (a == 'Horizontal Press' && (b == 'Vertical Press' || b == 'Arm Extension')) return false;
       if (b == 'Horizontal Press' && (a == 'Vertical Press' || a == 'Arm Extension')) return false;
+      // 🆕 Vertical Press should not pair with Arm Extension (symmetry with Horizontal Press rule)
+      if ((a == 'Vertical Press' && b == 'Arm Extension') ||
+          (b == 'Vertical Press' && a == 'Arm Extension')) {
+        return false;
+      }
+
 
       // Lateral Raise should not be combined with Vertical Press or Horizontal Press
       if ((a == 'Lateral Raise' && (b == 'Vertical Press' || b == 'Horizontal Press')) ||
@@ -749,6 +829,13 @@ class TemplateGenerator {
         (B == 'Horizontal Press' && (A == 'Vertical Press' || A == 'Arm Extension'))) {
       return true;
     }
+
+    // 🆕 Vertical Press vs Arm Extension
+    if ((A == 'Vertical Press' && B == 'Arm Extension') ||
+        (B == 'Vertical Press' && A == 'Arm Extension')) {
+      return true;
+    }
+
 
     // Lateral Raise should not pair with Vertical Press or Horizontal Press
     if ((A == 'Lateral Raise' && (B == 'Vertical Press' || B == 'Horizontal Press')) ||
