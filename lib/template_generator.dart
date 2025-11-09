@@ -134,8 +134,9 @@ class TemplateGenerator {
     );
 
 
-    // Core categories first so we don’t starve them
-    for (final cat in _orderedCategoriesPriority) {
+    // Core categories first so we don’t starve them (sex-specific ordering)
+    final ordered = _orderedCategoriesPriorityFor(isFemale: isFemale);
+    for (final cat in ordered) {
       allocate(cat);
     }
 
@@ -192,12 +193,13 @@ class TemplateGenerator {
         final usedThisCat = day.countByCategory[cat] ?? 0;
         if (usedThisCat >= perDayCategoryHardCap) continue;
 
-        // Pick a candidate exercise that doesn’t violate overlap rules on this day
         final chosen = _chooseExercise(
           pool: byCat[cat] ?? const [],
           day: day,
           category: cat,
+          allDays: days, // 🆕 pass full list for week awareness
         );
+
         if (chosen == null) continue;
 
         // Allocate to a circuit that respects pairing rules
@@ -218,6 +220,41 @@ class TemplateGenerator {
         'exercises': days[i].emit(),
       });
     }
+
+    // 🧩 DEBUG: Print Block 1 day/circuit layout for inspection
+    debugPrint('──────────── 🧠 BLOCK 1 DEBUG ────────────');
+    for (final d in days) {
+      debugPrint('📅  Day ${d.index + 1}');
+      for (int ci = 0; ci < d.circuits.length; ci++) {
+        final circuit = d.circuits[ci];
+        final buffer = StringBuffer('  🔁  Circuit $ci → ');
+        for (final p in circuit) {
+          buffer.write('${p.ex.name} [${p.category}], ');
+        }
+        debugPrint(buffer.toString());
+      }
+    }
+    debugPrint('──────────────────────────────────────────');
+
+    // 🧪 DEBUG: scan for actual illegal pairings (pairwise, no self-comparisons)
+    debugPrint('──────────── ⚠️  PAIRING VIOLATION CHECK ────────────');
+    for (final d in days) {
+      for (int ci = 0; ci < d.circuits.length; ci++) {
+        final circuit = d.circuits[ci];
+        for (int i = 0; i < circuit.length; i++) {
+          for (int j = i + 1; j < circuit.length; j++) {
+            final a = circuit[i];
+            final b = circuit[j];
+            if (_pairIsIllegal(a, b)) {
+              debugPrint('⚠️  [Day ${d.index + 1} | Circuit $ci] Illegal pair:\n'
+                  '     → ${a.ex.name} [${a.category}]\n'
+                  '     ↔ ${b.ex.name} [${b.category}]');
+            }
+          }
+        }
+      }
+    }
+    debugPrint('──────────────────────────────────────────────');
 
     // 9) Create Block 2 variants (same categories, but we’ll bias toward alternates)
     final daysB2 = _alternateBlock(days, byCat);
@@ -313,6 +350,8 @@ class TemplateGenerator {
         'Leg Extension'   : {'min': 1, 'max': 3},
         'Hip Hinge'       : {'min': 2, 'max': 4}, // max deadlift 2/wk is enforced at choose-time
         'Leg Curl'        : {'min': 2, 'max': 4},
+        'Calf Raise'      : {'min': 0, 'max': 5}, // 🆕 allow up to 3x/wk
+        'Hip Abduction'   : {'min': 0, 'max': 5}, // 🆕 allow up to 3x/wk
         'Core'            : {'min': 1, 'max': 7}, // we’ll cap by per-day pairing/circuits anyway
       };
     }
@@ -329,25 +368,50 @@ class TemplateGenerator {
       'Leg Extension'   : {'min': 1, 'max': 3},
       'Hip Hinge'       : {'min': 1, 'max': 3}, // max deadlift 2/wk enforced later
       'Leg Curl'        : {'min': 1, 'max': 3},
+      'Calf Raise'      : {'min': 1, 'max': 5}, // 🆕 allow up to 3x/wk
       'Core'            : {'min': 1, 'max': 4},
     };
   }
 
   // Order we try to allocate categories so key work gets space first.
-  static const List<String> _orderedCategoriesPriority = [
+  // Order we try to allocate categories so key work gets space first — sex-specific.
+  static const List<String> _orderedCategoriesPriorityMale = [
+    'Horizontal Press',
     'Squat Pattern',
     'Hip Hinge',
-    'Horizontal Press',
-    'Horizontal Pull',
-    'Vertical Press',
     'Vertical Pull',
-    'Leg Extension',
-    'Leg Curl',
+    'Vertical Press',
+    'Horizontal Pull',
     'Arm Extension',
     'Arm Curl',
     'Lateral Raise',
+    'Leg Curl',
+    'Leg Extension',
+    'Calf Raise',
     'Core',
   ];
+
+  static const List<String> _orderedCategoriesPriorityFemale = [
+    'Squat Pattern',
+    'Hip Hinge',
+    'Leg Curl',
+    'Horizontal Press',
+    'Hip Abduction',
+    'Vertical Pull',
+    'Horizontal Pull',
+    'Vertical Press',
+    'Leg Extension',
+    'Core',
+    'Arm Extension',
+    'Calf Raise',
+    'Arm Curl',
+    'Lateral Raise',
+
+  ];
+
+  static List<String> _orderedCategoriesPriorityFor({required bool isFemale}) =>
+      isFemale ? _orderedCategoriesPriorityFemale : _orderedCategoriesPriorityMale;
+
 
   // ── Weekly minimums by sex ────────────────────────────────────────────────
   static void _enforceWeeklyMinimums({
@@ -366,17 +430,36 @@ class TemplateGenerator {
     }
 
     if (isFemale) {
-      // Female weekly minimums
+      // Female weekly minimums (existing)
       bump('Squat Pattern', 2);
       bump('Hip Hinge', 1);
       bump('Leg Curl', 2);
       bump('Core', 2);
+
+      // 🆕 Both sexes
+      bump('Calf Raise', 1);
+      bump('Arm Curl', 1);
+      bump('Arm Extension', 1);
+
+      // 🆕 Female-specific
+      bump('Hip Abduction', 2);
     } else {
-      // Male weekly minimums
+      // Male weekly minimums (existing)
       bump('Squat Pattern', 2);
       bump('Hip Hinge', 1);
       bump('Core', 2);
+
+      // 🆕 Both sexes
+      bump('Calf Raise', 1);
+      bump('Arm Curl', 1);
+      bump('Arm Extension', 1);
+
+      // 🆕 Male-specific
+      bump('Horizontal Press', 2);
+      bump('Horizontal Pull', 1);
+      bump('Vertical Pull', 1);
     }
+
   }
 
   // ── Daily “minimum per day” preference sets (soft/first-pass seeding) ─────
@@ -415,11 +498,19 @@ class TemplateGenerator {
     required _DayPlan day,
     required List<String> choices,
     required Map<String, List<ExLite>> byCat,
+    required List<_DayPlan> allDays, // 🆕 add this line
   }) {
     for (final cat in choices) {
       final pool = byCat[cat];
       if (pool == null || pool.isEmpty) continue;
-      final picked = _chooseExercise(pool: pool, day: day, category: cat);
+
+      final picked = _chooseExercise(
+        pool: pool,
+        day: day,
+        category: cat,
+        allDays: allDays, // 🆕 pass full week context
+      );
+
       if (picked == null) continue;
       final ci = _placeIntoCircuit(day, picked);
       day.addExercise(picked, cat, ci);
@@ -427,6 +518,7 @@ class TemplateGenerator {
     }
     return false;
   }
+
 
   // Seed a day with the preferred “minimum per day” set for the given sex.
   static void _seedDailyMinimums({
@@ -438,10 +530,16 @@ class TemplateGenerator {
 
     for (final d in days) {
       for (final choiceList in sets) {
-        _trySeedOneFrom(day: d, choices: choiceList, byCat: byCat);
+        _trySeedOneFrom(
+          day: d,
+          choices: choiceList,
+          byCat: byCat,
+          allDays: days, // 🆕 pass the full week context
+        );
       }
     }
   }
+
 
 
   /// Returns an exercise that doesn't violate overlap rules *for this day*.
@@ -449,7 +547,10 @@ class TemplateGenerator {
     required List<ExLite> pool,
     required _DayPlan day,
     required String category,
+    required List<_DayPlan> allDays, // 🆕 add this
   }) {
+
+
     // Avoid pairing agonists / overlapping prime movers within same circuit/day:
     // - Any Horizontal Press cannot pair with Vertical Press or Arm Extension
     // - Any Horizontal Pull cannot pair with Vertical Pull or Arm Curl
@@ -480,6 +581,27 @@ class TemplateGenerator {
       }
       // If nothing else is allowed/available, fall through to normal logic.
     }
+
+    // 🧠 NEW RULE: Global week-level limit — max 3 uses per exercise (except Barbell Bench Press)
+    for (final ex in pool.toList()) {
+      if (_isBarbellBenchPress(ex)) continue; // skip bench entirely for this rule
+
+      // Count how many times this exercise has already appeared in earlier days
+      int priorUses = 0;
+      for (final pastDay in allDays.take(day.index)) {
+        for (final circ in pastDay.circuits) {
+          for (final placed in circ) {
+            if (placed.ex.id == ex.id) priorUses++;
+          }
+        }
+      }
+
+      // If already used 3 or more times, mark as banned for this week
+      if (priorUses >= 3) {
+        day._idsToday.add(ex.id); // pseudo-ban: prevents selection below
+      }
+    }
+
 
     // ✅ Bench-first preference SECOND:
     // If this is the FIRST Horizontal Press of the day, prefer Barbell Bench Press.
@@ -617,6 +739,73 @@ class TemplateGenerator {
     return true;
   }
 
+  // ✅ Pairwise legality check for debug: mirrors the key rules in _canJoin
+  static bool _pairIsIllegal(_Placed a, _Placed b) {
+    final A = _normCat(a.category);
+    final B = _normCat(b.category);
+
+    // Horizontal Press vs Vertical Press / Arm Extension
+    if ((A == 'Horizontal Press' && (B == 'Vertical Press' || B == 'Arm Extension')) ||
+        (B == 'Horizontal Press' && (A == 'Vertical Press' || A == 'Arm Extension'))) {
+      return true;
+    }
+
+    // Lateral Raise should not pair with Vertical Press or Horizontal Press
+    if ((A == 'Lateral Raise' && (B == 'Vertical Press' || B == 'Horizontal Press')) ||
+        (B == 'Lateral Raise' && (A == 'Vertical Press' || A == 'Horizontal Press'))) {
+      return true;
+    }
+
+    // Horizontal Press should NOT pair with Vertical Pull (except the exact wide-arm ID)
+    if ((A == 'Horizontal Press' && B == 'Vertical Pull') ||
+        (B == 'Horizontal Press' && A == 'Vertical Pull')) {
+      final vpEx = (A == 'Vertical Pull') ? a.ex : b.ex;
+      if (!_isWideArmLatPulldownAllowed(vpEx)) return true;
+    }
+
+    // Straight-arm lat variants must not pair with Horizontal/Vertical Press or Arm Extension
+    final aIsSAL = _isStraightArmLatVariant(a.ex);
+    final bIsSAL = _isStraightArmLatVariant(b.ex);
+    if ((aIsSAL && (B == 'Horizontal Press' || B == 'Vertical Press' || B == 'Arm Extension')) ||
+        (bIsSAL && (A == 'Horizontal Press' || A == 'Vertical Press' || A == 'Arm Extension'))) {
+      return true;
+    }
+
+    // Horizontal Pull vs Vertical Pull / Arm Curl
+    if ((A == 'Horizontal Pull' && (B == 'Vertical Pull' || B == 'Arm Curl')) ||
+        (B == 'Horizontal Pull' && (A == 'Vertical Pull' || A == 'Arm Curl'))) {
+      return true;
+    }
+
+    // Vertical Pull vs Arm Curl
+    if ((A == 'Vertical Pull' && B == 'Arm Curl') ||
+        (B == 'Vertical Pull' && A == 'Arm Curl')) {
+      return true;
+    }
+
+    // Squat Pattern vs Leg Extension
+    if ((A == 'Squat Pattern' && B == 'Leg Extension') ||
+        (B == 'Squat Pattern' && A == 'Leg Extension')) {
+      return true;
+    }
+
+    // Hip-dominant family: hip-dom with hip-dom, or hip-dom with Squat Pattern
+    final aHip = _isHipDominant(A);
+    final bHip = _isHipDominant(B);
+    if (aHip && bHip) return true;
+    if ((aHip && B == 'Squat Pattern') || (bHip && A == 'Squat Pattern')) return true;
+
+    // Muscle-overlap (top 1–2 primaries) — but avoid self-compare by construction
+    final primA = a.ex.primary.take(2).toSet();
+    final primB = b.ex.primary.take(2).toSet();
+    if (primA.isNotEmpty && primB.isNotEmpty && primA.intersection(primB).isNotEmpty) {
+      return true;
+    }
+
+    return false;
+  }
+
+
   static String _normCat(String c) => c.trim();
 
   static bool _isHipDominant(String c) =>
@@ -693,22 +882,39 @@ class TemplateGenerator {
 
 
   // Detects straight-arm lat pulldown / lat prayer / machine pullover variants by name.
+  // Detects straight-arm lat pulldown / lat prayer / machine pullover variants by name.
   static bool _isStraightArmLatVariant(ExLite ex) {
     final s = ex.name.toLowerCase();
-    final hasStraightArm =
-        s.contains('straight arm lat') || s.contains('straight-arm lat') ||
-            s.contains('straight arm pull') || s.contains('straight-arm pull') ||
-            s.contains('straight arm pulldown') || s.contains('straight-arm pulldown');
 
-    final hasLatPrayer = s.contains('lat prayer');
+    // Core markers
+    final hasStraightOrStiff =
+        s.contains('straight arm') || s.contains('straight-arm') ||
+            s.contains('stiff arm')    || s.contains('stiff-arm');
 
-    // Only treat “pullover/pull over” as this variant when it’s explicitly lat-focused (has “lat”)
-    final hasLatPullover =
-        (s.contains('pullover') || s.contains('pull over') || s.contains('pull-over')) &&
-            s.contains('lat');
+    final hasLat = s.contains('lat');
 
-    return hasStraightArm || hasLatPrayer || hasLatPullover;
+    // Pulldown / pull down / pull-over / pullover
+    final hasPulldown =
+        s.contains('pulldown') || s.contains('pull down') || s.contains('pull-down');
+    final hasPullover =
+        s.contains('pullover') || s.contains('pull over') || s.contains('pull-over');
+
+    // “Lat prayer” variants
+    final hasLatPrayer = s.contains('lat prayer') || s.contains('prayer');
+
+    // Heuristics:
+    // 1) Straight/Stiff-arm + (lat OR pulldown/pullover)
+    if (hasStraightOrStiff && (hasLat || hasPulldown || hasPullover)) return true;
+
+    // 2) Any explicit “lat prayer”
+    if (hasLatPrayer && hasLat) return true;
+
+    // 3) Machine pullover explicitly for lats
+    if (hasPullover && hasLat) return true;
+
+    return false;
   }
+
 
 
   /// Produce alternate versions for Block-2 by swapping in different exercises
