@@ -83,7 +83,7 @@ class TemplatesBootstrapper {
   }
 
 
-  static Future<void> ensureInitialTemplatesForUser(String? uid, {bool force = false, bool plannedOnly = false}) async {
+  static Future<void> ensureInitialTemplatesForUser(String? uid, {bool force = false, bool plannedOnly = true}) async {
 
 
     debugPrint('🧰 [TB] ensureInitialTemplatesForUser() called uid="$uid"');
