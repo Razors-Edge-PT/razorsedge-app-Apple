@@ -155,6 +155,18 @@ class TemplateGenerator {
       categoryEmphasis: categoryEmphasis, // 🆕
     );
 
+// 🧭 Emphasis routing (child sliders → category bumps + id targets)
+    final childLevels = _buildChildEmphasis(onboarding);
+    final routed = _routeEmphasisToDemand(childLevels: childLevels, byCat: byCat);
+    final Map<String,int> _idTargetsRemaining = Map.of(routed.idTargets);
+
+// Lift weekly minima by emphasis bumps (respect caps & availability)
+    _applyEmphasisCategoryBumps(
+      weeklyPlan: weeklyPlan,
+      freqCaps: freqCaps,
+      byCat: byCat,
+      categoryBumps: routed.categoryBumps,
+    );
 
 
     // Core categories first so we don’t starve them (sex-specific ordering)
@@ -188,6 +200,8 @@ class TemplateGenerator {
       days: days,
       isFemale: isFemale,
       byCat: byCat,
+      allDays: days,                          // 🆕
+      idTargetsRemaining: _idTargetsRemaining, // 🆕
     );
 
 
@@ -220,7 +234,8 @@ class TemplateGenerator {
           pool: byCat[cat] ?? const [],
           day: day,
           category: cat,
-          allDays: days, // 🆕 pass full list for week awareness
+          allDays: days,
+          idTargetsRemaining: _idTargetsRemaining, // 🆕
         );
 
         if (chosen == null) continue;
@@ -611,7 +626,8 @@ class TemplateGenerator {
     required _DayPlan day,
     required List<String> choices,
     required Map<String, List<ExLite>> byCat,
-    required List<_DayPlan> allDays, // 🆕 add this line
+    required List<_DayPlan> allDays,
+    Map<String,int>? idTargetsRemaining,  // 🆕
   }) {
     for (final cat in choices) {
       final pool = byCat[cat];
@@ -621,7 +637,8 @@ class TemplateGenerator {
         pool: pool,
         day: day,
         category: cat,
-        allDays: allDays, // 🆕 pass full week context
+        allDays: allDays,
+        idTargetsRemaining: idTargetsRemaining, // 🆕
       );
 
       if (picked == null) continue;
@@ -638,7 +655,10 @@ class TemplateGenerator {
     required List<_DayPlan> days,
     required bool isFemale,
     required Map<String, List<ExLite>> byCat,
+    required List<_DayPlan> allDays,                // 🆕
+    Map<String,int>? idTargetsRemaining,            // 🆕
   }) {
+
     final sets = isFemale ? _femaleDailyPrefSets : _maleDailyPrefSets;
 
     for (final d in days) {
@@ -647,7 +667,8 @@ class TemplateGenerator {
           day: d,
           choices: choiceList,
           byCat: byCat,
-          allDays: days, // 🆕 pass the full week context
+          allDays: allDays,                      // keep explicit
+          idTargetsRemaining: idTargetsRemaining,
         );
       }
     }
@@ -660,8 +681,10 @@ class TemplateGenerator {
     required List<ExLite> pool,
     required _DayPlan day,
     required String category,
-    required List<_DayPlan> allDays, // 🆕 add this
+    required List<_DayPlan> allDays,
+    Map<String,int>? idTargetsRemaining, // 🆕
   }) {
+
     // Avoid pairing agonists / overlapping prime movers within same circuit/day:
     // - Any Horizontal Press cannot pair with Vertical Press or Arm Extension
     // - Any Horizontal Pull cannot pair with Vertical Pull or Arm Curl
@@ -723,6 +746,33 @@ class TemplateGenerator {
         return ex;                                 // prefer this exact pick
       }
       // If no barbell bench is available/allowed, we fall through to normal logic.
+    }
+    // 🥇 Try to satisfy any remaining exercise-ID targets first (preferred picks)
+    if (idTargetsRemaining != null && idTargetsRemaining.isNotEmpty) {
+      for (final ex in pool) {
+        final need = idTargetsRemaining[ex.id] ?? 0;
+        if (need <= 0) continue;
+
+        if (day.hasExercise(ex.id)) continue;
+        if (day.isBanned(ex, category)) continue;
+
+        // Weekly per-exercise caps
+        final maxPerWeek = _perExerciseWeeklyMaxById[ex.id];
+        if (maxPerWeek != null) {
+          final used = _weeklyCountForExercise(ex.id, allDays);
+          if (used >= maxPerWeek) continue;
+        }
+
+        // Must be able to join some circuit (or open a new one if under 5)
+        bool canJoinAny = false;
+        for (int ci = 0; ci < day.circuits.length; ci++) {
+          if (_canJoin(day, ci, ex)) { canJoinAny = true; break; }
+        }
+        if (!canJoinAny && day.circuits.length >= 5) continue;
+
+        _decrementTarget(idTargetsRemaining, ex.id);
+        return ex;
+      }
     }
 
     // Default chooser (only pick if it can legally join some circuit)
@@ -795,6 +845,12 @@ class TemplateGenerator {
   static bool _canJoin(_DayPlan day, int circuitIdx, ExLite ex) {
     final circuit = day.circuits[circuitIdx];
 
+    // 🚫 Prevent duplicate categories within the same circuit
+    for (final p in circuit) {
+      if (_normCat(p.category) == _normCat(ex.category)) return false;
+    }
+
+
     // 1) Category-level rules
     for (final p in circuit) {
       final a = p.category;
@@ -803,6 +859,12 @@ class TemplateGenerator {
       // Horizontal Press vs Vertical Press/Arm Extension
       if (a == 'Horizontal Press' && (b == 'Vertical Press' || b == 'Arm Extension')) return false;
       if (b == 'Horizontal Press' && (a == 'Vertical Press' || a == 'Arm Extension')) return false;
+      // 🚫 New rule: Horizontal Press should not pair with Arm Curl
+      if ((a == 'Horizontal Press' && b == 'Arm Curl') ||
+          (b == 'Horizontal Press' && a == 'Arm Curl')) {
+        return false;
+      }
+
       // 🆕 Vertical Press should not pair with Arm Extension (symmetry with Horizontal Press rule)
       if ((a == 'Vertical Press' && b == 'Arm Extension') ||
           (b == 'Vertical Press' && a == 'Arm Extension')) {
@@ -879,6 +941,12 @@ class TemplateGenerator {
     // Horizontal Press vs Vertical Press / Arm Extension
     if ((A == 'Horizontal Press' && (B == 'Vertical Press' || B == 'Arm Extension')) ||
         (B == 'Horizontal Press' && (A == 'Vertical Press' || A == 'Arm Extension'))) {
+      return true;
+    }
+
+    // 🚫 New rule: Horizontal Press should not pair with Arm Curl
+    if ((A == 'Horizontal Press' && B == 'Arm Curl') ||
+        (B == 'Horizontal Press' && A == 'Arm Curl')) {
       return true;
     }
 
@@ -1054,6 +1122,213 @@ class TemplateGenerator {
     return false;
   }
 
+  // ───────────────── Emphasis → Demand routing config ─────────────────
+
+// Read child-muscle slider level. Checks onboarding.emphasis[key] first, then top-level key.
+  static int _readChildLevel(Map<String, dynamic> onb, String key) {
+    final raw = (onb['emphasis'] is Map) ? (onb['emphasis'][key]) : onb[key];
+    if (raw is int) return raw.clamp(0, 3);
+    if (raw is double) return raw.round().clamp(0, 3);
+    if (raw is String) {
+      final p = int.tryParse(raw);
+      if (p != null) return p.clamp(0, 3);
+    }
+    return 0;
+  }
+
+// Child muscle → emphasis level (0–3).
+  static Map<String, int> _buildChildEmphasis(Map<String, dynamic> onb) {
+    return <String, int>{
+      // Back
+      'Lats': _readChildLevel(onb, 'lats'),
+      'Mid traps & rear delts': _readChildLevel(onb, 'upper_back'),
+      'Lower back 🎄': _readChildLevel(onb, 'lower_back'),
+
+      // Delts / traps
+      'Anterior delts': _readChildLevel(onb, 'anterior_delts'),
+      'Lateral delts': _readChildLevel(onb, 'lateral_delts'),
+      'Upper traps': _readChildLevel(onb, 'upper_traps'),
+
+      // Arms
+      'Biceps': _readChildLevel(onb, 'biceps'),
+      'Triceps': _readChildLevel(onb, 'triceps'),
+      'Forearms': _readChildLevel(onb, 'forearms'),
+
+      // Glutes
+      'Glute Maximus': _readChildLevel(onb, 'glute_max'),
+      'Glute Medius': _readChildLevel(onb, 'glute_medius'),
+
+      // Big groups
+      'Chest': _readChildLevel(onb, 'chest'),
+      'Abs': _readChildLevel(onb, 'core'),
+      'Hamstrings': _readChildLevel(onb, 'hamstrings'),
+      'Quads': _readChildLevel(onb, 'quads'),
+      'Calves': _readChildLevel(onb, 'calves'),
+    };
+  }
+
+// Special exercise IDs (fill with your real IDs later if you want extra bias)
+  static const String _idSupinatedLatPulldown = '1XOIXxeLFhgmgjZS9Cyq';
+  static const String _idChinUp = 'XM9026peNIu0R8qh7UqY';
+  static const String _idBarbellOverheadPress = 'lVDG90yN6Z8aPjRNV2wc';
+
+// Optional: forearm isolation IDs (leave empty if none yet)
+  static const List<String> _forearmIsolationIds = <String>[
+    '0h3rJfPtx1beUw0TIUzU', // Hammer Curl
+    // 'REPLACE_WITH_REVERSE_WRIST_CURL_ID',
+    // 'REPLACE_WITH_FARMERS_CARRY_ID',
+  ];
+
+// Split weights
+  static const double _w50 = 0.5;
+  static const double _w60 = 0.6;
+  static const double _w40 = 0.4;
+
+// Route child-muscle emphasis into category bumps & per-ID targets
+  static ({Map<String,int> categoryBumps, Map<String,int> idTargets})
+  _routeEmphasisToDemand({
+    required Map<String, int> childLevels,
+    required Map<String, List<ExLite>> byCat,
+  }) {
+    final cat = <String, int>{};
+    final ids = <String, int>{};
+
+    int bump(double x) => x.round().clamp(0, 99);
+
+    void addCat(String category, int inc) {
+      if (inc <= 0) return;
+      if ((byCat[category]?.isNotEmpty ?? false)) {
+        cat[category] = (cat[category] ?? 0) + inc;
+      }
+    }
+
+    void addId(String exId, int inc) {
+      if (inc <= 0) return;
+      bool present = false;
+      for (final list in byCat.values) {
+        if (list.any((e) => e.id == exId)) { present = true; break; }
+      }
+      if (present) ids[exId] = (ids[exId] ?? 0) + inc;
+    }
+
+    // Chest → Horizontal Press
+    final chestL = childLevels['Chest'] ?? 0;
+    if (chestL > 0) addCat('Horizontal Press', chestL);
+
+    // Lats → Vertical Pull (+ optional horiz-pull IDs later)
+    final latsL = childLevels['Lats'] ?? 0;
+    if (latsL > 0) addCat('Vertical Pull', latsL);
+
+    // Mid traps & rear delts → Horizontal Pull
+    final upperBackL = childLevels['Mid traps & rear delts'] ?? 0;
+    if (upperBackL > 0) addCat('Horizontal Pull', upperBackL);
+
+    // Lower back → Hip Hinge
+    final lowBackL = childLevels['Lower back 🎄'] ?? 0;
+    if (lowBackL > 0) addCat('Hip Hinge', lowBackL);
+
+    // Anterior delts → VP + HP + LR
+    final antDeltsL = childLevels['Anterior delts'] ?? 0;
+    if (antDeltsL > 0) {
+      addCat('Vertical Press', bump(antDeltsL * _w60));
+      addCat('Horizontal Press', bump(antDeltsL * _w40));
+      addCat('Lateral Raise',   bump(antDeltsL * _w40));
+    }
+
+    // Lateral delts → LR + VP
+    final latDeltsL = childLevels['Lateral delts'] ?? 0;
+    if (latDeltsL > 0) {
+      addCat('Lateral Raise', bump(latDeltsL * _w60));
+      addCat('Vertical Press', bump(latDeltsL * _w40));
+    }
+
+    // Upper traps → Vertical Press
+    final upperTrapsL = childLevels['Upper traps'] ?? 0;
+    if (upperTrapsL > 0) addCat('Vertical Press', upperTrapsL);
+
+    // Biceps → Arm Curl (+ preferred IDs)
+    final bicepsL = childLevels['Biceps'] ?? 0;
+    if (bicepsL > 0) {
+      addCat('Arm Curl', bicepsL);
+      addId(_idSupinatedLatPulldown, bicepsL);
+      addId(_idChinUp, bicepsL);
+    }
+
+    // Triceps → Arm Extension (+ OHP ID)
+    final tricepsL = childLevels['Triceps'] ?? 0;
+    if (tricepsL > 0) {
+      addCat('Arm Extension', tricepsL);
+      addId(_idBarbellOverheadPress, tricepsL);
+    }
+
+    // Forearms → Pulls + Curl (+ optional isolation ids)
+    final forearmsL = childLevels['Forearms'] ?? 0;
+    if (forearmsL > 0) {
+      addCat('Horizontal Pull', bump(forearmsL * _w50));
+      addCat('Vertical Pull',   bump(forearmsL * _w50));
+      addCat('Arm Curl',        bump(forearmsL * _w40));
+      if (forearmsL >= 3) {
+        for (final id in _forearmIsolationIds) {
+          addId(id, 1);
+        }
+      }
+    }
+
+    // Glute Max → Hip Hinge + Squat Pattern
+    final gmaxL = childLevels['Glute Maximus'] ?? 0;
+    if (gmaxL > 0) {
+      addCat('Hip Hinge',     bump(gmaxL * _w50));
+      addCat('Squat Pattern', bump(gmaxL * _w50));
+    }
+
+    // Glute Med → Hip Abduction
+    final gmedL = childLevels['Glute Medius'] ?? 0;
+    if (gmedL > 0) addCat('Hip Abduction', gmedL);
+
+    // Abs → Core
+    final absL = childLevels['Abs'] ?? 0;
+    if (absL > 0) addCat('Core', absL);
+
+    // Hamstrings → Leg Curl + Hip Hinge
+    final hamsL = childLevels['Hamstrings'] ?? 0;
+    if (hamsL > 0) {
+      addCat('Leg Curl',  bump(hamsL * _w60));
+      addCat('Hip Hinge', bump(hamsL * _w40));
+    }
+
+    // Quads → Squat Pattern + Leg Extension
+    final quadsL = childLevels['Quads'] ?? 0;
+    if (quadsL > 0) {
+      addCat('Squat Pattern', bump(quadsL * _w60));
+      addCat('Leg Extension', bump(quadsL * _w40));
+    }
+
+    // Calves → Calf Raise
+    final calvesL = childLevels['Calves'] ?? 0;
+    if (calvesL > 0) addCat('Calf Raise', calvesL);
+
+    return (categoryBumps: cat, idTargets: ids);
+  }
+
+// Lift weeklyPlan mins using bumps (caps & availability respected)
+  static void _applyEmphasisCategoryBumps({
+    required Map<String, int> weeklyPlan,
+    required Map<String, Map<String,int>> freqCaps,
+    required Map<String, List<ExLite>> byCat,
+    required Map<String, int> categoryBumps,
+  }) {
+    categoryBumps.forEach((cat, inc) {
+      if (inc <= 0) return;
+      if ((byCat[cat]?.isEmpty ?? true)) return;
+      final caps = freqCaps[cat];
+      if (caps == null) return;
+      final curr = weeklyPlan[cat] ?? (caps['min'] ?? 0);
+      final desired = (curr + inc).clamp(caps['min']!, caps['max']!);
+      weeklyPlan[cat] = desired;
+    });
+  }
+
+
   // 🚫 Weekly per-exercise caps
   static const Map<String, int> _perExerciseWeeklyMaxById = {
     'ISXQqOEXLjMrPEs0xjgJ': 1, // Bulgarian Split Squat
@@ -1072,6 +1347,16 @@ class TemplateGenerator {
     return count;
   }
 
+  static void _decrementTarget(Map<String,int>? idTargetsRemaining, String id) {
+    if (idTargetsRemaining == null) return;
+    final left = idTargetsRemaining[id];
+    if (left == null) return;
+    if (left <= 1) {
+      idTargetsRemaining.remove(id);
+    } else {
+      idTargetsRemaining[id] = left - 1;
+    }
+  }
 
 
   /// Produce alternate versions for Block-2 by swapping in different exercises
