@@ -674,6 +674,12 @@ class TemplateGenerator {
     }
   }
 
+  static bool exNameHasSquat(List<ExLite> pool) {
+    for (final e in pool) {
+      if (e.name.toLowerCase().contains('squat')) return true;
+    }
+    return false;
+  }
 
 
   /// Returns an exercise that doesn't violate overlap rules *for this day*.
@@ -682,9 +688,8 @@ class TemplateGenerator {
     required _DayPlan day,
     required String category,
     required List<_DayPlan> allDays,
-    Map<String,int>? idTargetsRemaining, // 🆕
+    Map<String, int>? idTargetsRemaining, // 🆕
   }) {
-
     // Avoid pairing agonists / overlapping prime movers within same circuit/day:
     // - Any Horizontal Press cannot pair with Vertical Press or Arm Extension
     // - Any Horizontal Pull cannot pair with Vertical Pull or Arm Curl
@@ -701,6 +706,12 @@ class TemplateGenerator {
         day.index == 2) {
       // Prefer specific accessories
       for (final ex in pool) {
+        // 🚫 Allow only one "squat" exercise by name per day
+        if (_alreadyHasSquatNamedExercise(day) &&
+            ex.name.toLowerCase().contains('squat')) {
+          continue;
+        }
+
         if (!_isPreferredAccessoryHorizontalPress(ex)) continue;
         if (day.hasExercise(ex.id)) continue;
         if (day.isBanned(ex, category)) continue;
@@ -708,6 +719,12 @@ class TemplateGenerator {
       }
       // Otherwise, still enforce "not bench" for this first slot
       for (final ex in pool) {
+        // 🚫 Allow only one "squat" exercise by name per day
+        if (_alreadyHasSquatNamedExercise(day) &&
+            ex.name.toLowerCase().contains('squat')) {
+          continue;
+        }
+
         if (_isBarbellBenchPress(ex)) continue;   // skip bench here
         if (day.hasExercise(ex.id)) continue;
         if (day.isBanned(ex, category)) continue;
@@ -740,6 +757,12 @@ class TemplateGenerator {
     // If this is the FIRST Horizontal Press of the day, prefer Barbell Bench Press.
     if (category == 'Horizontal Press' && (day.countByCategory['Horizontal Press'] ?? 0) == 0) {
       for (final ex in pool) {
+        // 🚫 Allow only one "squat" exercise by name per day
+        if (_alreadyHasSquatNamedExercise(day) &&
+            ex.name.toLowerCase().contains('squat')) {
+          continue;
+        }
+
         if (!_isBarbellBenchPress(ex)) continue;
         if (day.hasExercise(ex.id)) continue;      // not already used today
         if (day.isBanned(ex, category)) continue;  // respect day-level bans
@@ -747,9 +770,16 @@ class TemplateGenerator {
       }
       // If no barbell bench is available/allowed, we fall through to normal logic.
     }
+
     // 🥇 Try to satisfy any remaining exercise-ID targets first (preferred picks)
     if (idTargetsRemaining != null && idTargetsRemaining.isNotEmpty) {
       for (final ex in pool) {
+        // 🚫 Allow only one "squat" exercise by name per day
+        if (_alreadyHasSquatNamedExercise(day) &&
+            ex.name.toLowerCase().contains('squat')) {
+          continue;
+        }
+
         final need = idTargetsRemaining[ex.id] ?? 0;
         if (need <= 0) continue;
 
@@ -777,9 +807,16 @@ class TemplateGenerator {
 
     // Default chooser (only pick if it can legally join some circuit)
     for (final ex in pool) {
+      // 🚫 Allow only one "squat" exercise by name per day
+      if (_alreadyHasSquatNamedExercise(day) &&
+          ex.name.toLowerCase().contains('squat')) {
+        continue;
+      }
+
       if (day.hasExercise(ex.id)) continue;
       if (day.isBanned(ex, category)) continue;
-// 🔒 Per-exercise weekly cap (e.g. Bulgarian Split Squat)
+
+      // 🔒 Per-exercise weekly cap (e.g. Bulgarian Split Squat)
       if (allDays != null) {
         final maxPerWeek = _perExerciseWeeklyMaxById[ex.id];
         if (maxPerWeek != null) {
@@ -800,6 +837,7 @@ class TemplateGenerator {
 
     return null;
   }
+
 
 
   /// Decide circuit index (0..N) for a chosen exercise to minimize overlap.
@@ -1326,6 +1364,19 @@ class TemplateGenerator {
       final desired = (curr + inc).clamp(caps['min']!, caps['max']!);
       weeklyPlan[cat] = desired;
     });
+  }
+
+// ───────────────── Per-day "Squat" name cap ─────────────────
+// We allow only one exercise *with "squat" in its name* per day,
+// even if multiple belong to the "Squat Pattern" category.
+  static bool _alreadyHasSquatNamedExercise(_DayPlan day) {
+    for (final circuits in day.circuits) {
+      for (final p in circuits) {
+        final n = p.ex.name.toLowerCase();
+        if (n.contains('squat')) return true;
+      }
+    }
+    return false;
   }
 
 
