@@ -6771,6 +6771,29 @@ class _WorkoutPageState extends State<WorkoutPage>
         tmpSets[i][0].reps   = reps;
         tmpSets[i][0].rir    = double.tryParse(rir ?? '');
 
+// 🔒 Preserve user-typed values for Set 2+ from the prior controllers
+// (Do not write hints here; only copy user text so typed wins across fast-paint)
+        final int _maxSets = _defaultSets;
+        for (var k = 1; k < _maxSets; k++) {
+          // weight
+          if (i < prevWtsCtr.length && k < prevWtsCtr[i].length) {
+            final t = prevWtsCtr[i][k].text.trim();
+            if (t.isNotEmpty) tmpWts[i][k].text = t;
+          }
+          // reps
+          if (i < prevRepsCtr.length && k < prevRepsCtr[i].length) {
+            final t = prevRepsCtr[i][k].text.trim();
+            if (t.isNotEmpty) tmpReps[i][k].text = t;
+          }
+          // RIR
+          if (i < prevRirCtr.length && k < prevRirCtr[i].length) {
+            final t = prevRirCtr[i][k].text.trim();
+            if (t.isNotEmpty) tmpRir[i][k].text = t;
+          }
+          // (Optional: preserve velocity/notes typed by user too)
+          // if (i < prevVelCtr.length && k < prevVelCtr[i].length) { ... }
+          // if (i < prevNotesCtr.length && k < prevNotesCtr[i].length) { ... }
+        }
 
 
         // ✅ Also hydrate RIR for sets 2–8 from hints if present (as hints, not user input)
