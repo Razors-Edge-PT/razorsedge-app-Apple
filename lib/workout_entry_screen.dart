@@ -196,7 +196,18 @@ class _WorkoutPageState extends State<WorkoutPage>
 
   bool _isLoadingData = true;
   bool _isInitialized = false;
+// Epoch guard for late loaders
+  int _epoch = 0;
+  bool _isStale(int e) => e != _epoch;
+// Active day key (YYYY-MM-DD) for the current page session
+  String _dayKey = '';
+  String get _currentDayKey => _dayKey;
 
+// Start a new date session: bump epoch + set dayKey
+  void _beginDateSession(DateTime d) {
+    _epoch++;
+    _dayKey = DateFormat('yyyy-MM-dd').format(DateTime(d.year, d.month, d.day));
+  }
 
   late Future<void> _initialLoad;
   late Future<void> _blockDateLoad;
@@ -2158,6 +2169,9 @@ class _WorkoutPageState extends State<WorkoutPage>
 // ──────────────────────────────────────────────────────────────
   Future<void> _verifyAndSelfHealIfStale() async {
     try {
+      final int _healEpoch = _epoch;
+      final String _healDayKey = _currentDayKey;
+
       final uid = UserContext.of(context, listen: false).currentUid;
       final bid = _selectedBlockId ?? _activeBlockId;
       final date = _selectedDate ?? DateTime.now();
@@ -2194,6 +2208,11 @@ class _WorkoutPageState extends State<WorkoutPage>
 
       final beforeHints = snap?.hintsJson ?? '';
 
+      if (_isStale(_healEpoch) || _healDayKey != _currentDayKey) {
+        debugPrint('⛔️ [SelfHeal] stale epoch; aborting');
+        return;
+      }
+
       // Reuse your sparkle routine for TODAY only
       debugPrint('⚙️ [SelfHeal] Running refresh (forced, silent) for $ymd…');
       await _refreshHintsForCurrentDate(
@@ -2201,6 +2220,11 @@ class _WorkoutPageState extends State<WorkoutPage>
         silent: true,              // no "starting" snack
         onlyToday: true,           // do not touch tomorrow
       );
+
+      if (_isStale(_healEpoch) || _healDayKey != _currentDayKey) {
+        debugPrint('⛔️ [SelfHeal] stale epoch post-refresh; skipping UI apply');
+        return;
+      }
 
       // Re-read snapshot and decide what changed
       final snap2 = await BlockPlanCache.getInitSnapshot(uid: uid, blockId: bid, dateYmd: ymd);
@@ -2654,6 +2678,7 @@ class _WorkoutPageState extends State<WorkoutPage>
       // Helper to slice by index list
       List<T> _slice<T>(List<T> src) =>
           [for (int i = 0; i < src.length; i++) if (_keepIdx.contains(i)) src[i]];
+
 
       // Mutate in place (don’t reassign the list variables)
       setState(() {
@@ -5109,6 +5134,14 @@ class _WorkoutPageState extends State<WorkoutPage>
     if (_workoutNameController.text.trim().isEmpty) {
       _workoutNameController.text = DateFormat('EEE d MMM yyyy').format(_selectedDate);
     }
+    // 🔒 Start session for the initial date
+    _beginDateSession(_selectedDate);
+
+
+    // 🔒 New epoch for this session/day
+    _epoch++;
+    final int _initEpoch = _epoch;
+
 
     // Read global block meta published by UserContext bootstrap (instant, no fetch)
     _cachedUid = UserContext.of(context, listen: false).currentUid;
@@ -5254,20 +5287,23 @@ class _WorkoutPageState extends State<WorkoutPage>
 
           _cachedProgressedValues.clear();
 
-// ⚠️ Do NOT wipe rows if a snapshot already painted them.
-          if (!_didFastPaint) {
-            _selectedExercisesWithCircuits.clear();
-            _workoutSets.clear();
-            _repsControllers.clear();
-            _weightControllers.clear();
-            _rirControllers.clear();
-            _velocityControllers.clear();
-            _notesControllers.clear();
-            _resolvedBB2Values.clear();
+// ⚠️ Non-destructive policy: if we already have rows (fast paint or user), never hard-clear.
+          if (_didFastPaint || _selectedExercisesWithCircuits.isNotEmpty) {
+            _resolvedBB2Values.clear(); // safe to clear non-row cache
           } else {
-            // Keep rows the fast paint drew; still reset non-row flags if needed.
-            _resolvedBB2Values.clear();
+            // Only clear if truly nothing is on screen AND epoch is still current
+            if (!_isStale(_initEpoch)) {
+              _selectedExercisesWithCircuits.clear();
+              _workoutSets.clear();
+              _repsControllers.clear();
+              _weightControllers.clear();
+              _rirControllers.clear();
+              _velocityControllers.clear();
+              _notesControllers.clear();
+              _resolvedBB2Values.clear();
+            }
           }
+
 
           //await _loadDraftLocallyIfAvailable();
           _populateVelocityFlags();
@@ -5416,6 +5452,10 @@ class _WorkoutPageState extends State<WorkoutPage>
     final _tInit = Stopwatch()
       ..start(); // ⏱️ start total timer
     print('⏱️ [WES] _loadInitialData started');
+    final int _loadEpoch = _epoch; // capture
+    final String _loadDayKey = _currentDayKey;
+
+
     // If fast-paint already put rows on screen, never gate UI again.
     final _bootPainted = _didFastPaint || _selectedExercisesWithCircuits.isNotEmpty;
     if (_bootPainted) {
@@ -5430,6 +5470,11 @@ class _WorkoutPageState extends State<WorkoutPage>
 
     // 0) Fast path for prefilled (unchanged)
     if (widget.prefilledExercisesWithCircuits?.isNotEmpty ?? false) {
+      if (_isStale(_loadEpoch) || _loadDayKey != _currentDayKey) {
+        print('⛔️ [_loadInitialData] stale (epoch/dayKey) — aborting apply');
+        return;
+      }
+
       setState(() {
         _selectedExercisesWithCircuits
           ..clear()
@@ -5564,7 +5609,14 @@ class _WorkoutPageState extends State<WorkoutPage>
       await _mergeNewBB2ExercisesIntoDraft(); // Isar-first inside
     } else {
       print('📭 [WES Init] No draft found → merging BB2...');
+      if (_isStale(_loadEpoch) || _loadDayKey != _currentDayKey) {
+        print('⛔️ [_loadInitialData] stale (epoch/dayKey) — aborting apply');
+        return;
+      }
+
       if (!_rowsExist && !_didFastPaint) {
+
+
         _selectedExercisesWithCircuits.clear();
       }
       await _mergeNewBB2ExercisesIntoDraft();
@@ -5579,6 +5631,11 @@ class _WorkoutPageState extends State<WorkoutPage>
 // Only rebuild if we’d otherwise show a spinner and there’s no content yet
     if (mounted && _needSpinnerFlip && _selectedExercisesWithCircuits.isEmpty) {
       print('🟢 [WES] Spinner→content flip repaint');
+      if (_isStale(_loadEpoch) || _loadDayKey != _currentDayKey) {
+        print('⛔️ [_loadInitialData] stale (epoch/dayKey) — aborting apply');
+        return;
+      }
+
       setState(() {});
     } else {
       print('⚪ [WES] Skip spinner repaint (content already on screen)');
@@ -8818,17 +8875,29 @@ class _WorkoutPageState extends State<WorkoutPage>
       // User tapped Cancel → keep existing exercises untouched.
       return;
     }
+    // Tag user-added cards for this specific day (so date-prune logic keeps them)
+    final String ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+    int _ts() => DateTime.now().microsecondsSinceEpoch;
+
 
     setState(() {
       _selectedExercisesWithCircuits.clear();
       _selectedExercisesWithCircuits.addAll(
-        selected.map((name) =>
-        {
-          'name': name,
-          'category': nameToCategoryMap[name] ?? '', // 👈 add this line
-          'circuitIndex': 0,
+        selected.asMap().entries.map((entry) {
+          final idx = entry.key;
+          final name = entry.value;
+          final exId = (nameToIdMap[name] ?? name).trim().toLowerCase();
+          // wes|<YYYY-MM-DD>|<unique-ts>|<exercise-id>|<circuitIndex>
+          final cardId = 'wes|$ymd|${_ts() + idx}|$exId|0';
+          return {
+            'name': name,
+            'category': nameToCategoryMap[name] ?? '',
+            'circuitIndex': 0,
+            'cardId': cardId,
+          };
         }),
       );
+
 
       _workoutSets.clear();
       _workoutSets.addAll(
@@ -10242,6 +10311,10 @@ class _WorkoutPageState extends State<WorkoutPage>
     final _tMergeBB2 = Stopwatch()
       ..start();
     print('⏱️ [WES] _mergeNewBB2ExercisesIntoDraft started');
+    final int _mergeEpoch = _epoch;
+    final String _mergeDayKey = _currentDayKey;
+
+
     print('👀 [Merge Pre] rows=${_selectedExercisesWithCircuits.length} '
         'sets=${_workoutSets.length} repsCtr=${_repsControllers.length} '
         'wtsCtr=${_weightControllers.length} rirCtr=${_rirControllers.length} '
@@ -10280,11 +10353,14 @@ class _WorkoutPageState extends State<WorkoutPage>
       if (shouldForceMerge) {
         print('🔁 [WES] Triggering BB2 merge due to athlete/date switch (deferred repaint)');
 
-// Only clear if we did NOT fast-paint this date.
-        if (!_didFastPaint) {
-          __preStructMergeReset = _structureHash();   // ← move here
+        final bool _userHasTyped =
+            _weightControllers.any((row) => row.any((c) => c.text.trim().isNotEmpty)) ||
+                _repsControllers.any((row) => row.any((c) => c.text.trim().isNotEmpty))   ||
+                _rirControllers.any((row) => row.any((c) => c.text.trim().isNotEmpty));
 
-          // Mutate without setState…
+// Only clear if we did NOT fast-paint this date.
+        if (!_didFastPaint && !_userHasTyped) {
+          __preStructMergeReset = _structureHash();   // ← move here
 
           // Mutate without setState; we’ll batch the repaint later only if needed.
           _selectedExercisesWithCircuits.clear();
@@ -10298,8 +10374,11 @@ class _WorkoutPageState extends State<WorkoutPage>
 
           __didResetStruct = true;
         } else {
-          print('🟢 [WES] Preserving FastPaint rows; will union BB2 without reset');
+          print('🟢 [WES] Preserving rows (fast paint or user typed); will union BB2 without reset');
         }
+
+
+
 
         _lastMergedUid = uid;
         _lastMergedDate = _selectedDate;
@@ -10354,6 +10433,9 @@ class _WorkoutPageState extends State<WorkoutPage>
         // ✅ Warmup/plan snapshot rows are date-scoped like: "YYYY-MM-DD|plan|..."
         if (cardId.startsWith('$_ymdSel|plan|')) return true;
 
+        // ✅ WES user-added rows are date-scoped like: "wes|YYYY-MM-DD|..."
+        if (cardId.startsWith('wes|$_ymdSel|')) return true;
+
         // ✅ BB2 inserts are date-scoped like: "bb2|YYYY-MM-DD|..."
         if (cardId.startsWith('bb2|$_ymdSel|')) return true;
 
@@ -10374,6 +10456,11 @@ class _WorkoutPageState extends State<WorkoutPage>
         // Helper to slice by index list
         List<T> _slice<T>(List<T> src) =>
             [for (int i = 0; i < src.length; i++) if (_keepIdx.contains(i)) src[i]];
+
+        if (_isStale(_mergeEpoch) || _mergeDayKey != _currentDayKey) {
+          print('⛔️ [Merge] stale (epoch/dayKey) — aborting apply');
+          return;
+        }
 
         // Mutate in place (don’t reassign the list variables)
         setState(() {
@@ -10698,6 +10785,11 @@ class _WorkoutPageState extends State<WorkoutPage>
             .map((e) => ((e['name'] ?? '') as String).trim().toLowerCase())
             .toSet();
 
+        if (_isStale(_mergeEpoch) || _mergeDayKey != _currentDayKey) {
+          print('⛔️ [Merge] stale (epoch/dayKey) — aborting apply');
+          return;
+        }
+
         setState(() {
           for (final newEx in newOnes) {
             final name = (newEx['name'] ?? '').toString().trim();
@@ -10832,6 +10924,11 @@ class _WorkoutPageState extends State<WorkoutPage>
                         : null))
                     : abs;
 
+                if (_isStale(_mergeEpoch) || _mergeDayKey != _currentDayKey) {
+                  print('⛔️ [Merge] stale (epoch/dayKey) — aborting apply');
+                  return;
+                }
+
                 sets[0].reps = (values['reps'] as num?)?.toInt();
                 sets[0].weight = display;
                 sets[0].rir = (values['rir'] as num?)?.toDouble();
@@ -10842,10 +10939,13 @@ class _WorkoutPageState extends State<WorkoutPage>
                       'repsField="${_repsControllers[idx][0].text}" '
                       'weightField="${_weightControllers[idx][0].text}"');
 
+              if (_isStale(_mergeEpoch) || _mergeDayKey != _currentDayKey) {
+                print('⛔️ [Merge] stale (epoch/dayKey) — aborting apply');
+                return;
+              }
+
               if (_repsControllers.length > idx &&
                   _repsControllers[idx].isNotEmpty) {
-                _repsControllers[idx][0].text =
-                    values['reps']?.toString() ?? '';
                 final exName = (_selectedExercisesWithCircuits[idx]['name'] as String)
                     .trim();
                 final exId = PeriodizationModelUtils.nameToId[exName] ?? exName;
@@ -10872,14 +10972,21 @@ class _WorkoutPageState extends State<WorkoutPage>
                         : null))
                     : abs;
 
-                _weightControllers[idx][0].text = display?.toString() ?? '';
-
-                print(
-                    '🪙 [WES HydrateWeight] ex=$exName isBW=$isBwEx abs=$abs added=$added display=$display '
-                        '→ wrote text="${_weightControllers[idx][0].text}"');
-
-                _rirControllers[idx][0].text = values['rir']?.toString() ?? '';
+                // 🚫 Don’t overwrite if the user has already typed
+                if (_repsControllers[idx][0].text.trim().isEmpty) {
+                  _repsControllers[idx][0].text = values['reps']?.toString() ?? '';
+                }
+                if (_weightControllers[idx][0].text.trim().isEmpty) {
+                  _weightControllers[idx][0].text = display?.toString() ?? '';
+                  print(
+                      '🪙 [WES HydrateWeight] ex=$exName isBW=$isBwEx abs=$abs added=$added display=$display '
+                          '→ wrote text="${_weightControllers[idx][0].text}"');
+                }
+                if (_rirControllers[idx][0].text.trim().isEmpty) {
+                  _rirControllers[idx][0].text = values['rir']?.toString() ?? '';
+                }
               }
+
             }
           }
         }
@@ -11030,6 +11137,12 @@ class _WorkoutPageState extends State<WorkoutPage>
     }
     final ymdPicked = DateFormat('yyyy-MM-dd').format(picked);
     print('📆 [WES] Date changed → $ymdPicked');
+    // 🔒 Begin a fresh session for this picked date (makes prior async results stale)
+    _beginDateSession(picked);
+    final int _selectEpoch = _epoch;
+    final String _selectDayKey = _currentDayKey;
+
+
 
     String _normNameForProv(String s) {
       var t = s.toLowerCase().trim();

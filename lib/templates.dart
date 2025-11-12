@@ -1,8 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
 import 'block_repository.dart'; // 👈 to get active block id + meta
 import 'template_bootstrapper.dart';
+import 'create_new_account_screen.dart';
 
 // Import the shared methods
 import 'create_template_screen.dart';
@@ -171,6 +174,63 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       if (mounted) setState(() => _loadingBlocks = false);
     }
   }
+
+  Future<void> _openEditFitnessPreferencesFromTemplates() async {
+    debugPrint('🧭 [Templates] Edit Training Preferences tapped');
+
+    try {
+      // Prefer actingAsUid (coach mode) else current user
+      final actingUid = Provider.of<UserContext>(context, listen: false).currentUid;
+// or equivalently: final actingUid = context.read<UserContext>().currentUid;
+
+      final db = FirebaseFirestore.instance;
+
+      String? sex;
+      String? dob;
+
+      try {
+        final snap = await db.collection('users').doc(actingUid).get();
+        final data = snap.data();
+        sex = data?['sex']?.toString();
+        dob = data?['dob']?.toString(); // e.g. "dd-mm-yyyy" (your UI already handles both)
+        debugPrint('🧭 [Templates] Loaded profile for $actingUid → sex=$sex, dob=$dob');
+      } catch (e) {
+        debugPrint('⚠️ [Templates] Could not prefetch sex/dob: $e');
+        // continue; screen will degrade labels gracefully
+      }
+
+      final email = FirebaseAuth.instance.currentUser?.email ?? '';
+
+      // Navigate to the existing onboarding page in edit mode
+      debugPrint('🚪 [Templates] Pushing OnboardingPageTwo (entryFrom=templates)');
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => OnboardingPageTwo(
+            email: email,
+            password: 'edit-mode', // harmless in logged-in flow
+            sex: sex,
+            username: null,
+            fullName: null,
+            dob: dob,
+          ),
+          // IMPORTANT: do not use `const` here because the map isn't const
+          settings: RouteSettings(
+            arguments: {'entryFrom': 'templates'},
+          ),
+        ),
+      );
+
+      debugPrint('✅ [Templates] Returned from Edit Training Preferences');
+    } catch (e, st) {
+      debugPrint('❌ [Templates] openEditFitnessPreferences failed: $e\n$st');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Couldn’t open Training Preferences.')),
+      );
+    }
+  }
+
+
 
   Future<void> _loadBlocksThenTemplates() async {
     // 1) get active block id (same source of truth as BB2/BP)
@@ -1706,27 +1766,34 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
       body: Column(
         children: [
-          const SizedBox(height: 2),
+          const SizedBox(height: 1),
           Wrap(
             alignment: WrapAlignment.center,
-            spacing: 12,
-            runSpacing: 8,
+            spacing: 9,
+            runSpacing: 1,
             children: [
               // 🧩 Toggle Planned-Only Mode
               StatefulBuilder(
                 builder: (context, setLocalState) {
                   return ElevatedButton.icon(
-                    icon: Icon(_plannedOnly ? Icons.checklist : Icons.list_alt),
-                    label: Text(_plannedOnly ? "Planned Exercises" : "Wild Stuff"),
+                    icon: Icon(
+                      _plannedOnly ? Icons.checklist : Icons.list_alt,
+                      size: 32, // ↓ smaller icon
+                    ),
+                    label: Text(
+                      _plannedOnly ? "Planned Exercises" : "Wild Card",
+                      style: const TextStyle(fontSize: 14), // ↓ slightly smaller text
+                    ),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: _plannedOnly
-                          ? Colors.blueGrey.shade700 // 🩵 Text Book → blue-grey
-                          : Colors.pink.shade200,    // 💗 Wild Stuff → light pink
+                          ? Colors.blueGrey.shade700
+                          : Colors.pink.shade200,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6), // ↓ tighter vertical padding
+                      minimumSize: const Size(0, 28), // ✅ ensures button stays short
+                      visualDensity: VisualDensity.compact, // ✅ reduces height slightly more
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     ),
-
                     onPressed: () {
                       setLocalState(() => _plannedOnly = !_plannedOnly);
                       ScaffoldMessenger.of(context).showSnackBar(
@@ -1742,36 +1809,68 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                 },
               ),
 
-              // 🔁 Regenerate Templates
+// 🔁 Regenerate Templates
               ElevatedButton.icon(
-                icon: const Icon(Icons.refresh),
-                label: const Text("Regen Templates"),
+                icon: const Icon(Icons.refresh, size: 32), // ↓ smaller icon
+                label: const Text(
+                  "Regen",
+                  style: TextStyle(fontSize: 13.5), // ↓ smaller text
+                ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.blueGrey.shade700,
-
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2), // ↓ tighter
+                  minimumSize: const Size(0, 28), // ✅ short button
+                  visualDensity: VisualDensity.compact,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
                 onPressed: _regenerateAllTemplates,
               ),
 
+
               // ➕ Create New Workout (existing)
               ElevatedButton.icon(
-                icon: const Icon(Icons.add),
-                label: const Text("Create New Workout"),
+                icon: const Icon(Icons.add, size: 32), // ↓ slightly smaller icon
+                label: const Text(
+                  "Add New Workout",
+                  style: TextStyle(fontSize: 14), // ✅ keep same text size
+                ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.blueGrey.shade700,
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2), // ↓ tighter vertical padding
+                  minimumSize: const Size(0, 28), // ✅ ensures consistent short height
+                  visualDensity: VisualDensity.compact,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
                 onPressed: _createTemplate,
               ),
+
+              const SizedBox(width: 1), // ✅ give them a bit more breathing room
+
+// 🛠️ Edit Training Preferences (opens the existing onboarding page in edit mode)
+              ElevatedButton.icon(
+                icon: const Icon(Icons.settings, color: Colors.grey, size: 32),
+                label: const Text(
+                  "Edit Preferences",
+                  style: TextStyle(fontSize: 14),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blueGrey.shade700,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  minimumSize: const Size(0, 28),
+                  visualDensity: VisualDensity.compact,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: _openEditFitnessPreferencesFromTemplates,
+              ),
+
+
             ],
           ),
 
-          const SizedBox(height: 8),
+          const SizedBox(height: 2),
 
           // 👇 always show block sections (once blocks & templates loaded)
           if (_loadingBlocks)

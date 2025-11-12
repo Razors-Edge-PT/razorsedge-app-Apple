@@ -4,6 +4,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:async'; // for Timer debounce
 import 'package:flutter/services.dart'; // for TextInputFormatter
 import 'package:flutter/services.dart' show HapticFeedback;
+import 'package:provider/provider.dart'; // for context.read()
+import 'package:localtest222/user_context.dart'; // <-- adjust path to your actual file
+
+
 import 'package:localtest222/login_screen.dart';
 import 'periodization_model_utils.dart';
 
@@ -1332,7 +1336,17 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
     // 🟦 Populate effort labels based on DOB + sex
     _trainingEffortLabels = _buildEffortLabels(widget.sex, widget.dob);
+
+    // 🔹 After first frame, detect entryFrom and hydrate existing values for edit mode
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final entryFrom = (ModalRoute.of(context)?.settings.arguments as Map?)?['entryFrom']?.toString() ?? 'onboarding';
+      final isEditMode = entryFrom == 'templates' || entryFrom == 'drawer';
+      if (isEditMode && mounted) {
+        _hydrateFromFirestoreEditMode();
+      }
+    });
   }
+
 
 
   Future<void> _finish() async {
@@ -1490,6 +1504,121 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       if (mounted) setState(() => _saving = false);
     }
   }
+
+  Future<void> _hydrateFromFirestoreEditMode() async {
+    try {
+      // one-time provider read in handlers/async code
+      final actingUid = context.read<UserContext>().currentUid;
+      final db = FirebaseFirestore.instance;
+
+      final snap = await db
+          .collection('users')
+          .doc(actingUid)
+          .collection('profile')
+          .doc('fitness_onboarding')
+          .get();
+
+      if (!snap.exists) {
+        debugPrint('ℹ️ [EditPrefs] No existing fitness_onboarding for $actingUid');
+        return;
+      }
+
+      final j = Map<String, dynamic>.from(snap.data()!);
+
+      // ---- Map JSON → state (cover all fields you save on finish) ----
+      final loadedGoals             = (j['goalsRanked'] as List?)?.map((e) => e.toString()).toList() ?? _goals;
+      final loadedNotImportant      = (j['goalsNotImportant'] as List?)?.map((e) => e.toString()).toList() ?? <String>[];
+
+      final loadedBodyFocusLevel    = (j['bodyFocusLevel'] as Map?)?.map((k, v) => MapEntry(k.toString(), (v as num).toInt())) ?? <String,int>{};
+      final loadedBodyFocusChildren = (j['bodyFocusChildren'] as Map?)?.map((pk, pv) {
+        final kids = Map<String, dynamic>.from(pv as Map);
+        return MapEntry(pk.toString(), kids.map((ck, cv) => MapEntry(ck.toString(), (cv as num).toInt())));
+      }) ?? <String, Map<String,int>>{};
+
+      final loadedInjuries          = (j['injuries'] as List?)?.map((e) => e.toString()).toSet() ?? <String>{};
+      final loadedPainNow           = (j['painNow'] as Map?)?.map((k, v) => MapEntry(k.toString(), (v as num).toDouble())) ?? <String,double>{};
+
+      final loadedExperienceStr     = j['experience']?.toString();
+      final loadedExperience        = OnboardingAnswers._expFromString(loadedExperienceStr);
+
+      final loadedWeeklyFreq        = (j['weeklyFrequency'] ?? j['minTrainingDaysPerWeek']) as num?;
+      final loadedTrainingEffort    = (j['trainingEffort'] as num?)?.toInt();
+
+      final env                     = j['environment']?.toString();
+      final equip                   = Map<String, dynamic>.from(j['equipment'] ?? {});
+      final equipItems              = (equip['items'] as List?)?.map((e) => e.toString()).toSet() ?? <String>{};
+      final dbMax                   = (equip['dumbbellsMax'] as num?)?.toInt();
+
+      final pt                      = Map<String, dynamic>.from(j['ptHistory'] ?? {});
+      final ptIndex                 = (pt['index'] as num?)?.toInt();
+
+      // Optional best efforts → hydrate text fields if present
+      final bestEfforts             = (j['bestEfforts'] as List?)?.map((e) => Map<String,dynamic>.from(e as Map)).toList() ?? const [];
+
+      // ---- Commit to state ----
+      if (!mounted) return;
+      setState(() {
+        _goals               = loadedGoals;
+        _notImportantGoals   = loadedNotImportant;
+
+        _bodyFocusLevel
+          ..clear()
+          ..addAll(loadedBodyFocusLevel);
+        _childFocusLevel
+          ..clear()
+          ..addAll(loadedBodyFocusChildren.map((k, v) => MapEntry(k, Map<String,int>.from(v))));
+
+        _injuries
+          ..clear()
+          ..addAll(loadedInjuries);
+
+        _painSlider
+          ..clear()
+          ..addAll(loadedPainNow);
+
+        _experience          = loadedExperience;
+        _minTrainingDays     = loadedWeeklyFreq?.toInt();
+        _trainingEffort      = loadedTrainingEffort;
+
+        _env                 = env;
+        _equipSelected
+          ..clear()
+          ..addAll(equipItems);
+        _dbMax               = dbMax;
+
+        _ptHistory           = ptIndex;
+
+        // If children exist, show the "More specific" view by default
+        _moreSpecific        = _childFocusLevel.isNotEmpty;
+
+        // (Optional) seed best-effort text fields if you want them visible
+        for (final be in bestEfforts) {
+          final key = (be['liftKey'] ?? '').toString();
+          final w   = (be['weightKg'] as num?)?.toDouble();
+          final r   = (be['reps'] as num?)?.toInt();
+
+          if (key.contains('bench')) {
+            if (w != null) _benchWeightCtrl.text = w.toStringAsFixed(w % 1 == 0 ? 0 : 1);
+            if (r != null) _benchRepsCtrl.text   = r.toString();
+          } else if (key.contains('squat') || key.contains('leg_press')) {
+            if (w != null) _squatWeightCtrl.text = w.toStringAsFixed(w % 1 == 0 ? 0 : 1);
+            if (r != null) _squatRepsCtrl.text   = r.toString();
+          } else if (key.contains('lat_pulldown') || key.contains('chinup')) {
+            if (w != null) _pullWeightCtrl.text  = w.toStringAsFixed(w % 1 == 0 ? 0 : 1);
+            if (r != null) _pullRepsCtrl.text    = r.toString();
+          } else if (key.contains('deadlift')) {
+            if (w != null) _deadWeightCtrl.text  = w.toStringAsFixed(w % 1 == 0 ? 0 : 1);
+            if (r != null) _deadRepsCtrl.text    = r.toString();
+          }
+        }
+      });
+
+      debugPrint('✅ [EditPrefs] Hydrated onboarding for $actingUid');
+    } catch (e, st) {
+      debugPrint('❌ [EditPrefs] hydrate failed: $e\n$st');
+    }
+  }
+
 
 
   List<BestEffort> _collectBestEfforts() {
@@ -1670,10 +1799,41 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.blueGrey.shade50,
-      body: Center(
-        child: Card(
+    final entryFrom = (ModalRoute.of(context)?.settings.arguments as Map?)?['entryFrom']?.toString() ?? 'onboarding';
+    final isEditMode = entryFrom == 'templates' || entryFrom == 'drawer';
+    // Ensure checkboxes/radios are visible even with different parent themes
+    final localTheme = Theme.of(context).copyWith(
+      // M2/M3 compatibility: some widgets still use this for the *unselected* ring
+      unselectedWidgetColor: Colors.blueGrey.shade600,
+
+      checkboxTheme: Theme.of(context).checkboxTheme.copyWith(
+        // Outline color when UNSELECTED
+        side: BorderSide(color: Colors.blueGrey.shade600, width: 1.4),
+        // Fill when selected / keep white when not selected
+        fillColor: MaterialStateProperty.resolveWith((states) {
+          return states.contains(MaterialState.selected)
+              ? Colors.blueAccent
+              : Colors.white;
+        }),
+        checkColor: MaterialStateProperty.all(Colors.white),
+      ),
+
+      radioTheme: Theme.of(context).radioTheme.copyWith(
+        // Ring & dot color for both selected/unselected
+        fillColor: MaterialStateProperty.resolveWith((states) {
+          // Use same color so the *unselected* ring is visible
+          return Colors.blueGrey.shade700;
+        }),
+      ),
+    );
+
+    return Theme(
+        data: localTheme,
+        child: Scaffold(
+          backgroundColor: Colors.blueGrey.shade50,
+          body: Center(
+
+          child: Card(
           elevation: 10,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           color: Colors.white.withOpacity(0.9),
@@ -2745,27 +2905,41 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                           ),
                           const SizedBox(height: 8),
 
-                          // radio row/column
-                          Column(
-                            children: [2, 3, 4, 5, 6, 7].map((d) {
-                              return RadioListTile<int>(
+                          // radio row/column (force a fresh, stable theme for this section)
+                          Theme(
+                            data: ThemeData.light().copyWith(
+                              useMaterial3: false, // ← hard lock to M2 rendering for clear radio rings
+                              unselectedWidgetColor: Colors.blueGrey.shade700, // ring color when not selected
+                              radioTheme: RadioThemeData(
+                                fillColor: MaterialStateProperty.resolveWith((states) {
+                                  return states.contains(MaterialState.selected)
+                                      ? Colors.blueAccent // selected dot/ring
+                                      : Colors.blueGrey.shade700; // unselected ring
+                                }),
+                                visualDensity: VisualDensity.compact,
+                                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              listTileTheme: const ListTileThemeData(
                                 dense: true,
                                 contentPadding: EdgeInsets.zero,
-                                value: d,
-                                groupValue: _minTrainingDays,
-                                activeColor: Colors.blueAccent,
-                                onChanged: (v) {
-                                  setState(() {
-                                    _minTrainingDays = v;
-                                  });
-                                },
-                                title: Text(
-                                  '$d ${d == 1 ? '' : ''} X week',
-                                  style: const TextStyle(fontSize: 13.5),
-                                ),
-                              );
-                            }).toList(),
+                              ),
+                            ),
+                            child: Column(
+                              children: [2, 3, 4, 5, 6, 7].map((d) {
+                                return RadioListTile<int>(
+                                  value: d,
+                                  groupValue: _minTrainingDays,
+                                  // Let the Theme control colors; don't set activeColor here
+                                  onChanged: (v) => setState(() => _minTrainingDays = v),
+                                  title: Text(
+                                    '$d ${d == 1 ? '' : ''} X week',
+                                    style: const TextStyle(fontSize: 13.5),
+                                  ),
+                                );
+                              }).toList(),
+                            ),
                           ),
+
                         ],
                       ),
                     ),
@@ -2914,16 +3088,35 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                     SizedBox(
                       width: double.infinity,
                       child: OutlinedButton(
-                        onPressed: () => Navigator.pop(context),
+                        onPressed: () {
+                          if (isEditMode) {
+                            // If navigated from Templates → go back there
+                            if (entryFrom == 'templates') {
+                              Navigator.pushReplacementNamed(context, '/templates');
+                            }
+                            // If navigated from Drawer → go back home
+                            else if (entryFrom == 'drawer') {
+                              Navigator.pushReplacementNamed(context, '/home');
+                            }
+                          } else {
+                            // Default behavior during onboarding
+                            Navigator.pop(context);
+                          }
+                        },
                         style: OutlinedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 12),
                           side: const BorderSide(color: Colors.blueAccent),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                           foregroundColor: Colors.blueAccent,
                         ),
-                        child: const Text('Back', style: TextStyle(fontSize: 16)),
+                        child: Text(
+                          isEditMode ? 'Back to ${entryFrom == 'templates' ? 'Templates' : 'Home'}'
+                              : 'Back',
+                          style: const TextStyle(fontSize: 16),
+                        ),
                       ),
                     ),
+
                     const SizedBox(height: 10),
 
                     SizedBox(
@@ -2937,7 +3130,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                         ),
                         child: _saving
                             ? const CircularProgressIndicator(color: Colors.white)
-                            : const Text('Finish', style: TextStyle(fontSize: 18)),
+                            : Text(isEditMode ? 'Save Changes' : 'Finish', style: const TextStyle(fontSize: 18)),
                       ),
                     ),
                   ],
@@ -2947,7 +3140,9 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
           ),
         ),
       ),
+    )
     );
+
   }
 }
 
