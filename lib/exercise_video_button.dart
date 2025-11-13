@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
 import 'exercise_video_assets.dart';
-import 'exercise_video_player_screen.dart'; // we'll create this next
+import 'exercise_video_player_screen.dart';
 
 class ExerciseVideoButton extends StatelessWidget {
-  final String exerciseId;
+  final String exerciseId;   // may be an ID OR a name
   final double size;
 
   const ExerciseVideoButton({
@@ -16,9 +16,15 @@ class ExerciseVideoButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final assetPath = kExerciseVideoAssets[exerciseId];
-    debugPrint('🎥 ExerciseVideoButton for "$exerciseId" → assetPath="$assetPath"');
-    // No video defined for this exercise → no icon.
+    debugPrint('🎥 [BUTTON] build for exerciseId="$exerciseId"');
+    // 🔍 1) Try ID → 2) Try Name → 3) no video
+    final assetPath =
+        kExerciseVideoAssets[exerciseId] ??      // try ID
+            kExerciseVideoAssets[exerciseId.trim()]; // try trimmed name
+
+    debugPrint('🎥 ExerciseVideoButton lookup for "$exerciseId" → "$assetPath"');
+
+    // ❌ No video found → hide icon
     if (assetPath == null) {
       return const SizedBox.shrink();
     }
@@ -35,10 +41,16 @@ class ExerciseVideoButton extends StatelessWidget {
   }
 
   void _openVideo(BuildContext context, String assetPath) {
+    debugPrint('▶️ Opening video: $assetPath');
+
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => ExerciseVideoPlayerScreen(assetPath: assetPath),
+        builder: (_) => ExerciseVideoPlayerScreen(
+          assetPath: assetPath,
+          exerciseName: exerciseId,   // ← Use the exerciseId/name you already have
+        ),
       ),
     );
   }
+
 }

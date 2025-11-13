@@ -35,8 +35,6 @@ import 'exercise_video_button.dart';
 import 'package:video_player/video_player.dart';
 import 'exercise_video_assets.dart';
 import 'exercise_video_player_screen.dart';
-import 'exercise_video_button.dart';
-
 
 import 'package:cloud_firestore/cloud_firestore.dart' as firebase_firestore;
 
@@ -12439,73 +12437,110 @@ class _WorkoutPageState extends State<WorkoutPage>
                                       ),
                                     ),
 
-                                    trailing: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        // If already saved → show the green "Saved" pill
+                                    // 👇 Wrap trailing in a Builder so we can print before returning the Row
+                                    trailing: Builder(
+                                      builder: (context) {
+                                        final ex = _selectedExercisesWithCircuits[i];
+                                        final String name = ex['name'] ?? '';
+                                        final String? id = ex['id'];
 
-                                        if (isSaved) ...[
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-                                            margin: const EdgeInsets.only(right: 1),
-                                            decoration: BoxDecoration(
-                                              color: Colors.green.withOpacity(0.15),
-                                              borderRadius: BorderRadius.circular(12),
-                                              border: Border.all(color: Colors.green.withOpacity(0.6)),
-                                            ),
-                                            child: const Row(
-                                              children: [
-                                                Icon(Icons.check_circle, size: 14, color: Colors.green),
-                                                SizedBox(width: 4),
-                                                Text(
-                                                  'Done',
-                                                  style: TextStyle(fontSize: 11, color: Colors.green),
+                                        // Prefer ID, fall back to name (matches your kExerciseVideoAssets keys)
+                                        final String videoKey = (id ?? name).trim();
+
+                                        // Look up the asset path in the map
+                                        final String? assetPath = videoKey.isEmpty
+                                            ? null
+                                            : (kExerciseVideoAssets[videoKey] ??
+                                            kExerciseVideoAssets[videoKey.trim()]);
+
+                                        debugPrint(
+                                          '🎥 row video lookup → '
+                                              'name="$name", id="$id", key="$videoKey", asset="$assetPath"',
+                                        );
+
+                                        return Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            // If already saved → show the green "Saved" pill
+                                            if (isSaved) ...[
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                                                margin: const EdgeInsets.only(right: 1),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.green.withOpacity(0.15),
+                                                  borderRadius: BorderRadius.circular(12),
+                                                  border: Border.all(color: Colors.green.withOpacity(0.6)),
                                                 ),
-                                              ],
+                                                child: const Row(
+                                                  children: [
+                                                    Icon(Icons.check_circle, size: 14, color: Colors.green),
+                                                    SizedBox(width: 4),
+                                                    Text(
+                                                      'Done',
+                                                      style: TextStyle(fontSize: 11, color: Colors.green),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ],
+
+                                            // 🎥 Only show the video icon if we actually found a video asset
+                                            if (assetPath != null)
+                                              GestureDetector(
+                                                onTap: () {
+                                                  debugPrint('▶️ Opening video: $assetPath');
+                                                  Navigator.of(context).push(
+                                                    MaterialPageRoute(
+                                                      builder: (_) => ExerciseVideoPlayerScreen(
+                                                        assetPath: assetPath,
+                                                        exerciseName: name,   // ← add this
+                                                      ),
+
+                                                    ),
+                                                  );
+                                                },
+                                                child: Icon(
+                                                  Icons.play_circle_fill,
+                                                  size: 22,
+                                                  color: Colors.blueGrey.shade400,
+                                                ),
+                                              ),
+
+                                            // Existing graph button
+                                            IconButton(
+                                              icon: const Icon(Icons.insights),
+                                              color: Colors.lightBlueAccent,
+                                              onPressed: () {
+                                                _navigateToExerciseDetails(
+                                                  _selectedExercisesWithCircuits[i]['name'] ?? '',
+                                                );
+                                              },
                                             ),
-                                          ),
-                                        ],
 
-                                        // 🎥 Small video icon for this exercise (ID → name fallback)
-                                        if (videoKey != null)
-                                          ExerciseVideoButton(
-                                            exerciseId: videoKey!,
-                                            size: 22,
-                                          ),
+                                            const SizedBox(width: 1),
 
-                                        // Existing graph button
-                                        IconButton(
-                                          icon: const Icon(Icons.insights),
-                                          color: Colors.lightBlueAccent,
-                                          onPressed: () {
-                                            _navigateToExerciseDetails(
-                                              _selectedExercisesWithCircuits[i]['name'] ?? '',
-                                            );
-                                          },
-                                        ),
-                                        const SizedBox(width: 1),
-
-                                        // Existing History button
-                                        ElevatedButton(
-                                          style: ElevatedButton.styleFrom(
-                                            backgroundColor: Colors.blueGrey[700],
-                                          ),
-                                          onPressed: () {
-                                            _navigateToTopSets(
-                                              _selectedExercisesWithCircuits[i]['name'] ?? '',
-                                            );
-                                          },
-                                          child: const Text(
-                                            'History',
-                                            style: TextStyle(
-                                              fontFamily: 'Verdana',
-                                              color: Colors.white70,
+                                            // Existing History button
+                                            ElevatedButton(
+                                              style: ElevatedButton.styleFrom(
+                                                backgroundColor: Colors.blueGrey[700],
+                                              ),
+                                              onPressed: () {
+                                                _navigateToTopSets(
+                                                  _selectedExercisesWithCircuits[i]['name'] ?? '',
+                                                );
+                                              },
+                                              child: const Text(
+                                                'History',
+                                                style: TextStyle(
+                                                  fontFamily: 'Verdana',
+                                                  color: Colors.white70,
+                                                ),
+                                              ),
                                             ),
-                                          ),
-                                        ),
-                                      ],
+                                          ],
+                                        );
+                                      },
                                     ),
-
 
 
                                     children: [
@@ -13514,10 +13549,14 @@ class ExerciseVideoButton extends StatelessWidget {
       onPressed: () {
         Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (_) => ExerciseVideoPlayerScreen(assetPath: assetPath),
+            builder: (_) => ExerciseVideoPlayerScreen(
+              assetPath: assetPath,
+              exerciseName: exerciseId,   // ← THIS is valid and always available
+            ),
           ),
         );
       },
     );
+
   }
 }

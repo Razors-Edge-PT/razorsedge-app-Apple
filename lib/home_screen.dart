@@ -2503,7 +2503,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                         const SizedBox(width: 8),
 
                         // 🔧 Sneaky debug button (one-time Firestore dump)
-                        TextButton.icon(
+                        /*TextButton.icon(
                           onPressed: () async {
                             try {
                               // 👇 enable file output
@@ -2534,7 +2534,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                             foregroundColor: Colors.white,
                           ),
                         ),
-
+*/
 
                         // ── Home Feed ──────────────────────────────────────────────────────────
                         if (_selectedFeed == SelectedFeed.home) ...[
