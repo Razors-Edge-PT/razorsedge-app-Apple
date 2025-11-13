@@ -202,6 +202,13 @@ class _WorkoutPageState extends State<WorkoutPage>
 // Active day key (YYYY-MM-DD) for the current page session
   String _dayKey = '';
   String get _currentDayKey => _dayKey;
+  // ⏳ Coalescing for swipe-driven date changes
+  Timer? _dateCoalesceTimer;
+  DateTime? _pendingPickedForCoalesce;
+  bool _hasOpenedOnce = false;
+  Timer? _heavyWorkTimer;
+
+
 
 // Start a new date session: bump epoch + set dayKey
   void _beginDateSession(DateTime d) {
@@ -2278,6 +2285,99 @@ class _WorkoutPageState extends State<WorkoutPage>
         _sparkleCtrl.stop();
         setState(() => _showSparkles = false);
         debugPrint('✨ [Sparkles] Hidden at ${DateTime.now()}');
+      }
+    });
+  }
+
+
+  // --- Heavy work coalescer (merge + self-heal) ---
+  void _scheduleHeavyWork({Duration delay = const Duration(milliseconds: 1000)}) {
+    print('🕒 [WES] _scheduleHeavyWork() called (will run in ${delay.inMilliseconds}ms)… epoch=$_epoch dayKey=$_currentDayKey');
+    _heavyWorkTimer?.cancel();
+
+    // Capture the session keys at schedule time
+    final int epochAtSchedule = _epoch;
+    final String dayKeyAtSchedule = _currentDayKey;
+
+    _heavyWorkTimer = Timer(delay, () async {
+      // Abort if a new date/session started
+      if (_isStale(epochAtSchedule)) return;
+      if (_currentDayKey != dayKeyAtSchedule) return;
+
+      // Re-compute allowMerge based on the *current* selected date,
+      // then run the heavy steps guarded.
+      try {
+        final picked = _selectedDate;
+        if (picked == null) return;
+
+        bool allowMerge = true;
+        try {
+          final DateTime pickedOnly = DateTime(picked.year, picked.month, picked.day);
+          final DateTime? blockStartOnly = (blockStartDate == null)
+              ? null
+              : DateTime(blockStartDate!.year, blockStartDate!.month, blockStartDate!.day);
+          if (blockStartOnly != null) {
+            final delta = pickedOnly.difference(blockStartOnly).inDays;
+            final wk = delta ~/ 7;
+            final diRaw = delta % 7;
+            final di = diRaw < 0 ? diRaw + 7 : diRaw;
+
+            final uid = _cachedUid ?? UserContext.of(context, listen: false).currentUid;
+            final bid = _selectedBlockId ?? _activeBlockId;
+
+            if (uid != null && bid != null) {
+              final dayDoc = await FirebaseFirestore.instance
+                  .collection('planned_blocks').doc(uid)
+                  .collection('blocks').doc(bid)
+                  .collection('weeks').doc('week_$wk')
+                  .collection('days').doc('day_$di')
+                  .get(const GetOptions(source: Source.server));
+
+              String _d(dynamic v) {
+                if (v == null) return '∅';
+                if (v is Timestamp) { final d = v.toDate(); return '${d.year}-${d.month.toString().padLeft(2,'0')}-${d.day.toString().padLeft(2,'0')}'; }
+                if (v is DateTime)  { final d = DateTime(v.year, v.month, v.day); return DateFormat('yyyy-MM-dd').format(d); }
+                if (v is String)    { return v.length >= 10 ? v.substring(0,10) : v; }
+                return v.toString();
+              }
+              final fsDate = _d(dayDoc.data()?['date']);
+              final pick   = DateFormat('yyyy-MM-dd').format(pickedOnly);
+              allowMerge = (fsDate == pick);
+              debugPrint('✅ [HeavyCoalesce MergeGate] allowMerge=$allowMerge (doc=$fsDate pick=$pick)');
+            }
+          }
+        } catch (e) {
+          debugPrint('⚠️ [HeavyCoalesce MergeGate] failed: $e (default allowMerge=true)');
+          allowMerge = true;
+        }
+
+        // Abort again if stale before mutating UI
+        if (_isStale(epochAtSchedule) || _currentDayKey != dayKeyAtSchedule) return;
+
+        // MERGE (deferred)
+        if (blockStartDate == null) {
+          debugPrint('🚧 [HeavyCoalesce] No block meta → skipping merge.');
+        } else if (allowMerge) {
+          try {
+            await _mergeNewBB2ExercisesIntoDraft();
+          } catch (e) {
+            debugPrint('⚠️ [HeavyCoalesce Merge] threw: $e');
+          }
+        } else {
+          debugPrint('🛑 [HeavyCoalesce] Skipping merge: FS day≠picked calendar date.');
+        }
+
+        // Abort again before self-heal
+        if (_isStale(epochAtSchedule) || _currentDayKey != dayKeyAtSchedule) return;
+
+        // SELF-HEAL (deferred)
+        try {
+          await _verifyAndSelfHealIfStale();
+        } catch (e) {
+          debugPrint('⚠️ [HeavyCoalesce SelfHeal] threw: $e');
+        }
+      } finally {
+        // no-op
       }
     });
   }
@@ -6869,8 +6969,16 @@ class _WorkoutPageState extends State<WorkoutPage>
         });
       }
 
-      // ⛑️ Kick a silent self-heal only if needed (today only)
-      unawaited(_verifyAndSelfHealIfStale());
+      if (_hasOpenedOnce) {
+        print('🟢 [WES] _scheduleHeavyWork triggered via date change (not first open)');
+        _scheduleHeavyWork();
+      } else {
+        print('🟣 [WES] First open → running immediate self-heal (no scheduled delay)');
+        unawaited(_verifyAndSelfHealIfStale());
+        _hasOpenedOnce = true;
+      }
+
+
 
     } catch (e, st) {
       print('⚠️ [_paintFromSnapshotIfAny] error: $e');
@@ -11285,6 +11393,10 @@ class _WorkoutPageState extends State<WorkoutPage>
     final _snapBeforePaint = _snapshotRows();
     try {
       await _paintFromSnapshotIfAny();
+// ⛑️ Guard
+      if (!await _applyGuard('SelectDate→AfterFastPaint', _selectEpoch, _selectDayKey)) return;
+
+
     } catch (_) {}
     _record('FastPaint/ISAR',
         _diffAdded(_snapBeforePaint, _snapshotRows()));
@@ -11378,12 +11490,20 @@ class _WorkoutPageState extends State<WorkoutPage>
       print('⚠️ [SelectDate MergeGate] failed: $e (default allowMerge=true)');
     }
 
-    if (blockStartDate == null) {
-      print('🚧 [WES] No block meta yet → skipping BB2 merge for $ymdPicked');
-    } else if (_allowMerge) {
-      try { await _mergeNewBB2ExercisesIntoDraft(); } catch (e) { print('⚠️ [WES Merge] threw: $e'); }
+    // 🕒 Defer heavy work (merge + self-heal) after fast paint — except on very first open
+    if (_hasOpenedOnce) {
+      _scheduleHeavyWork();  // delayed, cancellable heavy operations
     } else {
-      print('🛑 [WES] Skipping BB2 merge: FS day date doesn’t match picked calendar date.');
+      // 🚀 First open: run merge immediately, mark as opened
+      if (blockStartDate == null) {
+        print('🚧 [WES] No block meta yet → skipping BB2 merge for $ymdPicked');
+      } else if (_allowMerge) {
+        try { await _mergeNewBB2ExercisesIntoDraft(); } catch (e) { print('⚠️ [WES Merge] threw: $e'); }
+      } else {
+        print('🛑 [WES] Skipping BB2 merge: FS day date doesn’t match picked calendar date.');
+      }
+
+      _hasOpenedOnce = true;
     }
 
     _record('BB2 planned', _diffAdded(_snapBeforeBB2, _snapshotRows()));
@@ -11402,6 +11522,8 @@ class _WorkoutPageState extends State<WorkoutPage>
       print('📂 [WES] Attempting local draft overlay…');
       await _loadDraftLocallyIfAvailable();
     } catch (_) {}
+    // ⛑️ Guard
+    if (!await _applyGuard('SelectDate→AfterOverlays', _selectEpoch, _selectDayKey)) return;
     _record('Local Draft', _diffAdded(_snapBeforeDraft, _snapshotRows()));
 
     // Provenance summary print (once, after all sources applied)
@@ -11444,10 +11566,40 @@ class _WorkoutPageState extends State<WorkoutPage>
     );
   }
 
+  void _enqueueDateChange(DateTime picked) {
+    // 70–80ms is a sweet spot; choose 75ms for a little more batching headroom.
+    _pendingPickedForCoalesce = picked;
+    _dateCoalesceTimer?.cancel();
+    _dateCoalesceTimer = Timer(const Duration(milliseconds: 01), () {
+      if (!mounted) return;
+      final d = _pendingPickedForCoalesce;
+      _pendingPickedForCoalesce = null;
+      if (d != null) {
+        _selectDate(context, pickedOverride: d);
+      }
+    });
+  }
+
+  Future<bool> _applyGuard(String tag, int startedEpoch, String startedDayKey) async {
+    if (!mounted) {
+      print('⛔️ [$tag] not mounted; abort');
+      return false;
+    }
+    if (startedEpoch != _epoch || startedDayKey != _currentDayKey) {
+      print('⛔️ [$tag] stale (epoch/day changed); abort');
+      return false;
+    }
+    return true;
+  }
+
+
   void _bumpDate(int deltaDays) {
     final next = _selectedDate.add(Duration(days: deltaDays));
     _selectDate(context, pickedOverride: next); // ← uses the same pipeline
   }
+
+
+
 
 
   String _formatWorkoutDate(DateTime date) {
@@ -11930,14 +12082,18 @@ class _WorkoutPageState extends State<WorkoutPage>
                 onHorizontalDragEnd: (_) {
                   // simple threshold for intentional swipes
                   if (_dragX > 24) {
-                    _bumpDate(-1);   // swipe right → previous day
+                    final next = _selectedDate.add(const Duration(days: -1));
+                    _enqueueDateChange(next);
                   } else if (_dragX < -24) {
-                    _bumpDate(1);    // swipe left → next day
+                    final next = _selectedDate.add(const Duration(days: 1));
+                    _enqueueDateChange(next);
                   }
+
                   _dragX = 0;
                 },
                 child: Padding(
-                  padding: const EdgeInsets.only(left: 8.0, bottom: 7.0), // 👈 shifts it to the right
+
+                padding: const EdgeInsets.only(left: 8.0, bottom: 7.0), // 👈 shifts it to the right
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
