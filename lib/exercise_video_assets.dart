@@ -7,15 +7,17 @@ const Map<String, String> kExerciseVideoAssets = {
   // ACTIVE (videos present)
 
   'AmfUWbF1DH3I7qPAdh5k': 'assets/exercise_videos/Bench Press, Barbell.mp4', 'Bench Press, Barbell': 'assets/exercise_videos/Bench Press, Barbell.mp4',
-  'heeBViVINHO6tUScSd6y': 'assets/exercise_videos/Back Squat, Barbell.mp4',    'Back Squat, Barbell': 'assets/exercise_videos/Back Squat, Barbell.mp4',
+  'ocNWJv7xLrlinGmjG6cV': 'assets/exercise_videos/Machine Row, Supported.mp4',  'Machine Row, Supported': 'assets/exercise_videos/Machine Row, Supported.mp4',
+  'lVDG90yN6Z8aPjRNV2wc': 'assets/exercise_videos/Overhead Barbell Press.mp4',  'Overhead Barbell Press': 'assets/exercise_videos/Overhead Barbell Press.mp4',
+
   'y5q9OU9OBzZQMkfPzFrf': 'assets/exercise_videos/Romanian Deadlift.mp4',       'Romanian Deadlift': 'assets/exercise_videos/Romanian Deadlift.mp4',
   'v2XlZUvFfBUhogOdKtJ8': 'assets/exercise_videos/Leg Press.mp4',               'Leg Press': 'assets/exercise_videos/Leg Press.mp4',
-  'lVDG90yN6Z8aPjRNV2wc': 'assets/exercise_videos/Overhead Barbell Press.mp4',  'Overhead Barbell Press': 'assets/exercise_videos/Overhead Barbell Press.mp4',
+  'heeBViVINHO6tUScSd6y': 'assets/exercise_videos/Back Squat, Barbell.mp4',    'Back Squat, Barbell': 'assets/exercise_videos/Back Squat, Barbell.mp4',
   'wIcMsf2J9cswJRs1GuYX': 'assets/exercise_videos/Lying Leg Curl.mp4',          'Lying Leg Curl': 'assets/exercise_videos/Lying Leg Curl.mp4',
   'ZKpGshMxFl2dxNmYSATj': 'assets/exercise_videos/Leg Extension, Unilateral.mp4', 'Leg Extension, Unilateral': 'assets/exercise_videos/Leg Extension, Unilateral.mp4',
   'ci3KpMTEacH4bw8ZumJW': 'assets/exercise_videos/Standing Calf Raise.mp4',     'Standing Calf Raise': 'assets/exercise_videos/Standing Calf Raise.mp4',
   'FtayDmR5BVnGS1FX1XLL': 'assets/exercise_videos/Triceps Dip.mp4',             'Triceps Dip': 'assets/exercise_videos/Triceps Dip.mp4',
-  'ocNWJv7xLrlinGmjG6cV': 'assets/exercise_videos/Machine Row, Supported.mp4',  'Machine Row, Supported': 'assets/exercise_videos/Machine Row, Supported.mp4',
+
 
 
   // COMMENTED OUT (videos not yet added)

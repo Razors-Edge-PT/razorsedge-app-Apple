@@ -314,6 +314,18 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     }
   }
 
+  int _extractDayNumberFromName(String name) {
+    final lower = name.toLowerCase();
+    final match = RegExp(r'day\s*(\d+)').firstMatch(lower);
+    if (match != null) {
+      final n = int.tryParse(match.group(1)!);
+      if (n != null) return n;
+    }
+    // If we can't find a day number, push it to the end
+    return 9999;
+  }
+
+
   List<Template> _templatesForBlock(String? blockId) {
     if (blockId == null) return const [];
 
@@ -322,6 +334,19 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       return tmplBlockId == blockId;
     }).toList();
 
+    // 🔢 NEW: sort by day number in the name (Day 1, Day 2, ...)
+    results.sort((a, b) {
+      final dayA = _extractDayNumberFromName(a.name);
+      final dayB = _extractDayNumberFromName(b.name);
+
+      if (dayA != dayB) {
+        return dayA.compareTo(dayB); // Day 1 before Day 2, etc.
+      }
+
+      // If same day number (or both unknown), fall back to alphabetical name
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    });
+
     // 👀 Debug only – check assignments
     for (final t in results) {
       debugPrint('📄 Template "${t.name}" → blockId=${_templateBlockIds[t.id]}');
@@ -329,6 +354,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
     return results;
   }
+
 
 
   List<Template> get _templatesWithoutBlock {

@@ -69,7 +69,9 @@ class TemplateGenerator {
 
 
   static const String _assetPath = 'assets/exercise_dump_20251109_112626.json';
-
+  // Max circuits per day (age-dependent). Default = 5.
+  static const int _defaultMaxCircuitsPerDay = 5;
+  static int _maxCircuitsPerDay = _defaultMaxCircuitsPerDay;
 
   /// Generate a set of starter templates (e.g., B1 Day1.., B2 Day1..)
   /// based on onboarding + pairing & overlap rules.
@@ -114,6 +116,26 @@ class TemplateGenerator {
     final int weeklyFrequency = _readWeeklyFrequency(onboarding) ?? 4; // default to 4
     final bool isFemale = sexU == 'F' || sexU == 'N';
 
+// 🧬 Hypertrophy-focused male flag based on top 2 goals
+    final List<dynamic>? goalsRankedRaw =
+    onboarding['goalsRanked'] as List<dynamic>?;
+    final List<String> topGoals = (goalsRankedRaw ?? const [])
+        .map((e) => e.toString())
+        .take(2)
+        .toList();
+
+    const Set<String> _hypertrophyGoalSet = {
+      'Build more muscle',
+      'Tone and shape',
+      'Get leaner',
+    };
+
+    final bool isHypertrophyMale =
+        !isFemale && topGoals.any((g) => _hypertrophyGoalSet.contains(g));
+
+// We want HP first + HPull second in circuit 0 on ~ (weeklyFrequency - 1) days
+    final int requiredHPullPrimaryDays =
+    isHypertrophyMale ? ((weeklyFrequency - 1).clamp(0, weeklyFrequency) as int) : 0;
 
 
     // 3) Frequency caps by sex (baseline at ≥4x/wk), then reduce max caps if fewer days.
@@ -150,6 +172,7 @@ class TemplateGenerator {
 
     // Ensure weekly minimums by sex (after we’ve built the first pass of weeklyPlan).
     final categoryEmphasis = _buildCategoryEmphasis(onboarding);
+
 
     _enforceWeeklyMinimums(
       isFemale: isFemale,
@@ -204,9 +227,12 @@ class TemplateGenerator {
       days: days,
       isFemale: isFemale,
       byCat: byCat,
-      allDays: days,                          // 🆕
+      allDays: days,                           // 🆕
       idTargetsRemaining: _idTargetsRemaining, // 🆕
+      isHypertrophyMale: isHypertrophyMale,
+      requiredHPullPrimaryDays: requiredHPullPrimaryDays,
     );
+
 
 
 
@@ -655,17 +681,164 @@ class TemplateGenerator {
 
 
   // Seed a day with the preferred “minimum per day” set for the given sex.
+  // Seed a day with the preferred “minimum per day” set for the given sex.
   static void _seedDailyMinimums({
     required List<_DayPlan> days,
     required bool isFemale,
     required Map<String, List<ExLite>> byCat,
     required List<_DayPlan> allDays,                // 🆕
     Map<String,int>? idTargetsRemaining,            // 🆕
+    bool isHypertrophyMale = false,
+    int requiredHPullPrimaryDays = 0,
   }) {
-
     final sets = isFemale ? _femaleDailyPrefSets : _maleDailyPrefSets;
+    final int weeklyFrequency = days.length;
+
+    // For hypertrophy-focused males, we want on ~ (weeklyFrequency - 1) days:
+    //   Circuit 0: [Horizontal Press, Horizontal Pull]
+    //   Circuit 1: [Vertical Press (or Lateral Raise if needed), Vertical Pull]
+    int remainingHPullPrimaryDays = isHypertrophyMale
+        ? (requiredHPullPrimaryDays > weeklyFrequency
+        ? weeklyFrequency
+        : requiredHPullPrimaryDays)
+        : 0;
 
     for (final d in days) {
+      // 🧩 Special seeding for hypertrophy-focused males:
+      // Try to pre-build:
+      //   Circuit 0 → [Horizontal Press, Horizontal Pull]
+      //   Circuit 1 → [Vertical Press (or LR fallback), Vertical Pull]
+      if (isHypertrophyMale && remainingHPullPrimaryDays > 0) {
+        final hpPool       = byCat['Horizontal Press'];
+        final hPullPool    = byCat['Horizontal Pull'];
+        final vPressPool   = byCat['Vertical Press'];
+        final latRaisePool = byCat['Lateral Raise'];
+        final vPullPool    = byCat['Vertical Pull'];
+
+        final bool haveHP      = hpPool != null && hpPool.isNotEmpty;
+        final bool haveHPull   = hPullPool != null && hPullPool.isNotEmpty;
+        final bool haveVPress  = vPressPool != null && vPressPool.isNotEmpty;
+        final bool haveLatR    = latRaisePool != null && latRaisePool.isNotEmpty;
+        final bool haveVPull   = vPullPool != null && vPullPool.isNotEmpty;
+
+        // ── Circuit 0: Horizontal Press → Horizontal Pull ────────────────────
+        if (haveHP && haveHPull) {
+          // Step A: Horizontal Press first
+          final hp = _chooseExercise(
+            pool: hpPool!,
+            day: d,
+            category: 'Horizontal Press',
+            allDays: allDays,
+            idTargetsRemaining: idTargetsRemaining,
+          );
+
+          if (hp != null) {
+            final hpCircuitIdx = _placeIntoCircuit(d, hp); // usually creates circuit 0
+            d.addExercise(hp, 'Horizontal Press', hpCircuitIdx);
+
+            // Step B: Horizontal Pull second, ideally in the same circuit 0
+            final hPull = _chooseExercise(
+              pool: hPullPool!,
+              day: d,
+              category: 'Horizontal Pull',
+              allDays: allDays,
+              idTargetsRemaining: idTargetsRemaining,
+            );
+
+            if (hPull != null) {
+              int targetCircuit = 0;
+              if (d.circuits.isNotEmpty && _canJoin(d, 0, hPull)) {
+                targetCircuit = 0; // pair with the press
+              } else {
+                targetCircuit = _placeIntoCircuit(d, hPull);
+              }
+              d.addExercise(hPull, 'Horizontal Pull', targetCircuit);
+            }
+          }
+        }
+
+        // ── Circuit 1: Vertical Press (or LR) → Vertical Pull ────────────────
+        if (haveVPull && (haveVPress || haveLatR)) {
+          // Ensure there is at least one circuit before we try to target index 1
+          if (d.circuits.isEmpty) {
+            // If somehow no circuits yet, we’ll let placement logic create them
+            // when we place the first exercise below.
+          }
+
+          // First exercise for Circuit 1: prefer Vertical Press,
+          // but if it can't be placed and weeklyFrequency > 2,
+          // we allow Lateral Raise as a flexible alternative.
+          ExLite? firstC1;
+          String? firstC1Category;
+
+          // Prefer Vertical Press
+          if (haveVPress) {
+            final vp = _chooseExercise(
+              pool: vPressPool!,
+              day: d,
+              category: 'Vertical Press',
+              allDays: allDays,
+              idTargetsRemaining: idTargetsRemaining,
+            );
+            if (vp != null) {
+              firstC1 = vp;
+              firstC1Category = 'Vertical Press';
+            }
+          }
+
+          // Flexible Lateral Raise option (only if we couldn't place VP)
+          if (firstC1 == null && weeklyFrequency > 2 && haveLatR) {
+            final lr = _chooseExercise(
+              pool: latRaisePool!,
+              day: d,
+              category: 'Lateral Raise',
+              allDays: allDays,
+              idTargetsRemaining: idTargetsRemaining,
+            );
+            if (lr != null) {
+              firstC1 = lr;
+              firstC1Category = 'Lateral Raise';
+            }
+          }
+
+          if (firstC1 != null && firstC1Category != null) {
+            int circuitIdx1;
+            // If circuit 1 exists and we can join it, prefer that.
+            if (d.circuits.length > 1 && _canJoin(d, 1, firstC1)) {
+              circuitIdx1 = 1;
+            } else {
+              // Otherwise, place and let it create the best circuit (likely index 1).
+              circuitIdx1 = _placeIntoCircuit(d, firstC1);
+            }
+            d.addExercise(firstC1, firstC1Category, circuitIdx1);
+
+            // Second exercise for Circuit 1: Vertical Pull
+            final vPull = _chooseExercise(
+              pool: vPullPool!,
+              day: d,
+              category: 'Vertical Pull',
+              allDays: allDays,
+              idTargetsRemaining: idTargetsRemaining,
+            );
+
+            if (vPull != null) {
+              int targetCircuit = circuitIdx1;
+              if (d.circuits.length > circuitIdx1 &&
+                  _canJoin(d, circuitIdx1, vPull)) {
+                targetCircuit = circuitIdx1;
+              } else {
+                targetCircuit = _placeIntoCircuit(d, vPull);
+              }
+              d.addExercise(vPull, 'Vertical Pull', targetCircuit);
+            }
+          }
+        }
+
+        // We successfully attempted a "primary hypertrophy day" pattern on this day
+        remainingHPullPrimaryDays--;
+      }
+
+      // 🔁 Then apply the normal daily preference sets
       for (final choiceList in sets) {
         _trySeedOneFrom(
           day: d,
@@ -677,6 +850,7 @@ class TemplateGenerator {
       }
     }
   }
+
 
   static bool exNameHasSquat(List<ExLite> pool) {
     for (final e in pool) {
