@@ -1126,13 +1126,17 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
     'Get stronger',
     'Build more muscle',
     'Get fitter',
+    'Powerlifting',
     'Get leaner',
     'Feel healthier / move better',
     'Tone and shape',
     'Defeat my gym nemesis',
+    'Power-Building',
+    'Bench Press Specialist',
   ].toList();
 
   List<String> _notImportantGoals = [];
+
 
   // ── B) Body focus (conditional if “muscle/toned” is relevant): simple checklist for v1
   final List<String> _bodyParts = const [
@@ -2292,9 +2296,9 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                                     if (_experience == TrainingExperience.oneYear || _experience == TrainingExperience.twoPlus)
                                       ChoiceChip(
                                         showCheckmark: false,
-                                        label: const Text(
-                                          'More specific',
-                                          style: TextStyle(
+                                        label: Text(
+                                          _moreSpecific ? 'Less specific' : 'More specific',
+                                          style: const TextStyle(
                                             fontWeight: FontWeight.bold,
                                             color: Colors.black,
                                           ),
@@ -3262,9 +3266,9 @@ class _GoalsRankerState extends State<_GoalsRanker> {
               ),
             ],
           ),
-          padding: const EdgeInsets.fromLTRB(4, 4, 4, 6),
+          padding: const EdgeInsets.fromLTRB(4, 4, 2, 6),
           child: SizedBox(
-            height: 470,
+            height: 598,
             child: Column(
               children: [
                 // Top insert slot (drop here to put item at index 0)
@@ -3292,7 +3296,7 @@ class _GoalsRankerState extends State<_GoalsRanker> {
                           side: BorderSide(color: Colors.blueGrey.shade200),
                         ),
                         child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
                           child: Text(
                             mainGoals[i],
                             style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w600),
@@ -3455,7 +3459,7 @@ class _MainInsertSlot extends StatelessWidget {
         final isHover = candidate.isNotEmpty;
         return AnimatedContainer(
           duration: const Duration(milliseconds: 120),
-          margin: const EdgeInsets.symmetric(vertical: 4),
+          margin: const EdgeInsets.symmetric(vertical: 2),
           height: 12,
           decoration: BoxDecoration(
             color: isHover ? Colors.lightBlue.withOpacity(0.25) : Colors.transparent,

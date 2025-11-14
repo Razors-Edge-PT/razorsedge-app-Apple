@@ -82,6 +82,8 @@ class TemplateGenerator {
   ///      ...
   ///   ]
   /// }
+
+
   static Future<List<Map<String, dynamic>>> generateFromOnboarding({
     required String uid,
     required String? sexU,
@@ -111,6 +113,8 @@ class TemplateGenerator {
     // 2) Read knobs from onboarding
     final int weeklyFrequency = _readWeeklyFrequency(onboarding) ?? 4; // default to 4
     final bool isFemale = sexU == 'F' || sexU == 'N';
+
+
 
     // 3) Frequency caps by sex (baseline at ≥4x/wk), then reduce max caps if fewer days.
     final freqCaps = _capsFor(isFemale: isFemale);
@@ -733,11 +737,21 @@ class TemplateGenerator {
       // If nothing else is allowed/available, fall through to normal logic.
     }
 
-    // 🧠 NEW RULE: Global week-level limit — max 3 uses per exercise (except Barbell Bench Press)
+    // 🧠 Global week-level limit — per-exercise caps + no back-to-back days
+// - Bench Press (barbell): no cap, no spacing rule
+// - Calf Raise (any): max 3 uses/week
+// - Everything else: max 2 uses/week
+//   PLUS: avoid using the same exercise on two consecutive days,
+//   except Back Squat, Barbell when weeklyFrequency > 2.
     for (final ex in pool.toList()) {
+      // Bench: no weekly cap or spacing rule
       if (_isBarbellBenchPress(ex)) continue; // skip bench entirely for this rule
 
-      // Count how many times this exercise has already appeared in earlier days
+      // Category-specific caps
+      final bool isCalfRaise = _normCat(ex.category) == 'Calf Raise';
+      final int weeklyCap = isCalfRaise ? 3 : 2;
+
+      // Count prior uses up to "yesterday"
       int priorUses = 0;
       for (final pastDay in allDays.take(day.index)) {
         for (final circ in pastDay.circuits) {
@@ -747,11 +761,40 @@ class TemplateGenerator {
         }
       }
 
-      // If already used 3 or more times, mark as banned for this week
-      if (priorUses >= 3) {
+      // 🚫 No two consecutive days (spacing rule)
+      bool usedYesterday = false;
+      if (day.index > 0) {
+        final prevDay = allDays[day.index - 1];
+        for (final circ in prevDay.circuits) {
+          for (final placed in circ) {
+            if (placed.ex.id == ex.id) {
+              usedYesterday = true;
+              break;
+            }
+          }
+          if (usedYesterday) break;
+        }
+      }
+
+      // Back Squat exemption from spacing rule when weeklyFrequency > 2
+      final bool isBackSquat = _isBackSquatBarbell(ex);
+      final bool spacingRuleApplies =
+          !isBackSquat || day.totalDays <= 2; // if >2 days/week, skip spacing for back squat
+
+      if (spacingRuleApplies && usedYesterday) {
+        // Block this exercise for today to avoid back-to-back days
+        day._idsToday.add(ex.id);
+        continue;
+      }
+
+      // Weekly cap enforcement
+      if (priorUses >= weeklyCap) {
         day._idsToday.add(ex.id); // pseudo-ban: prevents selection below
       }
     }
+
+
+
 
     // ✅ Bench-first preference SECOND:
     // If this is the FIRST Horizontal Press of the day, prefer Barbell Bench Press.
@@ -1063,6 +1106,15 @@ class TemplateGenerator {
     // robust to naming like "Bench Press, Barbell" / "Barbell Bench Press"
     return (s.contains('bench') && s.contains('press') && s.contains('barbell'));
   }
+
+  // Place under: static bool _isBarbellBenchPress(ExLite ex) { ... }
+  static bool _isBackSquatBarbell(ExLite ex) {
+    if (_normCat(ex.category) != 'Squat Pattern') return false;
+    final s = ex.name.toLowerCase();
+    // robust to naming like "Back Squat, Barbell" / "Barbell Back Squat"
+    return s.contains('back') && s.contains('squat') && s.contains('barbell');
+  }
+
 
   // Use exact exercise id for "Wide Arm Lat Pulldown" OK-to-pair case.
   static const String _wideArmLatPulldownId = 'Url65Q2RxZa00dkDpUdl';
