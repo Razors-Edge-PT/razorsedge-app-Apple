@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart'; // for debugPrint
 import 'package:cloud_firestore/cloud_firestore.dart'; // 🆕 for plannedExercises fetch
 
+import 'debug_utils.dart';
 
 import 'package:flutter/services.dart' show rootBundle;
 
@@ -115,6 +116,11 @@ class TemplateGenerator {
     // 2) Read knobs from onboarding
     final int weeklyFrequency = _readWeeklyFrequency(onboarding) ?? 4; // default to 4
     final bool isFemale = sexU == 'F' || sexU == 'N';
+
+    // Age-based max circuits per day: >27 → 4 circuits, else default (5).
+    _maxCircuitsPerDay = (age != null && age > 27)
+        ? 4
+        : _defaultMaxCircuitsPerDay;
 
 // 🧬 Hypertrophy-focused male flag based on top 2 goals
     final List<dynamic>? goalsRankedRaw =
@@ -323,6 +329,8 @@ class TemplateGenerator {
       }
     }
     debugPrint('──────────────────────────────────────────────');
+    // 🧮 DEBUG: Weekly category & muscle hit counts (Block 1 only)
+    debugWeeklyCategoryAndMuscleCounts(days);
 
     // 9) Create Block 2 variants (same categories, but we’ll bias toward alternates)
     final daysB2 = _alternateBlock(days, byCat);
@@ -1015,7 +1023,7 @@ class TemplateGenerator {
         for (int ci = 0; ci < day.circuits.length; ci++) {
           if (_canJoin(day, ci, ex)) { canJoinAny = true; break; }
         }
-        if (!canJoinAny && day.circuits.length >= 5) continue;
+        if (!canJoinAny && day.circuits.length >= _maxCircuitsPerDay) continue;
 
         _decrementTarget(idTargetsRemaining, ex.id);
         return ex;
@@ -1047,7 +1055,7 @@ class TemplateGenerator {
       for (int ci = 0; ci < day.circuits.length; ci++) {
         if (_canJoin(day, ci, ex)) { canJoinAny = true; break; }
       }
-      if (!canJoinAny && day.circuits.length >= 5) continue; // skip if no spot and we've hit circuit cap
+      if (!canJoinAny && day.circuits.length >= _maxCircuitsPerDay) continue; // skip if no spot and we've hit circuit cap
 
       return ex;
     }
@@ -1080,10 +1088,11 @@ class TemplateGenerator {
 
     if (bestIdx != -1) return bestIdx;
 
-    if (day.circuits.length < 5) {
+    if (day.circuits.length < _maxCircuitsPerDay) {
       day.circuits.add(<_Placed>[]);
       return day.circuits.length - 1;
     }
+
 
     // As a last resort, drop into the smallest load circuit.
     int fallback = 0, minLen = 1 << 30;
@@ -1182,8 +1191,9 @@ class TemplateGenerator {
       if (primA.intersection(exPrimaries).isNotEmpty) return false;
     }
 
-    // 3) Circuit length cap (2..5 allowed); we prefer 2–3.
-    if (circuit.length >= 5) return false;
+    // 3) Circuit length cap (2.._maxCircuitsPerDay allowed); we prefer 2–3.
+    if (circuit.length >= _maxCircuitsPerDay) return false;
+
 
     return true;
   }

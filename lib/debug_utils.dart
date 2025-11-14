@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart'; // debugPrint
 import 'dart:convert';                    // jsonEncode
 import 'dart:io';                         // File
 import 'package:path_provider/path_provider.dart'; // getApplicationDocumentsDirectory
+import 'template_generator.dart';
 
 
 
@@ -72,5 +73,50 @@ Future<Map<String, List<Map<String, dynamic>>>> dumpExercisesByCategory({
   }
 
   return byCategory;
+}
+
+void debugWeeklyCategoryAndMuscleCounts(List<dynamic> days) {
+  final Map<String, int> categoryCounts = {};
+  final Map<String, int> muscleCounts   = {};
+
+  for (final d in days) {
+    for (final circ in d.circuits) {
+      for (final placed in circ) {
+        final ex = placed.ex;
+
+        // Count per category
+        final catKey = ex.category.trim();
+        if (catKey.isNotEmpty) {
+          categoryCounts[catKey] = (categoryCounts[catKey] ?? 0) + 1;
+        }
+
+        // Collect up to 4 muscles total (primary + secondary)
+        final allMuscles = <String>[];
+        allMuscles.addAll(ex.primary);
+        allMuscles.addAll(ex.secondary);
+
+        for (final m in allMuscles.take(4)) {
+          final mk = m.trim();
+          if (mk.isEmpty) continue;
+          muscleCounts[mk] = (muscleCounts[mk] ?? 0) + 1;
+        }
+      }
+    }
+  }
+
+  debugPrint('──────────── 📊 WEEKLY CATEGORY COUNTS ────────────');
+  final sortedCats = categoryCounts.entries.toList()
+    ..sort((a, b) => b.value.compareTo(a.value));
+  for (final e in sortedCats) {
+    debugPrint('  • ${e.key}: ${e.value}');
+  }
+
+  debugPrint('──────────── 🧬 WEEKLY MUSCLE COUNTS (top 4 hits/ex) ────────────');
+  final sortedMuscles = muscleCounts.entries.toList()
+    ..sort((a, b) => b.value.compareTo(a.value));
+  for (final e in sortedMuscles) {
+    debugPrint('  • ${e.key}: ${e.value}');
+  }
+  debugPrint('────────────────────────────────────────────────────');
 }
 
