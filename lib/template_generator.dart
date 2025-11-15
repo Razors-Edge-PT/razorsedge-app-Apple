@@ -469,7 +469,7 @@ class TemplateGenerator {
 
   // Max emphasis-driven minimums per category (default ceiling = 3)
   static const Map<String, int> _emphasisMinCeilByCat = {
-    'Horizontal Press': 4, // chest can scale up to 4
+    'Horizontal Press': 5, // chest can scale up to 4
     // everything else defaults to 3
   };
 
