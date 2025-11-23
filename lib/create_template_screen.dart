@@ -28,6 +28,11 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
   bool _plannedOnly = false;
   bool _isLoading = true;
   String? _activeBlockId;
+  // ---- blocks for dropdown
+  List<Map<String, String>> _blocks = []; // [{id, name}]
+  String? _selectedBlockId;
+  String? _selectedBlockName;
+
 
   List<Exercise> exercises = []; // fetched from Firestore
   Set<String> _plannedExerciseIds = {}; // planned exercise IDs (from block)
@@ -58,7 +63,49 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
+    // 1) active block
     _activeBlockId = await BlockRepository().fetchActiveBlockId();
+
+    // 2) load ALL blocks for dropdown
+    final blocksSnap = await FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(user.uid)
+        .collection('blocks')
+        .get();
+
+    final loadedBlocks = <Map<String, String>>[];
+    for (final doc in blocksSnap.docs) {
+      final data = doc.data();
+
+      // Try common fields you’ve used elsewhere; fall back gracefully
+      final name = (data['name'] ??
+          data['blockName'] ??
+          data['blockAssignment'] ??
+          doc.id)
+          .toString();
+
+      loadedBlocks.add({
+        'id': doc.id,
+        'name': name,
+      });
+    }
+
+    // 3) default dropdown to active block if possible
+    if (_activeBlockId != null) {
+      final activeBlock = loadedBlocks.firstWhere(
+            (b) => b['id'] == _activeBlockId,
+        orElse: () => loadedBlocks.isNotEmpty ? loadedBlocks.first : {'id': _activeBlockId!, 'name': 'Active Block'},
+      );
+      _selectedBlockId = activeBlock['id'];
+      _selectedBlockName = activeBlock['name'];
+    } else if (loadedBlocks.isNotEmpty) {
+      _selectedBlockId = loadedBlocks.first['id'];
+      _selectedBlockName = loadedBlocks.first['name'];
+    }
+
+    _blocks = loadedBlocks;
+
+    // 4) pull planned exercises from ACTIVE block only
     if (_activeBlockId == null) return;
 
     final docSnap = await FirebaseFirestore.instance
@@ -73,6 +120,7 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
       _plannedExerciseIds = plannedList.cast<String>().toSet();
     }
   }
+
 
   Future<void> _fetchExercises() async {
     try {
@@ -157,7 +205,7 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
           children: [
             // Name
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
               child: TextFormField(
                 controller: _nameController,
                 decoration: const InputDecoration(
@@ -170,23 +218,100 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
                     : null,
               ),
             ),
-
-            // Add circuit
+            const SizedBox(height: 2),
+            // Block selector + Add circuit on same row
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: TextButton.icon(
-                  icon: const Icon(Icons.add_circle_outline),
-                  label: const Text('Add circuit'),
-                  onPressed: () {
-                    setState(() {
-                      _circuits.add(_EditableCircuit());
-                    });
-                  },
-                ),
+              padding: const EdgeInsets.fromLTRB(12, 0, 3, 4),
+              child: Row(
+                children: [
+                  // smaller dropdown on the left
+                  Expanded(
+                    flex: 3,
+                    child: DropdownButtonFormField<String>(
+                      isDense: true,
+                      isExpanded: true, // ✅ forces dropdown to take available width
+                      value: _selectedBlockId,
+                      decoration: InputDecoration(
+                        labelText: 'Block',
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+
+                        // 👇 normal border
+                        enabledBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Colors.white70, width: 1.2),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+
+                        // 👇 border when focused
+                        focusedBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Colors.white70, width: 1.6),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+
+                        // 👇 optional hover border (desktop/web)
+                        border: OutlineInputBorder(
+                          borderSide: BorderSide(color: Colors.blueGrey.shade300),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                      ),
+
+
+                      // ✅ controls ONLY the collapsed (selected) view to ellipsize safely
+                      selectedItemBuilder: (context) {
+                        return _blocks.map((b) {
+                          return Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              b['name'] ?? 'Unnamed block',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              softWrap: false,
+                            ),
+                          );
+                        }).toList();
+                      },
+
+                      items: _blocks.map((b) {
+                        return DropdownMenuItem<String>(
+                          value: b['id'],
+                          child: Text(
+                            b['name'] ?? 'Unnamed block',
+                            // expanded menu can show full name naturally
+                          ),
+                        );
+                      }).toList(),
+
+                      onChanged: (val) {
+                        setState(() {
+                          _selectedBlockId = val;
+                          _selectedBlockName =
+                          _blocks.firstWhere((b) => b['id'] == val)['name'];
+                        });
+                      },
+                    ),
+
+                  ),
+                  const SizedBox(width: 6),
+
+                  // add circuit button on the right
+                  Expanded(
+                    flex: 2,
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton.icon(
+                        icon: const Icon(Icons.add_circle_outline),
+                        label: const Text('Add circuit'),
+                        onPressed: () {
+                          setState(() {
+                            _circuits.add(_EditableCircuit());
+                          });
+                        },
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
+
             const SizedBox(height: 8),
 
             // Circuits list (reorderable)
@@ -574,13 +699,31 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
       return;
     }
 
-    final newTemplate = Template(
-      id: ' ', // Firestore generated downstream (matching your old code)
-      name: name,
-      exercises: exerciseMaps,
-    );
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
 
-    addTemplateToFirestore(newTemplate, generatedId).then((_) {
+    final chosenBlockId = _selectedBlockId ?? _activeBlockId;
+    final chosenBlockName = _selectedBlockName ??
+        _blocks.firstWhere(
+              (b) => b['id'] == chosenBlockId,
+          orElse: () => {'name': 'Active Block'},
+        )['name'];
+
+    final payload = {
+      'name': name,
+      'exercises': exerciseMaps,
+      'blockId': chosenBlockId,
+      'blockAssignment': chosenBlockName,
+      'createdAt': FieldValue.serverTimestamp(),
+    };
+
+    FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('templates')
+        .doc(generatedId)
+        .set(payload)
+        .then((_) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Template created successfully')),
       );
@@ -599,11 +742,11 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
         ),
       );
     }).catchError((error) {
-      // Handle errors as you wish
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Failed to create template')),
       );
     });
+
   }
 }
 
