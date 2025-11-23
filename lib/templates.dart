@@ -61,14 +61,12 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   bool _showPreviousBlocks = false;
   bool _showUpcomingBlocks = false;
   bool _showActiveBlock = true;
-  bool _plannedOnly = false;
+  bool _plannedOnly = true;
 
   final Set<String> _expandedPreviousBlockIds = {}; // for per-block expansion
   final Set<String> _expandedUpcomingBlockIds = {};
 
-
   bool _loadingBlocks = true;
-
 
   // when you hover/drop we can give a little highlight
   String? _draggingOverTemplateId;
@@ -89,6 +87,523 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     super.initState();
     _loadBlocksThenTemplates();
   }
+
+  Future<void> _showExercisePickerDialogForTemplate(Template template) async {
+    // 1) load planned exercise ids (for planned-only toggle)
+    Set<String> plannedExerciseIds = {};
+    bool plannedModeAvailable = false;
+
+    try {
+      if (_activeBlockId != null) {
+        final plannedDoc = await FirebaseFirestore.instance
+            .collection('planned_blocks')
+            .doc(userId)
+            .collection('blocks')
+            .doc(_activeBlockId!)
+            .get();
+
+        final List<dynamic> plannedList =
+            plannedDoc.data()?['plannedExercises'] ?? [];
+        plannedExerciseIds = plannedList.cast<String>().toSet();
+        plannedModeAvailable = plannedExerciseIds.isNotEmpty;
+      }
+    } catch (_) {
+      plannedModeAvailable = false;
+    }
+
+    // 2) load all exercises
+    final snapshot =
+    await FirebaseFirestore.instance.collection('exercises').get();
+
+    final allExercises = snapshot.docs.map((doc) {
+      final data = doc.data();
+      return <String, String>{
+        'id': doc.id,
+        'name': (data['name'] ?? '').toString(),
+        'category': (data['category'] ?? 'Other').toString(),
+      };
+    }).toList();
+
+
+    bool showPlannedOnly = plannedModeAvailable; // default ON if available
+    String searchQuery = '';
+    final Map<String, bool> expandedGroups = {};
+
+    final List<Map<String, String>>? selected =
+    await showDialog<List<Map<String, String>>>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(builder: (context, setLocalState) {
+          // Planned-only filter
+          final filteredExercises =
+          (showPlannedOnly && plannedModeAvailable)
+              ? allExercises
+              .where((ex) => plannedExerciseIds.contains(ex['id']))
+              .toList()
+              : allExercises;
+
+          // Search filter
+          final searched = searchQuery.isNotEmpty
+              ? filteredExercises
+              .where((ex) =>
+              ex['name']!.toLowerCase().contains(searchQuery))
+              .toList()
+              : filteredExercises;
+
+          // Group by category when not searching
+          Map<String, List<Map<String, String>>> grouped = {};
+          if (searchQuery.isEmpty) {
+            for (final ex in searched) {
+              final cat = ex['category'] ?? 'Other';
+              grouped.putIfAbsent(cat, () => []).add(ex);
+            }
+            for (final g in grouped.values) {
+              g.sort((a, b) =>
+                  a['name']!.toLowerCase().compareTo(b['name']!.toLowerCase()));
+            }
+          }
+
+          const categoryOrder = [
+            'Horizontal Press',
+            'Horizontal Pull',
+            'Vertical Press',
+            'Vertical Pull',
+            'Lateral Raise',
+            'Arm Extension',
+            'Arm Curl',
+            'Squat Pattern',
+            'Hip Hinge',
+            'Leg Extension',
+            'Leg Curl',
+            'Hip Abduction/adduction',
+            'Calf Raise',
+            'Core',
+            'Other',
+          ];
+
+          final Map<String, List<Map<String, String>>> orderedGrouped = {};
+          for (final cat in categoryOrder) {
+            if (grouped.containsKey(cat)) orderedGrouped[cat] = grouped[cat]!;
+          }
+          for (final entry in grouped.entries) {
+            if (!orderedGrouped.containsKey(entry.key)) {
+              orderedGrouped[entry.key] = entry.value;
+            }
+          }
+
+          for (final category in orderedGrouped.keys) {
+            expandedGroups.putIfAbsent(category, () => false);
+          }
+
+          List<Widget> buildList() {
+            if (searchQuery.isNotEmpty) {
+              // flat list when searching
+              return searched
+                  .map((ex) => ListTile(
+                title: Text(
+                  ex['name']!,
+                  style: const TextStyle(color: Colors.white70),
+                ),
+                dense: true,
+                contentPadding:
+                const EdgeInsets.symmetric(horizontal: 10),
+                onTap: () => Navigator.pop(ctx, [ex]),
+              ))
+                  .toList();
+            }
+
+            // grouped list when no search
+            return orderedGrouped.entries.map((entry) {
+              final category = entry.key;
+              final exercises = entry.value;
+              final isExpanded = expandedGroups[category] ?? false;
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ListTile(
+                    tileColor: Colors.blueGrey.shade800,
+                    title: Text(
+                      category,
+                      style: const TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                    trailing: Icon(
+                      isExpanded ? Icons.expand_less : Icons.expand_more,
+                      color: Colors.white70,
+                    ),
+                    onTap: () => setLocalState(
+                            () => expandedGroups[category] = !isExpanded),
+                  ),
+                  if (isExpanded)
+                    ...exercises.map((ex) => ListTile(
+                      title: Text(
+                        ex['name']!,
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                      dense: true,
+                      contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 10),
+                      onTap: () => Navigator.pop(ctx, [ex]),
+                    )),
+                  const Divider(height: 10, color: Colors.grey),
+                ],
+              );
+            }).toList();
+          }
+
+          return AlertDialog(
+            backgroundColor: Colors.blueGrey.shade900,
+            insetPadding:
+            const EdgeInsets.symmetric(horizontal: 24, vertical: 2),
+            contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            title: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text("Select Exercise",
+                    style: TextStyle(fontSize: 13, color: Colors.white)),
+                if (plannedModeAvailable)
+                  Row(
+                    children: [
+                      Text(
+                        showPlannedOnly ? "Planned Only" : "All Exercises",
+                        style: const TextStyle(
+                            fontSize: 12, color: Colors.white70),
+                      ),
+                      Switch(
+                        value: showPlannedOnly,
+                        activeColor: Colors.lightBlueAccent,
+                        onChanged: (value) => setLocalState(
+                                () => showPlannedOnly = value),
+                      ),
+                    ],
+                  )
+                else
+                  const SizedBox(),
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              height: 400,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10.0),
+                    child: TextField(
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        hintText: 'Search exercises...',
+                        hintStyle: const TextStyle(color: Colors.white54),
+                        filled: true,
+                        fillColor: Colors.blueGrey.shade800,
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8.0)),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 10.0, vertical: 10.0),
+                      ),
+                      onChanged: (val) => setLocalState(
+                              () => searchQuery = val.toLowerCase()),
+                    ),
+                  ),
+                  Expanded(
+                    child: ListView(children: buildList()),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, null),
+                child: const Text('Cancel'),
+              ),
+            ],
+          );
+        });
+      },
+    );
+
+
+    if (selected == null || selected.isEmpty) return;
+
+    // 2) figure out the last circuit for this template
+    final circuits = _getCircuitIndices(template);
+    final lastCircuit = circuits.isEmpty ? 0 : circuits.last;
+
+    // 3) append to template + persist
+    setState(() {
+      for (final ex in selected) {
+        template.exercises.add({
+          'id': ex['id'],
+          'name': ex['name'],
+          'category': ex['category'] ?? '',
+          'circuitIndex': lastCircuit,
+        });
+      }
+    });
+
+    await _saveTemplateExercises(
+      template.id,
+      List<Map<String, dynamic>>.from(template.exercises),
+    );
+  }
+
+  Future<void> _showExercisePickerDialogForChip(
+      Template template,
+      int exerciseIndex,
+      ) async {
+
+    // ---- Planned-only support (safe-guarded)
+    Set<String> plannedExerciseIds = {};
+    bool plannedModeAvailable = false;
+
+    try {
+      if (_activeBlockId != null) {
+        final plannedDoc = await FirebaseFirestore.instance
+            .collection('planned_blocks')
+            .doc(userId)
+            .collection('blocks')
+            .doc(_activeBlockId!)
+            .get();
+
+        final List<dynamic> plannedList =
+            plannedDoc.data()?['plannedExercises'] ?? [];
+        plannedExerciseIds = plannedList.cast<String>().toSet();
+        plannedModeAvailable = plannedExerciseIds.isNotEmpty;
+      }
+    } catch (_) {
+      plannedModeAvailable = false;
+    }
+
+    // ---- Load all exercises
+    final snapshot =
+    await FirebaseFirestore.instance.collection('exercises').get();
+
+    final allExercises = snapshot.docs.map((doc) {
+      final data = doc.data();
+      return <String, String>{
+        'id': doc.id,
+        'name': (data['name'] ?? '').toString(),
+        'category': (data['category'] ?? 'Other').toString(),
+      };
+    }).toList();
+
+    bool showPlannedOnly = plannedModeAvailable; // default ON if available
+    String searchQuery = '';
+    final Map<String, bool> expandedGroups = {};
+
+    final selected = await showDialog<Map<String, String>>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(builder: (context, setLocalState) {
+          // 1) Planned-only filter
+          final filteredExercises = (showPlannedOnly && plannedModeAvailable)
+              ? allExercises
+              .where((ex) => plannedExerciseIds.contains(ex['id']))
+              .toList()
+              : allExercises;
+
+          // 2) Search filter
+          final searched = searchQuery.isNotEmpty
+              ? filteredExercises
+              .where((ex) =>
+              ex['name']!.toLowerCase().contains(searchQuery))
+              .toList()
+              : filteredExercises;
+
+          // 3) Group by category (only when not searching)
+          Map<String, List<Map<String, String>>> grouped = {};
+          if (searchQuery.isEmpty) {
+            for (final ex in searched) {
+              final cat = ex['category'] ?? 'Other';
+              grouped.putIfAbsent(cat, () => []).add(ex);
+            }
+            for (final g in grouped.values) {
+              g.sort((a, b) =>
+                  a['name']!.toLowerCase().compareTo(b['name']!.toLowerCase()));
+            }
+          }
+
+          const categoryOrder = [
+            'Horizontal Press',
+            'Horizontal Pull',
+            'Vertical Press',
+            'Vertical Pull',
+            'Lateral Raise',
+            'Arm Extension',
+            'Arm Curl',
+            'Squat Pattern',
+            'Hip Hinge',
+            'Leg Extension',
+            'Leg Curl',
+            'Hip Abduction/adduction',
+            'Calf Raise',
+            'Core',
+            'Other',
+          ];
+
+          final Map<String, List<Map<String, String>>> orderedGrouped = {};
+          for (final cat in categoryOrder) {
+            if (grouped.containsKey(cat)) orderedGrouped[cat] = grouped[cat]!;
+          }
+          for (final entry in grouped.entries) {
+            if (!orderedGrouped.containsKey(entry.key)) {
+              orderedGrouped[entry.key] = entry.value;
+            }
+          }
+
+          for (final category in orderedGrouped.keys) {
+            expandedGroups.putIfAbsent(category, () => false);
+          }
+
+          List<Widget> buildList() {
+            if (searchQuery.isNotEmpty) {
+              // flat list when searching
+              return searched
+                  .map((ex) => ListTile(
+                title: Text(
+                  ex['name']!,
+                  style: const TextStyle(color: Colors.white70),
+                ),
+                dense: true,
+                contentPadding:
+                const EdgeInsets.symmetric(horizontal: 10),
+                onTap: () => Navigator.pop(ctx, ex),
+              ))
+                  .toList();
+            }
+
+            // grouped list when no search
+            return orderedGrouped.entries.map((entry) {
+              final category = entry.key;
+              final exercises = entry.value;
+              final isExpanded = expandedGroups[category] ?? false;
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ListTile(
+                    tileColor: Colors.blueGrey.shade800,
+                    title: Text(
+                      category,
+                      style: const TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                    trailing: Icon(
+                      isExpanded ? Icons.expand_less : Icons.expand_more,
+                      color: Colors.white70,
+                    ),
+                    onTap: () => setLocalState(
+                            () => expandedGroups[category] = !isExpanded),
+                  ),
+                  if (isExpanded)
+                    ...exercises.map((ex) => ListTile(
+                      title: Text(
+                        ex['name']!,
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                      dense: true,
+                      contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 10),
+                      onTap: () => Navigator.pop(ctx, ex),
+                    )),
+                  const Divider(height: 10, color: Colors.grey),
+                ],
+              );
+            }).toList();
+          }
+
+          return AlertDialog(
+            backgroundColor: Colors.blueGrey.shade900,
+            insetPadding:
+            const EdgeInsets.symmetric(horizontal: 24, vertical: 2),
+            contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            title: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text("Select Exercise",
+                    style: TextStyle(fontSize: 13, color: Colors.white)),
+                if (plannedModeAvailable)
+                  Row(
+                    children: [
+                      Text(
+                        showPlannedOnly ? "Planned Only" : "All Exercises",
+                        style: const TextStyle(
+                            fontSize: 12, color: Colors.white70),
+                      ),
+                      Switch(
+                        value: showPlannedOnly,
+                        activeColor: Colors.lightBlueAccent,
+                        onChanged: (value) => setLocalState(
+                                () => showPlannedOnly = value),
+                      ),
+                    ],
+                  )
+                else
+                  const SizedBox(),
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              height: 400,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10.0),
+                    child: TextField(
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        hintText: 'Search exercises...',
+                        hintStyle: const TextStyle(color: Colors.white54),
+                        filled: true,
+                        fillColor: Colors.blueGrey.shade800,
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8.0)),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 10.0, vertical: 10.0),
+                      ),
+                      onChanged: (val) => setLocalState(
+                              () => searchQuery = val.toLowerCase()),
+                    ),
+                  ),
+                  Expanded(
+                    child: ListView(children: buildList()),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, null),
+                child: const Text('Cancel'),
+              ),
+            ],
+          );
+        });
+      },
+    );
+
+    if (selected == null) return;
+
+    final oldCircuitIndex =
+        template.exercises[exerciseIndex]['circuitIndex'] ?? 0;
+
+    setState(() {
+      template.exercises[exerciseIndex] = {
+        'id': selected['id'],
+        'name': selected['name'],
+        'category': selected['category'] ?? '',
+        'circuitIndex': oldCircuitIndex, // ✅ keep same circuit
+      };
+    });
+
+    await _saveTemplateExercises(
+      template.id,
+      List<Map<String, dynamic>>.from(template.exercises),
+    );
+  }
+
 
 
   void _createTemplate() {
@@ -493,112 +1008,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   }
 
 
-  Future<void> _showExercisePickerDialogForTemplate(Template template) async {
-    // 1) load all exercises
-    final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
-    final allExercises = snapshot.docs.map((doc) {
-      return {
-        'id': doc.id,
-        'name': doc['name'] as String,
-        'category': (doc.data().containsKey('category') ? doc['category'] as String : ''),
-      };
-    }).toList()
-      ..sort((a, b) => a['name']!.toLowerCase().compareTo(b['name']!.toLowerCase()));
 
-    final List<Map<String, String>>? selected = await showDialog<List<Map<String, String>>>(
-      context: context,
-      builder: (ctx) {
-        String search = '';
-        return StatefulBuilder(
-          builder: (ctx, setLocal) {
-            final filtered = search.trim().isEmpty
-                ? allExercises
-                : allExercises
-                .where((ex) => ex['name']!.toLowerCase().contains(search.toLowerCase()))
-                .toList();
-            return AlertDialog(
-              backgroundColor: Colors.blueGrey.shade900,
-              title: const Text(
-                'Select exercises',
-                style: TextStyle(color: Colors.white, fontSize: 14),
-              ),
-              content: SizedBox(
-                width: 420,
-                height: 420,
-                child: Column(
-                  children: [
-                    TextField(
-                      onChanged: (v) => setLocal(() => search = v),
-                      decoration: InputDecoration(
-                        hintText: 'Search...',
-                        hintStyle: const TextStyle(color: Colors.white54),
-                        prefixIcon: const Icon(Icons.search, color: Colors.white70, size: 18),
-                        filled: true,
-                        fillColor: Colors.blueGrey.shade800,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                      ),
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                    const SizedBox(height: 8),
-                    Expanded(
-                      child: ListView.builder(
-                        itemCount: filtered.length,
-                        itemBuilder: (ctx, i) {
-                          final ex = filtered[i];
-                          return ListTile(
-                            dense: true,
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 6),
-                            title: Text(
-                              ex['name']!,
-                              style: const TextStyle(color: Colors.white),
-                            ),
-                            onTap: () {
-                              Navigator.pop(ctx, [ex]);
-                            },
-                          );
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx),
-                  child: const Text('Cancel'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-
-    if (selected == null || selected.isEmpty) return;
-
-    // 2) figure out the last circuit for this template
-    final circuits = _getCircuitIndices(template);
-    final lastCircuit = circuits.isEmpty ? 0 : circuits.last;
-
-    // 3) append to template + persist
-    setState(() {
-      for (final ex in selected) {
-        template.exercises.add({
-          'id': ex['id'],
-          'name': ex['name'],
-          'category': ex['category'] ?? '',
-          'circuitIndex': lastCircuit,
-        });
-      }
-    });
-
-    await _saveTemplateExercises(
-      template.id,
-      List<Map<String, dynamic>>.from(template.exercises),
-    );
-  }
 
   String _fmtDate(dynamic ts) {
     // supports both Timestamp and String
@@ -1465,11 +1875,6 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     );
   }
 
-
-
-
-
-
   Widget _buildDraggableExerciseChip({
     required Template template,
     required int exerciseIndex, // GLOBAL index in template.exercises
@@ -1523,9 +1928,16 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
           ),
           childWhenDragging: Opacity(
             opacity: 0.35,
+            child: GestureDetector(
+              onTap: () => _showExercisePickerDialogForChip(template, exerciseIndex),
+              child: _exerciseChipBody(name),
+            ),
+          ),
+          child: GestureDetector(
+            onTap: () => _showExercisePickerDialogForChip(template, exerciseIndex),
             child: _exerciseChipBody(name),
           ),
-          child: _exerciseChipBody(name),
+
         );
       },
     );
