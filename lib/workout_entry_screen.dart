@@ -232,6 +232,9 @@ class _WorkoutPageState extends State<WorkoutPage>
   static const Duration _selfHealCooldown = Duration(seconds: 12);
   late final AnimationController _sparkleCtrl;
   bool _showSparkles = false;
+  final ValueNotifier<bool> _isMergingBB2 = ValueNotifier<bool>(false);
+  bool _openingMergePhase = true; // latch merge lock during WES open
+
 
   //autosave bits
   // ---- NEW: State fields ----
@@ -5430,6 +5433,9 @@ class _WorkoutPageState extends State<WorkoutPage>
             print(
                 '✅ [WES Init] Skipping BB2 re-merge — WES already has user-entered data');
           }
+          _openingMergePhase = false;   // boot merges are done
+          _isMergingBB2.value = false; // unlock button once
+
           print(
               '🔄 [WES Init] Overlaying saved workout (completed + WES-planned) after final BB2 merge…');
           // Capture row/controller structure before overlay
@@ -8306,6 +8312,8 @@ class _WorkoutPageState extends State<WorkoutPage>
     _catchupShineCtl?.dispose();
     print('💾 [WES dispose] Persisting local draft...');
     _persistDraftLocally();
+    _isMergingBB2.dispose();
+
 
     // ⭐ Always attempt autosave on exit; _upsert will skip/clear appropriately
     print('💾 [WES dispose] Attempting autosave to Firestore...');
@@ -10445,6 +10453,7 @@ class _WorkoutPageState extends State<WorkoutPage>
     final _tMergeBB2 = Stopwatch()
       ..start();
     print('⏱️ [WES] _mergeNewBB2ExercisesIntoDraft started');
+
     final int _mergeEpoch = _epoch;
     final String _mergeDayKey = _currentDayKey;
 
@@ -10465,6 +10474,8 @@ class _WorkoutPageState extends State<WorkoutPage>
           '⏭️ [WES] _mergeNewBB2ExercisesIntoDraft skipped (already completed for uid=$uidGate date=$_selectedDate)');
       return;
     }
+    _isMergingBB2.value = true;
+
     try {
       print(
           '[WES] Attempting to merge BB2 exercises into draft for $_selectedDate');
@@ -11142,10 +11153,16 @@ class _WorkoutPageState extends State<WorkoutPage>
 
       }
     } finally {
+      if (!_openingMergePhase) {
+        // Only unlock if select-date (or open) latch isn’t active
+        _isMergingBB2.value = _openingMergePhase;
+
+      }
+
       _tMergeBB2.stop();
-      print('⏱️ [WES] _mergeNewBB2ExercisesIntoDraft took ${_tMergeBB2
-          .elapsedMilliseconds}ms');
+      print('⏱️ [WES] _mergeNewBB2ExercisesIntoDraft took ${_tMergeBB2.elapsedMilliseconds}ms');
     }
+
   }
 
   void _scheduleMissedButtonAfterPaint() {
@@ -11258,6 +11275,9 @@ class _WorkoutPageState extends State<WorkoutPage>
 
     final sw = Stopwatch()..start();
     print('⏱️ [WES] _selectDate started');
+    // 🔒 Latch merge lock for the entire select-date pipeline
+    _openingMergePhase = true;
+    _isMergingBB2.value = true;
 
     final picked = pickedOverride ?? await showDatePicker(
     context: context,
@@ -11267,6 +11287,10 @@ class _WorkoutPageState extends State<WorkoutPage>
     );
     if (picked == null || picked == _selectedDate) {
       print('⛔️ [WES] Date selection cancelled or unchanged');
+      // 🔓 User cancelled / unchanged → release latch
+      _openingMergePhase = false;
+      _isMergingBB2.value = false;
+
       return;
     }
     final ymdPicked = DateFormat('yyyy-MM-dd').format(picked);
@@ -11555,6 +11579,10 @@ class _WorkoutPageState extends State<WorkoutPage>
       _debugLogCardsForSelectedDate('SelectDate');
     } catch (_) {}
 
+    // 🔓 Entire date-switch pipeline is done → release latch
+    _openingMergePhase = false;
+    _isMergingBB2.value = false;
+
     print('✅ [WES] Date switch complete for $ymdPicked');
     sw.stop();
     print('⏱️ [WES] _selectDate total = ${sw.elapsedMilliseconds}ms');
@@ -11567,6 +11595,8 @@ class _WorkoutPageState extends State<WorkoutPage>
       blockId: _selectedBlockId ?? _activeBlockId!,
       date: _selectedDate,
     );
+    _openingMergePhase = false;
+
   }
 
   void _enqueueDateChange(DateTime picked) {
@@ -11595,15 +11625,10 @@ class _WorkoutPageState extends State<WorkoutPage>
     return true;
   }
 
-
   void _bumpDate(int deltaDays) {
     final next = _selectedDate.add(Duration(days: deltaDays));
     _selectDate(context, pickedOverride: next); // ← uses the same pipeline
   }
-
-
-
-
 
   String _formatWorkoutDate(DateTime date) {
     final dayOfWeek = DateFormat('EEEE').format(date); // e.g., Tuesday
@@ -12123,18 +12148,30 @@ class _WorkoutPageState extends State<WorkoutPage>
                   children: [
                     Flexible(
                       flex: 4,
-                      child: ElevatedButton.icon(
-                        icon: const Icon(Icons.add, size: 16),
-                        label: const Text("Add Exercises",
-                            style: TextStyle(fontSize: 14)),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blueGrey.shade700,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 5, vertical: 8),
-                        ),
-                        onPressed: _showExercisePickerDialog,
+                      child: ValueListenableBuilder<bool>(
+                        valueListenable: _isMergingBB2,
+                        builder: (context, merging, _) {
+                          return ElevatedButton.icon(
+                            icon: const Icon(Icons.add, size: 16),
+                            label: Text(
+                              "Add Exercises",
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: merging ? Colors.grey.shade400 : Colors.white,
+                              ),
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: merging
+                                  ? Colors.blueGrey.shade700.withOpacity(0.55)
+                                  : Colors.blueGrey.shade700,
+                              foregroundColor: merging ? Colors.grey.shade400 : Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 8),
+                            ),
+                            onPressed: merging ? null : _showExercisePickerDialog,
+                          );
+                        },
                       ),
+
                     ),
                     const SizedBox(width: 6),
                     Flexible(
