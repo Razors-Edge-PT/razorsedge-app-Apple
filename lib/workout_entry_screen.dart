@@ -11640,82 +11640,61 @@ class _WorkoutPageState extends State<WorkoutPage>
   }
 
   void _navigateToExerciseDetails(String exerciseName) async {
-    // fetch workouts as before
-    List<Workout> recentWorkouts =
-    await getRecentWorkoutsForExercise(exerciseName, _selectedDate);
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
 
-    if (recentWorkouts.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('No recent workouts found for this exercise.')),
-      );
-      return;
+    // ✅ Best-effort: try to find an exerciseId from recent history,
+    // but do NOT block navigation if none found.
+    String exerciseId = exerciseName; // fallback
+
+    try {
+      final recentWorkouts =
+      await getRecentWorkoutsForExercise(exerciseName, _selectedDate);
+
+      if (recentWorkouts.isNotEmpty) {
+        final firstWithExercise = recentWorkouts.firstWhere(
+              (w) => w.exercises.any((ex) => ex.name == exerciseName),
+        );
+        final exercise = firstWithExercise.exercises
+            .firstWhere((ex) => ex.name == exerciseName);
+
+        exerciseId = exercise.id ?? exerciseName;
+      }
+    } catch (e) {
+      // If fetch fails or no match, just fall back to name.
+      print('⚠️ [WES] ExerciseDetails couldn’t resolve id for "$exerciseName": $e');
     }
 
-    // ✅ find the ID of the exercise from the most recent workout
-    final firstWithExercise = recentWorkouts.firstWhere(
-          (w) => w.exercises.any((ex) => ex.name == exerciseName),
-    );
-    final exercise = firstWithExercise.exercises
-        .firstWhere((ex) => ex.name == exerciseName);
+    print('➡️ [WES] Push ExerciseDetailsScreen id="$exerciseId" name="$exerciseName"');
 
-    final exerciseId = exercise.id ?? exerciseName;
-    // 👆 fallback to name if your Exercise model doesn’t yet expose `id`
-
-    print('➡️ [WES] Push ExerciseDetailsScreen id="${exercise
-        .id}" name="${exercise.name}"');
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) =>
-            ExerciseDetailsScreen(
-              exerciseId: exerciseId,
-              exerciseName: exerciseName, // optional, but good for title
-            ),
+        builder: (context) => ExerciseDetailsScreen(
+          exerciseId: exerciseId,
+          exerciseName: exerciseName, // optional, but good for title
+        ),
       ),
     );
   }
+
 
 
   void _navigateToTopSets(String exerciseName) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    final snapshot = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(userId)
-        .collection('workouts')
-        .orderBy('date', descending: true)
-        .limit(20)
-        .get();
-
-    final recentWorkouts = snapshot.docs
-        .map((doc) {
-      return Workout.fromFirestore(doc);
-    })
-        .where(
-            (workout) => workout.exercises.any((ex) => ex.name == exerciseName))
-        .toList();
-
-    if (recentWorkouts.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('No recent workouts found for this exercise.')),
-      );
-      return;
-    }
-
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) =>
-            TopSetsScreen(
-              exerciseName: exerciseName,
-              recentWorkouts: recentWorkouts,
-            ),
+        builder: (context) => TopSetsScreen(
+          exerciseName: exerciseName,
+          recentWorkouts: const [], // no longer used
+        ),
       ),
     );
   }
+
 
   Future<List<Workout>> getRecentWorkoutsForExercise(String exerciseName,
       DateTime currentWorkoutDate) async {

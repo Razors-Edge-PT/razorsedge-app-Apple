@@ -54,7 +54,8 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
 
 
   Future<void> _loadInitialWorkouts() async {
-    setState(() => _isInitialLoading = false); // or true if you show a spinner
+    setState(() => _isInitialLoading = true);
+
 
     try {
       final snap = await FirebaseFirestore.instance
@@ -199,9 +200,6 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final List<Workout> filteredWorkouts = widget.recentWorkouts
-        .where((workout) => workout.exercises.any((exercise) => exercise.name == widget.exerciseName))
-        .toList(); // ✅ Filters by selected exercise
 
     return Scaffold(
       appBar: AppBar(
