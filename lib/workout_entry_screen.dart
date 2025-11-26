@@ -667,6 +667,15 @@ class _WorkoutPageState extends State<WorkoutPage>
     return 'wes_draft_${uid}_$ymd'; // <-- replace with your actual convention
   }
 
+  /// Decide how many sets to create for this exercise based on BP repTargets.
+  /// Falls back to _defaultSets if anything is missing / malformed.
+  ///
+  /// Expects repTargets to look like:
+  /// repTargets: {
+  ///   week1: { instance1: "9 x 4", instance2: "2 x 5", ... },
+  ///   week2: { ... }
+  /// }
+
 
 
   String _normNameBB2(String s) {
@@ -3396,60 +3405,263 @@ class _WorkoutPageState extends State<WorkoutPage>
 
   }
 
-  Future<void> debugPrintRepTargetsFromExerciseSettings(BuildContext context,
-      String blockId,
-      String exerciseId,) async {
-    final uid = UserContext
-        .of(context, listen: false)
-        .actingAsUid;
+  int _plannedSetCountFor(int exerciseIndex) {
+    // default if we can't find anything better
+    int fallbackSets = _defaultSets;
 
+    final exerciseName =
+        _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
+    if (exerciseName.isEmpty) return fallbackSets;
 
-    final docRef = FirebaseFirestore.instance
-        .collection('planned_blocks')
-        .doc(uid)
-        .collection('blocks')
-        .doc(blockId);
+    final exerciseId =
+        PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
 
-    final docSnap = await docRef.get();
-    if (!docSnap.exists) {
-      print('🚫 [DEBUG] Block document not found for $blockId');
-      return;
+    final model =
+    PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
+
+    // How many times this exercise is planned earlier on this day
+    int plannedCountBefore = 0;
+    for (int i = 0; i < exerciseIndex; i++) {
+      if (_selectedExercisesWithCircuits[i]['name'] == exerciseName) {
+        plannedCountBefore++;
+      }
     }
 
-    final data = docSnap.data();
-    if (data == null || !data.containsKey('exerciseSettings')) {
-      print('🚫 [DEBUG] No exerciseSettings field in block document.');
-      print('🧾 [DEBUG] Full block doc:\n${jsonEncode(data)}');
-
-      return;
+    // Small helpers duplicated from _getProgressedValues
+    String _norm(String s) {
+      var t = s.toLowerCase().trim();
+      t = t.replaceAll(RegExp(r'\([^)]*\)'), '');
+      t = t.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');
+      t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
+      t = t.replaceAll(RegExp(r'\bdb\b'), 'dumbbell');
+      t = t.replaceAll(RegExp(r'\bbb\b'), 'barbell');
+      return t;
     }
 
-    final settings = data['exerciseSettings'][exerciseId];
-    if (settings == null) {
-      print('🚫 [DEBUG] No exerciseSettings found for $exerciseId');
-      return;
+    bool _hasValidSet(dynamic setsRaw) {
+      final sets = (setsRaw is List) ? setsRaw.cast<Map>() : const <Map>[];
+      return sets.any((s) {
+        final w = (s['weight']?.toString() ?? '').trim();
+        final r = (s['reps']?.toString() ?? '').trim();
+        return w.isNotEmpty && r.isNotEmpty;
+      });
     }
 
-    final repTargets = settings['repTargets'];
-    print(
-        '🔍 [DEBUG] repTargets from exerciseSettings for $exerciseId:\n${jsonEncode(
-            repTargets)}');
-
-    final week1 = repTargets?['week1'];
-    if (week1 is! Map<String, dynamic>) {
-      print('❌ [DEBUG] week1 not found in repTargets for $exerciseId');
-      return;
+    int _parseSets(String raw) {
+      // expect formats like "9 x 4" or "9x4"
+      final match = RegExp(r'[xX]\s*(\d+)').firstMatch(raw);
+      final parsed = match != null ? int.tryParse(match.group(1)!) : null;
+      return (parsed != null && parsed > 0) ? parsed : fallbackSets;
     }
 
-    final sorted = week1.entries
-        .where((e) => e.key.startsWith('instance'))
-        .toList()
-      ..sort((a, b) => a.key.compareTo(b.key));
+    // ---------------- DUP, By Exposure ----------------
+    if (model == PeriodizationModelType.dailyUndulatingExposure) {
+      final fullDetails = _exerciseSettings[exerciseId];
+      final week1 = fullDetails?['repTargets']?['week1'];
 
-    for (final e in sorted) {
-      print('✅ [DEBUG] $exerciseId → ${e.key}: ${e.value}');
+      if (week1 is Map<String, dynamic>) {
+        final sorted = week1.entries
+            .where((e) => e.key.startsWith('instance'))
+            .toList()
+          ..sort((a, b) => a.key.compareTo(b.key));
+
+        if (sorted.isEmpty) return fallbackSets;
+
+        int completedBeforeTodayInBlock = 0;
+
+        if (blockStartDate != null && _selectedDate != null) {
+          final matchedDates = <String>{};
+          try {
+            final base = DateTime(
+                blockStartDate!.year, blockStartDate!.month, blockStartDate!.day);
+            final todayStart = DateTime(
+                _selectedDate!.year, _selectedDate!.month, _selectedDate!.day);
+
+            final targetId = exerciseId;
+            final targetNameNorm = _norm(exerciseName);
+
+            for (final w in PeriodizationModelUtils.savedWorkoutsList) {
+              final dateStr = (w['date'] ?? '').toString();
+              final dt = DateTime.tryParse(dateStr);
+              if (dt == null) continue;
+
+              final dayOnly = DateTime(dt.year, dt.month, dt.day);
+              if (dayOnly.isBefore(base) || !dayOnly.isBefore(todayStart)) {
+                continue; // [base, today)
+              }
+
+              final exs = w['exercises'];
+              if (exs is! List) continue;
+
+              final matched = exs.any((ex) {
+                if (!_hasValidSet(ex['sets'])) return false;
+
+                final exId =
+                (ex['exerciseId'] ?? ex['id'] ?? ex['exercise_id'] ?? '')
+                    .toString();
+                if (exId.isNotEmpty && exId == targetId) return true;
+
+                final exName =
+                (ex['name'] ?? ex['exercise'] ?? ex['title'] ?? '')
+                    .toString();
+                if (exName.isNotEmpty && _norm(exName) == targetNameNorm) {
+                  return true;
+                }
+
+                final mapped =
+                (PeriodizationModelUtils.nameToId[exName] ?? '').toString();
+                return mapped.isNotEmpty && mapped == targetId;
+              });
+
+              if (matched) {
+                final key =
+                dateStr.length >= 10 ? dateStr.substring(0, 10) : dateStr;
+                matchedDates.add(key);
+              }
+            }
+
+            completedBeforeTodayInBlock = matchedDates.length;
+          } catch (_) {/* keep 0 */}
+        }
+
+        final plannedIndex = completedBeforeTodayInBlock + plannedCountBefore;
+        final idx = sorted.isEmpty ? 0 : plannedIndex % sorted.length;
+        final raw = sorted[idx].value?.toString() ?? '';
+
+        return _parseSets(raw);
+      }
+
+      return fallbackSets;
     }
+
+    // ---------------- DUP, By Week ----------------
+    if (model == PeriodizationModelType.dailyUndulatingWeek) {
+      final weekMap = _exerciseSettings[exerciseId]?['repTargets']?['week1'];
+      if (weekMap is Map<String, dynamic>) {
+        final sorted = weekMap.entries
+            .where((e) => e.key.startsWith('instance'))
+            .toList()
+          ..sort((a, b) => a.key.compareTo(b.key));
+
+        if (sorted.isEmpty) return fallbackSets;
+
+        int completedEarlierThisWeek = 0;
+
+        if (blockStartDate != null && _selectedDate != null) {
+          final matchedDates = <String>{};
+          try {
+            final wkIdx =
+            PeriodizationModelUtils.getWeekIndexForDate(_selectedDate, blockStartDate!);
+            final base = DateTime(
+                blockStartDate!.year, blockStartDate!.month, blockStartDate!.day);
+            final weekStart = base.add(Duration(days: wkIdx * 7));
+            final todayStart = DateTime(
+                _selectedDate!.year, _selectedDate!.month, _selectedDate!.day);
+
+            final targetId = exerciseId;
+            final targetNameNorm = _norm(exerciseName);
+
+            for (final w in PeriodizationModelUtils.savedWorkoutsList) {
+              final dateStr = (w['date'] ?? '').toString();
+              final dt = DateTime.tryParse(dateStr);
+              if (dt == null) continue;
+
+              final dayOnly = DateTime(dt.year, dt.month, dt.day);
+              if (dayOnly.isBefore(weekStart) || !dayOnly.isBefore(todayStart)) {
+                continue; // strictly before today in this week
+              }
+
+              final exs = w['exercises'];
+              if (exs is! List) continue;
+
+              final matched = exs.any((ex) {
+                if (!_hasValidSet(ex['sets'])) return false;
+
+                final exId =
+                (ex['exerciseId'] ?? ex['id'] ?? ex['exercise_id'] ?? '')
+                    .toString();
+                if (exId.isNotEmpty && exId == targetId) return true;
+
+                final exName =
+                (ex['name'] ?? ex['exercise'] ?? ex['title'] ?? '')
+                    .toString();
+                if (exName.isNotEmpty && _norm(exName) == targetNameNorm) {
+                  return true;
+                }
+
+                final mapped =
+                (PeriodizationModelUtils.nameToId[exName] ?? '').toString();
+                return mapped.isNotEmpty && mapped == targetId;
+              });
+
+              if (matched) {
+                final key =
+                dateStr.length >= 10 ? dateStr.substring(0, 10) : dateStr;
+                matchedDates.add(key);
+              }
+            }
+
+            completedEarlierThisWeek = matchedDates.length;
+          } catch (_) {/* keep 0 */}
+        }
+
+        final plannedIndex = completedEarlierThisWeek;
+        final idx = plannedIndex % sorted.length;
+        final raw = sorted[idx].value?.toString() ?? '';
+
+        return _parseSets(raw);
+      }
+
+      return fallbackSets;
+    }
+
+    // ---------------- Linear Classic ----------------
+    if (model == PeriodizationModelType.linearClassic) {
+      final repTargets = _exerciseSettings[exerciseId]?['repTargets'];
+      final weekStart = repTargets?['week1'];
+
+      if (weekStart is Map<String, dynamic> && blockStartDate != null && blockEndDate != null) {
+        final week = PeriodizationModelUtils.getWeekIndexForDate(
+          _selectedDate,
+          blockStartDate!,
+        );
+
+        final blockLength = PeriodizationModelUtils.getBlockLength(
+          blockStartDate: blockStartDate!,
+          blockEndDate: blockEndDate!,
+        );
+
+        final instanceCount =
+        PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+          exerciseName: exerciseName,
+          savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+          blockStartDate: blockStartDate!,
+          weekIndex: week,
+        );
+
+        final sortedKeys = weekStart.keys
+            .where((k) => k.startsWith('instance'))
+            .toList()
+          ..sort();
+
+        if (sortedKeys.isEmpty) return fallbackSets;
+
+        final instanceKey =
+        sortedKeys[instanceCount % sortedKeys.length];
+
+        final startRaw = weekStart[instanceKey]?.toString() ?? '10 x 3';
+
+        // sets don't depend on week interpolation; we just parse them from startRaw
+        return _parseSets(startRaw);
+      }
+
+      return fallbackSets;
+    }
+
+    // Other models → keep using whatever app-wide default you use
+    return fallbackSets;
   }
+
 
 
   Map<String, dynamic> _getProgressedValues(int exerciseIndex) {
@@ -7645,23 +7857,51 @@ class _WorkoutPageState extends State<WorkoutPage>
           'cardId': cardId,
         });
 
-        _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
-        _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-        _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-        _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-        _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-        _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+        // 🔢 Use planned set-count for this row (fallback to default)
+        final int rowIndex = _selectedExercisesWithCircuits.length - 1;
+        final int plannedSetCount = _plannedSetCountFor(rowIndex);
+        final int setCount =
+        (plannedSetCount <= 0) ? _defaultSets : plannedSetCount;
+
+        _workoutSets.add(List.generate(setCount, (_) => SetDetails()));
+        _repsControllers.add(
+            List.generate(setCount, (_) => TextEditingController()));
+        _weightControllers.add(
+            List.generate(setCount, (_) => TextEditingController()));
+        _rirControllers.add(
+            List.generate(setCount, (_) => TextEditingController()));
+        _velocityControllers.add(
+            List.generate(setCount, (_) => TextEditingController()));
+        _notesControllers.add(
+            List.generate(setCount, (_) => TextEditingController()));
 
         _haveNames.add(nKey); // avoid any later duplicates in this pass
       }
 
+
+
       plannedAdded = _selectedExercisesWithCircuits.length - beforeCount;
 
+      // 🔢 Ensure ALL rows have enough sets for their planned set-count
+      for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+        final int plannedSetCount = _plannedSetCountFor(i);
+        final int desiredSets =
+        (plannedSetCount <= 0) ? _defaultSets : plannedSetCount;
 
-
+        // Only ever grow; don’t shrink (avoids losing user-entered data)
+        while (_workoutSets[i].length < desiredSets) {
+          _workoutSets[i].add(SetDetails());
+          _repsControllers[i].add(TextEditingController());
+          _weightControllers[i].add(TextEditingController());
+          _rirControllers[i].add(TextEditingController());
+          _velocityControllers[i].add(TextEditingController());
+          _notesControllers[i].add(TextEditingController());
+        }
+      }
 
       // 7) Ensure listeners on any new controllers
       _attachDirtyListeners();
+
 
       // 8) Persist merged flags so next open is instant
       await _persistSavedFlagsLocally();
@@ -8583,11 +8823,29 @@ class _WorkoutPageState extends State<WorkoutPage>
 
         // Draft sets
         final List<Map<String, dynamic>> setMaps = (m['sets'] is List)
-            ? (m['sets'] as List).whereType<Map>().map((x) => Map<String, dynamic>.from(x)).toList()
+            ? (m['sets'] as List)
+            .whereType<Map>()
+            .map((x) => Map<String, dynamic>.from(x))
+            .toList()
             : const <Map<String, dynamic>>[];
 
+        // 🔢 Use planned set-count for this row, not a global default
+        final int plannedSetCount = _plannedSetCountFor(idx);
+        final int desiredSets =
+        (plannedSetCount <= 0 ? _defaultSets : plannedSetCount);
+
+        // Ensure this row has enough SetDetails / controllers allocated
+        while (_workoutSets[idx].length < desiredSets) {
+          _workoutSets[idx].add(SetDetails());
+          _repsControllers[idx].add(TextEditingController());
+          _weightControllers[idx].add(TextEditingController());
+          _rirControllers[idx].add(TextEditingController());
+          _velocityControllers[idx].add(TextEditingController());
+          _notesControllers[idx].add(TextEditingController());
+        }
+
         // Overlay set-by-set up to UI capacity
-        final int maxSets = (_defaultSets <= 0) ? 0 : _defaultSets;
+        final int maxSets = desiredSets;
         for (int s = 0; s < setMaps.length && s < maxSets; s++) {
           final ds = setMaps[s];
           final SetDetails sd = _workoutSets[idx][s];
@@ -9042,12 +9300,14 @@ class _WorkoutPageState extends State<WorkoutPage>
 
 
       _workoutSets.clear();
-      _workoutSets.addAll(
-        List.generate(
-          _selectedExercisesWithCircuits.length,
-              (_) => List.generate(_defaultSets, (_) => SetDetails()),
-        ),
-      );
+
+      for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+        final setCount = _plannedSetCountFor(i);
+        _workoutSets.add(
+          List.generate(setCount, (_) => SetDetails()),
+        );
+      }
+
 
       _initializeControllers();
       _populateVelocityFlags();
@@ -10942,33 +11202,40 @@ class _WorkoutPageState extends State<WorkoutPage>
 
             final lower = name.toLowerCase();
             if (existingNamesLower.contains(lower)) {
-              // Already have this exercise (by name) on the page → skip adding a duplicate card
-              continue;
+              continue; // avoid duplicates
             }
 
             final circuitIndex = (newEx['circuitIndex'] ?? 0) as int;
 
-            // Ensure each inserted BB2 row has a unique, date-scoped key
+            // Resolve a stable cardId for WES row
             final String cardId = (newEx['cardId'] as String?) ??
                 'bb2|$ymd|${DateTime.now().microsecondsSinceEpoch}|$lower|$circuitIndex';
 
+            // Insert into the list of exercises for this day's WES
             _selectedExercisesWithCircuits.add({
               'name': name,
               'circuitIndex': circuitIndex,
               'cardId': cardId,
             });
 
-            _workoutSets.add(List.generate(_defaultSets, (_) => SetDetails()));
-            _repsControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-            _weightControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-            _rirControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-            _velocityControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
-            _notesControllers.add(List.generate(_defaultSets, (_) => TextEditingController()));
+            /// 🔥 Use the SAME set-count logic as showExercisePickerDialog
+            final int setCount = _plannedSetCountFor(
+              _selectedExercisesWithCircuits.length - 1,
+            );
 
-            // keep the guard updated within this batch so multiple newOnes of the same name don't slip in
+            _workoutSets.add(List.generate(setCount, (_) => SetDetails()));
+            _repsControllers.add(List.generate(setCount, (_) => TextEditingController()));
+            _weightControllers.add(List.generate(setCount, (_) => TextEditingController()));
+            _rirControllers.add(List.generate(setCount, (_) => TextEditingController()));
+            _velocityControllers.add(List.generate(setCount, (_) => TextEditingController()));
+            _notesControllers.add(List.generate(setCount, (_) => TextEditingController()));
+
+            // Track to avoid future duplicates in this batch
             existingNamesLower.add(lower);
           }
         });
+
+
 
 
         // Seed initial values for newly added rows (prefer flat; else sets[0])
