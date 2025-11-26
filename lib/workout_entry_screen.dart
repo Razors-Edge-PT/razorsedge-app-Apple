@@ -8403,19 +8403,25 @@ class _WorkoutPageState extends State<WorkoutPage>
         });
       }
 
-      // ✅ Initialize sets and controllers
+      // ✅ Initialize sets per row using planned set-count (fallback to _defaultSets)
       _workoutSets.addAll(List.generate(
         _selectedExercisesWithCircuits.length,
-            (_) =>
-            List.generate(
-              _defaultSets,
-                  (_) => SetDetails(reps: null, weight: null, rir: null),
-            ),
+            (rowIndex) {
+          final int plannedSetCount = _plannedSetCountFor(rowIndex);
+          final int desiredSets =
+          (plannedSetCount <= 0) ? _defaultSets : plannedSetCount;
+
+          return List.generate(
+            desiredSets,
+                (_) => SetDetails(reps: null, weight: null, rir: null),
+          );
+        },
       ));
 
       _initializeControllers();
     });
   }
+
 
   void _showTemplateSelectionDialog() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -9538,10 +9544,29 @@ class _WorkoutPageState extends State<WorkoutPage>
 
     if (selected != null && selected.isNotEmpty) {
       setState(() {
+        // 1️⃣ Update the exercise name for this row
         _selectedExercisesWithCircuits[index]['name'] = selected;
+
+        // 2️⃣ Work out how many sets this row *should* have
+        final int plannedSetCount = _plannedSetCountFor(index);
+        final int desiredSets =
+        (plannedSetCount <= 0) ? _defaultSets : plannedSetCount;
+
+        // 3️⃣ Grow this row’s sets/controllers up to desiredSets (never shrink)
+        while (_workoutSets[index].length < desiredSets) {
+          _workoutSets[index].add(SetDetails());
+          _repsControllers[index].add(TextEditingController());
+          _weightControllers[index].add(TextEditingController());
+          _rirControllers[index].add(TextEditingController());
+          _velocityControllers[index].add(TextEditingController());
+          _notesControllers[index].add(TextEditingController());
+        }
+
+        // 4️⃣ Recompute per-exercise flags (e.g. velocity)
         _populateVelocityFlags();
       });
     }
+
   }
 
   void _onReorderExercises(int oldIndex, int newIndex) {
