@@ -814,6 +814,27 @@ class _WorkoutPageState extends State<WorkoutPage>
     }
   }
 
+  String formatRir(dynamic value) {
+    if (value == null) return '';
+
+    double? d;
+    if (value is num) {
+      d = value.toDouble();
+    } else {
+      d = double.tryParse(value.toString());
+    }
+
+    if (d == null) return '';
+
+    // If it's a whole number, drop .0
+    if (d % 1 == 0) {
+      return d.toInt().toString();
+    }
+
+    // Otherwise return the decimal version
+    return d.toString();
+  }
+
 
   // Map exercise → Group A/B/C/D
   Future<String> _resolveGroupForExercise(String name) async {
@@ -13482,62 +13503,61 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                         SizedBox(
                                                           width: 76,
                                                           child: (j == 0)
-                                                              ? TextField(
-                                                            controller: _weightControllers[i][j],
-                                                            keyboardType: TextInputType
-                                                                .number,
-                                                            decoration: InputDecoration(
-                                                              hintText: !_isInitialized
-                                                                  ? ''
-                                                                  : (() {
-                                                                final w = set1SuggestedWeight(i);
-                                                                return formatWeight(w);
-                                                              })(),
-                                                              hintStyle: const TextStyle(
-                                                                color: Colors
-                                                                    .grey,
-                                                                fontStyle: FontStyle
-                                                                    .italic,
+                                                              ? GestureDetector(
+                                                            onDoubleTap: () {
+                                                              if (!_isInitialized) return;
+                                                              if (_weightControllers[i][j].text.isNotEmpty) return;
+
+                                                              final w = set1SuggestedWeight(i);
+                                                              final wHint = formatWeight(w);
+
+                                                              if (wHint.isEmpty) return;
+
+                                                              setState(() {
+                                                                _weightControllers[i][j].text = wHint;
+                                                                _weightControllers[i][j].selection = TextSelection.fromPosition(
+                                                                  TextPosition(offset: wHint.length),
+                                                                );
+                                                              });
+                                                            },
+                                                            child: TextField(
+                                                              controller: _weightControllers[i][j],
+                                                              keyboardType: TextInputType.number,
+                                                              decoration: InputDecoration(
+                                                                hintText: !_isInitialized
+                                                                    ? ''
+                                                                    : (() {
+                                                                  final w = set1SuggestedWeight(i);
+                                                                  return formatWeight(w);
+                                                                })(),
+                                                                hintStyle: const TextStyle(
+                                                                  color: Colors.grey,
+                                                                  fontStyle: FontStyle.italic,
+                                                                  fontSize: 12,
+                                                                ),
+                                                                contentPadding: const EdgeInsets.only(left: 2),
+                                                                enabledBorder: const UnderlineInputBorder(
+                                                                  borderSide: BorderSide(color: Colors.white, width: 1),
+                                                                ),
+                                                                focusedBorder: const UnderlineInputBorder(
+                                                                  borderSide: BorderSide(color: Colors.white, width: 1.5),
+                                                                ),
+                                                                disabledBorder: const UnderlineInputBorder(
+                                                                  borderSide: BorderSide(color: Colors.white, width: 1),
+                                                                ),
+                                                              ),
+                                                              onChanged: (value) => setState(() {}),
+                                                              style: TextStyle(
+                                                                color: _weightControllers[i][j].text.isEmpty
+                                                                    ? Colors.grey
+                                                                    : Colors.white,
                                                                 fontSize: 12,
                                                               ),
-                                                              contentPadding: const EdgeInsets
-                                                                  .only(
-                                                                  left: 2),
-                                                              // align with RIR/E1RM
-                                                              enabledBorder: const UnderlineInputBorder(
-                                                                borderSide: BorderSide(
-                                                                    color: Colors
-                                                                        .white,
-                                                                    width: 1),
-                                                              ),
-                                                              focusedBorder: const UnderlineInputBorder(
-                                                                borderSide: BorderSide(
-                                                                    color: Colors
-                                                                        .white,
-                                                                    width: 1.5),
-                                                              ),
-                                                              disabledBorder: const UnderlineInputBorder(
-                                                                borderSide: BorderSide(
-                                                                    color: Colors
-                                                                        .white,
-                                                                    width: 1),
-                                                              ),
-                                                            ),
-                                                            onChanged: (
-                                                                value) =>
-                                                                setState(() {}),
-                                                            style: TextStyle(
-                                                              color: _weightControllers[i][j]
-                                                                  .text.isEmpty
-                                                                  ? Colors.grey
-                                                                  : Colors
-                                                                  .white,
-                                                              fontSize: 12, // align with E1RM font size
                                                             ),
                                                           )
-                                                              : FutureBuilder<
-                                                              String>(
-                                                            future: _weightHintText(
+                                                              : FutureBuilder<String>(
+
+                                                          future: _weightHintText(
                                                                 i, j),
                                                             builder: (_, snap) {
                                                               final hasTyped = _weightControllers[i][j]
@@ -13551,56 +13571,49 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                   .data ?? '')
                                                                   : '';
 
-                                                              return TextField(
-                                                                controller: _weightControllers[i][j],
-                                                                keyboardType: TextInputType
-                                                                    .number,
-                                                                decoration: InputDecoration(
-                                                                  hintText: hint,
-                                                                  // range like "50–52.5", disappears on input
-                                                                  hintStyle: const TextStyle(
-                                                                    color: Colors
-                                                                        .grey,
-                                                                    fontStyle: FontStyle
-                                                                        .italic,
+                                                              return GestureDetector(
+                                                                onDoubleTap: () {
+                                                                  if (_weightControllers[i][j].text.isNotEmpty) return;
+                                                                  if (hint.isEmpty) return;
+
+                                                                  setState(() {
+                                                                    _weightControllers[i][j].text = hint;
+                                                                    _weightControllers[i][j].selection = TextSelection.fromPosition(
+                                                                      TextPosition(offset: hint.length),
+                                                                    );
+                                                                  });
+                                                                },
+                                                                child: TextField(
+                                                                  controller: _weightControllers[i][j],
+                                                                  keyboardType: TextInputType.number,
+                                                                  decoration: InputDecoration(
+                                                                    hintText: hint, // range like "50–52.5", disappears on input
+                                                                    hintStyle: const TextStyle(
+                                                                      color: Colors.grey,
+                                                                      fontStyle: FontStyle.italic,
+                                                                      fontSize: 12,
+                                                                    ),
+                                                                    contentPadding: const EdgeInsets.only(left: 2),
+                                                                    enabledBorder: const UnderlineInputBorder(
+                                                                      borderSide: BorderSide(color: Colors.white, width: 1),
+                                                                    ),
+                                                                    focusedBorder: const UnderlineInputBorder(
+                                                                      borderSide: BorderSide(color: Colors.white, width: 1.5),
+                                                                    ),
+                                                                    disabledBorder: const UnderlineInputBorder(
+                                                                      borderSide: BorderSide(color: Colors.white, width: 1),
+                                                                    ),
+                                                                  ),
+                                                                  onChanged: (value) => setState(() {}),
+                                                                  style: TextStyle(
+                                                                    color: _weightControllers[i][j].text.isNotEmpty
+                                                                        ? Colors.white
+                                                                        : Colors.grey,
                                                                     fontSize: 12,
                                                                   ),
-                                                                  contentPadding: const EdgeInsets
-                                                                      .only(
-                                                                      left: 2),
-                                                                  enabledBorder: const UnderlineInputBorder(
-                                                                    borderSide: BorderSide(
-                                                                        color: Colors
-                                                                            .white,
-                                                                        width: 1),
-                                                                  ),
-                                                                  focusedBorder: const UnderlineInputBorder(
-                                                                    borderSide: BorderSide(
-                                                                        color: Colors
-                                                                            .white,
-                                                                        width: 1.5),
-                                                                  ),
-                                                                  disabledBorder: const UnderlineInputBorder(
-                                                                    borderSide: BorderSide(
-                                                                        color: Colors
-                                                                            .white,
-                                                                        width: 1),
-                                                                  ),
-                                                                ),
-                                                                onChanged: (
-                                                                    value) =>
-                                                                    setState(() {}),
-                                                                style: TextStyle(
-                                                                  color: _weightControllers[i][j]
-                                                                      .text
-                                                                      .isNotEmpty
-                                                                      ? Colors
-                                                                      .white
-                                                                      : Colors
-                                                                      .grey,
-                                                                  fontSize: 12,
                                                                 ),
                                                               );
+
                                                             },
                                                           ),
                                                         ),
@@ -13613,63 +13626,61 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                         SizedBox(
                                                           width: 50,
                                                           child: (j == 0)
-                                                              ? TextField(
-                                                            controller: _repsControllers[i][j],
-                                                            keyboardType: TextInputType
-                                                                .number,
-                                                            decoration: InputDecoration(
-                                                              contentPadding: const EdgeInsets
-                                                                  .only(
-                                                                  left: 2),
-                                                              // align with RIR/E1RM
-                                                              hintText: (_isLoadingData || !_isInitialized)
-                                                                  ? ''
-                                                                  : (() {
-                                                                final r = set1SuggestedReps(i);
-                                                                return (r?.toInt().toString() ?? '');
-                                                              })(),
+                                                              ? GestureDetector(
+                                                            onDoubleTap: () {
+                                                              if (_isLoadingData || !_isInitialized) return;
+                                                              if (_repsControllers[i][j].text.isNotEmpty) return;
 
-                                                              hintStyle: const TextStyle(
-                                                                color: Colors
-                                                                    .grey,
-                                                                fontStyle: FontStyle
-                                                                    .italic,
+                                                              final r = set1SuggestedReps(i);
+                                                              final rHint = (r?.toInt().toString() ?? '');
+
+                                                              if (rHint.isEmpty) return;
+
+                                                              setState(() {
+                                                                _repsControllers[i][j].text = rHint;
+                                                                _repsControllers[i][j].selection = TextSelection.fromPosition(
+                                                                  TextPosition(offset: rHint.length),
+                                                                );
+                                                              });
+                                                            },
+                                                            child: TextField(
+                                                              controller: _repsControllers[i][j],
+                                                              keyboardType: TextInputType.number,
+                                                              decoration: InputDecoration(
+                                                                contentPadding: const EdgeInsets.only(left: 2),
+                                                                hintText: (_isLoadingData || !_isInitialized)
+                                                                    ? ''
+                                                                    : (() {
+                                                                  final r = set1SuggestedReps(i);
+                                                                  return (r?.toInt().toString() ?? '');
+                                                                })(),
+                                                                hintStyle: const TextStyle(
+                                                                  color: Colors.grey,
+                                                                  fontStyle: FontStyle.italic,
+                                                                  fontSize: 12,
+                                                                ),
+                                                                enabledBorder: const UnderlineInputBorder(
+                                                                  borderSide: BorderSide(color: Colors.white, width: 1),
+                                                                ),
+                                                                focusedBorder: const UnderlineInputBorder(
+                                                                  borderSide: BorderSide(color: Colors.white, width: 1.5),
+                                                                ),
+                                                                disabledBorder: const UnderlineInputBorder(
+                                                                  borderSide: BorderSide(color: Colors.white, width: 1),
+                                                                ),
+                                                              ),
+                                                              onChanged: (value) => setState(() {}),
+                                                              style: TextStyle(
+                                                                color: _repsControllers[i][j].text.isNotEmpty
+                                                                    ? Colors.white
+                                                                    : Colors.grey,
                                                                 fontSize: 12,
                                                               ),
-                                                              enabledBorder: const UnderlineInputBorder(
-                                                                borderSide: BorderSide(
-                                                                    color: Colors
-                                                                        .white,
-                                                                    width: 1),
-                                                              ),
-                                                              focusedBorder: const UnderlineInputBorder(
-                                                                borderSide: BorderSide(
-                                                                    color: Colors
-                                                                        .white,
-                                                                    width: 1.5),
-                                                              ),
-                                                              disabledBorder: const UnderlineInputBorder(
-                                                                borderSide: BorderSide(
-                                                                    color: Colors
-                                                                        .white,
-                                                                    width: 1),
-                                                              ),
-                                                            ),
-                                                            onChanged: (
-                                                                value) =>
-                                                                setState(() {}),
-                                                            style: TextStyle(
-                                                              color: _repsControllers[i][j]
-                                                                  .text
-                                                                  .isNotEmpty
-                                                                  ? Colors.white
-                                                                  : Colors.grey,
-                                                              fontSize: 12,
                                                             ),
                                                           )
-                                                              : FutureBuilder<
-                                                              String>(
-                                                            future: _repsHintText(
+                                                              : FutureBuilder<String>(
+
+                                                          future: _repsHintText(
                                                                 i, j),
                                                             builder: (_, snap) {
                                                               final hasTyped = _repsControllers[i][j]
@@ -13683,56 +13694,49 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                   .data ?? '')
                                                                   : '';
 
-                                                              return TextField(
-                                                                controller: _repsControllers[i][j],
-                                                                keyboardType: TextInputType
-                                                                    .number,
-                                                                decoration: InputDecoration(
-                                                                  contentPadding: const EdgeInsets
-                                                                      .only(
-                                                                      left: 2),
-                                                                  hintText: hint,
-                                                                  // "4–6", disappears on input
-                                                                  hintStyle: const TextStyle(
-                                                                    color: Colors
-                                                                        .grey,
-                                                                    fontStyle: FontStyle
-                                                                        .italic,
+                                                              return GestureDetector(
+                                                                onDoubleTap: () {
+                                                                  if (_repsControllers[i][j].text.isNotEmpty) return;
+                                                                  if (hint.isEmpty) return;
+
+                                                                  setState(() {
+                                                                    _repsControllers[i][j].text = hint;
+                                                                    _repsControllers[i][j].selection = TextSelection.fromPosition(
+                                                                      TextPosition(offset: hint.length),
+                                                                    );
+                                                                  });
+                                                                },
+                                                                child: TextField(
+                                                                  controller: _repsControllers[i][j],
+                                                                  keyboardType: TextInputType.number,
+                                                                  decoration: InputDecoration(
+                                                                    contentPadding: const EdgeInsets.only(left: 2),
+                                                                    hintText: hint, // "4–6", disappears on input
+                                                                    hintStyle: const TextStyle(
+                                                                      color: Colors.grey,
+                                                                      fontStyle: FontStyle.italic,
+                                                                      fontSize: 12,
+                                                                    ),
+                                                                    enabledBorder: const UnderlineInputBorder(
+                                                                      borderSide: BorderSide(color: Colors.white, width: 1),
+                                                                    ),
+                                                                    focusedBorder: const UnderlineInputBorder(
+                                                                      borderSide: BorderSide(color: Colors.white, width: 1.5),
+                                                                    ),
+                                                                    disabledBorder: const UnderlineInputBorder(
+                                                                      borderSide: BorderSide(color: Colors.white, width: 1),
+                                                                    ),
+                                                                  ),
+                                                                  onChanged: (value) => setState(() {}),
+                                                                  style: TextStyle(
+                                                                    color: _repsControllers[i][j].text.isNotEmpty
+                                                                        ? Colors.white
+                                                                        : Colors.grey,
                                                                     fontSize: 12,
                                                                   ),
-                                                                  enabledBorder: const UnderlineInputBorder(
-                                                                    borderSide: BorderSide(
-                                                                        color: Colors
-                                                                            .white,
-                                                                        width: 1),
-                                                                  ),
-                                                                  focusedBorder: const UnderlineInputBorder(
-                                                                    borderSide: BorderSide(
-                                                                        color: Colors
-                                                                            .white,
-                                                                        width: 1.5),
-                                                                  ),
-                                                                  disabledBorder: const UnderlineInputBorder(
-                                                                    borderSide: BorderSide(
-                                                                        color: Colors
-                                                                            .white,
-                                                                        width: 1),
-                                                                  ),
-                                                                ),
-                                                                onChanged: (
-                                                                    value) =>
-                                                                    setState(() {}),
-                                                                style: TextStyle(
-                                                                  color: _repsControllers[i][j]
-                                                                      .text
-                                                                      .isNotEmpty
-                                                                      ? Colors
-                                                                      .white
-                                                                      : Colors
-                                                                      .grey,
-                                                                  fontSize: 12,
                                                                 ),
                                                               );
+
                                                             },
                                                           ),
                                                         ),
@@ -13742,45 +13746,83 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                         // RIR
                                                         SizedBox(
                                                           width: 50,
+                                                          child: GestureDetector(
+                                                            onDoubleTap: () {
+                                                              if (_rirControllers[i][j].text.isNotEmpty) return;
 
-                                                          child: TextField(
-                                                            controller: _rirControllers[i][j],
-                                                            keyboardType: TextInputType
-                                                                .number,
-                                                            decoration: InputDecoration(
-                                                              contentPadding: const EdgeInsets.only(left: 2),
-                                                              hintText: (j == 0)
-                                                                  ? (_seedHintsByKey['${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i']?['rir']?.toString() ?? set1RIR(i).toString())
-                                                                  : (j >= 1 && j <= 7)
-                                                                  ? (_seedHintsByKey['${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i']?['s${j + 1}_rir']?.toString()
-                                                                  ?? (j == 1
-                                                                      ? set2RIR(i).toString()
-                                                                      : j == 2
-                                                                      ? set3RIR(i).toString()
-                                                                      : '1'))
-                                                                  : '1',
+                                                              final exNameKey =
+                                                                  '${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i';
 
+                                                              String rawRirHint;
 
+                                                              if (j == 0) {
+                                                                rawRirHint = (
+                                                                    _seedHintsByKey[exNameKey]?['rir']
+                                                                        ?? set1RIR(i)
+                                                                ).toString();
+                                                              } else if (j >= 1 && j <= 7) {
+                                                                rawRirHint = (
+                                                                    _seedHintsByKey[exNameKey]?['s${j + 1}_rir']
+                                                                        ?? (j == 1
+                                                                        ? set2RIR(i)
+                                                                        : j == 2
+                                                                        ? set3RIR(i)
+                                                                        : 1)
+                                                                ).toString();
+                                                              } else {
+                                                                rawRirHint = '1';
+                                                              }
 
-                                                              hintStyle: const TextStyle(
-                                                                color: Colors.grey,
-                                                                fontStyle: FontStyle.italic,
-                                                                fontSize: 12,
+                                                              final rirHint = formatRir(rawRirHint);
+
+                                                              if (rirHint.isEmpty) return;
+
+                                                              setState(() {
+                                                                _rirControllers[i][j].text = rirHint;
+                                                                _rirControllers[i][j].selection = TextSelection.fromPosition(
+                                                                  TextPosition(offset: rirHint.length),
+                                                                );
+                                                              });
+                                                            },
+                                                            child: TextField(
+                                                              controller: _rirControllers[i][j],
+                                                              keyboardType: TextInputType.number,
+                                                              decoration: InputDecoration(
+                                                                contentPadding: const EdgeInsets.only(left: 2),
+                                                                hintText: (j == 0)
+                                                                    ? formatRir(
+                                                                    _seedHintsByKey[
+                                                                    '${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i']?['rir']
+                                                                        ?? set1RIR(i)
+                                                                )
+                                                                    : (j >= 1 && j <= 7)
+                                                                    ? formatRir(
+                                                                    _seedHintsByKey[
+                                                                    '${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i']?['s${j + 1}_rir']
+                                                                        ?? (j == 1
+                                                                        ? set2RIR(i)
+                                                                        : j == 2
+                                                                        ? set3RIR(i)
+                                                                        : 1)
+                                                                )
+                                                                    : '1',
+                                                                hintStyle: const TextStyle(
+                                                                  color: Colors.grey,
+                                                                  fontStyle: FontStyle.italic,
+                                                                  fontSize: 12,
+                                                                ),
                                                               ),
-                                                            ),
-
-                                                            onChanged: (
-                                                                value) =>
-                                                                setState(() {}),
-                                                            style: TextStyle(
-                                                              color: _rirControllers[i][j]
-                                                                  .text.isEmpty
-                                                                  ? Colors.grey
-                                                                  : Colors
-                                                                  .white,
+                                                              onChanged: (value) => setState(() {}),
+                                                              style: TextStyle(
+                                                                color: _rirControllers[i][j].text.isEmpty
+                                                                    ? Colors.grey
+                                                                    : Colors.white,
+                                                              ),
                                                             ),
                                                           ),
                                                         ),
+
+
                                                         const SizedBox(
                                                             width: 4),
 
