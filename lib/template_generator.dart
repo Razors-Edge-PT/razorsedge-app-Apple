@@ -200,7 +200,8 @@ class TemplateGenerator {
     // Start at min, allow up to max, but don’t exceed weeklyFrequency * 2 per-day caps.
     final weeklyPlan = <String, int>{};
     int totalPlanned = 0;
-    final int perDayOverallMax = weeklyFrequency * 5; // theoretical high ceiling
+    final int perDayOverallMax = weeklyFrequency * (_maxCircuitsPerDay * 3);
+
 
     void allocate(String cat) {
       final cap = freqCaps[cat];
@@ -290,11 +291,13 @@ class TemplateGenerator {
     }
 
     // 6) Build day shells. For block 1, we produce exactly `weeklyFrequency` days.
-    //    For block 2, we mirror the same count (names B2 Day1..DayN)
     final days = List.generate(
       weeklyFrequency,
           (i) => _DayPlan(index: i, totalDays: weeklyFrequency),
     ); // <-- close List.generate here
+
+// 🧮 Track how many times each category is already seeded
+    final Map<String, int> _seededCountByCategory = {};
 
 // Seed each day with the requested “minimum per day” set for the user’s sex.
 // (This is a soft seed; further placements will still obey pairing rules.)
@@ -306,6 +309,8 @@ class TemplateGenerator {
       idTargetsRemaining: _idTargetsRemaining,
       isHypertrophyMale: isHypertrophyMale,
       requiredHPullPrimaryDays: requiredHPullPrimaryDays,
+      weeklyPlan: weeklyPlan,                      // 🆕 pass weekly caps
+      seededCountByCategory: _seededCountByCategory, // 🆕 out-param map
     );
 
     // 6.5) Adjust weeklyPlan by subtracting what seeding already placed
@@ -350,22 +355,36 @@ class TemplateGenerator {
         final usedThisCat = day.countByCategory[cat] ?? 0;
         if (usedThisCat >= perDayCategoryHardCap) continue;
 
+        // 🧱 Weekly cap guard — do NOT exceed remainingPlan[cat]
+        final int remaining = remainingPlan[cat] ?? 0;
+        final int alreadyUsed = seededCount[cat] ?? 0;
+
+        if (alreadyUsed >= (weeklyPlan[cat] ?? 0)) {
+          // Category is fully capped — skip entirely
+          continue;
+        }
+
         final chosen = _chooseExercise(
           pool: byCat[cat] ?? const [],
           day: day,
           category: cat,
           allDays: days,
-          idTargetsRemaining: _idTargetsRemaining, // 🆕
+          idTargetsRemaining: _idTargetsRemaining,
         );
 
         if (chosen == null) continue;
 
-        // Allocate to a circuit that respects pairing rules
+// Allocate to a circuit that respects pairing rules
         final circuitIdx = _placeIntoCircuit(day, chosen);
         day.addExercise(chosen, cat, circuitIdx);
+
+// 📈 Track total weekly usage (seeded + greedy)
+        seededCount[cat] = (seededCount[cat] ?? 0) + 1;
+
         placed = true;
         cursor = (dayIdx + 1) % weeklyFrequency;
         break;
+
       }
       // If we couldn’t place it anywhere, we skip silently (library / rules too strict)
     }
@@ -778,13 +797,27 @@ class TemplateGenerator {
     required List<_DayPlan> days,
     required bool isFemale,
     required Map<String, List<ExLite>> byCat,
-    required List<_DayPlan> allDays,                // 🆕
-    Map<String,int>? idTargetsRemaining,            // 🆕
-    bool isHypertrophyMale = false,
-    int requiredHPullPrimaryDays = 0,
+    required List<_DayPlan> allDays,
+    required Map<String,int> idTargetsRemaining,
+    required bool isHypertrophyMale,
+    required int requiredHPullPrimaryDays,
+    required Map<String, int> weeklyPlan,            // 🆕
+    required Map<String, int> seededCountByCategory, // 🆕
   }) {
     final sets = isFemale ? _femaleDailyPrefSets : _maleDailyPrefSets;
     final int weeklyFrequency = days.length;
+
+    // 🧮 Helper: check & record category usage vs weeklyPlan
+    bool _canSeedCategory(String cat) {
+      final cap = weeklyPlan[cat];
+      if (cap == null) return true; // if not in plan, treat as uncapped
+      final seeded = seededCountByCategory[cat] ?? 0;
+      return seeded < cap;
+    }
+
+    void _recordSeed(String cat) {
+      seededCountByCategory[cat] = (seededCountByCategory[cat] ?? 0) + 1;
+    }
 
     // For hypertrophy-focused males, we want on ~ (weeklyFrequency - 1) days:
     //   Circuit 0: [Horizontal Press, Horizontal Pull]
@@ -814,7 +847,7 @@ class TemplateGenerator {
         final bool haveVPull   = vPullPool != null && vPullPool.isNotEmpty;
 
         // ── Circuit 0: Horizontal Press → Horizontal Pull ────────────────────
-        if (haveHP && haveHPull) {
+        if (haveHP && haveHPull && _canSeedCategory('Horizontal Press')) {
           // Step A: Horizontal Press first
           final hp = _chooseExercise(
             pool: hpPool!,
@@ -827,44 +860,41 @@ class TemplateGenerator {
           if (hp != null) {
             final hpCircuitIdx = _placeIntoCircuit(d, hp); // usually creates circuit 0
             d.addExercise(hp, 'Horizontal Press', hpCircuitIdx);
+            _recordSeed('Horizontal Press');
 
             // Step B: Horizontal Pull second, ideally in the same circuit 0
-            final hPull = _chooseExercise(
-              pool: hPullPool!,
-              day: d,
-              category: 'Horizontal Pull',
-              allDays: allDays,
-              idTargetsRemaining: idTargetsRemaining,
-            );
+            if (_canSeedCategory('Horizontal Pull')) {
+              final hPull = _chooseExercise(
+                pool: hPullPool!,
+                day: d,
+                category: 'Horizontal Pull',
+                allDays: allDays,
+                idTargetsRemaining: idTargetsRemaining,
+              );
 
-            if (hPull != null) {
-              int targetCircuit = 0;
-              if (d.circuits.isNotEmpty && _canJoin(d, 0, hPull)) {
-                targetCircuit = 0; // pair with the press
-              } else {
-                targetCircuit = _placeIntoCircuit(d, hPull);
+              if (hPull != null) {
+                int targetCircuit = 0;
+                if (d.circuits.isNotEmpty && _canJoin(d, 0, hPull)) {
+                  targetCircuit = 0; // pair with the press
+                } else {
+                  targetCircuit = _placeIntoCircuit(d, hPull);
+                }
+                d.addExercise(hPull, 'Horizontal Pull', targetCircuit);
+                _recordSeed('Horizontal Pull');
               }
-              d.addExercise(hPull, 'Horizontal Pull', targetCircuit);
             }
           }
         }
 
         // ── Circuit 1: Vertical Press (or LR) → Vertical Pull ────────────────
         if (haveVPull && (haveVPress || haveLatR)) {
-          // Ensure there is at least one circuit before we try to target index 1
-          if (d.circuits.isEmpty) {
-            // If somehow no circuits yet, we’ll let placement logic create them
-            // when we place the first exercise below.
-          }
+          ExLite? firstC1;
+          String? firstC1Category;
 
           // First exercise for Circuit 1: prefer Vertical Press,
           // but if it can't be placed and weeklyFrequency > 2,
           // we allow Lateral Raise as a flexible alternative.
-          ExLite? firstC1;
-          String? firstC1Category;
-
-          // Prefer Vertical Press
-          if (haveVPress) {
+          if (haveVPress && _canSeedCategory('Vertical Press')) {
             final vp = _chooseExercise(
               pool: vPressPool!,
               day: d,
@@ -879,7 +909,10 @@ class TemplateGenerator {
           }
 
           // Flexible Lateral Raise option (only if we couldn't place VP)
-          if (firstC1 == null && weeklyFrequency > 2 && haveLatR) {
+          if (firstC1 == null &&
+              weeklyFrequency > 2 &&
+              haveLatR &&
+              _canSeedCategory('Lateral Raise')) {
             final lr = _chooseExercise(
               pool: latRaisePool!,
               day: d,
@@ -903,25 +936,29 @@ class TemplateGenerator {
               circuitIdx1 = _placeIntoCircuit(d, firstC1);
             }
             d.addExercise(firstC1, firstC1Category, circuitIdx1);
+            _recordSeed(firstC1Category);
 
             // Second exercise for Circuit 1: Vertical Pull
-            final vPull = _chooseExercise(
-              pool: vPullPool!,
-              day: d,
-              category: 'Vertical Pull',
-              allDays: allDays,
-              idTargetsRemaining: idTargetsRemaining,
-            );
+            if (_canSeedCategory('Vertical Pull')) {
+              final vPull = _chooseExercise(
+                pool: vPullPool!,
+                day: d,
+                category: 'Vertical Pull',
+                allDays: allDays,
+                idTargetsRemaining: idTargetsRemaining,
+              );
 
-            if (vPull != null) {
-              int targetCircuit = circuitIdx1;
-              if (d.circuits.length > circuitIdx1 &&
-                  _canJoin(d, circuitIdx1, vPull)) {
-                targetCircuit = circuitIdx1;
-              } else {
-                targetCircuit = _placeIntoCircuit(d, vPull);
+              if (vPull != null) {
+                int targetCircuit = circuitIdx1;
+                if (d.circuits.length > circuitIdx1 &&
+                    _canJoin(d, circuitIdx1, vPull)) {
+                  targetCircuit = circuitIdx1;
+                } else {
+                  targetCircuit = _placeIntoCircuit(d, vPull);
+                }
+                d.addExercise(vPull, 'Vertical Pull', targetCircuit);
+                _recordSeed('Vertical Pull');
               }
-              d.addExercise(vPull, 'Vertical Pull', targetCircuit);
             }
           }
         }
@@ -930,18 +967,44 @@ class TemplateGenerator {
         remainingHPullPrimaryDays--;
       }
 
-      // 🔁 Then apply the normal daily preference sets
+      // 🔁 Then apply the normal daily preference sets,
+      // but only from categories that still have budget left in weeklyPlan.
       for (final choiceList in sets) {
+        // choiceList is e.g. ['Squat Pattern', 'Hip Hinge', 'Leg Curl', ...]
+        final filteredChoices = choiceList
+            .where((cat) => _canSeedCategory(cat))
+            .toList();
+
+        if (filteredChoices.isEmpty) {
+          continue; // no categories with remaining budget
+        }
+
+        // Snapshot counts before seeding one from this choice list
+        final beforeCounts = Map<String, int>.from(d.countByCategory);
+
         _trySeedOneFrom(
           day: d,
-          choices: choiceList,
+          choices: filteredChoices,
           byCat: byCat,
-          allDays: allDays,                      // keep explicit
+          allDays: allDays,
           idTargetsRemaining: idTargetsRemaining,
         );
+
+        // Detect which category actually got seeded and bump its counter
+        d.countByCategory.forEach((cat, count) {
+          final before = beforeCounts[cat] ?? 0;
+          if (count > before) {
+            final delta = count - before;
+            if (delta > 0) {
+              seededCountByCategory[cat] =
+                  (seededCountByCategory[cat] ?? 0) + delta;
+            }
+          }
+        });
       }
     }
   }
+
 
 
   static bool exNameHasSquat(List<ExLite> pool) {
