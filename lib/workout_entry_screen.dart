@@ -285,6 +285,14 @@ class _WorkoutPageState extends State<WorkoutPage>
     return null;
   }
 
+  void _debugRowSetCounts(String tag) {
+    final buf = StringBuffer('$tag — row setCounts: ');
+    for (int i = 0; i < _workoutSets.length; i++) {
+      buf.write('r$i=${_workoutSets[i].length} ');
+    }
+    print(buf.toString());
+  }
+
   void _debugLogCardsForSelectedDate(String tag) {
     try {
       final String ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
@@ -2255,6 +2263,90 @@ class _WorkoutPageState extends State<WorkoutPage>
       final bool hintsChanged = (afterHints.isNotEmpty && afterHints != beforeHints);
 
       if (hintsChanged) {
+        // 🔧 Also fix set counts per row based on planned structure
+        bool structureChanged = false;
+
+        // Small helper to resize a single row in a 2D list while preserving existing values.
+        void _resizeRow<T>(
+            List<List<T>> matrix,
+            int rowIndex,
+            int desiredLen,
+            T Function() create,
+            ) {
+          if (rowIndex >= matrix.length) return;
+          final row = matrix[rowIndex];
+
+          if (row.length > desiredLen) {
+            row.removeRange(desiredLen, row.length);
+            structureChanged = true;
+          } else if (row.length < desiredLen) {
+            while (row.length < desiredLen) {
+              row.add(create());
+            }
+            structureChanged = true;
+          }
+        }
+
+        for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+          final name = (_selectedExercisesWithCircuits[i]['name'] as String? ?? '').trim();
+          if (name.isEmpty) continue;
+
+          final exId = PeriodizationModelUtils.nameToId[name] ?? name;
+          final desiredSetCount = _plannedSetCountFor(i);
+          if (desiredSetCount <= 0) continue;
+
+          // Guard: if we somehow don't have rows yet, skip instead of crashing
+          if (i >= _workoutSets.length ||
+              i >= _repsControllers.length ||
+              i >= _weightControllers.length ||
+              i >= _rirControllers.length ||
+              i >= _velocityControllers.length ||
+              i >= _notesControllers.length) {
+            continue;
+          }
+
+          _resizeRow<SetDetails>(
+            _workoutSets,
+            i,
+            desiredSetCount,
+                () => SetDetails(),
+          );
+          _resizeRow<TextEditingController>(
+            _repsControllers,
+            i,
+            desiredSetCount,
+                () => TextEditingController(),
+          );
+          _resizeRow<TextEditingController>(
+            _weightControllers,
+            i,
+            desiredSetCount,
+                () => TextEditingController(),
+          );
+          _resizeRow<TextEditingController>(
+            _rirControllers,
+            i,
+            desiredSetCount,
+                () => TextEditingController(),
+          );
+          _resizeRow<TextEditingController>(
+            _velocityControllers,
+            i,
+            desiredSetCount,
+                () => TextEditingController(),
+          );
+          _resizeRow<TextEditingController>(
+            _notesControllers,
+            i,
+            desiredSetCount,
+                () => TextEditingController(),
+          );
+        }
+
+        if (structureChanged && mounted) {
+          setState(() {});
+        }
+
         // Optional: tiny toast to let user know silently updated
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -2264,10 +2356,11 @@ class _WorkoutPageState extends State<WorkoutPage>
             ),
           );
         }
-        debugPrint('✅ [SelfHeal] Hints changed; UI already updated by refresh.');
+        debugPrint('✅ [SelfHeal] Hints changed; UI + set counts updated.');
       } else {
         debugPrint('🟦 [SelfHeal] No diff after refresh (snapshot unchanged).');
       }
+
 
       _selfHealLastRun[key] = DateTime.now();
     } catch (e) {
@@ -3405,8 +3498,40 @@ class _WorkoutPageState extends State<WorkoutPage>
 
   }
 
+  // Helper: resize a single row in a List<List<T>> to desiredSetCount
+  void _resizeRow<T>(
+      List<List<T>> outer,
+      int rowIndex,
+      int desiredSetCount,
+      T Function() builder,
+      ) {
+    if (rowIndex < 0 || rowIndex >= outer.length) return;
+
+    final row = outer[rowIndex];
+
+    // Already the right size
+    if (row.length == desiredSetCount) return;
+
+    if (row.length > desiredSetCount) {
+      // Trim extra sets
+      outer[rowIndex] = row.sublist(0, desiredSetCount);
+    } else {
+      // Grow row by adding new items from builder()
+      final List<T> newRow = List<T>.from(row);
+      while (newRow.length < desiredSetCount) {
+        newRow.add(builder());
+      }
+      outer[rowIndex] = newRow;
+    }
+  }
+
   int _plannedSetCountFor(int exerciseIndex) {
-    // default if we can't find anything better
+    // 🔒 Extra guard: if index is out of range or no rows yet, use default
+    if (exerciseIndex < 0 ||
+        exerciseIndex >= _selectedExercisesWithCircuits.length ||
+        _selectedExercisesWithCircuits.isEmpty) {
+      return _defaultSets;
+    }
     int fallbackSets = _defaultSets;
 
     final exerciseName =
@@ -5435,6 +5560,16 @@ class _WorkoutPageState extends State<WorkoutPage>
     super.initState();
 
     print('🚀 [WES] initState started');
+    _isMergingBB2.value = true; // unlock button once
+    Future.delayed(const Duration(seconds: 2), () {
+      // If the widget is gone, do nothing
+      if (!mounted) return;
+
+      // Only re-enable if nothing else has set it back to true in the meantime
+      if (_isMergingBB2.value == true) {
+        _isMergingBB2.value = false;
+      }
+    });
 
     _sparkleCtrl = AnimationController(vsync: this);
 
@@ -5645,8 +5780,15 @@ class _WorkoutPageState extends State<WorkoutPage>
             print(
                 '✅ [WES Init] Skipping BB2 re-merge — WES already has user-entered data');
           }
+
           _openingMergePhase = false;   // boot merges are done
-          _isMergingBB2.value = false; // unlock button once
+
+          // 🟢 Safety net: once init/boot merges are done, ensure the Add Exercises
+          // button is enabled (unless a later merge flips it back to true).
+          _isMergingBB2.value = false;
+          print('🟢 [WES Init] Boot phase complete → enabling Add Exercises button');
+
+
 
           print(
               '🔄 [WES Init] Overlaying saved workout (completed + WES-planned) after final BB2 merge…');
@@ -6905,30 +7047,25 @@ class _WorkoutPageState extends State<WorkoutPage>
 
 
       // ⚙️ Build controllers and sets in locals and hydrate BEFORE setState
-      final tmpSets = List.generate(
-        tmpRows.length,
-            (_) => List.generate(_defaultSets, (_) => SetDetails()),
-      );
-      final tmpReps = List.generate(
-        tmpRows.length,
-            (_) => List.generate(_defaultSets, (_) => TextEditingController()),
-      );
-      final tmpWts = List.generate(
-        tmpRows.length,
-            (_) => List.generate(_defaultSets, (_) => TextEditingController()),
-      );
-      final tmpRir = List.generate(
-        tmpRows.length,
-            (_) => List.generate(_defaultSets, (_) => TextEditingController()),
-      );
-      final tmpVel = List.generate(
-        tmpRows.length,
-            (_) => List.generate(_defaultSets, (_) => TextEditingController()),
-      );
-      final tmpNotes = List.generate(
-        tmpRows.length,
-            (_) => List.generate(_defaultSets, (_) => TextEditingController()),
-      );
+      final List<List<SetDetails>> tmpSets = [];
+      final List<List<TextEditingController>> tmpReps = [];
+      final List<List<TextEditingController>> tmpWts = [];
+      final List<List<TextEditingController>> tmpRir = [];
+      final List<List<TextEditingController>> tmpVel = [];
+      final List<List<TextEditingController>> tmpNotes = [];
+
+      for (var i = 0; i < tmpRows.length; i++) {
+        // 🔢 Use the same planned-set logic as everywhere else
+        final int setCount = _plannedSetCountFor(i);
+
+        tmpSets.add(List.generate(setCount, (_) => SetDetails()));
+        tmpReps.add(List.generate(setCount, (_) => TextEditingController()));
+        tmpWts.add(List.generate(setCount, (_) => TextEditingController()));
+        tmpRir.add(List.generate(setCount, (_) => TextEditingController()));
+        tmpVel.add(List.generate(setCount, (_) => TextEditingController()));
+        tmpNotes.add(List.generate(setCount, (_) => TextEditingController()));
+      }
+
 
       // Hydrate set-1 from hints (with BW conversion) directly into tmp controllers
       for (var i = 0; i < tmpRows.length; i++) {
@@ -7180,8 +7317,8 @@ class _WorkoutPageState extends State<WorkoutPage>
           'wtsCtr=${_weightControllers.length} rirCtr=${_rirControllers.length} '
           'init=$_isInitialized load=$_isLoadingData didFast=$_didFastPaint');
 
+      _debugRowSetCounts('[FastPaint end]');
       _debugLogCardsForSelectedDate('FastPaint');
-
 
       if (!_firstRowsLogged && _selectedExercisesWithCircuits.isNotEmpty) {
         _firstRowsLogged = true;
@@ -7914,6 +8051,7 @@ class _WorkoutPageState extends State<WorkoutPage>
       }
 
     } finally {
+      _debugRowSetCounts('[LoadExisting end]');
       _tLoadExisting.stop();
       print('👀 [LoadExisting Exit] rows=${_selectedExercisesWithCircuits.length} '
           'sets=${_workoutSets.length} repsCtr=${_repsControllers.length} '
@@ -11430,6 +11568,69 @@ class _WorkoutPageState extends State<WorkoutPage>
 
         print('[WES] Merged ${newOnes.length} exercise(s) into draft');
 
+        print('[WES] Merged ${newOnes.length} exercise(s) into draft');
+
+        // 🔧 FINAL PASS: normalize all rows to their planned set-counts
+        if (mounted) {
+          setState(() {
+            for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+              final name = (_selectedExercisesWithCircuits[i]['name'] as String? ?? '').trim();
+              if (name.isEmpty) continue;
+
+              final int desiredSetCount = _plannedSetCountFor(i);
+              if (desiredSetCount <= 0) continue;
+
+              if (i >= _workoutSets.length ||
+                  i >= _repsControllers.length ||
+                  i >= _weightControllers.length ||
+                  i >= _rirControllers.length ||
+                  i >= _velocityControllers.length ||
+                  i >= _notesControllers.length) {
+                continue;
+              }
+
+              _resizeRow<SetDetails>(
+                _workoutSets,
+                i,
+                desiredSetCount,
+                    () => SetDetails(),
+              );
+              _resizeRow<TextEditingController>(
+                _repsControllers,
+                i,
+                desiredSetCount,
+                    () => TextEditingController(),
+              );
+              _resizeRow<TextEditingController>(
+                _weightControllers,
+                i,
+                desiredSetCount,
+                    () => TextEditingController(),
+              );
+              _resizeRow<TextEditingController>(
+                _rirControllers,
+                i,
+                desiredSetCount,
+                    () => TextEditingController(),
+              );
+              _resizeRow<TextEditingController>(
+                _velocityControllers,
+                i,
+                desiredSetCount,
+                    () => TextEditingController(),
+              );
+              _resizeRow<TextEditingController>(
+                _notesControllers,
+                i,
+                desiredSetCount,
+                    () => TextEditingController(),
+              );
+            }
+          });
+        }
+
+        _hasCompletedInitialMergeForThisDate = true; // ✅ gate further same-session calls
+
 
         _hasCompletedInitialMergeForThisDate = true; // ✅ gate further same-session calls
         // ANCHOR: [WES Merge] Finalize deferred reset repaint if nothing added
@@ -11451,8 +11652,10 @@ class _WorkoutPageState extends State<WorkoutPage>
 
       }
 
+      _debugRowSetCounts('[MergeBB2 end]');
       _tMergeBB2.stop();
       print('⏱️ [WES] _mergeNewBB2ExercisesIntoDraft took ${_tMergeBB2.elapsedMilliseconds}ms');
+
     }
 
   }
