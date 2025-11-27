@@ -4114,6 +4114,9 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
                           row.rirController.text = '';
 
+                          // 🧷 Immediately persist the new exercise selection
+                          saveDayToFirestore(weekIndex, dayIndex);
+
                         });
                       },
                     );
@@ -4287,7 +4290,17 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           localSetState(() {});
         },
 
-        onEditingComplete: () => _getFocusNode(key).unfocus(),
+        onEditingComplete: () async {
+          // First, remove focus from this field
+          _getFocusNode(key).unfocus();
+
+          // Only save for the fields you care about
+          if (fieldKey == "weight" || fieldKey == "reps" || fieldKey == "rir") {
+            print('💾 [BB2 autosave] field="$fieldKey" completed at w$week d$day r$row → saveDayToFirestore');
+            await saveDayToFirestore(week, day);
+          }
+        },
+
       ),
     );
   }
