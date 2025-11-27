@@ -64,6 +64,32 @@ class ExLite {
   }
 }
 
+/// Weekly volume target for a major muscle group.
+class MuscleVolumeTarget {
+  final int mevSets;          // Minimum effective volume
+  final int mrvSets;          // Maximum recoverable volume (age-adjusted)
+  final int targetSets;       // Where this user should roughly land
+  final int minExercises;     // ~MEV in exercise appearances
+  final int targetExercises;  // main planning anchor
+  final int maxExercises;     // ~MRV in exercise appearances
+
+  const MuscleVolumeTarget({
+    required this.mevSets,
+    required this.mrvSets,
+    required this.targetSets,
+    required this.minExercises,
+    required this.targetExercises,
+    required this.maxExercises,
+  });
+
+  @override
+  String toString() {
+    return 'MEV=$mevSets, target=$targetSets, MRV=$mrvSets | '
+        'ex/week: min=$minExercises, target=$targetExercises, max=$maxExercises';
+  }
+}
+
+
 class TemplateGenerator {
   /// Where we expect you to place the bundled library you exported earlier.
   /// You can rename the file; just update this path and pubspec assets.
@@ -116,6 +142,15 @@ class TemplateGenerator {
     // 2) Read knobs from onboarding
     final int weeklyFrequency = _readWeeklyFrequency(onboarding) ?? 4; // default to 4
     final bool isFemale = sexU == 'F' || sexU == 'N';
+
+    final volumeTargets = computeVolumeTargetsFromOnboarding(
+      age: age,
+      onboarding: onboarding,
+    );
+
+    // TEMP: debug only
+    debugPrintVolumeTargets(volumeTargets);
+
 
     // Age-based max circuits per day: >27 → 4 circuits, else default (5).
     _maxCircuitsPerDay = (age != null && age > 27)
@@ -170,36 +205,70 @@ class TemplateGenerator {
     void allocate(String cat) {
       final cap = freqCaps[cat];
       if (cap == null) return;
-      final have = byCat[cat]?.isNotEmpty == true;
-      if (!have) return;
-      final want = cap['max']!;
-      weeklyPlan[cat] = want;
+
+      // Skip categories that aren't available in the library
+      if (!(byCat[cat]?.isNotEmpty ?? false)) return;
+
+      final current = weeklyPlan[cat];
+
+      if (current == null) {
+        // If nothing planned yet, start at the category's min
+        weeklyPlan[cat] = cap['min']!;
+      } else {
+        // Clamp the already-computed plan into [min, max]
+        if (current < cap['min']!) {
+          weeklyPlan[cat] = cap['min']!;
+        } else if (current > cap['max']!) {
+          weeklyPlan[cat] = cap['max']!;
+        }
+      }
     }
+
 
     // Ensure weekly minimums by sex (after we’ve built the first pass of weeklyPlan).
     final categoryEmphasis = _buildCategoryEmphasis(onboarding);
-
 
     _enforceWeeklyMinimums(
       isFemale: isFemale,
       weeklyPlan: weeklyPlan,
       freqCaps: freqCaps,
       byCat: byCat,
-      categoryEmphasis: categoryEmphasis, // 🆕
+      categoryEmphasis: categoryEmphasis,
     );
 
-// 🧭 Emphasis routing (child sliders → category bumps + id targets)
+    // 🧭 Emphasis routing (child sliders → category bumps + id targets)
     final childLevels = _buildChildEmphasis(onboarding);
     final routed = _routeEmphasisToDemand(childLevels: childLevels, byCat: byCat);
     final Map<String,int> _idTargetsRemaining = Map.of(routed.idTargets);
 
-// Lift weekly minima by emphasis bumps (respect caps & availability)
+    // 🔢 New: volume-engine-driven category bumps (MEV/MAV/MRV → ex/week)
+    final volumeCategoryBumps = _volumeCategoryBumpsFromTargets(
+      volumeTargets: volumeTargets,
+      freqCaps: freqCaps,
+    );
+
+    // Lift weekly minima by BOTH:
+    // 1) slider-based bumps (routed.categoryBumps)
+    // 2) volume-engine bumps (volumeCategoryBumps)
+    final mergedCategoryBumps = <String, int>{};
+
+    // Start with slider bumps
+    routed.categoryBumps.forEach((cat, inc) {
+      mergedCategoryBumps[cat] = (mergedCategoryBumps[cat] ?? 0) + inc;
+    });
+
+    // Add volume bumps
+    volumeCategoryBumps.forEach((cat, inc) {
+      mergedCategoryBumps[cat] = (mergedCategoryBumps[cat] ?? 0) + inc;
+    });
+
     _applyEmphasisCategoryBumps(
       weeklyPlan: weeklyPlan,
       freqCaps: freqCaps,
       byCat: byCat,
-      categoryBumps: routed.categoryBumps,
+      categoryBumps: mergedCategoryBumps,
     );
+
 
 
     // Core categories first so we don’t starve them (sex-specific ordering)
@@ -233,26 +302,41 @@ class TemplateGenerator {
       days: days,
       isFemale: isFemale,
       byCat: byCat,
-      allDays: days,                           // 🆕
-      idTargetsRemaining: _idTargetsRemaining, // 🆕
+      allDays: days,
+      idTargetsRemaining: _idTargetsRemaining,
       isHypertrophyMale: isHypertrophyMale,
       requiredHPullPrimaryDays: requiredHPullPrimaryDays,
     );
 
+    // 6.5) Adjust weeklyPlan by subtracting what seeding already placed
+    final Map<String, int> seededCount = {};
+    for (final d in days) {
+      d.countByCategory.forEach((cat, count) {
+        seededCount[cat] = (seededCount[cat] ?? 0) + count;
+      });
+    }
 
-
+    final Map<String, int> remainingPlan = {};
+    weeklyPlan.forEach((cat, planned) {
+      final seeded = seededCount[cat] ?? 0;
+      final remaining = planned - seeded;
+      if (remaining > 0) {
+        remainingPlan[cat] = remaining;
+      }
+    });
 
     // 7) Greedy round-robin placement following pairing & overlap rules.
     // Per-day category cap: "prefer 1, allow 2" → enforce hard cap = 2
     const int perDayCategoryHardCap = 2;
 
-    // Make a working list of categories expanded by their weekly counts.
+    // Make a working list of categories expanded by their *remaining* weekly counts.
     final workList = <String>[];
-    weeklyPlan.forEach((cat, n) {
+    remainingPlan.forEach((cat, n) {
       for (int i = 0; i < n; i++) {
         workList.add(cat);
       }
     });
+
 
     // Rotation pointer
     int cursor = 0;
@@ -479,15 +563,15 @@ class TemplateGenerator {
   static Map<String, Map<String, int>> _capsFor({required bool isFemale}) {
     if (isFemale) {
       return {
-        'Horizontal Press': {'min': 1, 'max': 4},
-        'Vertical Press'  : {'min': 0, 'max': 2},
+        'Horizontal Press': {'min': 1, 'max': 5},
+        'Vertical Press'  : {'min': 0, 'max': 5},
         'Horizontal Pull' : {'min': 1, 'max': 4},
         'Vertical Pull'   : {'min': 1, 'max': 4},
         'Lateral Raise'   : {'min': 1, 'max': 2},
         'Arm Extension'   : {'min': 1, 'max': 4},
         'Arm Curl'        : {'min': 1, 'max': 2},
         'Squat Pattern'   : {'min': 2, 'max': 2},
-        'Leg Extension'   : {'min': 1, 'max': 3},
+        'Leg Extension'   : {'min': 1, 'max': 4},
         'Hip Hinge'       : {'min': 2, 'max': 4}, // max deadlift 2/wk is enforced at choose-time
         'Leg Curl'        : {'min': 2, 'max': 4},
         'Calf Raise'      : {'min': 0, 'max': 5}, // 🆕 allow up to 3x/wk
@@ -497,19 +581,19 @@ class TemplateGenerator {
     }
     // Male/default
     return {
-      'Horizontal Press': {'min': 1, 'max': 4},
-      'Vertical Press'  : {'min': 0, 'max': 2},
-      'Horizontal Pull' : {'min': 1, 'max': 4},
-      'Vertical Pull'   : {'min': 1, 'max': 4},
-      'Lateral Raise'   : {'min': 1, 'max': 4},
-      'Arm Extension'   : {'min': 1, 'max': 4},
-      'Arm Curl'        : {'min': 1, 'max': 4},
-      'Squat Pattern'   : {'min': 2, 'max': 2},
-      'Leg Extension'   : {'min': 1, 'max': 3},
-      'Hip Hinge'       : {'min': 1, 'max': 3}, // max deadlift 2/wk enforced later
-      'Leg Curl'        : {'min': 1, 'max': 3},
+      'Horizontal Press': {'min': 1, 'max': 6},
+      'Vertical Press'  : {'min': 0, 'max': 6},
+      'Horizontal Pull' : {'min': 1, 'max': 6},
+      'Vertical Pull'   : {'min': 1, 'max': 6},
+      'Lateral Raise'   : {'min': 1, 'max': 6},
+      'Arm Extension'   : {'min': 1, 'max': 6},
+      'Arm Curl'        : {'min': 1, 'max': 6},
+      'Squat Pattern'   : {'min': 2, 'max': 4},
+      'Leg Extension'   : {'min': 1, 'max': 4},
+      'Hip Hinge'       : {'min': 1, 'max': 4}, // max deadlift 2/wk enforced later
+      'Leg Curl'        : {'min': 1, 'max': 4},
       'Calf Raise'      : {'min': 1, 'max': 5}, // 🆕 allow up to 3x/wk
-      'Core'            : {'min': 1, 'max': 4},
+      'Core'            : {'min': 1, 'max': 5},
     };
   }
 
@@ -1584,6 +1668,82 @@ class TemplateGenerator {
     return (categoryBumps: cat, idTargets: ids);
   }
 
+  // Map your exercise categories to the muscle keys used by the volume engine.
+  static String? _muscleKeyForCategory(String category) {
+    final c = _normCat(category);
+    switch (c) {
+      case 'Horizontal Press':
+        return 'Chest';
+      case 'Vertical Press':
+      case 'Lateral Raise':
+        return 'Shoulders';
+      case 'Horizontal Pull':
+      case 'Vertical Pull':
+        return 'Back';
+      case 'Squat Pattern':
+      case 'Leg Extension':
+        return 'Quads';
+      case 'Leg Curl':
+        return 'Hamstrings';
+      case 'Hip Hinge':
+      // Could also be 'Glutes'; both get similar volume in our model.
+        return 'Hamstrings';
+      case 'Calf Raise':
+        return 'Calves';
+      case 'Core':
+        return 'Abs';
+      case 'Arm Curl':
+        return 'Biceps';
+      case 'Arm Extension':
+        return 'Triceps';
+      case 'Hip Abduction':
+        return 'Glutes';
+      default:
+        return null;
+    }
+  }
+
+  // Convert per-muscle volume targets into per-category "extra weekly slots".
+  // We look at MEV (min) vs targetExercises, and ask:
+  // "How many extra appearances above the min should this category get?"
+  static Map<String, int> _volumeCategoryBumpsFromTargets({
+    required Map<String, MuscleVolumeTarget> volumeTargets,
+    required Map<String, Map<String,int>> freqCaps,
+  }) {
+    final bumps = <String, int>{};
+
+    void bumpFor(String cat) {
+      final muscleKey = _muscleKeyForCategory(cat);
+      if (muscleKey == null) return;
+
+      final vt = volumeTargets[muscleKey];
+      if (vt == null) return;
+
+      final caps = freqCaps[cat];
+      if (caps == null) return;
+
+      final minCap = caps['min'] ?? 0;
+      final maxCap = caps['max'] ?? 0;
+
+      if (maxCap <= minCap) return; // fixed-cap categories (e.g. Squat Pattern 2x/wk) stay as-is.
+
+      // We want to move from minCap towards vt.targetExercises, but never above cap['max'].
+      final int desiredCount = vt.targetExercises.clamp(minCap, maxCap);
+      final int extraOverMin = desiredCount - minCap;
+      if (extraOverMin <= 0) return;
+
+      // For now we use extraOverMin as the bump (can weight later if needed).
+      bumps[cat] = (bumps[cat] ?? 0) + extraOverMin;
+    }
+
+    for (final cat in freqCaps.keys) {
+      bumpFor(cat);
+    }
+
+    return bumps;
+  }
+
+
 // Lift weeklyPlan mins using bumps (caps & availability respected)
   static void _applyEmphasisCategoryBumps({
     required Map<String, int> weeklyPlan,
@@ -1601,6 +1761,175 @@ class TemplateGenerator {
       weeklyPlan[cat] = desired;
     });
   }
+
+  /// Compute weekly volume targets per muscle group from onboarding.
+  ///
+  /// - Uses unified base: MEV 12, MAV ~18-20, MRV 26 (per muscle, per week).
+  /// - Adjusts MEV/MRV down a bit for older ages.
+  /// - Blends trainingEffort (1..4) and emphasis (0..3) into a 0..1 weight
+  ///   to choose a target between MEV and MRV.
+  /// - Returns sets + approximate exercise frequencies per week.
+  static Map<String, MuscleVolumeTarget> computeVolumeTargetsFromOnboarding({
+    required int? age,
+    required Map<String, dynamic> onboarding,
+  }) {
+    final int effRaw = (onboarding['trainingEffort'] is int)
+        ? onboarding['trainingEffort'] as int
+        : 3;
+    final int trainingEffort = effRaw.clamp(1, 4);
+
+    final Map<String, dynamic> bodyFocusLevelRaw =
+        (onboarding['bodyFocusLevel'] as Map<String, dynamic>?) ?? const {};
+    final Map<String, dynamic> bodyFocusChildrenRaw =
+        (onboarding['bodyFocusChildren'] as Map<String, dynamic>?) ?? const {};
+
+    // Age handling: null → treat as 27 (young bucket).
+    final int userAge = age ?? 27;
+
+    // Age → base MEV/MRV sets (same for all muscles, only age adjusts)
+    int baseMevSets;
+    int baseMrvSets;
+
+    if (userAge <= 27) {
+      baseMevSets = 12;
+      baseMrvSets = 26;
+    } else if (userAge <= 37) {
+      baseMevSets = 12;
+      baseMrvSets = 26;
+    } else if (userAge <= 47) {
+      baseMevSets = 10;
+      baseMrvSets = 24;
+    } else if (userAge <= 60) {
+      baseMevSets = 9;
+      baseMrvSets = 22;
+    } else {
+      baseMevSets = 8;
+      baseMrvSets = 20;
+    }
+
+    // Age → average sets per exercise (for converting sets → exercise count)
+    // (We only use this for frequency estimation, not rigid constraints.)
+    double setsPerExercise;
+    if (userAge <= 27) {
+      setsPerExercise = 4.0;   // younger: assume 4 sets/ex (ceiling 5)
+    } else if (userAge <= 37) {
+      setsPerExercise = 3.5;   // transitional
+    } else {
+      setsPerExercise = 3.0;   // older buckets
+    }
+
+    // Helper to get emphasis level (0..3) for a broad region
+    int _readRegionLevel(String region) {
+      final raw = bodyFocusLevelRaw[region];
+      if (raw is int) return raw.clamp(0, 3);
+      if (raw is num) return raw.toInt().clamp(0, 3);
+      if (raw is String) {
+        final p = int.tryParse(raw);
+        if (p != null) return p.clamp(0, 3);
+      }
+      return 0;
+    }
+
+    // Helper to read child emphasis if present, fallback to region
+    int _readChildLevel(String parent, String childKey) {
+      final parentMap = bodyFocusChildrenRaw[parent];
+      if (parentMap is Map) {
+        final raw = parentMap[childKey];
+        if (raw is int) return raw.clamp(0, 3);
+        if (raw is num) return raw.toInt().clamp(0, 3);
+        if (raw is String) {
+          final p = int.tryParse(raw);
+          if (p != null) return p.clamp(0, 3);
+        }
+      }
+      // fallback to parent region level
+      return _readRegionLevel(parent);
+    }
+
+    // Build per-muscle emphasis (0..3).
+    // These keys are *muscles*, not categories, on purpose.
+    final Map<String, int> emphasisByMuscle = <String, int>{
+      // Big groups
+      'Chest'      : _readRegionLevel('Chest'),
+      'Back'       : _readRegionLevel('Back'),
+      'Quads'      : _readRegionLevel('Quads'),
+      'Hamstrings' : _readRegionLevel('Hamstrings'),
+      'Glutes'     : _readRegionLevel('Glutes'),
+      'Shoulders'  : _readRegionLevel('Shoulders'),
+      'Calves'     : _readRegionLevel('Calves'),
+      'Abs'        : _readRegionLevel('Abs'),
+
+      // Arms – try child first
+      'Biceps'     : _readChildLevel('Arms', 'Biceps'),
+      'Triceps'    : _readChildLevel('Arms', 'Triceps'),
+      'Forearms'   : _readChildLevel('Arms', 'Forearms'),
+    };
+
+    // Training effort (1..4) → 0..1
+    final double effortNorm = (trainingEffort - 1) / 3.0; // 0.0 .. 1.0
+
+    // Blend effort + emphasis → 0..1 weight.
+    // We weight effort slightly more heavily than emphasis.
+    double _computeWeight(int emphasisLevel) {
+      final double empNorm = (emphasisLevel.clamp(0, 3)) / 3.0; // 0..1
+      return (0.6 * effortNorm + 0.4 * empNorm).clamp(0.0, 1.0);
+    }
+
+    // Core builder per muscle
+    MuscleVolumeTarget _buildForMuscle(String muscleKey) {
+      final int emp = emphasisByMuscle[muscleKey] ?? 0;
+
+      final double w = _computeWeight(emp); // 0..1 between MEV..MRV
+
+      // Choose targetSets between MEV and MRV based on weight.
+      final double tSetsDouble =
+          baseMevSets + w * (baseMrvSets - baseMevSets);
+      int targetSets = tSetsDouble.round().clamp(baseMevSets, baseMrvSets);
+
+      final int mevSets = baseMevSets;
+      final int mrvSets = baseMrvSets;
+
+      // Convert sets → exercise counts.
+      int minExercises = (mevSets / setsPerExercise).ceil();
+      int targetExercises = (targetSets / setsPerExercise).round();
+      int maxExercises = (mrvSets / setsPerExercise).floor();
+
+      // Always ensure at least 1 exercise/week if any volume at all.
+      if (targetExercises == 0 && targetSets > 0) targetExercises = 1;
+      if (maxExercises < targetExercises) {
+        maxExercises = targetExercises;
+      }
+
+      return MuscleVolumeTarget(
+        mevSets: mevSets,
+        mrvSets: mrvSets,
+        targetSets: targetSets,
+        minExercises: minExercises,
+        targetExercises: targetExercises,
+        maxExercises: maxExercises,
+      );
+    }
+
+    // Final map: per-muscle targets
+    final Map<String, MuscleVolumeTarget> out = <String, MuscleVolumeTarget>{};
+
+    for (final muscle in emphasisByMuscle.keys) {
+      out[muscle] = _buildForMuscle(muscle);
+    }
+
+    return out;
+  }
+
+  static void debugPrintVolumeTargets(
+      Map<String, MuscleVolumeTarget> vt,
+      ) {
+    debugPrint('──────────── 📊 VOLUME ENGINE OUTPUT ────────────');
+    vt.forEach((muscle, target) {
+      debugPrint('  • $muscle → $target');
+    });
+    debugPrint('────────────────────────────────────────────────');
+  }
+
 
 // ───────────────── Per-day "Squat" name cap ─────────────────
 // We allow only one exercise *with "squat" in its name* per day,
