@@ -186,8 +186,6 @@ class TemplateGenerator {
       final cap = freqCaps[k]!;
       final reducedMax = (cap['max']! - reduceSteps).clamp(cap['min']!, cap['max']!);
       cap['max'] = reducedMax;
-      // rules: keep Squat Pattern min 2 regardless
-      if (k == 'Squat Pattern' && cap['min']! < 2) cap['min'] = 2;
     }
 
     // 4) Build a per-category pick list from the library (no duplicates)
@@ -239,6 +237,7 @@ class TemplateGenerator {
 
     // 🧭 Emphasis routing (child sliders → category bumps + id targets)
     final childLevels = _buildChildEmphasis(onboarding);
+    debugPrint('🎯 childLevels = $childLevels');
     final routed = _routeEmphasisToDemand(childLevels: childLevels, byCat: byCat);
     final Map<String,int> _idTargetsRemaining = Map.of(routed.idTargets);
 
@@ -246,7 +245,9 @@ class TemplateGenerator {
     final volumeCategoryBumps = _volumeCategoryBumpsFromTargets(
       volumeTargets: volumeTargets,
       freqCaps: freqCaps,
+      childLevels: childLevels, // 🔍 so we can skip zero-emphasis muscles
     );
+
 
     // Lift weekly minima by BOTH:
     // 1) slider-based bumps (routed.categoryBumps)
@@ -559,16 +560,30 @@ class TemplateGenerator {
 
 // Map categories to emphasis levels (0..3). Start with Calves only.
   static Map<String, int> _buildCategoryEmphasis(Map<String, dynamic> onb) {
-    // Extend here later: e.g., 'Arm Curl' from 'biceps', 'Arm Extension' from 'triceps', etc.
     return <String, int>{
-      'Calf Raise': _readEmphasisLevel(onb, 'calves'),
-      'Arm Curl': _readEmphasisLevel(onb, 'biceps'),
-      'Arm Extension': _readEmphasisLevel(onb, 'triceps'),
+      // Existing
+      'Calf Raise'      : _readEmphasisLevel(onb, 'calves'),
+      'Arm Curl'        : _readEmphasisLevel(onb, 'biceps'),
+      'Arm Extension'   : _readEmphasisLevel(onb, 'triceps'),
       'Horizontal Press': _readEmphasisLevel(onb, 'chest'),
-      'Vertical Pull': _readEmphasisLevel(onb, 'lats'),
+      'Vertical Pull'   : _readEmphasisLevel(onb, 'lats'),
 
+      // 🆕 Quads → Squat Pattern & Leg Extension
+      'Squat Pattern'   : _readEmphasisLevel(onb, 'quads'),
+      'Leg Extension'   : _readEmphasisLevel(onb, 'quads'),
+
+      // 🆕 Hamstrings → Hip Hinge & Leg Curl
+      'Hip Hinge'       : _readEmphasisLevel(onb, 'hamstrings'),
+      'Leg Curl'        : _readEmphasisLevel(onb, 'hamstrings'),
+
+      // 🆕 Abs → Core
+      'Core'            : _readEmphasisLevel(onb, 'abs'),
+
+      // Optional: Glutes → Hip Abduction / Hip Hinge / Squat Pattern if you want
+      // 'Hip Abduction' : _readEmphasisLevel(onb, 'glutes'),
     };
   }
+
 
   // Max emphasis-driven minimums per category (default ceiling = 3)
   static const Map<String, int> _emphasisMinCeilByCat = {
@@ -585,29 +600,29 @@ class TemplateGenerator {
         'Horizontal Press': {'min': 1, 'max': 5},
         'Vertical Press'  : {'min': 0, 'max': 5},
         'Horizontal Pull' : {'min': 1, 'max': 4},
-        'Vertical Pull'   : {'min': 1, 'max': 4},
-        'Lateral Raise'   : {'min': 1, 'max': 2},
+        'Vertical Pull'   : {'min': 1, 'max': 6},
+        'Lateral Raise'   : {'min': 0, 'max': 4},
         'Arm Extension'   : {'min': 1, 'max': 4},
         'Arm Curl'        : {'min': 1, 'max': 2},
-        'Squat Pattern'   : {'min': 2, 'max': 2},
+        'Squat Pattern'   : {'min': 2, 'max': 6},
         'Leg Extension'   : {'min': 1, 'max': 4},
-        'Hip Hinge'       : {'min': 2, 'max': 4}, // max deadlift 2/wk is enforced at choose-time
-        'Leg Curl'        : {'min': 2, 'max': 4},
+        'Hip Hinge'       : {'min': 1, 'max': 6}, // max deadlift 2/wk is enforced at choose-time
+        'Leg Curl'        : {'min': 2, 'max': 5},
         'Calf Raise'      : {'min': 0, 'max': 5}, // 🆕 allow up to 3x/wk
-        'Hip Abduction'   : {'min': 0, 'max': 5}, // 🆕 allow up to 3x/wk
+        'Hip Abduction'   : {'min': 1, 'max': 5}, // 🆕 allow up to 3x/wk
         'Core'            : {'min': 1, 'max': 7}, // we’ll cap by per-day pairing/circuits anyway
       };
     }
     // Male/default
     return {
       'Horizontal Press': {'min': 1, 'max': 6},
-      'Vertical Press'  : {'min': 0, 'max': 6},
+      'Vertical Press'  : {'min': 1, 'max': 6},
       'Horizontal Pull' : {'min': 1, 'max': 6},
       'Vertical Pull'   : {'min': 1, 'max': 6},
       'Lateral Raise'   : {'min': 1, 'max': 6},
       'Arm Extension'   : {'min': 1, 'max': 6},
       'Arm Curl'        : {'min': 1, 'max': 6},
-      'Squat Pattern'   : {'min': 2, 'max': 4},
+      'Squat Pattern'   : {'min': 1, 'max': 4},
       'Leg Extension'   : {'min': 1, 'max': 4},
       'Hip Hinge'       : {'min': 1, 'max': 4}, // max deadlift 2/wk enforced later
       'Leg Curl'        : {'min': 1, 'max': 4},
@@ -662,74 +677,74 @@ class TemplateGenerator {
     required Map<String, int> weeklyPlan,
     required Map<String, Map<String, int>> freqCaps,
     required Map<String, List<ExLite>> byCat,
-    Map<String, int> categoryEmphasis = const {}, // 🆕 emphasis per category (0..3)
+    Map<String, int> categoryEmphasis = const {}, // emphasis 0..3
   }) {
 
-    void bump(String cat, int min) {
-      final cap = freqCaps[cat];
-      if (cap == null) return;
-      if ((byCat[cat]?.isEmpty ?? true)) return;
-      final current = weeklyPlan[cat] ?? 0;
-      final desired = current < min ? min : current;
-      weeklyPlan[cat] = desired.clamp(cap['min']!, cap['max']!);
+    // Helper: bump only if emphasis > 0
+    void bumpIfEmphasised(String cat, int forcedMin) {
+      final emph = categoryEmphasis[cat] ?? 0;
+
+      if (emph > 0) {
+        final caps = freqCaps[cat];
+        if (caps == null) return;
+
+        final cappedValue = forcedMin.clamp(caps['min']!, caps['max']!);
+        if (weeklyPlan[cat] == null || weeklyPlan[cat]! < cappedValue) {
+          weeklyPlan[cat] = cappedValue;
+        }
+      }
+      // If emph == 0 → skip → capsFor()[cat]['min'] becomes the true min.
     }
 
-
-    // Helper: bump with emphasis (min = clamp(baseMin + level, baseMin..ceiling)), then respect caps & availability
-    void bumpWithEmphasis(String cat, int baseMin) {
-      final cap = freqCaps[cat];
-      if (cap == null) return;
-      if ((byCat[cat]?.isEmpty ?? true)) return;
-
-      final level   = (categoryEmphasis[cat] ?? 0).clamp(0, 3); // 0..3 from onboarding
-      final ceiling = _emphasisMinCeilByCat[cat] ?? 3;          // default emphasis ceiling = 3
-      final boosted = (baseMin + level).clamp(baseMin, ceiling);
-
-      final current = weeklyPlan[cat] ?? 0;
-      final desired = current < boosted ? boosted : current;
-
-      weeklyPlan[cat] = desired.clamp(cap['min']!, cap['max']!);
+    // Alias for clarity
+    void bumpWithEmphasis(String cat, int forcedMin) {
+      bumpIfEmphasised(cat, forcedMin);
     }
 
-
-
+    // ────────────────────────────────────────────────────────────────
+    //                            FEMALE
+    // ────────────────────────────────────────────────────────────────
     if (isFemale) {
-      // Female weekly minimums (existing fixed mins)
-      bump('Squat Pattern', 2);
-      bump('Hip Hinge', 1);
-      bump('Leg Curl', 2);
-      bump('Core', 2);
+      bumpIfEmphasised('Squat Pattern', 2);
+      bumpIfEmphasised('Hip Hinge', 1);
+      bumpIfEmphasised('Leg Curl', 2);
+      bumpIfEmphasised('Leg Extension', 0);
+      bumpIfEmphasised('Core', 2);
 
-// Both sexes (now emphasis-aware)
-      bumpWithEmphasis('Calf Raise', 1);     // base 1 → +level, ceiling 3
-      bumpWithEmphasis('Arm Curl', 1);       // base 1 → +level, ceiling 3
-      bumpWithEmphasis('Arm Extension', 1);  // base 1 → +level, ceiling 3
-      bumpWithEmphasis('Horizontal Press', 0); // female base 0 → +level, chest ceiling 4
-      bumpWithEmphasis('Vertical Pull', 0);    // base 0 → +level, ceiling 3
+      bumpWithEmphasis('Horizontal Press', 0);
+      bumpWithEmphasis('Vertical Press', 0);
 
-// Female-specific fixed minimums
-      bump('Hip Abduction', 2);
+      bumpWithEmphasis('Horizontal Pull', 0);
+      bumpWithEmphasis('Vertical Pull', 0);
 
-    } else {
-      // Male weekly minimums (existing)
-      // Male weekly minimums (fixed mins)
-      bump('Squat Pattern', 2);
-      bump('Hip Hinge', 1);
-      bump('Core', 2);
-
-// Both sexes (now emphasis-aware)
-      bumpWithEmphasis('Calf Raise', 1);     // base 1 → +level, ceiling 3
-      bumpWithEmphasis('Arm Curl', 1);       // base 1 → +level, ceiling 3
-      bumpWithEmphasis('Arm Extension', 1);  // base 1 → +level, ceiling 3
-
-// Male-specific: keep base mins but allow emphasis to push higher (within ceilings)
-      bumpWithEmphasis('Horizontal Press', 2); // base 2 → +level, chest ceiling 4
-      bumpWithEmphasis('Horizontal Pull', 1);  // base 1 → +level, ceiling 3
-      bumpWithEmphasis('Vertical Pull', 1);    // base 1 → +level, ceiling 3
+      bumpWithEmphasis('Lateral Raise', 0);
+      bumpWithEmphasis('Arm Curl', 0);
+      bumpWithEmphasis('Arm Extension', 0);
     }
 
+    // ────────────────────────────────────────────────────────────────
+    //                             MALE
+    // ────────────────────────────────────────────────────────────────
+    else {
+      bumpIfEmphasised('Squat Pattern', 2);
+      bumpIfEmphasised('Hip Hinge', 1);
+      bumpIfEmphasised('Leg Curl', 0);
+      bumpIfEmphasised('Leg Extension', 0);
 
+      bumpIfEmphasised('Core', 2);
+
+      bumpIfEmphasised('Horizontal Press', 2);
+      bumpWithEmphasis('Vertical Press', 0);
+
+      bumpWithEmphasis('Horizontal Pull', 1);
+      bumpWithEmphasis('Vertical Pull', 1);
+
+      bumpWithEmphasis('Lateral Raise', 0);
+      bumpWithEmphasis('Arm Curl', 0);
+      bumpWithEmphasis('Arm Extension', 0);
+    }
   }
+
 
   // ── Daily “minimum per day” preference sets (soft/first-pass seeding) ─────
   // Each entry is a list of alternatives; we’ll try them in order.
@@ -1547,46 +1562,89 @@ class TemplateGenerator {
 
 // Read child-muscle slider level. Checks onboarding.emphasis[key] first, then top-level key.
   static int _readChildLevel(Map<String, dynamic> onb, String key) {
-    final raw = (onb['emphasis'] is Map) ? (onb['emphasis'][key]) : onb[key];
-    if (raw is int) return raw.clamp(0, 3);
-    if (raw is double) return raw.round().clamp(0, 3);
-    if (raw is String) {
-      final p = int.tryParse(raw);
-      if (p != null) return p.clamp(0, 3);
+    // Normalise lookup
+    final keyNorm = key.toString().toLowerCase().trim();
+
+    // 1) Try bodyFocusChildren first
+    final childrenRaw = onb['bodyFocusChildren'];
+    if (childrenRaw is Map<String, dynamic>) {
+      for (final parentEntry in childrenRaw.entries) {
+        final kids = parentEntry.value;
+        if (kids is Map<String, dynamic>) {
+          for (final childEntry in kids.entries) {
+            final childName = childEntry.key.toString().toLowerCase().trim();
+            if (childName == keyNorm) {
+              final v = childEntry.value;
+              if (v is int) return v.clamp(0, 3);
+              if (v is String) {
+                final p = int.tryParse(v);
+                if (p != null) return p.clamp(0, 3);
+              }
+            }
+          }
+        }
+      }
     }
+
+    // 2) Fallback to bodyFocusLevel (for big muscle groups)
+    final parentRaw = onb['bodyFocusLevel'];
+    if (parentRaw is Map<String, dynamic>) {
+      const parentKeyMap = {
+        'chest': 'Chest',
+        'core': 'Abs',
+        'abs': 'Abs',
+        'hamstrings': 'Hamstrings',
+        'quads': 'Quads',
+        'calves': 'Calves',
+      };
+
+      final parentKey = parentKeyMap[keyNorm];
+      if (parentKey != null) {
+        final v = parentRaw[parentKey];
+        if (v is int) return v.clamp(0, 3);
+        if (v is String) {
+          final p = int.tryParse(v);
+          if (p != null) return p.clamp(0, 3);
+        }
+      }
+    }
+
+    // Default
     return 0;
   }
+
 
 // Child muscle → emphasis level (0–3).
   static Map<String, int> _buildChildEmphasis(Map<String, dynamic> onb) {
     return <String, int>{
       // Back
-      'Lats': _readChildLevel(onb, 'lats'),
-      'Mid traps & rear delts': _readChildLevel(onb, 'upper_back'),
-      'Lower back 🎄': _readChildLevel(onb, 'lower_back'),
+      'Lats'                 : _readChildLevel(onb, 'Lats'),
+      'Mid traps & rear delts': _readChildLevel(onb, 'Mid traps & rear delts'),
+      'Lower back 🎄'        : _readChildLevel(onb, 'Lower back 🎄'),
 
       // Delts / traps
-      'Anterior delts': _readChildLevel(onb, 'anterior_delts'),
-      'Lateral delts': _readChildLevel(onb, 'lateral_delts'),
-      'Upper traps': _readChildLevel(onb, 'upper_traps'),
+      'Anterior delts'       : _readChildLevel(onb, 'Anterior delts'),
+      'Lateral delts'        : _readChildLevel(onb, 'Lateral delts'),
+      'Upper traps'          : _readChildLevel(onb, 'Upper traps'),
 
       // Arms
-      'Biceps': _readChildLevel(onb, 'biceps'),
-      'Triceps': _readChildLevel(onb, 'triceps'),
-      'Forearms': _readChildLevel(onb, 'forearms'),
+      'Biceps'               : _readChildLevel(onb, 'Biceps'),
+      'Triceps'              : _readChildLevel(onb, 'Triceps'),
+      'Forearms'             : _readChildLevel(onb, 'Forearms'),
 
       // Glutes
-      'Glute Maximus': _readChildLevel(onb, 'glute_max'),
-      'Glute Medius': _readChildLevel(onb, 'glute_medius'),
+      'Glute Maximus'        : _readChildLevel(onb, 'Glute Maximus'),
+      'Glute Medius'         : _readChildLevel(onb, 'Glute Medius'),
 
-      // Big groups
-      'Chest': _readChildLevel(onb, 'chest'),
-      'Abs': _readChildLevel(onb, 'core'),
-      'Hamstrings': _readChildLevel(onb, 'hamstrings'),
-      'Quads': _readChildLevel(onb, 'quads'),
-      'Calves': _readChildLevel(onb, 'calves'),
+      // Big groups (fall back to bodyFocusLevel)
+      'Chest'                : _readChildLevel(onb, 'Chest'),
+      'Abs'                  : _readChildLevel(onb, 'Abs'),
+      'Hamstrings'           : _readChildLevel(onb, 'Hamstrings'),
+      'Quads'                : _readChildLevel(onb, 'Quads'),
+      'Calves'               : _readChildLevel(onb, 'Calves'),
     };
   }
+
 
 // Special exercise IDs (fill with your real IDs later if you want extra bias)
   static const String _idSupinatedLatPulldown = '1XOIXxeLFhgmgjZS9Cyq';
@@ -1767,17 +1825,24 @@ class TemplateGenerator {
   }
 
   // Convert per-muscle volume targets into per-category "extra weekly slots".
-  // We look at MEV (min) vs targetExercises, and ask:
-  // "How many extra appearances above the min should this category get?"
+// We look at MEV (min) vs targetExercises, and ask:
+// "How many extra appearances above the min should this category get?"
   static Map<String, int> _volumeCategoryBumpsFromTargets({
     required Map<String, MuscleVolumeTarget> volumeTargets,
     required Map<String, Map<String,int>> freqCaps,
+    required Map<String, int> childLevels,  // 🔍 emphasis 0..3 per muscle (e.g. 'Quads', 'Chest')
   }) {
     final bumps = <String, int>{};
 
     void bumpFor(String cat) {
       final muscleKey = _muscleKeyForCategory(cat);
       if (muscleKey == null) return;
+
+      // 🛑 If this muscle has zero emphasis, do NOT add volume bumps.
+      final muscleLevel = childLevels[muscleKey] ?? 0;
+      if (muscleLevel == 0) {
+        return; // category stays at capsFor() + seeding only
+      }
 
       final vt = volumeTargets[muscleKey];
       if (vt == null) return;
@@ -1788,7 +1853,7 @@ class TemplateGenerator {
       final minCap = caps['min'] ?? 0;
       final maxCap = caps['max'] ?? 0;
 
-      if (maxCap <= minCap) return; // fixed-cap categories (e.g. Squat Pattern 2x/wk) stay as-is.
+      if (maxCap <= minCap) return; // fixed-cap categories stay as-is.
 
       // We want to move from minCap towards vt.targetExercises, but never above cap['max'].
       final int desiredCount = vt.targetExercises.clamp(minCap, maxCap);
@@ -1805,6 +1870,7 @@ class TemplateGenerator {
 
     return bumps;
   }
+
 
 
 // Lift weeklyPlan mins using bumps (caps & availability respected)

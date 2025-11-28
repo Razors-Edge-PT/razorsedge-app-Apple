@@ -1432,18 +1432,23 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       if (_childFocusLevel.isNotEmpty) {
         final filtered = <String, Map<String, int>>{};
         _childFocusLevel.forEach((parent, kidsMap) {
-          final pruned = Map.fromEntries(
-              kidsMap.entries.where((e) => (e.value as int) > 0)
+          // Keep all kids, including 0
+          final copy = Map<String, int>.fromEntries(
+            kidsMap.entries.map((e) => MapEntry(e.key, e.value as int)),
           );
-          if (pruned.isNotEmpty) filtered[parent] = pruned;
+          if (copy.isNotEmpty) {
+            filtered[parent] = copy;
+          }
         });
 
         if (filtered.isNotEmpty) {
           await onbRef.set({
-            'bodyFocusChildren': filtered, // parent → (child → 1..3)
+            'bodyFocusChildren': filtered,
           }, SetOptions(merge: true));
         }
       }
+
+
 
 
 
@@ -2385,24 +2390,20 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                                   onParentCycle: () {
                                     final next = (lvl + 1) % 4; // 0→1→2→3→0
                                     setState(() {
-                                      if (next == 0) {
-                                        _bodyFocusLevel.remove(p);
-                                      } else {
-                                        _bodyFocusLevel[p] = next;
+                                      // ✅ Always store the value, even when it's 0
+                                      _bodyFocusLevel[p] = next;
+
+                                      // ✅ Keep children in sync when "More specific" is ON
+                                      if (_moreSpecific && _subGroups.containsKey(p)) {
+                                        final kids = _subGroups[p]!;
+                                        _childFocusLevel[p] ??= {};
+                                        for (final k in kids) {
+                                          _childFocusLevel[p]![k] = next; // children follow parent, including 0
+                                        }
                                       }
                                     });
-
-                                    // Keep children in sync when "More specific" is ON
-                                    if (_moreSpecific && _subGroups.containsKey(p)) {
-                                      final kids = _subGroups[p]!;
-                                      if ((_bodyFocusLevel[p] ?? 0) == 0) {
-                                        _childFocusLevel.remove(p);
-                                      } else {
-                                        final pLvlNow = _bodyFocusLevel[p]!;
-                                        _childFocusLevel[p] = {for (final k in kids) k: pLvlNow};
-                                      }
-                                    }
                                   },
+
                                   moreSpecific: _moreSpecific,
                                   subGroups: _subGroups[p] ?? const [],
                                   getChildLevel: (child) => _childFocusLevel[p]?[child] ?? 0,
