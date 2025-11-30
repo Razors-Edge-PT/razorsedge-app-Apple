@@ -1345,43 +1345,98 @@ class TemplateGenerator {
 
   /// Decide circuit index (0..N) for a chosen exercise to minimize overlap.
   static int _placeIntoCircuit(_DayPlan day, ExLite ex) {
-    // Try to put it in the BEST existing circuit (by score), else start new one.
+    // 🧩 Normalised category + "is allowed in 3rd circuit?" flag
+    final String catNorm = _normCat(ex.category);
+    final bool isThirdCircuitIsolationAllowed =
+        catNorm == 'Arm Curl' ||
+            catNorm == 'Arm Extension' ||
+            catNorm == 'Leg Curl' ||
+            catNorm == 'Leg Extension' ||
+            catNorm == 'Hip Adduction' ||
+            catNorm == 'Hip Abduction' ||
+            catNorm == 'Calf Raise' ||
+            catNorm == 'Lateral Raise' ||
+            // Plank → Core category, but name must contain "plank"
+            (catNorm == 'Core' && ex.name.toLowerCase().contains('plank'));
 
+    // Try to put it in the BEST existing circuit (by score), else start new one.
     int bestIdx = -1;
     int bestScore = -0x3fffffff;
     int bestLen = 1 << 30;
 
     // Evaluate all circuits we CAN join, pick the one with the highest score.
     for (int i = 0; i < day.circuits.length; i++) {
-      if (_canJoin(day, i, ex)) {
-        final s = _pairingScoreFor(day, i, ex);
-        // Prefer higher score; break ties by shorter circuit (keeps 2–3 ideal size)
-        if (s > bestScore || (s == bestScore && day.circuits[i].length < bestLen)) {
-          bestScore = s;
-          bestLen = day.circuits[i].length;
-          bestIdx = i;
-        }
+      // 🚫 3rd circuit (index 2) must be isolation-only
+      if (i == 2 && !isThirdCircuitIsolationAllowed) {
+        continue;
+      }
+
+      if (!_canJoin(day, i, ex)) {
+        continue;
+      }
+
+      final s = _pairingScoreFor(day, i, ex);
+      // Prefer higher score; break ties by shorter circuit (keeps 2–3 ideal size)
+      if (s > bestScore || (s == bestScore && day.circuits[i].length < bestLen)) {
+        bestScore = s;
+        bestLen = day.circuits[i].length;
+        bestIdx = i;
       }
     }
 
-    if (bestIdx != -1) return bestIdx;
-
-    if (day.circuits.length < _maxCircuitsPerDay) {
-      day.circuits.add(<_Placed>[]);
-      return day.circuits.length - 1;
+    // ✅ Found a legal existing circuit
+    if (bestIdx != -1) {
+      return bestIdx;
     }
 
+    // 🆕 Try to create a new circuit (respecting the 3rd-circuit isolation rule)
+    if (day.circuits.length < _maxCircuitsPerDay) {
+      final int nextIdx = day.circuits.length;
 
-    // As a last resort, drop into the smallest load circuit.
-    int fallback = 0, minLen = 1 << 30;
+      // If we’d be creating the 3rd circuit (index 2), only allow for isolation types
+      if (nextIdx == 2 && !isThirdCircuitIsolationAllowed) {
+        // Skip creating circuit 2 for non-isolation; we’ll try fallback below.
+      } else {
+        day.circuits.add(<_Placed>[]);
+        return day.circuits.length - 1;
+      }
+    }
+
+    // 🛟 Pairing-safe fallback: smallest-load circuit we can LEGALLY join.
+    int fallback = -1;
+    int minLen = 1 << 30;
     for (int i = 0; i < day.circuits.length; i++) {
+      // Still enforce the 3rd-circuit isolation rule here.
+      if (i == 2 && !isThirdCircuitIsolationAllowed) {
+        continue;
+      }
+      if (!_canJoin(day, i, ex)) {
+        continue;
+      }
+
       if (day.circuits[i].length < minLen) {
         minLen = day.circuits[i].length;
         fallback = i;
       }
     }
-    return fallback;
+
+    if (fallback != -1) {
+      return fallback; // ✅ still pairing-legal
+    }
+
+    // Extreme edge case:
+    // - No existing circuit can legally take this exercise
+    // - We also weren't allowed to create the 3rd circuit for it
+    // In this situation, relax the "3rd circuit isolation" to preserve pairing rules.
+    if (day.circuits.length < _maxCircuitsPerDay) {
+      day.circuits.add(<_Placed>[]);
+      return day.circuits.length - 1; // new, empty circuit → always legal
+    }
+
+    // Final guard (should basically never be hit in practice).
+    return 0;
   }
+
 
 
   static bool _canJoin(_DayPlan day, int circuitIdx, ExLite ex) {
