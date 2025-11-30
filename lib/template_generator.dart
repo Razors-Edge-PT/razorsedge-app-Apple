@@ -376,6 +376,19 @@ class TemplateGenerator {
         final usedThisCat = day.countByCategory[cat] ?? 0;
         if (usedThisCat >= perDayCategoryHardCap) continue;
 
+        // 🆕 RULE: Maximum 2 pressing movements per day (HP + VP combined)
+        const pressCats = {'Horizontal Press', 'Vertical Press'};
+        if (pressCats.contains(cat)) {
+          final int pressesToday =
+              (day.countByCategory['Horizontal Press'] ?? 0) +
+                  (day.countByCategory['Vertical Press'] ?? 0);
+
+          if (pressesToday >= 2) {
+            continue; // skip this day for pressing categories
+          }
+        }
+
+
         // 🧱 Weekly cap guard — do NOT exceed remainingPlan[cat]
         final int remaining = remainingPlan[cat] ?? 0;
         final int alreadyUsed = seededCount[cat] ?? 0;
@@ -826,7 +839,7 @@ class TemplateGenerator {
   }
 
 
-  // Seed a day with the preferred “minimum per day” set for the given sex.
+
   // Seed a day with the preferred “minimum per day” set for the given sex.
   static void _seedDailyMinimums({
     required List<_DayPlan> days,
@@ -841,6 +854,12 @@ class TemplateGenerator {
   }) {
     final sets = isFemale ? _femaleDailyPrefSets : _maleDailyPrefSets;
     final int weeklyFrequency = days.length;
+
+    // 🧮 Helper: total presses (HP + VP) already on this day
+    int _pressesToday(_DayPlan d) {
+      return (d.countByCategory['Horizontal Press'] ?? 0) +
+          (d.countByCategory['Vertical Press'] ?? 0);
+    }
 
     // 🧮 Helper: check & record category usage vs weeklyPlan
     bool _canSeedCategory(String cat) {
@@ -882,7 +901,11 @@ class TemplateGenerator {
         final bool haveVPull   = vPullPool != null && vPullPool.isNotEmpty;
 
         // ── Circuit 0: Horizontal Press → Horizontal Pull ────────────────────
-        if (haveHP && haveHPull && _canSeedCategory('Horizontal Press')) {
+        if (haveHP &&
+            haveHPull &&
+            _canSeedCategory('Horizontal Press') &&
+            _pressesToday(d) < 2) {
+
           // Step A: Horizontal Press first
           final hp = _chooseExercise(
             pool: hpPool!,
@@ -929,7 +952,9 @@ class TemplateGenerator {
           // First exercise for Circuit 1: prefer Vertical Press,
           // but if it can't be placed and weeklyFrequency > 2,
           // we allow Lateral Raise as a flexible alternative.
-          if (haveVPress && _canSeedCategory('Vertical Press')) {
+          if (haveVPress &&
+              _canSeedCategory('Vertical Press') &&
+              _pressesToday(d) < 2) {
             final vp = _chooseExercise(
               pool: vPressPool!,
               day: d,
@@ -937,6 +962,7 @@ class TemplateGenerator {
               allDays: allDays,
               idTargetsRemaining: idTargetsRemaining,
             );
+
             if (vp != null) {
               firstC1 = vp;
               firstC1Category = 'Vertical Press';
@@ -1006,9 +1032,16 @@ class TemplateGenerator {
       // but only from categories that still have budget left in weeklyPlan.
       for (final choiceList in sets) {
         // choiceList is e.g. ['Squat Pattern', 'Hip Hinge', 'Leg Curl', ...]
-        final filteredChoices = choiceList
-            .where((cat) => _canSeedCategory(cat))
-            .toList();
+        final filteredChoices = choiceList.where((cat) {
+          if (!_canSeedCategory(cat)) return false;
+
+          // 🆕 Press cap: at most 2 (HP + VP) per day
+          if (cat == 'Horizontal Press' || cat == 'Vertical Press') {
+            if (_pressesToday(d) >= 2) return false;
+          }
+          return true;
+        }).toList();
+
 
         if (filteredChoices.isEmpty) {
           continue; // no categories with remaining budget
@@ -1918,8 +1951,10 @@ class TemplateGenerator {
       final muscleKey = _muscleKeyForCategory(cat);
       if (muscleKey == null) return;
 
+      // Emphasis level 0..3 for this muscle (Chest, Quads, etc.)
+      final int muscleLevel = (childLevels[muscleKey] ?? 0).clamp(0, 3);
+
       // 🛑 If this muscle has zero emphasis, do NOT add volume bumps at all.
-      final muscleLevel = childLevels[muscleKey] ?? 0;
       if (muscleLevel == 0) {
         return; // category stays at capsFor() + seeding only
       }
@@ -1930,19 +1965,31 @@ class TemplateGenerator {
       final caps = freqCaps[cat];
       if (caps == null) return;
 
-      final minCap = caps['min'] ?? 0;
-      final maxCap = caps['max'] ?? 0;
+      final int minCap = caps['min'] ?? 0;
+      final int maxCap = caps['max'] ?? 0;
 
       if (maxCap <= minCap) return; // fixed-cap categories stay as-is.
 
-      // We want to move from minCap towards vt.targetExercises,
-      // but scale the "extra" above min by effort.
+      // Ideal target (from volume engine), still clamped by caps.
       final int desiredCount = vt.targetExercises.clamp(minCap, maxCap);
       final int rawExtraOverMin = desiredCount - minCap;
       if (rawExtraOverMin <= 0) return;
 
-      // Scale extra by effort (e.g. at effort=1 we might go from +3 → +1)
-      final int scaledExtra = (rawExtraOverMin * effortScale).round();
+      // 🔢 Emphasis 1..3 → 0.33 .. 1.0
+      final double emphasisScale = muscleLevel / 3.0;
+
+      // Final bump scale = effort × emphasis.
+      final double bumpScale = effortScale * emphasisScale;
+
+      // Scale the "extra over min" by bump scale.
+      int scaledExtra = (rawExtraOverMin * bumpScale).round();
+
+      // If there is any emphasis/effort at all but rounding gave 0, allow a minimum bump of 1
+      // (optional – you can remove this if you want very fine-grained behaviour).
+      if (scaledExtra <= 0 && bumpScale > 0) {
+        scaledExtra = 1;
+      }
+
       if (scaledExtra <= 0) return;
 
       bumps[cat] = (bumps[cat] ?? 0) + scaledExtra;
@@ -1954,6 +2001,7 @@ class TemplateGenerator {
 
     return bumps;
   }
+
 
 
 
