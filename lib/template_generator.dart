@@ -332,7 +332,9 @@ class TemplateGenerator {
       requiredHPullPrimaryDays: requiredHPullPrimaryDays,
       weeklyPlan: weeklyPlan,                      // 🆕 pass weekly caps
       seededCountByCategory: _seededCountByCategory, // 🆕 out-param map
+      userAge: age ?? 27, // 👈 use `age` from this method’s params                       // 🆕 age for circuit caps
     );
+
 
     // 6.5) Adjust weeklyPlan by subtracting what seeding already placed
     final Map<String, int> seededCount = {};
@@ -849,11 +851,18 @@ class TemplateGenerator {
     required Map<String,int> idTargetsRemaining,
     required bool isHypertrophyMale,
     required int requiredHPullPrimaryDays,
-    required Map<String, int> weeklyPlan,            // 🆕
-    required Map<String, int> seededCountByCategory, // 🆕
-  }) {
+    required Map<String, int> weeklyPlan,
+    required Map<String, int> seededCountByCategory,
+    required int userAge,   // 👈 NEW
+  })
+  {
     final sets = isFemale ? _femaleDailyPrefSets : _maleDailyPrefSets;
     final int weeklyFrequency = days.length;
+
+    // 🔢 Age-based max circuits per day
+    final int maxCircuitsPerDay =
+    (userAge > 47) ? 2 : (userAge > 27 ? 3 : 4);
+
 
     // 🧮 Helper: total presses (HP + VP) already on this day
     int _pressesToday(_DayPlan d) {
@@ -1031,6 +1040,12 @@ class TemplateGenerator {
       // 🔁 Then apply the normal daily preference sets,
       // but only from categories that still have budget left in weeklyPlan.
       for (final choiceList in sets) {
+        // 🛑 Age-based circuit cap: if we've already hit the max,
+        // stop seeding any further categories onto this day.
+        if (d.circuits.length >= maxCircuitsPerDay) {
+          break;
+        }
+
         // choiceList is e.g. ['Squat Pattern', 'Hip Hinge', 'Leg Curl', ...]
         final filteredChoices = choiceList.where((cat) {
           if (!_canSeedCategory(cat)) return false;
@@ -1041,6 +1056,7 @@ class TemplateGenerator {
           }
           return true;
         }).toList();
+
 
 
         if (filteredChoices.isEmpty) {
@@ -1070,6 +1086,26 @@ class TemplateGenerator {
           }
         });
       }
+
+      // ─────────────────────────────────────────────────────────────
+// NEW RULE: Age → maximum circuits per day
+// age > 47 → max 2 circuits
+// age > 27 → max 3 circuits
+// else: no cap (effectively unlimited)
+// ─────────────────────────────────────────────────────────────
+      int _maxCircuitsForAge(int age) {
+        if (age > 47) return 2;
+        if (age > 27) return 3;
+        return 999; // unlimited for younger users
+      }
+
+      final int maxCircuits = _maxCircuitsForAge(userAge);
+
+// Trim extra circuits (remove lowest-priority circuits last)
+      while (d.circuits.length > maxCircuits) {
+        d.circuits.removeLast();
+      }
+
     }
   }
 
@@ -1925,27 +1961,15 @@ class TemplateGenerator {
   static Map<String, int> _volumeCategoryBumpsFromTargets({
     required Map<String, MuscleVolumeTarget> volumeTargets,
     required Map<String, Map<String,int>> freqCaps,
-    required Map<String, int> childLevels,   // 🔍 emphasis 0..3 per muscle (e.g. 'Quads', 'Chest')
-    required int trainingEffort,             // 1..4
+    required Map<String, int> childLevels,
+    required int trainingEffort, // you can keep this arg for now, even if unused
   }) {
     final bumps = <String, int>{};
 
-    // Same scale idea as in _routeEmphasisToDemand
-    double _effortScale(int effort) {
-      switch (effort.clamp(1, 4)) {
-        case 1:
-          return 0.3;   // very conservative bumps
-        case 2:
-          return 0.6;   // moderate
-        case 3:
-          return 0.85;  // high
-        case 4:
-        default:
-          return 1.0;   // full volume push
-      }
-    }
+    // Effort is already reflected in volumeTargets.targetExercises,
+    // so we do *no extra scaling* here to avoid double counting.
+    const double effortScale = 1.0;
 
-    final double effortScale = _effortScale(trainingEffort);
 
     void bumpFor(String cat) {
       final muscleKey = _muscleKeyForCategory(cat);
@@ -2004,8 +2028,6 @@ class TemplateGenerator {
 
 
 
-
-
 // Lift weeklyPlan mins using bumps (caps & availability respected)
   static void _applyEmphasisCategoryBumps({
     required Map<String, int> weeklyPlan,
@@ -2035,11 +2057,13 @@ class TemplateGenerator {
     required int? age,
     required Map<String, dynamic> onboarding,
   }) {
+    // ── 1) Training effort (1..4) ─────────────────────────────────────────────
     final int effRaw = (onboarding['trainingEffort'] is int)
         ? onboarding['trainingEffort'] as int
         : 3;
     final int trainingEffort = effRaw.clamp(1, 4);
 
+    // ── 2) Onboarding body-focus maps ─────────────────────────────────────────
     final Map<String, dynamic> bodyFocusLevelRaw =
         (onboarding['bodyFocusLevel'] as Map<String, dynamic>?) ?? const {};
     final Map<String, dynamic> bodyFocusChildrenRaw =
@@ -2048,39 +2072,17 @@ class TemplateGenerator {
     // Age handling: null → treat as 27 (young bucket).
     final int userAge = age ?? 27;
 
-    // Age → base MEV/MRV sets (same for all muscles, only age adjusts)
-    int baseMevSets;
-    int baseMrvSets;
-
-    if (userAge <= 27) {
-      baseMevSets = 12;
-      baseMrvSets = 26;
-    } else if (userAge <= 37) {
-      baseMevSets = 12;
-      baseMrvSets = 26;
-    } else if (userAge <= 47) {
-      baseMevSets = 10;
-      baseMrvSets = 24;
-    } else if (userAge <= 60) {
-      baseMevSets = 9;
-      baseMrvSets = 22;
-    } else {
-      baseMevSets = 8;
-      baseMrvSets = 20;
-    }
-
-    // Age → average sets per exercise (for converting sets → exercise count)
-    // (We only use this for frequency estimation, not rigid constraints.)
+    // ── 3) Age → average sets per exercise (for converting sets → exercises) ──
     double setsPerExercise;
     if (userAge <= 27) {
-      setsPerExercise = 4.0;   // younger: assume 4 sets/ex (ceiling 5)
+      setsPerExercise = 4.0;   // younger: assume ~4 sets/ex
     } else if (userAge <= 37) {
       setsPerExercise = 3.5;   // transitional
     } else {
       setsPerExercise = 3.0;   // older buckets
     }
 
-    // Helper to get emphasis level (0..3) for a broad region
+    // ── 4) Region / child emphasis readers (0..3) ─────────────────────────────
     int _readRegionLevel(String region) {
       final raw = bodyFocusLevelRaw[region];
       if (raw is int) return raw.clamp(0, 3);
@@ -2092,7 +2094,6 @@ class TemplateGenerator {
       return 0;
     }
 
-    // Helper to read child emphasis if present, fallback to region
     int _readChildLevel(String parent, String childKey) {
       final parentMap = bodyFocusChildrenRaw[parent];
       if (parentMap is Map) {
@@ -2108,8 +2109,8 @@ class TemplateGenerator {
       return _readRegionLevel(parent);
     }
 
-    // Build per-muscle emphasis (0..3).
-    // These keys are *muscles*, not categories, on purpose.
+    // ── 5) Per-muscle emphasis (0..3) ─────────────────────────────────────────
+    // These keys are muscle names, on purpose.
     final Map<String, int> emphasisByMuscle = <String, int>{
       // Big groups
       'Chest'      : _readRegionLevel('Chest'),
@@ -2127,37 +2128,97 @@ class TemplateGenerator {
       'Forearms'   : _readChildLevel('Arms', 'Forearms'),
     };
 
-    // Training effort (1..4) → 0..1
-    final double effortNorm = (trainingEffort - 1) / 3.0; // 0.0 .. 1.0
-
-    // Blend effort + emphasis → 0..1 weight.
-    // We weight effort slightly more heavily than emphasis.
-    double _computeWeight(int emphasisLevel) {
-      final double empNorm = (emphasisLevel.clamp(0, 3)) / 3.0; // 0..1
-      return (0.6 * effortNorm + 0.4 * empNorm).clamp(0.0, 1.0);
+    // ── 6) Effort → base set bands per muscle (pre age/emphasis) ──────────────
+    // These are sets per muscle per week, before age & emphasis adjustments.
+    int _effortLow(int effort) {
+      switch (effort.clamp(1, 4)) {
+        case 1: return 10; // 10–12
+        case 2: return 13; // 13–15
+        case 3: return 16; // 16–19
+        case 4:
+        default:
+          return 20;       // 20–24
+      }
     }
 
-    // Core builder per muscle
+    int _effortMid(int effort) {
+      switch (effort.clamp(1, 4)) {
+        case 1: return 11; // midpoint of 10–12
+        case 2: return 14; // midpoint of 13–15
+        case 3: return 18; // midpoint of 16–19
+        case 4:
+        default:
+          return 22;       // midpoint of 20–24
+      }
+    }
+
+    int _effortHigh(int effort) {
+      switch (effort.clamp(1, 4)) {
+        case 1: return 12; // 10–12
+        case 2: return 15; // 13–15
+        case 3: return 19; // 16–19
+        case 4:
+        default:
+          return 24;       // 20–24
+      }
+    }
+
+    // ── 7) Age / emphasis scaling ─────────────────────────────────────────────
+    double _ageScale(int age) {
+      if (age > 40) return 0.8; // –20%
+      if (age > 30) return 0.9; // –10%
+      return 1.0;
+    }
+
+    // Emphasis slider = add ~15–30% on top of effort level.
+    // 0 = neutral (zero-emphasis is handled separately in routing/bumps),
+    // 1 = baseline, 2 = +15%, 3 = +30%.
+    double _emphScale(int level) {
+      switch (level.clamp(0, 3)) {
+        case 0:
+        case 1:
+          return 1.0;
+        case 2:
+          return 1.15;
+        case 3:
+          return 1.30;
+        default:
+          return 1.0;
+      }
+    }
+
+    final int baseLow   = _effortLow(trainingEffort);
+    final int baseMid   = _effortMid(trainingEffort);
+    final int baseHigh  = _effortHigh(trainingEffort);
+    final double ageFactor = _ageScale(userAge);
+
+    // ── 8) Core builder per muscle ────────────────────────────────────────────
     MuscleVolumeTarget _buildForMuscle(String muscleKey) {
       final int emp = emphasisByMuscle[muscleKey] ?? 0;
+      final double eScale = _emphScale(emp);
 
-      final double w = _computeWeight(emp); // 0..1 between MEV..MRV
+      // Raw (float) bands after age + emphasis scaling
+      final double rawLow  = baseLow  * ageFactor * eScale;
+      final double rawMid  = baseMid  * ageFactor * eScale;
+      final double rawHigh = baseHigh * ageFactor * eScale;
 
-      // Choose targetSets between MEV and MRV based on weight.
-      final double tSetsDouble =
-          baseMevSets + w * (baseMrvSets - baseMevSets);
-      int targetSets = tSetsDouble.round().clamp(baseMevSets, baseMrvSets);
+      // Clamp into a reasonable global safety band (e.g. 8–30 sets/week)
+      int mevSets     = rawLow.clamp(8.0, 30.0).floor();
+      int targetSets  = rawMid.clamp(8.0, 30.0).round();
+      int mrvSets     = rawHigh.clamp(8.0, 30.0).ceil();
 
-      final int mevSets = baseMevSets;
-      final int mrvSets = baseMrvSets;
+      // Make sure ordering is sane
+      if (targetSets < mevSets) targetSets = mevSets;
+      if (mrvSets < targetSets) mrvSets = targetSets;
 
-      // Convert sets → exercise counts.
-      int minExercises = (mevSets / setsPerExercise).ceil();
+      // Convert sets → exercise counts (soft guidance)
+      int minExercises    = (mevSets / setsPerExercise).ceil();
       int targetExercises = (targetSets / setsPerExercise).round();
-      int maxExercises = (mrvSets / setsPerExercise).floor();
+      int maxExercises    = (mrvSets / setsPerExercise).floor();
 
-      // Always ensure at least 1 exercise/week if any volume at all.
-      if (targetExercises == 0 && targetSets > 0) targetExercises = 1;
+      if (targetExercises == 0 && targetSets > 0) {
+        targetExercises = 1;
+      }
       if (maxExercises < targetExercises) {
         maxExercises = targetExercises;
       }
@@ -2172,7 +2233,7 @@ class TemplateGenerator {
       );
     }
 
-    // Final map: per-muscle targets
+    // ── 9) Final map: per-muscle targets ──────────────────────────────────────
     final Map<String, MuscleVolumeTarget> out = <String, MuscleVolumeTarget>{};
 
     for (final muscle in emphasisByMuscle.keys) {
@@ -2181,6 +2242,7 @@ class TemplateGenerator {
 
     return out;
   }
+
 
   static void debugPrintVolumeTargets(
       Map<String, MuscleVolumeTarget> vt,
