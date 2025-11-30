@@ -1345,97 +1345,64 @@ class TemplateGenerator {
 
   /// Decide circuit index (0..N) for a chosen exercise to minimize overlap.
   static int _placeIntoCircuit(_DayPlan day, ExLite ex) {
-    // 🧩 Normalised category + "is allowed in 3rd circuit?" flag
-    final String catNorm = _normCat(ex.category);
-    final bool isThirdCircuitIsolationAllowed =
-        catNorm == 'Arm Curl' ||
-            catNorm == 'Arm Extension' ||
-            catNorm == 'Leg Curl' ||
-            catNorm == 'Leg Extension' ||
-            catNorm == 'Hip Adduction' ||
-            catNorm == 'Hip Abduction' ||
-            catNorm == 'Calf Raise' ||
-            catNorm == 'Lateral Raise' ||
-            // Plank → Core category, but name must contain "plank"
-            (catNorm == 'Core' && ex.name.toLowerCase().contains('plank'));
+    // Isolation categories that are allowed to live in circuit 3+
+    final cat = _normCat(ex.category);
+    final bool isIsoCategory =
+        cat == 'Arm Curl' ||
+            cat == 'Arm Extension' ||
+            cat == 'Lateral Raise' ||
+            cat == 'Calf Raise' ||
+            cat == 'Core' ||
+            cat == 'Hip Abduction';
 
-    // Try to put it in the BEST existing circuit (by score), else start new one.
+    // 👉 If we already have 2 circuits, and this is an isolation exercise,
+    // start a *new* iso-only circuit (index 2) instead of stuffing it into 0/1.
+    if (isIsoCategory &&
+        day.circuits.length == 2 &&
+        day.circuits.length < _maxCircuitsPerDay) {
+      day.circuits.add(<_Placed>[]);
+      return day.circuits.length - 1; // this will be 2
+    }
+
+    // Otherwise: try to put it in the BEST existing circuit (by score),
+    // then optionally start a new circuit if allowed.
     int bestIdx = -1;
     int bestScore = -0x3fffffff;
     int bestLen = 1 << 30;
 
     // Evaluate all circuits we CAN join, pick the one with the highest score.
     for (int i = 0; i < day.circuits.length; i++) {
-      // 🚫 3rd circuit (index 2) must be isolation-only
-      if (i == 2 && !isThirdCircuitIsolationAllowed) {
-        continue;
-      }
-
-      if (!_canJoin(day, i, ex)) {
-        continue;
-      }
-
-      final s = _pairingScoreFor(day, i, ex);
-      // Prefer higher score; break ties by shorter circuit (keeps 2–3 ideal size)
-      if (s > bestScore || (s == bestScore && day.circuits[i].length < bestLen)) {
-        bestScore = s;
-        bestLen = day.circuits[i].length;
-        bestIdx = i;
+      if (_canJoin(day, i, ex)) {
+        final s = _pairingScoreFor(day, i, ex);
+        // Prefer higher score; break ties by shorter circuit (keeps 2–3 ideal size)
+        if (s > bestScore || (s == bestScore && day.circuits[i].length < bestLen)) {
+          bestScore = s;
+          bestLen = day.circuits[i].length;
+          bestIdx = i;
+        }
       }
     }
 
-    // ✅ Found a legal existing circuit
-    if (bestIdx != -1) {
-      return bestIdx;
-    }
+    if (bestIdx != -1) return bestIdx;
 
-    // 🆕 Try to create a new circuit (respecting the 3rd-circuit isolation rule)
+    // No existing circuit could take it → can we open a new one?
     if (day.circuits.length < _maxCircuitsPerDay) {
-      final int nextIdx = day.circuits.length;
-
-      // If we’d be creating the 3rd circuit (index 2), only allow for isolation types
-      if (nextIdx == 2 && !isThirdCircuitIsolationAllowed) {
-        // Skip creating circuit 2 for non-isolation; we’ll try fallback below.
-      } else {
-        day.circuits.add(<_Placed>[]);
-        return day.circuits.length - 1;
-      }
+      // For non-iso lifts, this usually happens only for the first 1–2 circuits.
+      day.circuits.add(<_Placed>[]);
+      return day.circuits.length - 1;
     }
 
-    // 🛟 Pairing-safe fallback: smallest-load circuit we can LEGALLY join.
-    int fallback = -1;
-    int minLen = 1 << 30;
+    // As a last resort, drop into the smallest load circuit.
+    int fallback = 0, minLen = 1 << 30;
     for (int i = 0; i < day.circuits.length; i++) {
-      // Still enforce the 3rd-circuit isolation rule here.
-      if (i == 2 && !isThirdCircuitIsolationAllowed) {
-        continue;
-      }
-      if (!_canJoin(day, i, ex)) {
-        continue;
-      }
-
       if (day.circuits[i].length < minLen) {
         minLen = day.circuits[i].length;
         fallback = i;
       }
     }
-
-    if (fallback != -1) {
-      return fallback; // ✅ still pairing-legal
-    }
-
-    // Extreme edge case:
-    // - No existing circuit can legally take this exercise
-    // - We also weren't allowed to create the 3rd circuit for it
-    // In this situation, relax the "3rd circuit isolation" to preserve pairing rules.
-    if (day.circuits.length < _maxCircuitsPerDay) {
-      day.circuits.add(<_Placed>[]);
-      return day.circuits.length - 1; // new, empty circuit → always legal
-    }
-
-    // Final guard (should basically never be hit in practice).
-    return 0;
+    return fallback;
   }
+
 
 
 
@@ -1443,10 +1410,23 @@ class TemplateGenerator {
     final circuit = day.circuits[circuitIdx];
 
     // 🚫 Prevent duplicate categories within the same circuit
+    final c = _normCat(ex.category);
     for (final p in circuit) {
-      if (_normCat(p.category) == _normCat(ex.category)) return false;
+      if (_normCat(p.category) == c) return false;
     }
 
+    // 👉 For circuits 2 and above (index >= 2), restrict to isolation categories only.
+    final bool isIsoCategory =
+        c == 'Arm Curl' ||
+            c == 'Arm Extension' ||
+            c == 'Lateral Raise' ||
+            c == 'Calf Raise' ||
+            c == 'Core' ||
+            c == 'Hip Abduction';
+
+    if (circuitIdx >= 2 && !isIsoCategory) {
+      return false;
+    }
 
     // 1) Category-level rules
     for (final p in circuit) {
