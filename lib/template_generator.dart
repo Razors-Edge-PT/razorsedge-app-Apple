@@ -96,9 +96,10 @@ class TemplateGenerator {
 
 
   static const String _assetPath = 'assets/exercise_dump_20251109_112626.json';
-  // Max circuits per day (age-dependent). Default = 5.
-  static const int _defaultMaxCircuitsPerDay = 5;
+// Max circuits per day (age-dependent). Default for younger / unknown age.
+  static const int _defaultMaxCircuitsPerDay = 4;
   static int _maxCircuitsPerDay = _defaultMaxCircuitsPerDay;
+
 
   /// Generate a set of starter templates (e.g., B1 Day1.., B2 Day1..)
   /// based on onboarding + pairing & overlap rules.
@@ -165,10 +166,20 @@ class TemplateGenerator {
     debugPrintVolumeTargets(volumeTargets);
 
 
-    // Age-based max circuits per day: >27 → 4 circuits, else default (5).
-    _maxCircuitsPerDay = (age != null && age > 27)
-        ? 4
-        : _defaultMaxCircuitsPerDay;
+    // Age-based max circuits per day:
+//   age > 47 → 2 circuits
+//   age > 27 → 3 circuits
+//   else (younger / unknown) → 4 circuits
+    if (age == null) {
+      _maxCircuitsPerDay = _defaultMaxCircuitsPerDay; // 4
+    } else if (age > 47) {
+      _maxCircuitsPerDay = 2;
+    } else if (age > 27) {
+      _maxCircuitsPerDay = 3;
+    } else {
+      _maxCircuitsPerDay = _defaultMaxCircuitsPerDay; // 4
+    }
+
 
 // 🧬 Hypertrophy-focused male flag based on top 2 goals
     final List<dynamic>? goalsRankedRaw =
@@ -859,11 +870,6 @@ class TemplateGenerator {
     final sets = isFemale ? _femaleDailyPrefSets : _maleDailyPrefSets;
     final int weeklyFrequency = days.length;
 
-    // 🔢 Age-based max circuits per day
-    final int maxCircuitsPerDay =
-    (userAge > 47) ? 2 : (userAge > 27 ? 3 : 4);
-
-
     // 🧮 Helper: total presses (HP + VP) already on this day
     int _pressesToday(_DayPlan d) {
       return (d.countByCategory['Horizontal Press'] ?? 0) +
@@ -1042,7 +1048,7 @@ class TemplateGenerator {
       for (final choiceList in sets) {
         // 🛑 Age-based circuit cap: if we've already hit the max,
         // stop seeding any further categories onto this day.
-        if (d.circuits.length >= maxCircuitsPerDay) {
+        if (d.circuits.length >= _maxCircuitsPerDay) {
           break;
         }
 
@@ -1088,24 +1094,10 @@ class TemplateGenerator {
       }
 
       // ─────────────────────────────────────────────────────────────
-// NEW RULE: Age → maximum circuits per day
-// age > 47 → max 2 circuits
-// age > 27 → max 3 circuits
-// else: no cap (effectively unlimited)
-// ─────────────────────────────────────────────────────────────
-      int _maxCircuitsForAge(int age) {
-        if (age > 47) return 2;
-        if (age > 27) return 3;
-        return 999; // unlimited for younger users
-      }
-
-      final int maxCircuits = _maxCircuitsForAge(userAge);
-
-// Trim extra circuits (remove lowest-priority circuits last)
-      while (d.circuits.length > maxCircuits) {
+// Final safety trim: respect the global age-based max circuits per day.
+      while (d.circuits.length > _maxCircuitsPerDay) {
         d.circuits.removeLast();
       }
-
     }
   }
 
@@ -1127,6 +1119,12 @@ class TemplateGenerator {
     required List<_DayPlan> allDays,
     Map<String, int>? idTargetsRemaining, // 🆕
   }) {
+
+    // 🚫 Day-level cap: only one Arm Curl and one Arm Extension per day
+    if ((category == 'Arm Curl' || category == 'Arm Extension') &&
+        (day.countByCategory[category] ?? 0) >= 1) {
+      return null;
+    }
     // Avoid pairing agonists / overlapping prime movers within same circuit/day:
     // - Any Horizontal Press cannot pair with Vertical Press or Arm Extension
     // - Any Horizontal Pull cannot pair with Vertical Pull or Arm Curl
