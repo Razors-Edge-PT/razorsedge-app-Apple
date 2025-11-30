@@ -143,6 +143,19 @@ class TemplateGenerator {
     final int weeklyFrequency = _readWeeklyFrequency(onboarding) ?? 4; // default to 4
     final bool isFemale = sexU == 'F' || sexU == 'N';
 
+    // Training effort (1..4), default 3
+    final int trainingEffort = (() {
+      final raw = onboarding['trainingEffort'];
+      if (raw is int) return raw.clamp(1, 4);
+      if (raw is num) return raw.toInt().clamp(1, 4);
+      if (raw is String) {
+        final p = int.tryParse(raw);
+        if (p != null) return p.clamp(1, 4);
+      }
+      return 3;
+    })();
+
+
     final volumeTargets = computeVolumeTargetsFromOnboarding(
       age: age,
       onboarding: onboarding,
@@ -238,7 +251,12 @@ class TemplateGenerator {
     // 🧭 Emphasis routing (child sliders → category bumps + id targets)
     final childLevels = _buildChildEmphasis(onboarding);
     debugPrint('🎯 childLevels = $childLevels');
-    final routed = _routeEmphasisToDemand(childLevels: childLevels, byCat: byCat);
+    final routed = _routeEmphasisToDemand(
+      childLevels: childLevels,
+      byCat: byCat,
+      trainingEffort: trainingEffort,
+    );
+
     final Map<String,int> _idTargetsRemaining = Map.of(routed.idTargets);
 
     // 🔢 New: volume-engine-driven category bumps (MEV/MAV/MRV → ex/week)
@@ -246,7 +264,9 @@ class TemplateGenerator {
       volumeTargets: volumeTargets,
       freqCaps: freqCaps,
       childLevels: childLevels, // 🔍 so we can skip zero-emphasis muscles
+      trainingEffort: trainingEffort, // 🆕 effort-aware bumps
     );
+
 
 
     // Lift weekly minima by BOTH:
@@ -1668,11 +1688,34 @@ class TemplateGenerator {
   _routeEmphasisToDemand({
     required Map<String, int> childLevels,
     required Map<String, List<ExLite>> byCat,
+    required int trainingEffort, // 1..4
   }) {
     final cat = <String, int>{};
     final ids = <String, int>{};
 
-    int bump(double x) => x.round().clamp(0, 99);
+    // Effort scaling: 1 = very conservative, 4 = full emphasis
+    double _effortScale(int effort) {
+      switch (effort.clamp(1, 4)) {
+        case 1:
+          return 0.3;  // low effort → small slider impact
+        case 2:
+          return 0.6;  // moderate
+        case 3:
+          return 0.85; // high
+        case 4:
+        default:
+          return 1.0;  // max effort → full slider effect
+      }
+    }
+
+    final double effortScale = _effortScale(trainingEffort);
+
+    // Scale integer bumps by effort factor
+    int bumpInt(int base) {
+      if (base <= 0) return 0;
+      return (base * effortScale).round().clamp(0, 99);
+    }
+
 
     void addCat(String category, int inc) {
       if (inc <= 0) return;
@@ -1692,63 +1735,75 @@ class TemplateGenerator {
 
     // Chest → Horizontal Press
     final chestL = childLevels['Chest'] ?? 0;
-    if (chestL > 0) addCat('Horizontal Press', chestL);
+    if (chestL > 0) {
+      addCat('Horizontal Press', bumpInt(chestL));
+    }
 
     // Lats → Vertical Pull (+ optional horiz-pull IDs later)
     final latsL = childLevels['Lats'] ?? 0;
-    if (latsL > 0) addCat('Vertical Pull', latsL);
+    if (latsL > 0) {
+      addCat('Vertical Pull', bumpInt(latsL));
+    }
 
     // Mid traps & rear delts → Horizontal Pull
     final upperBackL = childLevels['Mid traps & rear delts'] ?? 0;
-    if (upperBackL > 0) addCat('Horizontal Pull', upperBackL);
+    if (upperBackL > 0) {
+      addCat('Horizontal Pull', bumpInt(upperBackL));
+    }
 
     // Lower back → Hip Hinge
     final lowBackL = childLevels['Lower back 🎄'] ?? 0;
-    if (lowBackL > 0) addCat('Hip Hinge', lowBackL);
+    if (lowBackL > 0) {
+      addCat('Hip Hinge', bumpInt(lowBackL));
+    }
 
     // Anterior delts → VP + HP + LR
     final antDeltsL = childLevels['Anterior delts'] ?? 0;
     if (antDeltsL > 0) {
-      addCat('Vertical Press', bump(antDeltsL * _w60));
-      addCat('Horizontal Press', bump(antDeltsL * _w40));
-      addCat('Lateral Raise',   bump(antDeltsL * _w40));
+      addCat('Vertical Press',   bumpInt((antDeltsL * _w60).round()));
+      addCat('Horizontal Press', bumpInt((antDeltsL * _w40).round()));
+      addCat('Lateral Raise',    bumpInt((antDeltsL * _w40).round()));
     }
 
     // Lateral delts → LR + VP
     final latDeltsL = childLevels['Lateral delts'] ?? 0;
     if (latDeltsL > 0) {
-      addCat('Lateral Raise', bump(latDeltsL * _w60));
-      addCat('Vertical Press', bump(latDeltsL * _w40));
+      addCat('Lateral Raise',  bumpInt((latDeltsL * _w60).round()));
+      addCat('Vertical Press', bumpInt((latDeltsL * _w40).round()));
     }
 
     // Upper traps → Vertical Press
     final upperTrapsL = childLevels['Upper traps'] ?? 0;
-    if (upperTrapsL > 0) addCat('Vertical Press', upperTrapsL);
+    if (upperTrapsL > 0) {
+      addCat('Vertical Press', bumpInt(upperTrapsL));
+    }
 
     // Biceps → Arm Curl (+ preferred IDs)
     final bicepsL = childLevels['Biceps'] ?? 0;
     if (bicepsL > 0) {
-      addCat('Arm Curl', bicepsL);
-      addId(_idSupinatedLatPulldown, bicepsL);
-      addId(_idChinUp, bicepsL);
+      final inc = bumpInt(bicepsL);
+      addCat('Arm Curl', inc);
+      addId(_idSupinatedLatPulldown, inc);
+      addId(_idChinUp, inc);
     }
 
     // Triceps → Arm Extension (+ OHP ID)
     final tricepsL = childLevels['Triceps'] ?? 0;
     if (tricepsL > 0) {
-      addCat('Arm Extension', tricepsL);
-      addId(_idBarbellOverheadPress, tricepsL);
+      final inc = bumpInt(tricepsL);
+      addCat('Arm Extension', inc);
+      addId(_idBarbellOverheadPress, inc);
     }
 
     // Forearms → Pulls + Curl (+ optional isolation ids)
     final forearmsL = childLevels['Forearms'] ?? 0;
     if (forearmsL > 0) {
-      addCat('Horizontal Pull', bump(forearmsL * _w50));
-      addCat('Vertical Pull',   bump(forearmsL * _w50));
-      addCat('Arm Curl',        bump(forearmsL * _w40));
+      addCat('Horizontal Pull', bumpInt((forearmsL * _w50).round()));
+      addCat('Vertical Pull',   bumpInt((forearmsL * _w50).round()));
+      addCat('Arm Curl',        bumpInt((forearmsL * _w40).round()));
       if (forearmsL >= 3) {
         for (final id in _forearmIsolationIds) {
-          addId(id, 1);
+          addId(id, bumpInt(1)); // small, effort-scaled nudge
         }
       }
     }
@@ -1756,38 +1811,45 @@ class TemplateGenerator {
     // Glute Max → Hip Hinge + Squat Pattern
     final gmaxL = childLevels['Glute Maximus'] ?? 0;
     if (gmaxL > 0) {
-      addCat('Hip Hinge',     bump(gmaxL * _w50));
-      addCat('Squat Pattern', bump(gmaxL * _w50));
+      addCat('Hip Hinge',     bumpInt((gmaxL * _w50).round()));
+      addCat('Squat Pattern', bumpInt((gmaxL * _w50).round()));
     }
 
     // Glute Med → Hip Abduction
     final gmedL = childLevels['Glute Medius'] ?? 0;
-    if (gmedL > 0) addCat('Hip Abduction', gmedL);
+    if (gmedL > 0) {
+      addCat('Hip Abduction', bumpInt(gmedL));
+    }
 
     // Abs → Core
     final absL = childLevels['Abs'] ?? 0;
-    if (absL > 0) addCat('Core', absL);
+    if (absL > 0) {
+      addCat('Core', bumpInt(absL));
+    }
 
     // Hamstrings → Leg Curl + Hip Hinge
     final hamsL = childLevels['Hamstrings'] ?? 0;
     if (hamsL > 0) {
-      addCat('Leg Curl',  bump(hamsL * _w60));
-      addCat('Hip Hinge', bump(hamsL * _w40));
+      addCat('Leg Curl',  bumpInt((hamsL * _w60).round()));
+      addCat('Hip Hinge', bumpInt((hamsL * _w40).round()));
     }
 
     // Quads → Squat Pattern + Leg Extension
     final quadsL = childLevels['Quads'] ?? 0;
     if (quadsL > 0) {
-      addCat('Squat Pattern', bump(quadsL * _w60));
-      addCat('Leg Extension', bump(quadsL * _w40));
+      addCat('Squat Pattern', bumpInt((quadsL * _w60).round()));
+      addCat('Leg Extension', bumpInt((quadsL * _w40).round()));
     }
 
     // Calves → Calf Raise
     final calvesL = childLevels['Calves'] ?? 0;
-    if (calvesL > 0) addCat('Calf Raise', calvesL);
+    if (calvesL > 0) {
+      addCat('Calf Raise', bumpInt(calvesL));
+    }
 
     return (categoryBumps: cat, idTargets: ids);
   }
+
 
   // Map your exercise categories to the muscle keys used by the volume engine.
   static String? _muscleKeyForCategory(String category) {
@@ -1830,15 +1892,33 @@ class TemplateGenerator {
   static Map<String, int> _volumeCategoryBumpsFromTargets({
     required Map<String, MuscleVolumeTarget> volumeTargets,
     required Map<String, Map<String,int>> freqCaps,
-    required Map<String, int> childLevels,  // 🔍 emphasis 0..3 per muscle (e.g. 'Quads', 'Chest')
+    required Map<String, int> childLevels,   // 🔍 emphasis 0..3 per muscle (e.g. 'Quads', 'Chest')
+    required int trainingEffort,             // 1..4
   }) {
     final bumps = <String, int>{};
+
+    // Same scale idea as in _routeEmphasisToDemand
+    double _effortScale(int effort) {
+      switch (effort.clamp(1, 4)) {
+        case 1:
+          return 0.3;   // very conservative bumps
+        case 2:
+          return 0.6;   // moderate
+        case 3:
+          return 0.85;  // high
+        case 4:
+        default:
+          return 1.0;   // full volume push
+      }
+    }
+
+    final double effortScale = _effortScale(trainingEffort);
 
     void bumpFor(String cat) {
       final muscleKey = _muscleKeyForCategory(cat);
       if (muscleKey == null) return;
 
-      // 🛑 If this muscle has zero emphasis, do NOT add volume bumps.
+      // 🛑 If this muscle has zero emphasis, do NOT add volume bumps at all.
       final muscleLevel = childLevels[muscleKey] ?? 0;
       if (muscleLevel == 0) {
         return; // category stays at capsFor() + seeding only
@@ -1855,13 +1935,17 @@ class TemplateGenerator {
 
       if (maxCap <= minCap) return; // fixed-cap categories stay as-is.
 
-      // We want to move from minCap towards vt.targetExercises, but never above cap['max'].
+      // We want to move from minCap towards vt.targetExercises,
+      // but scale the "extra" above min by effort.
       final int desiredCount = vt.targetExercises.clamp(minCap, maxCap);
-      final int extraOverMin = desiredCount - minCap;
-      if (extraOverMin <= 0) return;
+      final int rawExtraOverMin = desiredCount - minCap;
+      if (rawExtraOverMin <= 0) return;
 
-      // For now we use extraOverMin as the bump (can weight later if needed).
-      bumps[cat] = (bumps[cat] ?? 0) + extraOverMin;
+      // Scale extra by effort (e.g. at effort=1 we might go from +3 → +1)
+      final int scaledExtra = (rawExtraOverMin * effortScale).round();
+      if (scaledExtra <= 0) return;
+
+      bumps[cat] = (bumps[cat] ?? 0) + scaledExtra;
     }
 
     for (final cat in freqCaps.keys) {
@@ -1870,6 +1954,7 @@ class TemplateGenerator {
 
     return bumps;
   }
+
 
 
 
