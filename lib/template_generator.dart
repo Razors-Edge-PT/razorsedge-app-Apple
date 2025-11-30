@@ -381,8 +381,37 @@ class TemplateGenerator {
     int cursor = 0;
     for (final cat in workList) {
       bool placed = false;
-      for (int attempts = 0; attempts < weeklyFrequency; attempts++) {
-        final dayIdx = (cursor + attempts) % weeklyFrequency;
+
+      // 🔁 Build candidate day order:
+      //   - sort by total exercises (lighter days first)
+      //   - tie-break by distance from cursor (keeps round-robin flavour)
+      final dayIndices = List<int>.generate(
+        weeklyFrequency,
+            (offset) => (cursor + offset) % weeklyFrequency,
+      );
+
+      dayIndices.sort((a, b) {
+        // Total exercises = sum of all circuit lengths for that day
+        final int aLoad = days[a].circuits.fold<int>(
+          0,
+              (sum, circ) => sum + circ.length,
+        );
+        final int bLoad = days[b].circuits.fold<int>(
+          0,
+              (sum, circ) => sum + circ.length,
+        );
+
+        if (aLoad != bLoad) {
+          return aLoad.compareTo(bLoad); // lighter day first
+        }
+
+        // Tie-break: keep nearer-to-cursor earlier
+        final int aDist = (a - cursor) >= 0 ? (a - cursor) : (a - cursor + weeklyFrequency);
+        final int bDist = (b - cursor) >= 0 ? (b - cursor) : (b - cursor + weeklyFrequency);
+        return aDist.compareTo(bDist);
+      });
+
+      for (final dayIdx in dayIndices) {
         final day = days[dayIdx];
 
         // Per-day category count
@@ -400,7 +429,6 @@ class TemplateGenerator {
             continue; // skip this day for pressing categories
           }
         }
-
 
         // 🧱 Weekly cap guard — do NOT exceed remainingPlan[cat]
         final int remaining = remainingPlan[cat] ?? 0;
@@ -421,20 +449,21 @@ class TemplateGenerator {
 
         if (chosen == null) continue;
 
-// Allocate to a circuit that respects pairing rules
+        // Allocate to a circuit that respects pairing rules
         final circuitIdx = _placeIntoCircuit(day, chosen);
         day.addExercise(chosen, cat, circuitIdx);
 
-// 📈 Track total weekly usage (seeded + greedy)
+        // 📈 Track total weekly usage (seeded + greedy)
         seededCount[cat] = (seededCount[cat] ?? 0) + 1;
 
         placed = true;
         cursor = (dayIdx + 1) % weeklyFrequency;
         break;
-
       }
+
       // If we couldn’t place it anywhere, we skip silently (library / rules too strict)
     }
+
 
     // 8) Emit templates: B1 first
     final out = <Map<String, dynamic>>[];
