@@ -123,7 +123,7 @@ class TemplateGenerator {
   }) async {
     // 1) Load library
     final lib = await _loadExerciseLibrary();
-// 🆕 Planned-only filter (from Block Planner current_block)
+    // 🆕 Planned-only filter (from Block Planner current_block)
     List<ExLite> workingLib = lib;
     if (plannedOnly) {
       final plannedIds = await _fetchPlannedExerciseIds(uid);
@@ -139,6 +139,13 @@ class TemplateGenerator {
         debugPrint('⚠️ [GEN] no plannedExercises; falling back to full library');
       }
     }
+
+    // 🩹 Injury filters (lower back, shoulders, elbow, knees)
+    workingLib = _applyInjuryFilters(
+      lib: workingLib,
+      onboarding: onboarding,
+    );
+
 
     // 2) Read knobs from onboarding
     final int weeklyFrequency = _readWeeklyFrequency(onboarding) ?? 4; // default to 4
@@ -532,6 +539,197 @@ class TemplateGenerator {
 
     return out;
   }
+
+  /// Apply injury / pain-slider filters to the working exercise library.
+  ///
+  /// Expects onboarding['injuries'] to be a map like:
+  /// {
+  ///   'lowerBack': 0..10,
+  ///   'shoulder' : 0..10,
+  ///   'elbow'    : 0..10,
+  ///   'knee'     : 0..10,
+  /// }
+  // Apply injury-based filters to the working exercise library.
+  // Reads pain sliders from onboarding['painNow'].
+  static List<ExLite> _applyInjuryFilters({
+    required List<ExLite> lib,
+    required Map<String, dynamic> onboarding,
+  })
+  {
+    int lowerBack = 0;
+    int shoulder  = 0;
+    int elbow     = 0;
+    int knee      = 0;
+
+    // 🔎 Read from onboarding.painNow (case-insensitive key matching)
+    final painRaw = onboarding['painNow'];
+    if (painRaw is Map) {
+      final painMap = Map<String, dynamic>.from(painRaw as Map);
+      painMap.forEach((k, v) {
+        final key = k.toString().toLowerCase().trim();
+
+        int? val;
+        if (v is int) {
+          val = v;
+        } else if (v is num) {
+          val = v.toInt();
+        } else if (v is String) {
+          val = int.tryParse(v);
+        }
+        if (val == null) return;
+
+        if (key.contains('lower back')) {
+          lowerBack = val;
+        } else if (key.contains('shoulder')) {
+          shoulder = val;
+        } else if (key.contains('elbow')) {
+          elbow = val;
+        } else if (key.contains('knee')) {
+          knee = val;
+        }
+      });
+    }
+
+    // 🩹 Debug: print levels every time
+    debugPrint(
+        '🩹 [INJ] Injury levels: '
+            'lowerBack=$lowerBack, shoulder=$shoulder, elbow=$elbow, knee=$knee');
+
+    // Fast-path: nothing to filter
+    if (lowerBack == 0 && shoulder == 0 && elbow == 0 && knee == 0) {
+      debugPrint(
+          '🩹 [INJ] No injury filters applied → library size = ${lib.length}');
+      return lib;
+    }
+
+    debugPrint(
+        '🩹 [INJ] Applying injury filters → starting size = ${lib.length}');
+
+    final out = lib.where((ex) {
+      final name = ex.name.toLowerCase();
+      final cat  = _normCat(ex.category);
+
+      bool keep = true;
+
+      // ───────────── LOWER BACK ─────────────
+      if (keep && lowerBack > 1) {
+        // Remove anything with the word "deadlift" in the name
+        if (name.contains('deadlift')) keep = false;
+      }
+      if (keep && lowerBack > 2) {
+        // Eliminate Hip Hinge category
+        if (cat == 'Hip Hinge') keep = false;
+      }
+      if (keep && lowerBack > 3) {
+        // Eliminate Squat Pattern
+        if (cat == 'Squat Pattern') keep = false;
+
+        // Core: keep only *plank* variants, but NOT weighted plank
+        if (cat == 'Core') {
+          final hasPlank = name.contains('plank');
+          final isWeightedPlank = hasPlank && name.contains('weighted');
+          if (!hasPlank || isWeightedPlank) {
+            keep = false;
+          }
+        }
+      }
+      if (keep && lowerBack > 4) {
+        // Eliminate Vertical Press
+        if (cat == 'Vertical Press') keep = false;
+
+        // Eliminate anything with "row" in the name,
+        // except "suspended high row" and "bar high row".
+        if (name.contains('row')) {
+          final isSuspendedHighRow =
+              name.contains('suspended') && name.contains('row');
+          final isBarHighRow =
+              name.contains('bar') && name.contains('row');
+          if (!isSuspendedHighRow && !isBarHighRow) {
+            keep = false;
+          }
+        }
+
+        // Eliminate Leg Curl category
+        if (cat == 'Leg Curl') keep = false;
+      }
+      if (keep && lowerBack > 5) {
+        // Eliminate Leg Extension
+        if (cat == 'Leg Extension') keep = false;
+
+        // Eliminate all Calf Raise except "seated calf raise"
+        if (cat == 'Calf Raise') {
+          final isSeatedCalfRaise =
+              name.contains('seated') && name.contains('calf');
+          if (!isSeatedCalfRaise) keep = false;
+        }
+      }
+
+      // ───────────── SHOULDERS ─────────────
+      if (keep && shoulder > 3) {
+        // Eliminate all horizontal + vertical presses
+        if (cat == 'Horizontal Press' || cat == 'Vertical Press') {
+          keep = false;
+        }
+      }
+
+      // ───────────── ELBOW ─────────────
+      if (keep && elbow > 3) {
+        final nNorm = ex.name.toLowerCase().trim();
+
+        // Specific named offenders
+        const bannedExactNames = [
+          'chin-up',
+          'chin up',
+          'chinup',
+          'lat pull down, unilateral',
+          'lat pulldown, unilateral',
+          'lat pull down, supinated',
+          'lat pulldown, supinated',
+        ];
+
+        if (bannedExactNames.contains(nNorm)) {
+          keep = false;
+        }
+
+        // All Arm Curl category
+        if (keep && cat == 'Arm Curl') keep = false;
+      }
+
+      if (keep && elbow > 4) {
+        // Eliminate all Vertical Pull category
+        if (cat == 'Vertical Pull') keep = false;
+      }
+
+      if (keep && elbow > 6) {
+        // Eliminate all Horizontal Pull category
+        if (cat == 'Horizontal Pull') keep = false;
+      }
+
+      // ───────────── KNEES ─────────────
+      if (keep && knee > 4) {
+        // Eliminate Leg Extension category
+        if (cat == 'Leg Extension') keep = false;
+      }
+
+      if (keep && knee > 6) {
+        // Eliminate Squat Pattern + Leg Curl
+        if (cat == 'Squat Pattern' || cat == 'Leg Curl') {
+          keep = false;
+        }
+      }
+
+      // (knee > 7 re-elim leg curl is redundant; covered by >6)
+
+      return keep;
+    }).toList();
+
+    debugPrint(
+        '🩹 [INJ] After injury filters → final size = ${out.length}');
+
+    return out;
+  }
+
+
 
   // ---------- Helpers ----------
 
