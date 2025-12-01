@@ -8087,8 +8087,7 @@ class _WorkoutPageState extends State<WorkoutPage>
 
   Future<void> loadExercisesFromFirestoreForWES() async {
     print('➡️ [WES] loadExercisesFromFirestoreForWES START');
-    final total = Stopwatch()
-      ..start();
+    final total = Stopwatch()..start();
     final getSw = Stopwatch();
     final mapSw = Stopwatch();
 
@@ -8117,40 +8116,46 @@ class _WorkoutPageState extends State<WorkoutPage>
       var snapshot = await _getCached();
       if (snapshot == null || snapshot.docs.isEmpty) {
         snapshot = await _getServer();
-        print('📥 [WES] exercises.get() from SERVER (docs: ${snapshot.docs
-            .length})');
+        print('📥 [WES] exercises.get() from SERVER (docs: ${snapshot.docs.length})');
       } else {
-        print('📥 [WES] exercises.get() from CACHE (docs: ${snapshot.docs
-            .length})');
+        print('📥 [WES] exercises.get() from CACHE (docs: ${snapshot.docs.length})');
       }
       getSw.stop();
 
       mapSw.start();
       for (final doc in snapshot.docs) {
+        final data = doc.data(); // 👈 grab once
         final id = doc.id;
-        final rawName = doc.data()['name'];
+        final rawName = data['name'];
         final name = rawName?.toString().trim();
         if (name != null && name.isNotEmpty) {
           PeriodizationModelUtils.nameToId[name] = id;
-          PeriodizationModelUtils.idToName[id] = name;
-          mapped++;
+          PeriodizationModelUtils.idToName[id] = name;  // ⬅ anchor we patched under
 
+          // 🔽 NEW: store type → exerciseTypeById
+          final String? type = data['type'] as String?;
+          if (type != null && type.isNotEmpty) {
+            PeriodizationModelUtils.exerciseTypeById[id] = type;
+            // optional debug:
+            // print('🧩 [WES] Type mapped id="$id" name="$name" type="$type"');
+          }
+
+          mapped++;
         }
       }
       mapSw.stop();
 
       print('📥 [WES] exercises.get() took ${getSw.elapsedMilliseconds}ms');
-      print('🧭 [WES] Mapping loop took ${mapSw
-          .elapsedMilliseconds}ms (mapped $mapped)');
+      print('🧭 [WES] Mapping loop took ${mapSw.elapsedMilliseconds}ms (mapped $mapped)');
     } catch (e, st) {
       print(st);
     } finally {
       total.stop();
-      print('⏱️ [WES] loadExercisesFromFirestoreForWES total ${total
-          .elapsedMilliseconds}ms (mapped $mapped)');
+      print('⏱️ [WES] loadExercisesFromFirestoreForWES total ${total.elapsedMilliseconds}ms (mapped $mapped)');
       print('⤴️ [WES] loadExercisesFromFirestoreForWES END');
     }
   }
+
 
 
   Future<Map<String, dynamic>> _loadPlannedExerciseDetails() async {

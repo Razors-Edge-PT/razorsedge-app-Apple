@@ -188,9 +188,20 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
     final categoryCtrl = TextEditingController();
     final bodySearchCtrl = TextEditingController();
 
-
     String? pickedCategory;
     final List<String> pickedBodyParts = [];
+
+// NEW: optional equipment type
+    String? pickedType;
+    const List<String> kExerciseTypes = [
+      'Dumbbell',
+      'Barbell',
+      'Suspension System',
+      'Machine',
+      'Cable Stack',
+      'Body Weight'
+    ];
+
 
     final formKey = GlobalKey<FormState>();
 
@@ -370,6 +381,29 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
                   ),
                   const SizedBox(height: 14),
 
+                  // NEW: Equipment type (optional)
+                  DropdownButtonFormField<String>(
+                    value: pickedType,
+                    decoration: _dec(
+                      'Equipment type (optional)',
+                      icon: const Icon(Icons.fitness_center),
+                    ),
+                    items: kExerciseTypes
+                        .map(
+                          (t) => DropdownMenuItem<String>(
+                        value: t,
+                        child: Text(t),
+                      ),
+                    )
+                        .toList(),
+                    onChanged: (value) {
+                      pickedType = value;
+                    },
+                    dropdownColor: Colors.blueGrey.shade800,
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                  const SizedBox(height: 14),
+
                   // Body parts title + tooltip
                   Row(
                     children: const [
@@ -470,7 +504,12 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
                 final trimmedName = nameCtrl.text.trim();
                 final category = pickedCategory ?? categoryCtrl.text.trim();
 
-                await _addExercise(trimmedName, pickedBodyParts, category);
+                await _addExercise(
+                  trimmedName,
+                  pickedBodyParts,
+                  category,
+                  type: pickedType,
+                );
                 if (ctx.mounted) Navigator.of(ctx).pop();
               },
 
@@ -486,8 +525,9 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
   Future<void> _addExercise(
       String name,
       List<String> bodyParts,
-      String category,
-      ) async {
+      String category, {
+        String? type, // NEW optional named parameter
+      }) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
@@ -497,6 +537,8 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
       'bodyParts': bodyParts, // ← ordered list (primary first)
       // Legacy compatibility: keep first as 'bodyPart' if you still have code reading it
       if (bodyParts.isNotEmpty) 'bodyPart': bodyParts.first,
+      // NEW: optional equipment type
+      if (type != null && type.isNotEmpty) 'type': type,
     };
 
     try {
@@ -506,6 +548,7 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
       print('Error adding exercise: $e');
     }
   }
+
 
 
   @override
@@ -561,14 +604,19 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
             ...groupedExercises.entries
                 .where((entry) => !categoryOrder.contains(entry.key))
                 .map((entry) => _buildCategoryTile(entry.key, entry.value)),
+
+            const SizedBox(height: 40),
           ],
         ),
+
+
       ),
       floatingActionButton: FloatingActionButton(
         backgroundColor: Colors.blueGrey.shade700,
         onPressed: _showAddExerciseDialog,
         child: const Icon(Icons.add),
       ),
+
     );
 
   }

@@ -51,6 +51,7 @@ class PeriodizationModelUtils {
   static Map<String, String> nameToId = {};
 
   static final Map<String, String> idToName = {};        // id → name ✅
+  static final Map<String, String> exerciseTypeById = {}; // NEW: exerciseId → type
   static final List<int> linearClassicDefaults = [10, 8, 6];
   static final List<int> linearExposureDefaults = [12, 10, 8, 6, 4, 2];
   static final List<int> dupSignatureDefaults = [6, 10];
@@ -58,6 +59,7 @@ class PeriodizationModelUtils {
   static List<Map<String, dynamic>> savedWorkoutsList = [];
 
   static Map<String, dynamic> get exerciseSettings => _exerciseSettings;
+
 
 
   static double calculateE1RM(double? weight, double? reps, double? rir) {
@@ -1019,6 +1021,54 @@ class PeriodizationModelUtils {
   }
 
   // Weight Logic
+  /// Default weight rules for when we have no usable history.
+  /// - If type == "Barbell" AND name is Barbell Overhead Press → 10
+  /// - Else if type == "Barbell" → 20
+  /// - Else → 5
+  static double _defaultWeightForExercise(String exerciseName) {
+    {
+      final type = _getExerciseTypeForName(exerciseName);
+      final id = nameToId[exerciseName] ?? 'NO_ID';
+      print('🔍 [PMU][TYPE CHECK] exercise="$exerciseName" | id="$id" | resolvedType="$type"');
+    }
+
+    final lowerName = exerciseName.toLowerCase().trim();
+    final type = _getExerciseTypeForName(exerciseName);
+
+    // 1️⃣ Most specific: Barbell Overhead Press → 10 kg
+    if (type == 'Barbell' &&
+        (lowerName == 'barbell overhead press' ||
+            lowerName.contains('overhead press'))) {
+      return 10.0;
+    }
+
+    // 2️⃣ Any other barbell exercise → 20 kg
+    if (type == 'Barbell') {
+      return 20.0;
+    }
+
+    // 3️⃣ Everything else → 5 kg
+    return 5.0;
+  }
+
+
+  /// Lookup the exercise type (e.g. "Barbell") from our static maps.
+  /// Falls back to name-based detection if we don't have a type yet.
+  static String? _getExerciseTypeForName(String exerciseName) {
+    final exerciseId = nameToId[exerciseName] ?? exerciseName;
+    final type = exerciseTypeById[exerciseId];
+
+    if (type != null && type.isNotEmpty) {
+      return type;
+    }
+
+    // Fallback: infer from name if we have nothing stored
+    final lower = exerciseName.toLowerCase();
+    if (lower.contains('barbell')) return 'Barbell';
+
+    return null;
+  }
+
 
   static double getSuggestedWeightFromRep(String exerciseName, int reps, double rir) {
     // 1) Pull a unified base E1RM from history (no week-1 logic here)
@@ -1030,9 +1080,12 @@ class PeriodizationModelUtils {
     final double? baseE1RM = info['baseE1RM'] as double?;
 
     if (baseE1RM == null || baseE1RM <= 0) {
-      // Preserve your conservative fallback when no history is available.
-      return 20.0;
+      final fallback = _defaultWeightForExercise(exerciseName);
+      print('🔻 [PMU] No history for "$exerciseName" '
+          '— default weight = $fallback (type=${_getExerciseTypeForName(exerciseName)})');
+      return fallback;
     }
+
 
     // 2) Convert E1RM → weight for the current plan
     final double suggestedWeight = reverseCalculateWeight(
