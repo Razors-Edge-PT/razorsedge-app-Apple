@@ -1172,6 +1172,12 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
 
 
+  // Shoulder / elbow detail flags
+  bool _shoulderPainOverhead = false;
+  bool _shoulderPainFront   = false;
+  bool _elbowPainInside     = false;
+  bool _elbowPainOutside    = false;
+
   // ── C) Injuries: checkboxes + per-item pain slider (1–10) when checked
   final List<String> _injuryKeys = const [
     'Lower back',
@@ -1422,11 +1428,36 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
       final onbRef = db.collection('users').doc(user.uid)
           .collection('profile').doc('fitness_onboarding');
+
+      // 🔄 Clear old painNow entries so deselected injuries don't linger
+      await onbRef.set({
+        'painNow': FieldValue.delete(),
+      }, SetOptions(merge: true));
+
+      // Now write the fresh onboarding answers (including the new painNow map)
       await onbRef.set(answers.toJson(), SetOptions(merge: true));
+
+      // Save shoulder / elbow pain detail flags (flat keys)
+      final Map<String, dynamic> painDetailFlags = {};
+
+      if (_injuries.contains('Shoulders')) {
+        painDetailFlags['shoulderPainOverhead'] = _shoulderPainOverhead;
+        painDetailFlags['shoulderPainFront'] = _shoulderPainFront;
+      }
+      if (_injuries.contains('Elbows')) {
+        painDetailFlags['elbowPainInside'] = _elbowPainInside;
+        painDetailFlags['elbowPainOutside'] = _elbowPainOutside;
+      }
+
+      if (painDetailFlags.isNotEmpty) {
+        await onbRef.set(painDetailFlags, SetOptions(merge: true));
+      }
 
       await onbRef.set({
         'bodyFocusLevel': _bodyFocusLevel,
       }, SetOptions(merge: true));
+
+
 
       // Save child/sub-group levels (if any)
       if (_childFocusLevel.isNotEmpty) {
@@ -1938,6 +1969,16 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                                     } else {
                                       _injuries.remove(k);
                                       _painSlider.remove(k);
+
+                                      // reset detail flags when turning off
+                                      if (k == 'Shoulders') {
+                                        _shoulderPainOverhead = false;
+                                        _shoulderPainFront = false;
+                                      }
+                                      if (k == 'Elbows') {
+                                        _elbowPainInside = false;
+                                        _elbowPainOutside = false;
+                                      }
                                     }
                                   });
                                 },
@@ -1959,7 +2000,8 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                                           thumbColor: Colors.lightBlue,
                                           overlayColor: Colors.lightBlue.withOpacity(0.15),
                                           valueIndicatorColor: Colors.blueAccent,
-                                          valueIndicatorTextStyle: const TextStyle(color: Colors.white),
+                                          valueIndicatorTextStyle:
+                                          const TextStyle(color: Colors.white),
                                         ),
                                         child: Slider(
                                           min: 1,
@@ -1967,12 +2009,126 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                                           divisions: 9,
                                           label: _painSlider[k]?.round().toString(),
                                           value: val,
-                                          onChanged: (v) => setState(() => _painSlider[k] = v),
+                                          onChanged: (v) =>
+                                              setState(() => _painSlider[k] = v),
                                         ),
                                       ),
                                     ),
                                   ],
                                 ),
+
+                                // ── Shoulder follow-up
+                                if (k == 'Shoulders') ...[
+                                  const SizedBox(height: 4),
+                                  const Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: Text(
+                                      'Is there pain when you press up above your head, '
+                                          'or when you press out in front of you, or both?',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: Colors.black87,
+                                      ),
+                                    ),
+                                  ),
+                                  CheckboxListTile(
+                                    dense: true,
+                                    visualDensity: VisualDensity.compact,
+                                    contentPadding: EdgeInsets.only(left: 24.0),
+                                    controlAffinity: ListTileControlAffinity.leading,
+                                    activeColor: Colors.blueAccent,
+                                    title: const Text(
+                                      'Pressing above my head',
+                                      style: TextStyle(
+                                        fontSize: 13.5,
+                                        color: Colors.black87,
+                                      ),
+                                    ),
+
+                                    value: _shoulderPainOverhead,
+                                    onChanged: (v) {
+                                      setState(() {
+                                        _shoulderPainOverhead = v ?? false;
+                                      });
+                                    },
+                                  ),
+                                  CheckboxListTile(
+                                    dense: true,
+                                    visualDensity: VisualDensity.compact,
+                                    contentPadding: EdgeInsets.only(left: 24.0),
+                                    controlAffinity: ListTileControlAffinity.leading,
+                                    activeColor: Colors.blueAccent,
+                                    title: const Text(
+                                      'Pressing out in front of me',
+                                      style: TextStyle(
+                                        fontSize: 13.5,
+                                        color: Colors.black87,
+                                      ),
+                                    ),
+                                    value: _shoulderPainFront,
+                                    onChanged: (v) {
+                                      setState(() {
+                                        _shoulderPainFront = v ?? false;
+                                      });
+                                    },
+                                  ),
+                                ],
+
+                                // ── Elbow follow-up
+                                if (k == 'Elbows') ...[
+                                  const SizedBox(height: 4),
+                                  const Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: Text(
+                                      'Does the inside of your elbow hurt (closest to your body), '
+                                          'or the outside?',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: Colors.black87,
+                                      ),
+                                    ),
+                                  ),
+                                  CheckboxListTile(
+                                    dense: true,
+                                    visualDensity: VisualDensity.compact,
+                                    contentPadding: EdgeInsets.only(left: 24.0),
+                                    controlAffinity: ListTileControlAffinity.leading,
+                                    activeColor: Colors.blueAccent,
+                                    title: const Text(
+                                      'The inside hurts',
+                                      style: TextStyle(
+                                        fontSize: 13.5,
+                                        color: Colors.black87,
+                                      ),
+                                    ),
+                                    value: _elbowPainInside,
+                                    onChanged: (v) {
+                                      setState(() {
+                                        _elbowPainInside = v ?? false;
+                                      });
+                                    },
+                                  ),
+                                  CheckboxListTile(
+                                    dense: true,
+                                    visualDensity: VisualDensity.compact,
+                                    contentPadding: EdgeInsets.only(left: 24.0),
+                                    controlAffinity: ListTileControlAffinity.leading,
+                                    activeColor: Colors.blueAccent,
+                                    title: const Text(
+                                      'The outside hurts',
+                                      style: TextStyle(
+                                        fontSize: 13.5,
+                                        color: Colors.black87,
+                                      ),
+                                    ),
+                                    value: _elbowPainOutside,
+                                    onChanged: (v) {
+                                      setState(() {
+                                        _elbowPainOutside = v ?? false;
+                                      });
+                                    },
+                                  ),
+                                ],
                               ],
 
                               // divider between items
@@ -1981,6 +2137,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                           );
                         }).toList(),
                       ),
+
                     ),
 
 

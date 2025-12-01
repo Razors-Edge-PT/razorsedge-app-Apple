@@ -590,10 +590,17 @@ class TemplateGenerator {
       });
     }
 
+    // Shoulder cause flags from onboarding root doc
+    final bool shoulderPainFront    = onboarding['shoulderPainFront'] == true;
+    final bool shoulderPainOverhead = onboarding['shoulderPainOverhead'] == true;
+
+
     // 🩹 Debug: print levels every time
     debugPrint(
         '🩹 [INJ] Injury levels: '
             'lowerBack=$lowerBack, shoulder=$shoulder, elbow=$elbow, knee=$knee');
+    debugPrint(
+        '🩹 [INJ] Shoulder cause flags: front=$shoulderPainFront, overhead=$shoulderPainOverhead');
 
     // Fast-path: nothing to filter
     if (lowerBack == 0 && shoulder == 0 && elbow == 0 && knee == 0) {
@@ -602,8 +609,32 @@ class TemplateGenerator {
       return lib;
     }
 
+    // Decide which pressing directions to eliminate for shoulder pain > 3
+    bool elimShoulderHP = false; // Horizontal Press
+    bool elimShoulderVP = false; // Vertical Press
+
+    if (shoulder > 3) {
+      if (shoulderPainFront && !shoulderPainOverhead) {
+        // Pain only on horizontal pressing
+        elimShoulderHP = true;
+        elimShoulderVP = false;
+      } else if (shoulderPainOverhead && !shoulderPainFront) {
+        // Pain only on vertical pressing
+        elimShoulderHP = false;
+        elimShoulderVP = true;
+      } else {
+        // Both checked OR neither checked → eliminate both
+        elimShoulderHP = true;
+        elimShoulderVP = true;
+      }
+    }
+
+    debugPrint(
+        '🩹 [INJ] Shoulder rule → elimHP=$elimShoulderHP, elimVP=$elimShoulderVP');
+
     debugPrint(
         '🩹 [INJ] Applying injury filters → starting size = ${lib.length}');
+
 
     final out = lib.where((ex) {
       final name = ex.name.toLowerCase();
@@ -639,7 +670,7 @@ class TemplateGenerator {
 
         // Eliminate anything with "row" in the name,
         // except "suspended high row" and "bar high row".
-        if (name.contains('row')) {
+        if (keep && name.contains('row')) {
           final isSuspendedHighRow =
               name.contains('suspended') && name.contains('row');
           final isBarHighRow =
@@ -650,8 +681,17 @@ class TemplateGenerator {
         }
 
         // Eliminate Leg Curl category
-        if (cat == 'Leg Curl') keep = false;
+        if (keep && cat == 'Leg Curl') keep = false;
+
+        // 🆕 Eliminate Butterfly Dumbbell Raise for back pain > 4
+        if (keep &&
+            name.contains('butterfly') &&
+            name.contains('dumbbell') &&
+            name.contains('raise')) {
+          keep = false;
+        }
       }
+
       if (keep && lowerBack > 5) {
         // Eliminate Leg Extension
         if (cat == 'Leg Extension') keep = false;
@@ -666,11 +706,13 @@ class TemplateGenerator {
 
       // ───────────── SHOULDERS ─────────────
       if (keep && shoulder > 3) {
-        // Eliminate all horizontal + vertical presses
-        if (cat == 'Horizontal Press' || cat == 'Vertical Press') {
+        if (elimShoulderHP && cat == 'Horizontal Press') {
+          keep = false;
+        } else if (elimShoulderVP && cat == 'Vertical Press') {
           keep = false;
         }
       }
+
 
       // ───────────── ELBOW ─────────────
       if (keep && elbow > 3) {
