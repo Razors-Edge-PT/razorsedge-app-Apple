@@ -594,6 +594,10 @@ class TemplateGenerator {
     final bool shoulderPainFront    = onboarding['shoulderPainFront'] == true;
     final bool shoulderPainOverhead = onboarding['shoulderPainOverhead'] == true;
 
+    // Elbow cause flags from onboarding root doc
+    final bool elbowPainInside  = onboarding['elbowPainInside'] == true;
+    final bool elbowPainOutside = onboarding['elbowPainOutside'] == true;
+
 
     // 🩹 Debug: print levels every time
     debugPrint(
@@ -601,6 +605,16 @@ class TemplateGenerator {
             'lowerBack=$lowerBack, shoulder=$shoulder, elbow=$elbow, knee=$knee');
     debugPrint(
         '🩹 [INJ] Shoulder cause flags: front=$shoulderPainFront, overhead=$shoulderPainOverhead');
+
+    // 🩹 Debug: print levels every time
+    debugPrint(
+        '🩹 [INJ] Injury levels: '
+            'lowerBack=$lowerBack, shoulder=$shoulder, elbow=$elbow, knee=$knee');
+    debugPrint(
+        '🩹 [INJ] Shoulder cause flags: front=$shoulderPainFront, overhead=$shoulderPainOverhead');
+    debugPrint(
+        '🩹 [INJ] Elbow cause flags: inside=$elbowPainInside, outside=$elbowPainOutside');
+
 
     // Fast-path: nothing to filter
     if (lowerBack == 0 && shoulder == 0 && elbow == 0 && knee == 0) {
@@ -715,11 +729,12 @@ class TemplateGenerator {
 
 
       // ───────────── ELBOW ─────────────
-      if (keep && elbow > 3) {
+      // Inside elbow pain (medial) rules
+      if (keep && elbow > 2 && elbowPainInside) {
         final nNorm = ex.name.toLowerCase().trim();
 
-        // Specific named offenders
-        const bannedExactNames = [
+        // Specific inside offenders
+        const bannedInsideNames = [
           'chin-up',
           'chin up',
           'chinup',
@@ -729,7 +744,7 @@ class TemplateGenerator {
           'lat pulldown, supinated',
         ];
 
-        if (bannedExactNames.contains(nNorm)) {
+        if (bannedInsideNames.contains(nNorm)) {
           keep = false;
         }
 
@@ -737,15 +752,37 @@ class TemplateGenerator {
         if (keep && cat == 'Arm Curl') keep = false;
       }
 
-      if (keep && elbow > 4) {
+      if (keep && elbow > 4 && elbowPainInside) {
         // Eliminate all Vertical Pull category
         if (cat == 'Vertical Pull') keep = false;
       }
 
-      if (keep && elbow > 6) {
+      if (keep && elbow > 6 && elbowPainInside) {
         // Eliminate all Horizontal Pull category
         if (cat == 'Horizontal Pull') keep = false;
       }
+
+      // Outside elbow pain (lateral) rules
+      if (keep && elbow > 4 && elbowPainOutside) {
+        // Eliminate all Vertical Press
+        if (cat == 'Vertical Press') keep = false;
+
+        // Eliminate Arm Extension *with* "overhead" in the name
+        if (keep && cat == 'Arm Extension' && name.contains('overhead')) {
+          keep = false;
+        }
+      }
+
+      if (keep && elbow > 5 && elbowPainOutside) {
+        // Eliminate all Horizontal Press
+        if (cat == 'Horizontal Press') keep = false;
+
+        // Eliminate all remaining Arm Extension
+        if (keep && cat == 'Arm Extension') {
+          keep = false;
+        }
+      }
+
 
       // ───────────── KNEES ─────────────
       if (keep && knee > 4) {
