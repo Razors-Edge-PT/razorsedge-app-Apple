@@ -13557,11 +13557,17 @@ class _WorkoutPageState extends State<WorkoutPage>
                     final isNewCircuit = i == 0 ||
                         current['circuitIndex'] != prev?['circuitIndex'];
 
-// 🔑 stable key for this row
-                    // 🔑 stable key for this row (per-card unique)
+// 🔑 stable key for this row (per-card unique)
                     final name = (current['name'] ?? '').toString().trim();
                     final ci   = (current['circuitIndex'] ?? 0) as int;
-                    final cardId = (current['cardId'] ?? current['_runtimeId'] ?? '${name.toLowerCase()}|$ci|$i').toString();
+                    final exIdForCard = (current['exerciseId'] ?? current['id'])?.toString();
+
+                    final cardId = (current['cardId']
+                        ?? current['_runtimeId']
+                        ?? exIdForCard
+                        ?? '${name.toLowerCase()}|$ci|$i')
+                        .toString();
+
 
 
                     return Column(
@@ -13683,7 +13689,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                 // 🔓 No gating: always render the row; reconciliation happens in background
                                 final bool isSaved = _isExerciseSaved(i);
 
-                                final exId   = _selectedExercisesWithCircuits[i]['id'];
+                                final exId   = _selectedExercisesWithCircuits[i]['exerciseId'] ?? _selectedExercisesWithCircuits[i]['id'];
                                 final exName = _selectedExercisesWithCircuits[i]['name'] ?? '';
 
 // Try ID → fallback to name
@@ -13693,6 +13699,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                 } else if (exName.isNotEmpty && kExerciseVideoAssets.containsKey(exName)) {
                                   videoKey = exName;
                                 }
+
 
 
                                 // TEMP: inspect structure for this row
@@ -13777,16 +13784,17 @@ class _WorkoutPageState extends State<WorkoutPage>
                                       builder: (context) {
                                         final ex = _selectedExercisesWithCircuits[i];
                                         final String name = ex['name'] ?? '';
-                                        final String? id = ex['id'];
+                                        final String? id = (ex['exerciseId'] ?? ex['id'])?.toString();
 
-                                        // Prefer ID, fall back to name (matches your kExerciseVideoAssets keys)
+// Prefer ID, fall back to name (matches your kExerciseVideoAssets keys)
                                         final String videoKey = (id ?? name).trim();
 
-                                        // Look up the asset path in the map
+// Look up the asset path in the map
                                         final String? assetPath = videoKey.isEmpty
                                             ? null
                                             : (kExerciseVideoAssets[videoKey] ??
                                             kExerciseVideoAssets[videoKey.trim()]);
+
 
                                         debugPrint(
                                           '🎥 row video lookup → '
@@ -13931,217 +13939,166 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                             Text(
                                                                   () {
                                                                 final exerciseName =
-                                                                    _selectedExercisesWithCircuits[
-                                                                    i]
-                                                                    ['name']
-                                                                        ?.trim() ??
+                                                                    _selectedExercisesWithCircuits[i]['name']
+                                                                        ?.toString()
+                                                                        .trim() ??
                                                                         '';
+                                                                final String? exerciseId =
+                                                                (_selectedExercisesWithCircuits[i]['exerciseId'] ??
+                                                                    _selectedExercisesWithCircuits[i]['id'])
+                                                                    ?.toString();
+                                                                final String historyKey = exerciseId ?? exerciseName;
+
                                                                 final targetWeight = _isInitialized
-                                                                    ? set1SuggestedWeight(
-                                                                    i)
+                                                                    ? set1SuggestedWeight(i)
                                                                     : 20.0;
 
                                                                 final history =
-                                                                    PeriodizationModelUtils
-                                                                        .topSetsByExercise[
-                                                                    exerciseName] ??
+                                                                    PeriodizationModelUtils.topSetsByExercise[historyKey] ??
+                                                                        PeriodizationModelUtils.topSetsByExercise[exerciseName] ??
                                                                         [];
 
                                                                 final matchingSets = history
-                                                                    .where((
-                                                                    s) =>
-                                                                (s['weight']
-                                                                as double)
-                                                                    .toStringAsFixed(
-                                                                    1) ==
-                                                                    targetWeight
-                                                                        .toStringAsFixed(
-                                                                        1))
+                                                                    .where((s) =>
+                                                                (s['weight'] as double).toStringAsFixed(1) ==
+                                                                    targetWeight.toStringAsFixed(1))
                                                                     .toList();
 
-                                                                if (matchingSets
-                                                                    .isEmpty)
-                                                                  return 'No previous sets at ${targetWeight
-                                                                      .toStringAsFixed(
-                                                                      1)} kg';
+                                                                if (matchingSets.isEmpty) {
+                                                                  return 'No previous sets at ${targetWeight.toStringAsFixed(1)} kg';
+                                                                }
 
-                                                                matchingSets
-                                                                    .sort((a,
-                                                                    b) {
-                                                                  final repsA =
-                                                                      a['reps'] ??
-                                                                          0.0;
-                                                                  final repsB =
-                                                                      b['reps'] ??
-                                                                          0.0;
-                                                                  final rirA =
-                                                                      a['rir'] ??
-                                                                          99.0;
-                                                                  final rirB =
-                                                                      b['rir'] ??
-                                                                          99.0;
+                                                                matchingSets.sort((a, b) {
+                                                                  final repsA = a['reps'] ?? 0.0;
+                                                                  final repsB = b['reps'] ?? 0.0;
+                                                                  final rirA = a['rir'] ?? 99.0;
+                                                                  final rirB = b['rir'] ?? 99.0;
 
-                                                                  if (repsB
-                                                                      .compareTo(
-                                                                      repsA) !=
-                                                                      0)
-                                                                    return repsB
-                                                                        .compareTo(
-                                                                        repsA);
-                                                                  return rirA
-                                                                      .compareTo(
-                                                                      rirB);
+                                                                  if (repsB.compareTo(repsA) != 0) {
+                                                                    return repsB.compareTo(repsA);
+                                                                  }
+                                                                  return rirA.compareTo(rirB);
                                                                 });
 
-                                                                final best =
-                                                                    matchingSets
-                                                                        .first;
-                                                                final reps =
-                                                                best['reps'];
+                                                                final best = matchingSets.first;
+                                                                final reps = best['reps'];
                                                                 final rir = best['rir'];
 
-                                                                return 'Best at ${targetWeight
-                                                                    .toStringAsFixed(
-                                                                    1)} kg: $reps reps @ RIR $rir';
+                                                                return 'Best at ${targetWeight.toStringAsFixed(1)} kg: $reps reps @ RIR $rir';
                                                               }(),
                                                               style: const TextStyle(
                                                                 fontSize: 10.0,
-                                                                fontWeight:
-                                                                FontWeight.bold,
-                                                                color: Colors
-                                                                    .white24,
+                                                                fontWeight: FontWeight.bold,
+                                                                color: Colors.white24,
                                                               ),
                                                             ),
-                                                            const SizedBox(
-                                                                height: 0),
+                                                            const SizedBox(height: 0),
                                                             Builder(
-                                                              builder: (
-                                                                  context) {
+                                                              builder: (context) {
                                                                 if (!_isInitialized) {
                                                                   return const Text(
                                                                     'Loading...',
                                                                     style: TextStyle(
                                                                       fontSize: 10.0,
-                                                                      fontWeight: FontWeight
-                                                                          .bold,
-                                                                      color: Colors
-                                                                          .white54,
+                                                                      fontWeight: FontWeight.bold,
+                                                                      color: Colors.white54,
                                                                     ),
                                                                   );
                                                                 }
 
-                                                                final exerciseName = _selectedExercisesWithCircuits[i]['name']
-                                                                    ?.trim() ??
-                                                                    '';
-                                                                final repTarget = set1SuggestedReps(
-                                                                    i); // no `.round()` yet
+                                                                final exerciseName =
+                                                                    _selectedExercisesWithCircuits[i]['name']
+                                                                        ?.toString()
+                                                                        .trim() ??
+                                                                        '';
+                                                                final String? exerciseId =
+                                                                (_selectedExercisesWithCircuits[i]['exerciseId'] ??
+                                                                    _selectedExercisesWithCircuits[i]['id'])
+                                                                    ?.toString();
+                                                                final String historyKey = exerciseId ?? exerciseName;
 
-                                                                if (repTarget ==
-                                                                    null) {
+                                                                final repTarget = set1SuggestedReps(i); // no `.round()` yet
+
+                                                                if (repTarget == null) {
                                                                   return const Text(
                                                                     'Loading...',
                                                                     style: TextStyle(
                                                                       fontSize: 10.0,
-                                                                      fontWeight: FontWeight
-                                                                          .bold,
-                                                                      color: Colors
-                                                                          .white54,
+                                                                      fontWeight: FontWeight.bold,
+                                                                      color: Colors.white54,
                                                                     ),
                                                                   );
                                                                 }
 
-                                                                final roundedTarget = repTarget
-                                                                    .round();
-                                                                final history = PeriodizationModelUtils
-                                                                    .topSetsByExercise[exerciseName] ??
-                                                                    [];
+                                                                final roundedTarget = repTarget.round(); // (kept for behaviour parity even if unused)
+                                                                final history =
+                                                                    PeriodizationModelUtils.topSetsByExercise[historyKey] ??
+                                                                        PeriodizationModelUtils.topSetsByExercise[exerciseName] ??
+                                                                        [];
 
-                                                                final matchingSets = history
-                                                                    .where((s) {
-                                                                  final reps = (s['reps'] as num?)
-                                                                      ?.round();
-                                                                  return reps ==
-                                                                      repTarget;
+                                                                final matchingSets = history.where((s) {
+                                                                  final reps = (s['reps'] as num?)?.round();
+                                                                  return reps == repTarget;
                                                                 }).toList();
 
-                                                                if (matchingSets
-                                                                    .isEmpty) {
+                                                                if (matchingSets.isEmpty) {
                                                                   return Text(
                                                                     'No previous sets at $repTarget reps',
                                                                     style: const TextStyle(
                                                                       fontSize: 10.0,
-                                                                      fontWeight: FontWeight
-                                                                          .bold,
-                                                                      color: Colors
-                                                                          .white54,
+                                                                      fontWeight: FontWeight.bold,
+                                                                      color: Colors.white54,
                                                                     ),
                                                                   );
                                                                 }
 
-                                                                matchingSets
-                                                                    .sort((a,
-                                                                    b) {
-                                                                  final wa = a['weight'] ??
-                                                                      0.0;
-                                                                  final wb = b['weight'] ??
-                                                                      0.0;
-                                                                  return (wb as num)
-                                                                      .compareTo(
-                                                                      wa as num);
+                                                                matchingSets.sort((a, b) {
+                                                                  final wa = a['weight'] ?? 0.0;
+                                                                  final wb = b['weight'] ?? 0.0;
+                                                                  return (wb as num).compareTo(wa as num);
                                                                 });
 
-                                                                final best = matchingSets
-                                                                    .first;
-                                                                double weight = (best['weight'] as num?)
-                                                                    ?.toDouble() ??
-                                                                    0.0;
-                                                                final isBwEx = PeriodizationModelUtils
-                                                                    .isBodyweightExercise(
-                                                                  id: PeriodizationModelUtils
-                                                                      .nameToId[exerciseName] ??
+                                                                final best = matchingSets.first;
+                                                                double weight =
+                                                                    (best['weight'] as num?)?.toDouble() ?? 0.0;
+
+                                                                final isBwEx = PeriodizationModelUtils.isBodyweightExercise(
+                                                                  id: exerciseId ??
+                                                                      PeriodizationModelUtils.nameToId[exerciseName] ??
                                                                       exerciseName,
                                                                   name: exerciseName,
                                                                 );
+
                                                                 if (isBwEx) {
-                                                                  weight =
-                                                                      PeriodizationModelUtils
-                                                                          .toDisplayAddedWeight(
-                                                                        uid: _cachedUid ??
-                                                                            FirebaseAuth
-                                                                                .instance
-                                                                                .currentUser
-                                                                                ?.uid ??
-                                                                            '',
-                                                                        absoluteKg: weight,
-                                                                        exerciseId: PeriodizationModelUtils
-                                                                            .nameToId[exerciseName] ??
-                                                                            exerciseName,
-                                                                        exerciseName: exerciseName,
-                                                                        asOfDate: (best['date'] is DateTime)
-                                                                            ? best['date']
-                                                                            : null,
-                                                                      );
+                                                                  weight = PeriodizationModelUtils.toDisplayAddedWeight(
+                                                                    uid: _cachedUid ??
+                                                                        FirebaseAuth.instance.currentUser?.uid ??
+                                                                        '',
+                                                                    absoluteKg: weight,
+                                                                    exerciseId: exerciseId ??
+                                                                        PeriodizationModelUtils.nameToId[exerciseName] ??
+                                                                        exerciseName,
+                                                                    exerciseName: exerciseName,
+                                                                    asOfDate: (best['date'] is DateTime)
+                                                                        ? best['date']
+                                                                        : null,
+                                                                  );
                                                                 }
 
                                                                 final rir = best['rir'];
 
                                                                 return Text(
-                                                                  'Best at $repTarget reps: ${weight
-                                                                      .toStringAsFixed(
-                                                                      1)} kg @ RIR ${rir
-                                                                      .toString()}',
+                                                                  'Best at $repTarget reps: ${weight.toStringAsFixed(1)} kg @ RIR ${rir.toString()}',
                                                                   style: const TextStyle(
                                                                     fontSize: 10.0,
-                                                                    fontWeight: FontWeight
-                                                                        .bold,
-                                                                    color: Colors
-                                                                        .white54,
+                                                                    fontWeight: FontWeight.bold,
+                                                                    color: Colors.white54,
                                                                   ),
                                                                 );
                                                               },
-
                                                             ),
                                                           ],
+
                                                         ),
 
                                                         const SizedBox(
