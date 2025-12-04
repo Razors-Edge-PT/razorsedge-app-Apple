@@ -5200,11 +5200,21 @@ class _WorkoutPageState extends State<WorkoutPage>
             'plannedRir=$plannedRir  bb2Rir=$bb2Rir  final=$finalRir'
     );
 
+    print(
+        '🎯 getRirFromPlanOrInput → ex="$exerciseName" set=$setNumber '
+            'weekIndex=$weekIndex weekKey=$weekKey sessionKey=$sessionKey '
+            'plannedRir=$plannedRir bb2Rir=$bb2Rir → final=$finalRir');
+
     return finalRir;
   }
 
 
-  double set1RIR(int i) => getRirFromPlanOrInput(i, 1);
+  double set1RIR(int i) {
+    final v = getRirFromPlanOrInput(i, 1);
+    print('🟢 set1RIR($i) → $v');
+    return v;
+  }
+
 
 // ✅ Function to determine RIR for Set 2 (Default: 1.5, Modifiable in Future)
   double set2RIR(int i) => getRirFromPlanOrInput(i, 2);
@@ -10136,6 +10146,168 @@ class _WorkoutPageState extends State<WorkoutPage>
     await dayDocRef.set({'exercises': existing}, SetOptions(merge: true));
     print('✅ [BB2 Push] Wrote top sets for week_$weekIndex/day_$dayIndex');
   }
+  Future<void> _saveSingleRowToFirestore({
+    required int rowIndex,
+    required int setIndex,
+  }) async {
+    try {
+      // Optional: don’t auto-save while still loading
+      if (_isLoadingData) return;
+
+      final uid = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid;
+      if (uid == null) return;
+
+      final String docId = _workoutDocIdForDate(_selectedDate);
+      final docRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('workouts')
+          .doc(docId);
+
+      // 1) Read existing workout document (if any)
+      final snap = await docRef.get();
+      final data = snap.data() ?? <String, dynamic>{};
+
+      final List<Map<String, dynamic>> exercises = [
+        for (final e in (data['exercises'] as List<dynamic>? ?? const []))
+          Map<String, dynamic>.from(e as Map),
+      ];
+
+      // 2) Work out which exercise this UI row is
+      final rowMeta = _selectedExercisesWithCircuits[rowIndex];
+      final String name =
+      ((rowMeta['name'] ?? '') as String).toString().trim();
+      final int circuitIndex = (rowMeta['circuitIndex'] ?? 0) as int;
+      if (name.isEmpty) return;
+
+      final String exerciseId =
+          PeriodizationModelUtils.nameToId[name] ?? name;
+
+      String _exKey(Map e) =>
+          '${(e['name'] ?? '').toString().trim()}|${e['circuitIndex'] ?? 0}';
+      final String targetKey = '$name|$circuitIndex';
+
+      // 3) Find or create this exercise entry in `exercises`
+      int exIndex = exercises.indexWhere((e) => _exKey(e) == targetKey);
+      if (exIndex == -1) {
+        exercises.add({
+          'exerciseId': exerciseId,
+          'name': name,
+          'circuitIndex': circuitIndex,
+          'sets': <Map<String, dynamic>>[],
+        });
+        exIndex = exercises.length - 1;
+      }
+
+      final ex = Map<String, dynamic>.from(exercises[exIndex]);
+      List<Map<String, dynamic>> sets = [
+        for (final s in (ex['sets'] as List<dynamic>? ?? const []))
+          Map<String, dynamic>.from(s as Map),
+      ];
+
+      // 4) Make sure sets list is long enough
+      while (sets.length <= setIndex) {
+        sets.add(<String, dynamic>{});
+      }
+
+      // 5) Pull current values from controllers for that row + set
+      double? _tryDouble(String s) =>
+          s.trim().isEmpty ? null : double.tryParse(s.trim());
+      int? _tryInt(String s) =>
+          s.trim().isEmpty ? null : int.tryParse(s.trim());
+
+      final String weightText =
+      _weightControllers[rowIndex][setIndex].text.trim();
+      final String repsText =
+      _repsControllers[rowIndex][setIndex].text.trim();
+      final String rirText =
+      _rirControllers[rowIndex][setIndex].text.trim();
+
+      String velocityText = '';
+      if (_velocityControllers.length > rowIndex &&
+          _velocityControllers[rowIndex].length > setIndex) {
+        velocityText =
+            _velocityControllers[rowIndex][setIndex].text.trim();
+      }
+
+      final String notesText =
+      _notesControllers[rowIndex][setIndex].text.trim();
+
+      final Map<String, dynamic> setMap =
+      Map<String, dynamic>.from(sets[setIndex]);
+
+      // ✅ BW-AWARE WEIGHT HANDLING
+      final bool isBw = PeriodizationModelUtils.isBodyweightExercise(
+        id: exerciseId,
+        name: name,
+      );
+
+      if (weightText.isEmpty) {
+        // Clear weight if field cleared
+        setMap['weight'] = null;
+        setMap['addedWeight'] = null;
+      } else {
+        if (isBw) {
+          // Treat typed value as ADDED KG above bodyweight
+          double added = _tryDouble(weightText) ?? 0.0;
+          if (added < 0) added = 0.0;
+
+          final DateTime? asOf = _selectedDate;
+          final double abs = PeriodizationModelUtils.toAbsoluteWeight(
+            uid: uid,
+            displayAddedKg: added,
+            exerciseId: exerciseId,
+            exerciseName: name,
+            asOfDate: asOf,
+          );
+
+          final double bw = PeriodizationModelUtils.bodyweightKgForDate(
+            uid: uid,
+            asOf: asOf,
+          );
+          debugPrint(
+              '🧪[INLINE] $name set#$setIndex typedAdded=$added, bw=$bw → save abs=$abs');
+
+          // Store BOTH:
+          setMap['weight'] = abs;       // absolute (BW + added)
+          setMap['addedWeight'] = added; // what user typed
+        } else {
+          // Normal exercise: typed value is the absolute weight
+          setMap['weight'] = _tryDouble(weightText);
+          // Optional: don’t keep stray addedWeight on non-BW
+          setMap.remove('addedWeight');
+        }
+      }
+
+      // ✅ Other fields (same as before)
+      setMap['reps'] = _tryInt(repsText);
+      setMap['rir'] = _tryDouble(rirText);
+      if (velocityText.isNotEmpty) {
+        setMap['velocity'] = _tryDouble(velocityText);
+      }
+      setMap['notes'] = notesText;
+      setMap['updatedAt'] = FieldValue.serverTimestamp();
+
+      sets[setIndex] = setMap;
+      ex['sets'] = sets;
+      exercises[exIndex] = ex;
+
+      // 6) Write back only the exercises array (merge so other fields survive)
+      await docRef.set(
+        {
+          'exercises': exercises,
+        },
+        SetOptions(merge: true),
+      );
+
+      debugPrint(
+          '💾 [WES inline-save] Saved row row=$rowIndex set=$setIndex for $name');
+    } catch (e, st) {
+      debugPrint(
+          '❌ [WES inline-save] Failed to save single row (row=$rowIndex set=$setIndex): $e');
+      debugPrint(st.toString());
+    }
+  }
 
 
   Future<void> _upsertWorkoutToFirestore({
@@ -12399,6 +12571,13 @@ class _WorkoutPageState extends State<WorkoutPage>
     final dynamic existingRepTargets = existing['repTargets'];
     final dynamic existingRirPlan = existing['rirPlan'];
 
+    // 🔎 Which week are we currently in for this exercise?
+    // _getApplicableWeekIndex(exerciseId) is the same helper used in getRirFromPlanOrInput.
+    final int? _currentWeekIndex = _getApplicableWeekIndex(exerciseId);
+    final String _currentWeekKey =
+    _currentWeekIndex != null ? 'week${_currentWeekIndex + 1}' : 'week1';
+
+
     // ---- format current values for the text fields ----
     String _formatIncrementsForField(Map<String, dynamic> inc) {
       if (inc.isEmpty) return '';
@@ -12513,10 +12692,18 @@ class _WorkoutPageState extends State<WorkoutPage>
         dynamic repTargetsRaw,
         ) {
       final plan = Map<String, dynamic>.from(rirPlan ?? {});
-      Map<String, dynamic> week1 =
-      Map<String, dynamic>.from(plan['week1'] ?? {});
+
+      // 🔎 Work out which week we're in right now
+      final int? currentWeekIndex = _getApplicableWeekIndex(exerciseId);
+      final int startWeekIndex = (currentWeekIndex ?? 0); // 0-based
+      final String currentWeekKey = 'week${startWeekIndex + 1}';
+
+      // Use the current week as the base template
+      Map<String, dynamic> currentWeek =
+      Map<String, dynamic>.from(plan[currentWeekKey] ?? {});
 
       // Build session → reps map from repTargets.week1.instanceX
+      // (repTargets still driven off week1 only – unchanged)
       final Map<String, int> repsBySession = {};
       if (repTargetsRaw is Map && repTargetsRaw['week1'] is Map) {
         final rtWeek1 =
@@ -12548,9 +12735,9 @@ class _WorkoutPageState extends State<WorkoutPage>
         final sessionKey = parts[0]; // e.g. "session1"
         final setKey = parts[1]; // e.g. "set1"
 
-        week1[sessionKey] ??= {};
+        currentWeek[sessionKey] ??= {};
         final sessionMap =
-        Map<String, dynamic>.from(week1[sessionKey] as Map? ?? {});
+        Map<String, dynamic>.from(currentWeek[sessionKey] as Map? ?? {});
 
         sessionMap[setKey] ??= {};
         final setMap =
@@ -12566,12 +12753,22 @@ class _WorkoutPageState extends State<WorkoutPage>
         }
 
         sessionMap[setKey] = setMap;
-        week1[sessionKey] = sessionMap;
+        currentWeek[sessionKey] = sessionMap;
       });
 
-      plan['week1'] = week1;
+      // ✅ Save back to the current week
+      plan[currentWeekKey] = currentWeek;
+
+      // ✅ Propagate this pattern to all *later* weeks that already exist
+      for (int wi = startWeekIndex + 1; wi < 20; wi++) {
+        final wkKey = 'week${wi + 1}';
+        if (!plan.containsKey(wkKey)) break;
+        plan[wkKey] = Map<String, dynamic>.from(currentWeek);
+      }
+
       return plan;
     }
+
 
     // ─────────────────────────────────────────────
     // Build controllers for WEEK 1, all sessions/sets
@@ -12594,7 +12791,7 @@ class _WorkoutPageState extends State<WorkoutPage>
 
       if (instKeys.isNotEmpty) {
         final firstVal = week1RT[instKeys[0]]?.toString() ?? '';
-        final setsMatch = RegExp(r'x\\s*(\\d+)').firstMatch(firstVal);
+        final setsMatch = RegExp(r'x\s*(\d+)').firstMatch(firstVal);
         if (setsMatch != null) {
           setsPerSession =
               int.tryParse(setsMatch.group(1)!) ?? setsPerSession;
@@ -12618,15 +12815,21 @@ class _WorkoutPageState extends State<WorkoutPage>
     }
 
     final Map<String, TextEditingController> rirControllers = {};
-    final week1Rir = (existingRirPlan is Map &&
-        existingRirPlan['week1'] is Map)
-        ? (existingRirPlan['week1'] as Map).cast<String, dynamic>()
+
+// 🔎 Figure out which week we're in for pre-filling the dialog
+    int? dialogWeekIndex = _getApplicableWeekIndex(exerciseId);
+    dialogWeekIndex ??= 0; // fallback to week1 if null
+    final String dialogWeekKey = 'week${dialogWeekIndex + 1}';
+
+    final weekRir = (existingRirPlan is Map &&
+        existingRirPlan[dialogWeekKey] is Map)
+        ? (existingRirPlan[dialogWeekKey] as Map).cast<String, dynamic>()
         : <String, dynamic>{};
 
     for (int s = 1; s <= weeklyFrequency; s++) {
       final sessionKey = 'session$s';
       final sessionMap =
-          (week1Rir[sessionKey] as Map?)?.cast<String, dynamic>() ??
+          (weekRir[sessionKey] as Map?)?.cast<String, dynamic>() ??
               <String, dynamic>{};
 
       for (int set = 1; set <= setsPerSession; set++) {
@@ -12641,6 +12844,7 @@ class _WorkoutPageState extends State<WorkoutPage>
             TextEditingController(text: rirVal);
       }
     }
+
 
 
     // 🔢 Reps per session/set from repTargets.week1
@@ -14417,6 +14621,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                         const SizedBox(
                                                             width: 4),
 
+
                                                         // RIR
                                                         SizedBox(
                                                           width: 50,
@@ -14465,21 +14670,20 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                 contentPadding: const EdgeInsets.only(left: 2),
                                                                 hintText: (j == 0)
                                                                     ? formatRir(
-                                                                    _seedHintsByKey[
-                                                                    '${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i']?['rir']
-                                                                        ?? set1RIR(i)
+                                                                  // ✅ Always use the central logic for set 1
+                                                                    set1RIR(i)
                                                                 )
                                                                     : (j >= 1 && j <= 7)
                                                                     ? formatRir(
-                                                                    _seedHintsByKey[
-                                                                    '${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i']?['s${j + 1}_rir']
-                                                                        ?? (j == 1
+                                                                  // ✅ Sets 2–8 also come from the same logic
+                                                                    (j == 1
                                                                         ? set2RIR(i)
                                                                         : j == 2
                                                                         ? set3RIR(i)
-                                                                        : 1)
+                                                                        : getRirFromPlanOrInput(i, j + 1))
                                                                 )
                                                                     : '1',
+
                                                                 hintStyle: const TextStyle(
                                                                   color: Colors.grey,
                                                                   fontStyle: FontStyle.italic,
