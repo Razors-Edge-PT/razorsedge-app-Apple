@@ -10146,16 +10146,35 @@ class _WorkoutPageState extends State<WorkoutPage>
     await dayDocRef.set({'exercises': existing}, SetOptions(merge: true));
     print('✅ [BB2 Push] Wrote top sets for week_$weekIndex/day_$dayIndex');
   }
+
   Future<void> _saveSingleRowToFirestore({
     required int rowIndex,
     required int setIndex,
   }) async {
-    try {
-      // Optional: don’t auto-save while still loading
-      if (_isLoadingData) return;
+    print('💾 [INLINE SAVE] Triggered for row=$rowIndex set=$setIndex');
 
+    try {
       final uid = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid;
-      if (uid == null) return;
+      if (uid == null) {
+        print('❌ [INLINE SAVE] No uid, aborting');
+        return;
+      }
+
+      // Build a fresh payload from the CURRENT UI, using your canonical builder.
+      // This will:
+      //  - sync controllers -> _workoutSets
+      //  - do BW absolute/added weight conversion
+      //  - include only setsWithData
+      final payload = _buildWorkoutPayload(
+        markAllSaved: false,
+        uid: uid,
+      );
+
+      final exercises = payload['exercises'];
+      if (exercises is! List || exercises.isEmpty) {
+        print('💾 [INLINE SAVE] Payload has no exercises, skipping write');
+        return;
+      }
 
       final String docId = _workoutDocIdForDate(_selectedDate);
       final docRef = FirebaseFirestore.instance
@@ -10164,150 +10183,30 @@ class _WorkoutPageState extends State<WorkoutPage>
           .collection('workouts')
           .doc(docId);
 
-      // 1) Read existing workout document (if any)
-      final snap = await docRef.get();
-      final data = snap.data() ?? <String, dynamic>{};
+      print('💾 [INLINE SAVE] About to write exercises=${exercises.length} to Firestore for $docId');
 
-      final List<Map<String, dynamic>> exercises = [
-        for (final e in (data['exercises'] as List<dynamic>? ?? const []))
-          Map<String, dynamic>.from(e as Map),
-      ];
-
-      // 2) Work out which exercise this UI row is
-      final rowMeta = _selectedExercisesWithCircuits[rowIndex];
-      final String name =
-      ((rowMeta['name'] ?? '') as String).toString().trim();
-      final int circuitIndex = (rowMeta['circuitIndex'] ?? 0) as int;
-      if (name.isEmpty) return;
-
-      final String exerciseId =
-          PeriodizationModelUtils.nameToId[name] ?? name;
-
-      String _exKey(Map e) =>
-          '${(e['name'] ?? '').toString().trim()}|${e['circuitIndex'] ?? 0}';
-      final String targetKey = '$name|$circuitIndex';
-
-      // 3) Find or create this exercise entry in `exercises`
-      int exIndex = exercises.indexWhere((e) => _exKey(e) == targetKey);
-      if (exIndex == -1) {
-        exercises.add({
-          'exerciseId': exerciseId,
-          'name': name,
-          'circuitIndex': circuitIndex,
-          'sets': <Map<String, dynamic>>[],
-        });
-        exIndex = exercises.length - 1;
-      }
-
-      final ex = Map<String, dynamic>.from(exercises[exIndex]);
-      List<Map<String, dynamic>> sets = [
-        for (final s in (ex['sets'] as List<dynamic>? ?? const []))
-          Map<String, dynamic>.from(s as Map),
-      ];
-
-      // 4) Make sure sets list is long enough
-      while (sets.length <= setIndex) {
-        sets.add(<String, dynamic>{});
-      }
-
-      // 5) Pull current values from controllers for that row + set
-      double? _tryDouble(String s) =>
-          s.trim().isEmpty ? null : double.tryParse(s.trim());
-      int? _tryInt(String s) =>
-          s.trim().isEmpty ? null : int.tryParse(s.trim());
-
-      final String weightText =
-      _weightControllers[rowIndex][setIndex].text.trim();
-      final String repsText =
-      _repsControllers[rowIndex][setIndex].text.trim();
-      final String rirText =
-      _rirControllers[rowIndex][setIndex].text.trim();
-
-      String velocityText = '';
-      if (_velocityControllers.length > rowIndex &&
-          _velocityControllers[rowIndex].length > setIndex) {
-        velocityText =
-            _velocityControllers[rowIndex][setIndex].text.trim();
-      }
-
-      final String notesText =
-      _notesControllers[rowIndex][setIndex].text.trim();
-
-      final Map<String, dynamic> setMap =
-      Map<String, dynamic>.from(sets[setIndex]);
-
-      // ✅ BW-AWARE WEIGHT HANDLING
-      final bool isBw = PeriodizationModelUtils.isBodyweightExercise(
-        id: exerciseId,
-        name: name,
-      );
-
-      if (weightText.isEmpty) {
-        // Clear weight if field cleared
-        setMap['weight'] = null;
-        setMap['addedWeight'] = null;
-      } else {
-        if (isBw) {
-          // Treat typed value as ADDED KG above bodyweight
-          double added = _tryDouble(weightText) ?? 0.0;
-          if (added < 0) added = 0.0;
-
-          final DateTime? asOf = _selectedDate;
-          final double abs = PeriodizationModelUtils.toAbsoluteWeight(
-            uid: uid,
-            displayAddedKg: added,
-            exerciseId: exerciseId,
-            exerciseName: name,
-            asOfDate: asOf,
-          );
-
-          final double bw = PeriodizationModelUtils.bodyweightKgForDate(
-            uid: uid,
-            asOf: asOf,
-          );
-          debugPrint(
-              '🧪[INLINE] $name set#$setIndex typedAdded=$added, bw=$bw → save abs=$abs');
-
-          // Store BOTH:
-          setMap['weight'] = abs;       // absolute (BW + added)
-          setMap['addedWeight'] = added; // what user typed
-        } else {
-          // Normal exercise: typed value is the absolute weight
-          setMap['weight'] = _tryDouble(weightText);
-          // Optional: don’t keep stray addedWeight on non-BW
-          setMap.remove('addedWeight');
-        }
-      }
-
-      // ✅ Other fields (same as before)
-      setMap['reps'] = _tryInt(repsText);
-      setMap['rir'] = _tryDouble(rirText);
-      if (velocityText.isNotEmpty) {
-        setMap['velocity'] = _tryDouble(velocityText);
-      }
-      setMap['notes'] = notesText;
-      setMap['updatedAt'] = FieldValue.serverTimestamp();
-
-      sets[setIndex] = setMap;
-      ex['sets'] = sets;
-      exercises[exIndex] = ex;
-
-      // 6) Write back only the exercises array (merge so other fields survive)
+      // Write ONLY the fields we know are safe and cheap to update frequently.
       await docRef.set(
         {
+          'name': payload['name'],
+          'date': payload['date'],
+          'userId': uid,
           'exercises': exercises,
+          'lastEditedAt': FieldValue.serverTimestamp(),
         },
-        SetOptions(merge: true),
+        SetOptions(merge: true), // don’t clobber wesPlannedExercises etc.
       );
 
-      debugPrint(
-          '💾 [WES inline-save] Saved row row=$rowIndex set=$setIndex for $name');
+      print('✅ [INLINE SAVE] Firestore write complete for row=$rowIndex set=$setIndex');
     } catch (e, st) {
-      debugPrint(
-          '❌ [WES inline-save] Failed to save single row (row=$rowIndex set=$setIndex): $e');
-      debugPrint(st.toString());
+      print('❌ [INLINE SAVE] Failed to save single row (row=$rowIndex set=$setIndex): $e');
+      print(st);
     }
   }
+
+
+
+
 
 
   Future<void> _upsertWorkoutToFirestore({
@@ -14398,40 +14297,48 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                 );
                                                               });
                                                             },
-                                                            child: TextField(
-                                                              controller: _weightControllers[i][j],
-                                                              keyboardType: TextInputType.number,
-                                                              decoration: InputDecoration(
-                                                                hintText: !_isInitialized
-                                                                    ? ''
-                                                                    : (() {
-                                                                  final w = set1SuggestedWeight(i);
-                                                                  return formatWeight(w);
-                                                                })(),
-                                                                hintStyle: const TextStyle(
-                                                                  color: Colors.grey,
-                                                                  fontStyle: FontStyle.italic,
+                                                            child: Focus(
+                                                              onFocusChange: (hasFocus) {
+                                                                if (!hasFocus) {
+                                                                  _saveSingleRowToFirestore(rowIndex: i, setIndex: j);
+                                                                }
+                                                              },
+                                                              child: TextField(
+                                                                controller: _weightControllers[i][j],
+                                                                keyboardType: TextInputType.number,
+                                                                decoration: InputDecoration(
+                                                                  hintText: !_isInitialized
+                                                                      ? ''
+                                                                      : (() {
+                                                                    final w = set1SuggestedWeight(i);
+                                                                    return formatWeight(w);
+                                                                  })(),
+                                                                  hintStyle: const TextStyle(
+                                                                    color: Colors.grey,
+                                                                    fontStyle: FontStyle.italic,
+                                                                    fontSize: 12,
+                                                                  ),
+                                                                  contentPadding: const EdgeInsets.only(left: 2),
+                                                                  enabledBorder: const UnderlineInputBorder(
+                                                                    borderSide: BorderSide(color: Colors.white, width: 1),
+                                                                  ),
+                                                                  focusedBorder: const UnderlineInputBorder(
+                                                                    borderSide: BorderSide(color: Colors.white, width: 1.5),
+                                                                  ),
+                                                                  disabledBorder: const UnderlineInputBorder(
+                                                                    borderSide: BorderSide(color: Colors.white, width: 1),
+                                                                  ),
+                                                                ),
+                                                                onChanged: (value) => setState(() {}),
+                                                                style: TextStyle(
+                                                                  color: _weightControllers[i][j].text.isEmpty
+                                                                      ? Colors.grey
+                                                                      : Colors.white,
                                                                   fontSize: 12,
                                                                 ),
-                                                                contentPadding: const EdgeInsets.only(left: 2),
-                                                                enabledBorder: const UnderlineInputBorder(
-                                                                  borderSide: BorderSide(color: Colors.white, width: 1),
-                                                                ),
-                                                                focusedBorder: const UnderlineInputBorder(
-                                                                  borderSide: BorderSide(color: Colors.white, width: 1.5),
-                                                                ),
-                                                                disabledBorder: const UnderlineInputBorder(
-                                                                  borderSide: BorderSide(color: Colors.white, width: 1),
-                                                                ),
-                                                              ),
-                                                              onChanged: (value) => setState(() {}),
-                                                              style: TextStyle(
-                                                                color: _weightControllers[i][j].text.isEmpty
-                                                                    ? Colors.grey
-                                                                    : Colors.white,
-                                                                fontSize: 12,
                                                               ),
                                                             ),
+
                                                           )
                                                               : FutureBuilder<String>(
 
@@ -14461,36 +14368,44 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                     );
                                                                   });
                                                                 },
-                                                                child: TextField(
-                                                                  controller: _weightControllers[i][j],
-                                                                  keyboardType: TextInputType.number,
-                                                                  decoration: InputDecoration(
-                                                                    hintText: hint, // range like "50–52.5", disappears on input
-                                                                    hintStyle: const TextStyle(
-                                                                      color: Colors.grey,
-                                                                      fontStyle: FontStyle.italic,
+                                                                child: Focus(
+                                                                  onFocusChange: (hasFocus) {
+                                                                    if (!hasFocus) {
+                                                                      _saveSingleRowToFirestore(rowIndex: i, setIndex: j);
+                                                                    }
+                                                                  },
+                                                                  child: TextField(
+                                                                    controller: _weightControllers[i][j],
+                                                                    keyboardType: TextInputType.number,
+                                                                    decoration: InputDecoration(
+                                                                      hintText: hint, // range like "50–52.5", disappears on input
+                                                                      hintStyle: const TextStyle(
+                                                                        color: Colors.grey,
+                                                                        fontStyle: FontStyle.italic,
+                                                                        fontSize: 12,
+                                                                      ),
+                                                                      contentPadding: const EdgeInsets.only(left: 2),
+                                                                      enabledBorder: const UnderlineInputBorder(
+                                                                        borderSide: BorderSide(color: Colors.white, width: 1),
+                                                                      ),
+                                                                      focusedBorder: const UnderlineInputBorder(
+                                                                        borderSide: BorderSide(color: Colors.white, width: 1.5),
+                                                                      ),
+                                                                      disabledBorder: const UnderlineInputBorder(
+                                                                        borderSide: BorderSide(color: Colors.white, width: 1),
+                                                                      ),
+                                                                    ),
+                                                                    onChanged: (value) => setState(() {}),
+                                                                    style: TextStyle(
+                                                                      color: _weightControllers[i][j].text.isNotEmpty
+                                                                          ? Colors.white
+                                                                          : Colors.grey,
                                                                       fontSize: 12,
                                                                     ),
-                                                                    contentPadding: const EdgeInsets.only(left: 2),
-                                                                    enabledBorder: const UnderlineInputBorder(
-                                                                      borderSide: BorderSide(color: Colors.white, width: 1),
-                                                                    ),
-                                                                    focusedBorder: const UnderlineInputBorder(
-                                                                      borderSide: BorderSide(color: Colors.white, width: 1.5),
-                                                                    ),
-                                                                    disabledBorder: const UnderlineInputBorder(
-                                                                      borderSide: BorderSide(color: Colors.white, width: 1),
-                                                                    ),
-                                                                  ),
-                                                                  onChanged: (value) => setState(() {}),
-                                                                  style: TextStyle(
-                                                                    color: _weightControllers[i][j].text.isNotEmpty
-                                                                        ? Colors.white
-                                                                        : Colors.grey,
-                                                                    fontSize: 12,
                                                                   ),
                                                                 ),
                                                               );
+
 
                                                             },
                                                           ),
@@ -14521,40 +14436,48 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                 );
                                                               });
                                                             },
-                                                            child: TextField(
-                                                              controller: _repsControllers[i][j],
-                                                              keyboardType: TextInputType.number,
-                                                              decoration: InputDecoration(
-                                                                contentPadding: const EdgeInsets.only(left: 2),
-                                                                hintText: (_isLoadingData || !_isInitialized)
-                                                                    ? ''
-                                                                    : (() {
-                                                                  final r = set1SuggestedReps(i);
-                                                                  return (r?.toInt().toString() ?? '');
-                                                                })(),
-                                                                hintStyle: const TextStyle(
-                                                                  color: Colors.grey,
-                                                                  fontStyle: FontStyle.italic,
+                                                            child: Focus(
+                                                              onFocusChange: (hasFocus) {
+                                                                if (!hasFocus) {
+                                                                  _saveSingleRowToFirestore(rowIndex: i, setIndex: j);
+                                                                }
+                                                              },
+                                                              child: TextField(
+                                                                controller: _repsControllers[i][j],
+                                                                keyboardType: TextInputType.number,
+                                                                decoration: InputDecoration(
+                                                                  contentPadding: const EdgeInsets.only(left: 2),
+                                                                  hintText: (_isLoadingData || !_isInitialized)
+                                                                      ? ''
+                                                                      : (() {
+                                                                    final r = set1SuggestedReps(i);
+                                                                    return (r?.toInt().toString() ?? '');
+                                                                  })(),
+                                                                  hintStyle: const TextStyle(
+                                                                    color: Colors.grey,
+                                                                    fontStyle: FontStyle.italic,
+                                                                    fontSize: 12,
+                                                                  ),
+                                                                  enabledBorder: const UnderlineInputBorder(
+                                                                    borderSide: BorderSide(color: Colors.white, width: 1),
+                                                                  ),
+                                                                  focusedBorder: const UnderlineInputBorder(
+                                                                    borderSide: BorderSide(color: Colors.white, width: 1.5),
+                                                                  ),
+                                                                  disabledBorder: const UnderlineInputBorder(
+                                                                    borderSide: BorderSide(color: Colors.white, width: 1),
+                                                                  ),
+                                                                ),
+                                                                onChanged: (value) => setState(() {}),
+                                                                style: TextStyle(
+                                                                  color: _repsControllers[i][j].text.isNotEmpty
+                                                                      ? Colors.white
+                                                                      : Colors.grey,
                                                                   fontSize: 12,
                                                                 ),
-                                                                enabledBorder: const UnderlineInputBorder(
-                                                                  borderSide: BorderSide(color: Colors.white, width: 1),
-                                                                ),
-                                                                focusedBorder: const UnderlineInputBorder(
-                                                                  borderSide: BorderSide(color: Colors.white, width: 1.5),
-                                                                ),
-                                                                disabledBorder: const UnderlineInputBorder(
-                                                                  borderSide: BorderSide(color: Colors.white, width: 1),
-                                                                ),
-                                                              ),
-                                                              onChanged: (value) => setState(() {}),
-                                                              style: TextStyle(
-                                                                color: _repsControllers[i][j].text.isNotEmpty
-                                                                    ? Colors.white
-                                                                    : Colors.grey,
-                                                                fontSize: 12,
                                                               ),
                                                             ),
+
                                                           )
                                                               : FutureBuilder<String>(
 
@@ -14584,35 +14507,43 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                     );
                                                                   });
                                                                 },
-                                                                child: TextField(
-                                                                  controller: _repsControllers[i][j],
-                                                                  keyboardType: TextInputType.number,
-                                                                  decoration: InputDecoration(
-                                                                    contentPadding: const EdgeInsets.only(left: 2),
-                                                                    hintText: hint, // "4–6", disappears on input
-                                                                    hintStyle: const TextStyle(
-                                                                      color: Colors.grey,
-                                                                      fontStyle: FontStyle.italic,
+                                                                child: Focus(
+                                                                  onFocusChange: (hasFocus) {
+                                                                    if (!hasFocus) {
+                                                                      _saveSingleRowToFirestore(rowIndex: i, setIndex: j);
+                                                                    }
+                                                                  },
+                                                                  child: TextField(
+                                                                    controller: _repsControllers[i][j],
+                                                                    keyboardType: TextInputType.number,
+                                                                    decoration: InputDecoration(
+                                                                      contentPadding: const EdgeInsets.only(left: 2),
+                                                                      hintText: hint, // "4–6"
+                                                                      hintStyle: const TextStyle(
+                                                                        color: Colors.grey,
+                                                                        fontStyle: FontStyle.italic,
+                                                                        fontSize: 12,
+                                                                      ),
+                                                                      enabledBorder: const UnderlineInputBorder(
+                                                                        borderSide: BorderSide(color: Colors.white, width: 1),
+                                                                      ),
+                                                                      focusedBorder: const UnderlineInputBorder(
+                                                                        borderSide: BorderSide(color: Colors.white, width: 1.5),
+                                                                      ),
+                                                                      disabledBorder: const UnderlineInputBorder(
+                                                                        borderSide: BorderSide(color: Colors.white, width: 1),
+                                                                      ),
+                                                                    ),
+                                                                    onChanged: (value) => setState(() {}),
+                                                                    style: TextStyle(
+                                                                      color: _repsControllers[i][j].text.isNotEmpty
+                                                                          ? Colors.white
+                                                                          : Colors.grey,
                                                                       fontSize: 12,
                                                                     ),
-                                                                    enabledBorder: const UnderlineInputBorder(
-                                                                      borderSide: BorderSide(color: Colors.white, width: 1),
-                                                                    ),
-                                                                    focusedBorder: const UnderlineInputBorder(
-                                                                      borderSide: BorderSide(color: Colors.white, width: 1.5),
-                                                                    ),
-                                                                    disabledBorder: const UnderlineInputBorder(
-                                                                      borderSide: BorderSide(color: Colors.white, width: 1),
-                                                                    ),
-                                                                  ),
-                                                                  onChanged: (value) => setState(() {}),
-                                                                  style: TextStyle(
-                                                                    color: _repsControllers[i][j].text.isNotEmpty
-                                                                        ? Colors.white
-                                                                        : Colors.grey,
-                                                                    fontSize: 12,
                                                                   ),
                                                                 ),
+
                                                               );
 
                                                             },
@@ -14663,42 +14594,51 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                 );
                                                               });
                                                             },
-                                                            child: TextField(
-                                                              controller: _rirControllers[i][j],
-                                                              keyboardType: TextInputType.number,
-                                                              decoration: InputDecoration(
-                                                                contentPadding: const EdgeInsets.only(left: 2),
-                                                                hintText: (j == 0)
-                                                                    ? formatRir(
-                                                                  // ✅ Always use the central logic for set 1
-                                                                    set1RIR(i)
-                                                                )
-                                                                    : (j >= 1 && j <= 7)
-                                                                    ? formatRir(
-                                                                  // ✅ Sets 2–8 also come from the same logic
-                                                                    (j == 1
-                                                                        ? set2RIR(i)
-                                                                        : j == 2
-                                                                        ? set3RIR(i)
-                                                                        : getRirFromPlanOrInput(i, j + 1))
-                                                                )
-                                                                    : '1',
-
-                                                                hintStyle: const TextStyle(
-                                                                  color: Colors.grey,
-                                                                  fontStyle: FontStyle.italic,
-                                                                  fontSize: 12,
+                                                            child: Focus(
+                                                              onFocusChange: (hasFocus) {
+                                                                if (!hasFocus) {
+                                                                  _saveSingleRowToFirestore(rowIndex: i, setIndex: j);
+                                                                }
+                                                              },
+                                                              child: TextField(
+                                                                controller: _rirControllers[i][j],
+                                                                keyboardType: TextInputType.number,
+                                                                decoration: InputDecoration(
+                                                                  contentPadding: const EdgeInsets.only(left: 2),
+                                                                  hintText: (j == 0)
+                                                                      ? formatRir(
+                                                                      _seedHintsByKey[
+                                                                      '${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i']?['rir']
+                                                                          ?? set1RIR(i)
+                                                                  )
+                                                                      : (j >= 1 && j <= 7)
+                                                                      ? formatRir(
+                                                                      _seedHintsByKey[
+                                                                      '${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i']?['s${j + 1}_rir']
+                                                                          ?? (j == 1
+                                                                          ? set2RIR(i)
+                                                                          : j == 2
+                                                                          ? set3RIR(i)
+                                                                          : 1)
+                                                                  )
+                                                                      : '1',
+                                                                  hintStyle: const TextStyle(
+                                                                    color: Colors.grey,
+                                                                    fontStyle: FontStyle.italic,
+                                                                    fontSize: 12,
+                                                                  ),
                                                                 ),
-                                                              ),
-                                                              onChanged: (value) => setState(() {}),
-                                                              style: TextStyle(
-                                                                color: _rirControllers[i][j].text.isEmpty
-                                                                    ? Colors.grey
-                                                                    : Colors.white,
+                                                                onChanged: (value) => setState(() {}),
+                                                                style: TextStyle(
+                                                                  color: _rirControllers[i][j].text.isEmpty
+                                                                      ? Colors.grey
+                                                                      : Colors.white,
+                                                                ),
                                                               ),
                                                             ),
                                                           ),
                                                         ),
+
 
 
                                                         const SizedBox(
