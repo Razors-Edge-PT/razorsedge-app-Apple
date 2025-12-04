@@ -29,6 +29,7 @@ const Map<String, String> kExerciseVideoAssets = {
   //'Url65Q2RxZa00dkDpUdl': 'assets/exercise_videos/Lat Pull Down, Wide Arm.mp4',       // Lat Pull Wide Arm
   //'JbthLLjMF6xRvvaUY8PU': 'assets/exercise_videos/Lat Pull Down, Unilateral.mp4',     // Lat Pull Unilateral
   //'ETm055bydWtUCxTMu3MR': 'assets/exercise_videos/Seated Leg Curl.mp4',               // Seated Leg Curl
+
   //'QkEgE8gnIva2kkNJEfxw': 'assets/exercise_videos/Leg Extension.mp4',                 // Leg Extension
   //'spGqXXReJNHMcc62YgZX': 'assets/exercise_videos/Seated Calf Raise.mp4',             // Seated Calf Raise
   //'WPb8rtRTupKIBzgydB5k': 'assets/exercise_videos/Cable Biceps Curl.mp4',             // Cable Biceps Curl

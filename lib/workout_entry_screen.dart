@@ -11,6 +11,8 @@ import 'top_sets_screen.dart';
 import 'periodization_model_utils.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/services.dart';
+
 // For JSON encoding
 import 'debounce_Utils.dart';
 import 'block_planner_repository.dart';
@@ -1890,6 +1892,10 @@ class _WorkoutPageState extends State<WorkoutPage>
     final double? baseE1RM = info['baseE1RM'] as double?;
     return (baseE1RM != null && baseE1RM.isFinite) ? baseE1RM : 0.0;
   }
+
+
+
+
 
 // Missing exercises block begins...
 
@@ -12343,6 +12349,670 @@ class _WorkoutPageState extends State<WorkoutPage>
     );
   }
 
+  //settings cog
+
+  Map<String, dynamic> _updateFullWeek1RirPlan(
+      dynamic rirPlan,
+      Map<String, TextEditingController> ctrls,
+      ) {
+    final plan = Map<String, dynamic>.from(rirPlan ?? {});
+    plan['week1'] ??= {};
+
+    // iterate sessions set1, set2, set3, ...
+    for (int session = 1; session <= 6; session++) {
+      final sKey = 'session$session';
+      final sessionMap = Map<String, dynamic>.from(plan['week1'][sKey] ?? {});
+
+      for (int set = 1; set <= 8; set++) {
+        final cKey = 'w1_s${session}_set$set';
+        final ctrl = ctrls[cKey];
+        if (ctrl == null) continue;
+
+        final val = ctrl.text.trim();
+        if (val.isEmpty) continue;
+
+        sessionMap['set$set'] ??= {};
+        sessionMap['set$set']['rir'] = val;
+      }
+
+      if (sessionMap.isNotEmpty) {
+        plan['week1'][sKey] = sessionMap;
+      }
+    }
+
+    return plan;
+  }
+
+
+  // 🔧 Opens a small alert dialog to edit increments, repTargets and a simple RIR target
+  Future<void> _showExerciseSettingsDialog(String exerciseId, String exerciseName) async {
+    // You should already have this map in WES from BB2 load:
+    // Map<String, dynamic> plannedExerciseDetails = {};
+    // Pull existing settings for this exercise from WES local cache
+    final existing = Map<String, dynamic>.from(
+      (_exerciseSettings[exerciseId] ?? {}) as Map<String, dynamic>,
+    );
+
+
+    final Map<String, dynamic> existingIncrements =
+    Map<String, dynamic>.from(existing['increments'] ?? {});
+    final dynamic existingRepTargets = existing['repTargets'];
+    final dynamic existingRirPlan = existing['rirPlan'];
+
+    // ---- format current values for the text fields ----
+    String _formatIncrementsForField(Map<String, dynamic> inc) {
+      if (inc.isEmpty) return '';
+      final parts = <String>[];
+      if (inc['primary'] != null) {
+        parts.add((inc['primary'] as num).toString());
+      }
+      if (inc['secondary'] != null) {
+        parts.add((inc['secondary'] as num).toString());
+      }
+      if (inc['tertiary'] != null) {
+        parts.add((inc['tertiary'] as num).toString());
+      }
+      return parts.join(', ');
+    }
+
+    String _formatRepTargetsForField(dynamic repTargets) {
+      // We only care about week1 here (DUP / most current week use case)
+      if (repTargets is Map && repTargets['week1'] is Map) {
+        final week1 = Map<String, dynamic>.from(repTargets['week1'] as Map);
+        final keys = week1.keys.toList()
+          ..sort(); // instance1, instance2, ...
+        final vals = <String>[];
+        for (final k in keys) {
+          final v = week1[k];
+          if (v != null && v.toString().trim().isNotEmpty) {
+            vals.add(v.toString());
+          }
+        }
+        return vals.join(', ');
+      }
+      return '';
+    }
+
+    String _formatRirForField(dynamic rirPlan) {
+      // Very small, conservative: just show week1.session1.set1.rir if present
+      try {
+        if (rirPlan is Map &&
+            rirPlan['week1'] is Map &&
+            (rirPlan['week1'] as Map)['session1'] is Map &&
+            ((rirPlan['week1'] as Map)['session1'] as Map)['set1'] is Map) {
+          final set1 = Map<String, dynamic>.from(
+              ((rirPlan['week1'] as Map)['session1'] as Map)['set1'] as Map);
+          final rir = set1['rir']?.toString();
+          if (rir != null && rir.isNotEmpty) return rir;
+        }
+      } catch (_) {}
+      return '';
+    }
+
+    // ---- controllers prefilled with current values ----
+    final incrementsController = TextEditingController(
+      text: _formatIncrementsForField(existingIncrements),
+    );
+
+    final repTargetsController = TextEditingController(
+      text: _formatRepTargetsForField(existingRepTargets),
+    );
+
+    final rirController = TextEditingController(
+      text: _formatRirForField(existingRirPlan),
+    );
+
+    Map<String, double> _parseIncrements(String txt) {
+      final parts = txt
+          .split(',')
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
+
+      if (parts.isEmpty) return {};
+
+      final nums = parts
+          .map((p) => double.tryParse(p.replaceAll(',', '.')))
+          .whereType<double>()
+          .toList();
+
+      if (nums.isEmpty) return {};
+
+      final map = <String, double>{};
+      if (nums.length > 0) map['primary'] = nums[0];
+      if (nums.length > 1) map['secondary'] = nums[1];
+      if (nums.length > 2) map['tertiary'] = nums[2];
+      return map;
+    }
+
+    Map<String, dynamic> _parseRepTargets(String txt) {
+      // User enters:  "9 x 3, 15 x 3, 5 x 3"
+      final entries = txt
+          .split(',')
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
+
+      if (entries.isEmpty) return {};
+
+      final week1 = <String, String>{};
+      for (int i = 0; i < entries.length; i++) {
+        week1['instance${i + 1}'] = entries[i];
+      }
+
+      return {
+        'week1': week1,
+      };
+    }
+
+    // 🔁 Update ALL week1 RIR values from controllers (sessionX.setY),
+    // also stamping the correct REPS for each set from repTargets.
+    Map<String, dynamic> _updateRirPlan(
+        dynamic rirPlan,
+        Map<String, TextEditingController> rirControllers,
+        dynamic repTargetsRaw,
+        ) {
+      final plan = Map<String, dynamic>.from(rirPlan ?? {});
+      Map<String, dynamic> week1 =
+      Map<String, dynamic>.from(plan['week1'] ?? {});
+
+      // Build session → reps map from repTargets.week1.instanceX
+      final Map<String, int> repsBySession = {};
+      if (repTargetsRaw is Map && repTargetsRaw['week1'] is Map) {
+        final rtWeek1 =
+        Map<String, dynamic>.from(repTargetsRaw['week1'] as Map);
+        final instKeys = rtWeek1.keys
+            .where((k) => k.toString().startsWith('instance'))
+            .toList()
+          ..sort();
+        for (int idx = 0; idx < instKeys.length; idx++) {
+          final val = rtWeek1[instKeys[idx]]?.toString() ?? '';
+          final match = RegExp(r'^(\d+)').firstMatch(val);
+          if (match != null) {
+            final reps = int.tryParse(match.group(1)!);
+            if (reps != null) {
+              repsBySession['session${idx + 1}'] = reps;
+            }
+          }
+        }
+      }
+
+      rirControllers.forEach((key, ctrl) {
+        final txt = ctrl.text.trim();
+        if (txt.isEmpty) return;
+
+        // key is "session1.set1"
+        final parts = key.split('.');
+        if (parts.length != 2) return;
+
+        final sessionKey = parts[0]; // e.g. "session1"
+        final setKey = parts[1]; // e.g. "set1"
+
+        week1[sessionKey] ??= {};
+        final sessionMap =
+        Map<String, dynamic>.from(week1[sessionKey] as Map? ?? {});
+
+        sessionMap[setKey] ??= {};
+        final setMap =
+        Map<String, dynamic>.from(sessionMap[setKey] as Map? ?? {});
+
+        // ✅ write RIR
+        setMap['rir'] = txt;
+
+        // ✅ stamp reps for this session (non-editable in UI)
+        final repsForSession = repsBySession[sessionKey];
+        if (repsForSession != null) {
+          setMap['reps'] = repsForSession.toString();
+        }
+
+        sessionMap[setKey] = setMap;
+        week1[sessionKey] = sessionMap;
+      });
+
+      plan['week1'] = week1;
+      return plan;
+    }
+
+    // ─────────────────────────────────────────────
+    // Build controllers for WEEK 1, all sessions/sets
+    // Sessions = weeklyFrequency / instances
+    // Sets     = parsed from "9 x 3" etc
+    // ─────────────────────────────────────────────
+    final Map<String, int> repsBySession = {}; // "session1" → 9
+    int weeklyFrequency = 0;
+    int setsPerSession = 3; // default fallback
+
+    if (existingRepTargets is Map && existingRepTargets['week1'] is Map) {
+      final week1RT =
+      Map<String, dynamic>.from(existingRepTargets['week1'] as Map);
+      final instKeys = week1RT.keys
+          .where((k) => k.toString().startsWith('instance'))
+          .toList()
+        ..sort();
+
+      weeklyFrequency = instKeys.length;
+
+      if (instKeys.isNotEmpty) {
+        final firstVal = week1RT[instKeys[0]]?.toString() ?? '';
+        final setsMatch = RegExp(r'x\\s*(\\d+)').firstMatch(firstVal);
+        if (setsMatch != null) {
+          setsPerSession =
+              int.tryParse(setsMatch.group(1)!) ?? setsPerSession;
+        }
+      }
+
+      for (int idx = 0; idx < instKeys.length; idx++) {
+        final val = week1RT[instKeys[idx]]?.toString() ?? '';
+        final repsMatch = RegExp(r'^(\\d+)').firstMatch(val);
+        if (repsMatch != null) {
+          final reps = int.tryParse(repsMatch.group(1)!);
+          if (reps != null) {
+            repsBySession['session${idx + 1}'] = reps;
+          }
+        }
+      }
+    }
+
+    if (weeklyFrequency == 0) {
+      weeklyFrequency = (existing['weeklyFrequency'] as int?) ?? 1;
+    }
+
+    final Map<String, TextEditingController> rirControllers = {};
+    final week1Rir = (existingRirPlan is Map &&
+        existingRirPlan['week1'] is Map)
+        ? (existingRirPlan['week1'] as Map).cast<String, dynamic>()
+        : <String, dynamic>{};
+
+    for (int s = 1; s <= weeklyFrequency; s++) {
+      final sessionKey = 'session$s';
+      final sessionMap =
+          (week1Rir[sessionKey] as Map?)?.cast<String, dynamic>() ??
+              <String, dynamic>{};
+
+      for (int set = 1; set <= setsPerSession; set++) {
+        final setKey = 'set$set';
+        final setMap =
+            (sessionMap[setKey] as Map?)?.cast<String, dynamic>() ??
+                <String, dynamic>{};
+        final rirVal = setMap['rir']?.toString() ?? '';
+
+        final controllerKey = '$sessionKey.$setKey';
+        rirControllers[controllerKey] =
+            TextEditingController(text: rirVal);
+      }
+    }
+
+
+    // 🔢 Reps per session/set from repTargets.week1
+    // e.g. "instance1: 9 x 3" → session1.set1/2/3 = 9
+    final Map<String, String> repsBySessionSet = {};
+    if (existingRepTargets is Map && existingRepTargets['week1'] is Map) {
+      final week1Targets =
+      (existingRepTargets['week1'] as Map).cast<String, dynamic>();
+
+      week1Targets.forEach((instanceKey, value) {
+        final raw = value.toString();
+        final m = RegExp(r'(\d+)\s*x\s*(\d+)').firstMatch(raw);
+        if (m == null) return;
+
+        final reps = m.group(1)!;                         // "9"
+        final setsCount = int.tryParse(m.group(2)!) ?? 0; // "3" → 3
+        if (setsCount <= 0) return;
+
+        // instance1 → session1, instance2 → session2, ...
+        final instNum = int.tryParse(
+          RegExp(r'(\d+)').firstMatch(instanceKey)?.group(1) ?? '',
+        ) ??
+            0;
+        if (instNum <= 0) return;
+
+        final sessionKey = 'session$instNum';
+        for (int set = 1; set <= setsCount; set++) {
+          repsBySessionSet['$sessionKey.set$set'] = reps;
+        }
+      });
+    }
+
+    await showDialog(
+    context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: Colors.blueGrey.shade900,
+          title: Text(
+            'Exercise settings',
+            style: const TextStyle(color: Colors.white),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  exerciseName,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                // Increments
+                SizedBox(
+                  width: 220,
+                  height: 40,
+                  child: TextField(
+                    controller: incrementsController,
+                    keyboardType: TextInputType.text,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9., ]')),
+                    ],
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    decoration: InputDecoration(
+                      labelText: 'Increments (kg)',
+                      hintText: '2.5, 1, 0.5',
+                      labelStyle: const TextStyle(color: Colors.white),
+                      hintStyle: const TextStyle(color: Colors.white38),
+                      filled: true,
+                      fillColor: Colors.blueGrey.shade700,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 10,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+
+                // Rep Targets
+                SizedBox(
+                  width: 220,
+                  height: 40,
+                  child: TextField(
+                    controller: repTargetsController,
+                    keyboardType: TextInputType.text,
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    decoration: InputDecoration(
+                      labelText: 'Rep targets (week 1)',
+                      hintText: '9 x 3, 15 x 3, 5 x 3',
+                      labelStyle: const TextStyle(color: Colors.white),
+                      hintStyle: const TextStyle(color: Colors.white38),
+                      filled: true,
+                      fillColor: Colors.blueGrey.shade700,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 10,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+
+                // Week 1 RIR targets (all sessions / sets)
+                if (rirControllers.isNotEmpty) ...[
+                  const Text(
+                    'RIR targets (week 1)',
+                    style: TextStyle(color: Colors.white, fontSize: 13),
+                  ),
+                  const SizedBox(height: 6),
+
+                  // Group inputs by session
+                  ...(() {
+                    final Map<String,
+                        List<MapEntry<String, TextEditingController>>> bySession =
+                    {};
+
+                    rirControllers.forEach((key, ctrl) {
+                      final parts = key.split('.'); // "session1.set1"
+                      if (parts.length != 2) return;
+                      final sessionKey = parts[0];
+                      final setKey = parts[1];
+                      bySession.putIfAbsent(sessionKey, () => []);
+                      bySession[sessionKey]!.add(MapEntry(setKey, ctrl));
+                    });
+
+                    final sessionNames = bySession.keys.toList()..sort();
+
+                    return sessionNames.map((sessionKey) {
+                      final entries = bySession[sessionKey]!;
+                      entries.sort((a, b) => a.key.compareTo(b.key));
+
+                      final sessionNumber = int.tryParse(
+                        sessionKey.replaceAll(RegExp(r'[^0-9]'), ''),
+                      ) ??
+                          0;
+
+                      final repsForSession =
+                      repsBySession[sessionKey]; // from helper above
+
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 8.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Session $sessionNumber',
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 4,
+                              children: [
+                                for (int i = 0; i < entries.length; i++)
+                                  Builder(
+                                    builder: (_) {
+                                      final setNumber = i + 1;
+                                      final controller = entries[i].value;
+
+                                      // sessionKey is in scope from the outer map() (e.g. "session1")
+                                      final controllerKey =
+                                          '$sessionKey.set$setNumber';
+
+                                      final reps =
+                                      repsBySessionSet[controllerKey];
+
+                                      final labelText = (reps != null)
+                                          ? 'Set $setNumber: $reps @ RIR'
+                                          : 'Set $setNumber: ? @ RIR';
+
+                                      return SizedBox(
+                                        width: 110,
+                                        child: TextField(
+                                          controller: controller,
+                                          keyboardType:
+                                          const TextInputType
+                                              .numberWithOptions(
+                                              decimal: true),
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 12,
+                                          ),
+                                          decoration: InputDecoration(
+                                            labelText: labelText,
+                                            labelStyle: const TextStyle(
+                                              color: Colors.white70,
+                                            ),
+                                            filled: true,
+                                            fillColor:
+                                            Colors.blueGrey.shade700,
+                                            border: OutlineInputBorder(
+                                              borderRadius:
+                                              BorderRadius.circular(6),
+                                            ),
+                                            isDense: true,
+                                            contentPadding:
+                                            const EdgeInsets.symmetric(
+                                              horizontal: 6,
+                                              vertical: 6,
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                              ],
+                            ),
+
+                          ],
+                        ),
+                      );
+                    }).toList();
+                  })(),
+                ] else ...[
+                  const Text(
+                    'No week 1 RIR plan to edit.',
+                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                ],
+
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                final userId =
+                    UserContext.of(context, listen: false).currentUid;
+                if (userId == null || _selectedBlockId == null) {
+                  Navigator.of(ctx).pop();
+                  return;
+                }
+
+                // --- BUILD UPDATED MAPS ---
+                final newIncrements =
+                _parseIncrements(incrementsController.text);
+                final newRepTargets =
+                _parseRepTargets(repTargetsController.text);
+
+                // Decide which repTargets drive the RIR plan:
+                final dynamic repTargetsForRir =
+                newRepTargets.isNotEmpty ? newRepTargets : existingRepTargets;
+
+                // 🔥 NEW: update entire week1 RIR plan (all sessions + sets),
+                // also stamping REPS for each set from repTargets
+                final newRirPlan = _updateRirPlan(
+                  existingRirPlan,
+                  rirControllers,
+                  repTargetsForRir,
+                );
+
+                final docRef = FirebaseFirestore.instance
+                    .collection('planned_blocks')
+                    .doc(userId)
+                    .collection('blocks')
+                    .doc(_selectedBlockId);
+
+                // --- FIRESTORE SAVE: both plannedExerciseDetails & exerciseSettings ---
+                final Map<String, dynamic> payloadPerExercise = {
+                  if (newIncrements.isNotEmpty) 'increments': newIncrements,
+                  if (newRepTargets.isNotEmpty) 'repTargets': newRepTargets,
+                  'rirPlan': newRirPlan,
+                };
+
+                await docRef.set({
+                  'plannedExerciseDetails': {
+                    exerciseId: payloadPerExercise,
+                  },
+                  'exerciseSettings': {
+                    exerciseId: payloadPerExercise,
+                  },
+                }, SetOptions(merge: true));
+
+                // --- LOCAL STATE & PMU UPDATE ---
+                setState(() {
+                  final local = Map<String, dynamic>.from(
+                    _exerciseSettings[exerciseId] ?? {},
+                  );
+
+                  if (newIncrements.isNotEmpty) {
+                    local['increments'] = newIncrements;
+                  }
+                  if (newRepTargets.isNotEmpty) {
+                    local['repTargets'] = newRepTargets;
+                  } else if (repTargetsForRir != null) {
+                    // keep existing repTargets so RIR "reps" stay in sync
+                    local['repTargets'] = repTargetsForRir;
+                  }
+                  local['rirPlan'] = newRirPlan;
+                  _exerciseSettings[exerciseId] = local;
+
+                  // Mirror into PMU so WES hints see it immediately
+                  final pmuEntry = Map<String, dynamic>.from(
+                    PeriodizationModelUtils
+                        .plannedExerciseDetails[exerciseId] ??
+                        {},
+                  );
+                  if (newIncrements.isNotEmpty) {
+                    pmuEntry['increments'] = newIncrements;
+                  }
+                  if (repTargetsForRir != null) {
+                    pmuEntry['repTargets'] = repTargetsForRir;
+                  }
+                  pmuEntry['rirPlan'] = newRirPlan;
+                  PeriodizationModelUtils
+                      .plannedExerciseDetails[exerciseId] = pmuEntry;
+
+                  // ⚡ Force WES to recompute hints immediately
+                  _cachedProgressedValues.clear();
+                });
+
+                Navigator.of(ctx).pop();
+              },
+              child: const Text('Save'),
+            ),
+
+          ],
+        );
+      },
+    );
+
+  }
+
+  Widget _buildExerciseSettingsCog(int i) {
+    final exName = _selectedExercisesWithCircuits[i]['name']?.toString() ?? '';
+    if (exName.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final exerciseId = PeriodizationModelUtils.nameToId[exName];
+
+    if (exerciseId == null) {
+      // You already know exercises should all be from the dropdown, but log if not.
+      debugPrint('⚠️ [WES] No exerciseId for "$exName" when opening settings cog.');
+      return const SizedBox.shrink();
+    }
+
+    return IconButton(
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(),
+      icon: const Icon(
+        Icons.settings,
+        size: 16,
+        color: Colors.blueGrey,
+      ),
+      onPressed: () {
+        _showExerciseSettingsDialog(exerciseId, exName);
+      },
+    );
+  }
+
+
 
   @override
   Widget build(BuildContext context) {
@@ -13347,25 +14017,24 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                         ),
 
                                                         const SizedBox(
-                                                            width:
-                                                            12),
-                                                        // ✅ Optional spacing between sections
+                                                            width: 12),
+                                                        // ⚙️ Exercise settings cog (opens small dialog)
+                                                        _buildExerciseSettingsCog(i),
+                                                        const SizedBox(width: 4),
 
                                                         // ➡️ Avg E1RM (on the RIGHT)
                                                         Text(
                                                           'Avg E1RM: ${getAverageE1RM(
                                                               _selectedExercisesWithCircuits[i]['name'] ??
                                                                   '')
-                                                              .toStringAsFixed(
-                                                              1)}Kg',
+                                                              .toStringAsFixed(1)}Kg',
                                                           style: const TextStyle(
                                                             fontSize: 12.0,
-                                                            fontWeight: FontWeight
-                                                                .bold,
-                                                            color: Colors
-                                                                .blueGrey,
+                                                            fontWeight: FontWeight.bold,
+                                                            color: Colors.blueGrey,
                                                           ),
                                                         ),
+
                                                       ],
                                                     ),
                                                   ),
