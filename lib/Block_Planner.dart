@@ -1232,6 +1232,11 @@ class _BlockPlannerState extends State<Block_Planner> {
     final existingDetails = Map<String, dynamic>.from(
       data['plannedExerciseDetails'] ?? {},
     );
+    // 🔁 Also track existing exerciseSettings so we mirror all changes there too
+    final existingSettings = Map<String, dynamic>.from(
+      data['exerciseSettings'] ?? {},
+    );
+
 
     for (final exercise in exercises) {
       final entry = Map<String, dynamic>.from(exerciseSettings[exercise] ?? {});
@@ -1321,8 +1326,18 @@ class _BlockPlannerState extends State<Block_Planner> {
       }
       print('💾 [BP] saving increments for $exercise → '
           '${jsonEncode(existingDetails[exercise]['increments'])}');
-    }
 
+      // 🔁 Mirror the same per-exercise payload into exerciseSettings,
+      // but keep any extra keys that already existed there (e.g. defaultSets).
+      final Map<String, dynamic> existingSettingsEntry =
+      Map<String, dynamic>.from(existingSettings[exercise] ?? {});
+      existingSettingsEntry.addAll(
+          existingDetails[exercise] as Map<String, dynamic>);
+      existingSettings[exercise] = existingSettingsEntry;
+
+      print('💾 [BP] mirrored into exerciseSettings for $exercise → '
+          '${jsonEncode(existingSettings[exercise])}');
+    }
 
     // ✅ Inject block meta into plannedExerciseDetails if dates are valid
     if (_blockStartDate != null && _blockEndDate != null) {
@@ -1338,12 +1353,15 @@ class _BlockPlannerState extends State<Block_Planner> {
 
 
     print("📤 Saving plannedExerciseDetails:\n${jsonEncode(existingDetails)}");
+    print("📤 Saving exerciseSettings:\n${jsonEncode(existingSettings)}");
 
     await docRef.set({
       'exercises': exercises,
       'plannedExercises': exercises,
       'plannedExerciseDetails': existingDetails,
+      'exerciseSettings':       existingSettings,
     }, SetOptions(merge: true));
+
 
     // 🧹 Schema hygiene: remove explicitRepTargets from Firestore (kept only in local state)
     final cleanup = <String, dynamic>{};
