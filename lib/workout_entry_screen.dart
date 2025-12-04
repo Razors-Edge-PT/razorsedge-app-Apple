@@ -12746,10 +12746,31 @@ class _WorkoutPageState extends State<WorkoutPage>
 
 
 
-    // 🔢 Reps per session/set from repTargets.week1
-    // e.g. "instance1: 9 x 3" → session1.set1/2/3 = 9
+    // 🔢 Reps per session/set used ONLY for label text in the RIR dialog.
     final Map<String, String> repsBySessionSet = {};
-    if (existingRepTargets is Map && existingRepTargets['week1'] is Map) {
+
+// 1️⃣ Prefer reps already stored in the *current week's* RIR plan.
+//     This aligns the dialog sessions with WES sessions.
+    if (weekRir.isNotEmpty) {
+      weekRir.forEach((sessionKey, sessionVal) {
+        final sessionMap =
+        (sessionVal as Map).cast<String, dynamic>();
+
+        sessionMap.forEach((setKey, setVal) {
+          final setMap =
+          (setVal as Map).cast<String, dynamic>();
+          final reps = setMap['reps']?.toString();
+          if (reps != null && reps.isNotEmpty) {
+            repsBySessionSet['$sessionKey.$setKey'] = reps;
+          }
+        });
+      });
+    }
+
+// 2️⃣ Fallback: derive from repTargets if no RIR-set reps exist yet.
+    if (repsBySessionSet.isEmpty &&
+        existingRepTargets is Map &&
+        existingRepTargets['week1'] is Map) {
       final week1Targets =
       (existingRepTargets['week1'] as Map).cast<String, dynamic>();
 
@@ -12758,15 +12779,13 @@ class _WorkoutPageState extends State<WorkoutPage>
         final m = RegExp(r'(\d+)\s*x\s*(\d+)').firstMatch(raw);
         if (m == null) return;
 
-        final reps = m.group(1)!;                         // "9"
-        final setsCount = int.tryParse(m.group(2)!) ?? 0; // "3" → 3
+        final reps = m.group(1)!;
+        final setsCount = int.tryParse(m.group(2)!) ?? 0;
         if (setsCount <= 0) return;
 
-        // instance1 → session1, instance2 → session2, ...
         final instNum = int.tryParse(
           RegExp(r'(\d+)').firstMatch(instanceKey)?.group(1) ?? '',
-        ) ??
-            0;
+        ) ?? 0;
         if (instNum <= 0) return;
 
         final sessionKey = 'session$instNum';
@@ -12775,6 +12794,7 @@ class _WorkoutPageState extends State<WorkoutPage>
         }
       });
     }
+
 
     await showDialog(
     context: context,
@@ -13096,24 +13116,29 @@ class _WorkoutPageState extends State<WorkoutPage>
     final exerciseId = PeriodizationModelUtils.nameToId[exName];
 
     if (exerciseId == null) {
-      // You already know exercises should all be from the dropdown, but log if not.
       debugPrint('⚠️ [WES] No exerciseId for "$exName" when opening settings cog.');
       return const SizedBox.shrink();
     }
 
     return IconButton(
       padding: EdgeInsets.zero,
-      constraints: const BoxConstraints(),
+      // 🔽 Force a small tap target so it doesn't blow up row height
+      constraints: const BoxConstraints.tightFor(
+        width: 15,
+        height: 10,
+      ),
+      iconSize: 12,
       icon: const Icon(
         Icons.settings,
-        size: 16,
-        color: Colors.blueGrey,
+        size: 23,
+        color: Colors.grey,
       ),
       onPressed: () {
         _showExerciseSettingsDialog(exerciseId, exName);
       },
     );
   }
+
 
 
 
@@ -14120,10 +14145,10 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                         ),
 
                                                         const SizedBox(
-                                                            width: 12),
+                                                            width: 1),
                                                         // ⚙️ Exercise settings cog (opens small dialog)
                                                         _buildExerciseSettingsCog(i),
-                                                        const SizedBox(width: 4),
+                                                        const SizedBox(width: 1),
 
                                                         // ➡️ Avg E1RM (on the RIGHT)
                                                         Text(
