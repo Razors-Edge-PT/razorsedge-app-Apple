@@ -943,33 +943,18 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
   Future<void> _fetchTemplates() async {
     final userId = UserContext.of(context, listen: false).currentUid;
-    {
-      final userDoc = FirebaseFirestore.instance.collection('users').doc(userId);
-      final snapshot = await userDoc.collection('templates').get();
 
-      templates = snapshot.docs.map((doc) {
-        final rawExercises = doc.get('exercises');
+    final userDoc = FirebaseFirestore.instance.collection('users').doc(userId);
+    final snapshot = await userDoc.collection('templates').get();
 
-        // 🧠 Detect whether it's the new format or the old one
-        final List<Map<String, dynamic>> parsedExercises = rawExercises is List && rawExercises.isNotEmpty
-            ? (rawExercises.first is Map
-            ? List<Map<String, dynamic>>.from(rawExercises)
-            : List<Map<String, dynamic>>.from(
-            rawExercises.map((e) => {'name': e, 'circuitIndex': 0})))
-            : <Map<String, dynamic>>[];
+    templates = snapshot.docs
+        .map((doc) => Template.fromFirestore(doc.data(), doc.id))
+        .toList();
 
-        return Template(
-          id: doc.id,
-          name: doc.get('name') ?? 'Unnamed',
-          day: doc.data().containsKey('day') ? doc.get('day') : null,
-          exercises: parsedExercises,
-        );
-      }).toList();
-
-      setState(() {});
-      print("✅ Templates loaded: ${templates.map((t) => t.name).toList()}");
-    }
+    setState(() {});
+    print("✅ Templates loaded: ${templates.map((t) => t.name).toList()}");
   }
+
 
 
   Map<String, List<String>> groupedExercises = {};
@@ -4550,33 +4535,203 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                               return;
                             }
 
+                            // ─────────────────────────────────────────────────────────────
+                            // Group templates by blockId OR blockAssignment; collect "other".
+                            // ─────────────────────────────────────────────────────────────
+                            final Map<String, List<Template>> templateGroups = {};
+                            final List<Template> otherTemplates = [];
+
+                            for (final t in templates) {
+                              final String? blockId = t.blockId?.trim();
+                              final String? assignment = t.blockAssignment?.trim();
+
+                              String? groupKey;
+                              if (blockId != null && blockId.isNotEmpty) {
+                                groupKey = 'id:$blockId';
+                              } else if (assignment != null && assignment.isNotEmpty) {
+                                groupKey = 'assign:$assignment';
+                              }
+
+                              if (groupKey == null) {
+                                // No block info → "Other templates"
+                                otherTemplates.add(t);
+                              } else {
+                                templateGroups.putIfAbsent(groupKey, () => []).add(t);
+                              }
+                            }
+
+                            // If some templates only have assignment, they’ll still group correctly now.
+
+                            // Sort groups so that the *current block* comes first when we can detect it.
+                            final entries = templateGroups.entries.toList()
+                              ..sort((a, b) {
+                                Template? firstA =
+                                a.value.isNotEmpty ? a.value.first : null;
+                                Template? firstB =
+                                b.value.isNotEmpty ? b.value.first : null;
+
+                                final aIsCurrent =
+                                    firstA?.blockId == _selectedBlockId;
+                                final bIsCurrent =
+                                    firstB?.blockId == _selectedBlockId;
+
+                                if (aIsCurrent && !bIsCurrent) return -1;
+                                if (bIsCurrent && !aIsCurrent) return 1;
+                                return 0;
+                              });
+
+                            // 🔑 Expansion state (per group + "other")
+                            final Map<String, bool> expandedGroups = {
+                              for (final e in entries)
+                                e.key: (e.value.isNotEmpty &&
+                                    e.value.first.blockId == _selectedBlockId),
+                            };
+                            bool otherExpanded = false;
+
                             final selectedTemplate = await showDialog<Template>(
                               context: context,
-                              builder: (context) {
-                                return AlertDialog(
-                                  title: const Text('Select a Template'),
-                                  content: SizedBox(
-                                    width: double.maxFinite,
-                                    height: 400,
-                                    child: ListView.builder(
-                                      itemCount: templates.length,
-                                      itemBuilder: (context, index) {
-                                        final template = templates[index];
-                                        return ListTile(
-                                          title: Text(template.name),
-                                          onTap: () {
-                                            Navigator.of(context).pop(template);
-                                          },
-                                        );
-                                      },
-                                    ),
-                                  ),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(context),
-                                      child: const Text("Cancel"),
-                                    ),
-                                  ],
+                              builder: (dialogCtx) {
+                                return StatefulBuilder(
+                                  builder: (ctx, setStateDialog) {
+                                    return AlertDialog(
+                                      backgroundColor: Colors.blueGrey.shade900,
+                                      insetPadding:
+                                      const EdgeInsets.symmetric(horizontal: 24, vertical: 2),
+                                      contentPadding:
+                                      const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                                      title: const Text(
+                                        'Select Template',
+                                        style: TextStyle(fontSize: 13, color: Colors.white),
+                                      ),
+                                      content: SizedBox(
+                                        width: double.maxFinite,
+                                        child: ListView(
+                                          shrinkWrap: true,
+                                          children: [
+                                            // One collapsible section per group
+                                            for (final entry in entries) ...[
+                                              Builder(
+                                                builder: (_) {
+                                                  final groupKey = entry.key;
+                                                  final List<Template> groupTemplates = entry.value;
+                                                  final isExpanded =
+                                                      expandedGroups[groupKey] ?? false;
+
+                                                  final Template first = groupTemplates.first;
+                                                  final String? assignment =
+                                                      first.blockAssignment;
+                                                  final String? blockId = first.blockId;
+
+                                                  String headerText;
+                                                  if (assignment != null &&
+                                                      assignment.isNotEmpty) {
+                                                    headerText = 'Block $assignment';
+                                                  } else {
+                                                    headerText = 'Block';
+                                                  }
+                                                  if (blockId == _selectedBlockId) {
+                                                    headerText = '$headerText (current)';
+                                                  }
+
+                                                  return Column(
+                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                    children: [
+                                                      ListTile(
+                                                        tileColor: Colors.blueGrey.shade800,
+                                                        title: Text(
+                                                          headerText,
+                                                          style: const TextStyle(
+                                                            color: Colors.white,
+                                                            fontWeight: FontWeight.bold,
+                                                          ),
+                                                        ),
+                                                        trailing: Icon(
+                                                          isExpanded
+                                                              ? Icons.expand_less
+                                                              : Icons.expand_more,
+                                                          color: Colors.white70,
+                                                        ),
+                                                        onTap: () {
+                                                          setStateDialog(() {
+                                                            expandedGroups[groupKey] =
+                                                            !isExpanded;
+                                                          });
+                                                        },
+                                                      ),
+                                                      if (isExpanded)
+                                                        ...groupTemplates.map((template) {
+                                                          return ListTile(
+                                                            dense: true,
+                                                            title: Text(
+                                                              template.name,
+                                                              style: const TextStyle(
+                                                                  color: Colors.white),
+                                                            ),
+                                                            onTap: () => Navigator.of(dialogCtx)
+                                                                .pop(template),
+                                                          );
+                                                        }),
+                                                      const Divider(
+                                                        height: 10,
+                                                        color: Colors.grey,
+                                                      ),
+                                                    ],
+                                                  );
+                                                },
+                                              ),
+                                            ],
+
+                                            // "Other templates" group at the bottom
+                                            if (otherTemplates.isNotEmpty) ...[
+                                              ListTile(
+                                                tileColor: Colors.blueGrey.shade800,
+                                                title: const Text(
+                                                  'Other templates',
+                                                  style: TextStyle(
+                                                    color: Colors.white,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                                trailing: Icon(
+                                                  otherExpanded
+                                                      ? Icons.expand_less
+                                                      : Icons.expand_more,
+                                                  color: Colors.white70,
+                                                ),
+                                                onTap: () {
+                                                  setStateDialog(() {
+                                                    otherExpanded = !otherExpanded;
+                                                  });
+                                                },
+                                              ),
+                                              if (otherExpanded)
+                                                ...otherTemplates.map((template) {
+                                                  return ListTile(
+                                                    dense: true,
+                                                    title: Text(
+                                                      template.name,
+                                                      style:
+                                                      const TextStyle(color: Colors.white),
+                                                    ),
+                                                    onTap: () =>
+                                                        Navigator.of(dialogCtx).pop(template),
+                                                  );
+                                                }),
+                                            ],
+                                          ],
+                                        ),
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () => Navigator.of(dialogCtx).pop(),
+                                          child: const Text(
+                                            "Cancel",
+                                            style: TextStyle(color: Colors.white70),
+                                          ),
+                                        ),
+                                      ],
+                                    );
+                                  },
                                 );
                               },
                             );
@@ -4584,11 +4739,15 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                             if (selectedTemplate != null) {
                               setState(() {
                                 selectedTemplateIds[weekIndex][dayIndex] = selectedTemplate.id;
-                                _populateExercisesFromTemplate(weekIndex, dayIndex, selectedTemplate.id);
-                                updateFutureDaysWithEditedDay(weekIndex, dayIndex); // ✅ Mirror into future weeks
+                                _populateExercisesFromTemplate(
+                                    weekIndex, dayIndex, selectedTemplate.id);
+                                updateFutureDaysWithEditedDay(
+                                    weekIndex, dayIndex); // ✅ Mirror into future weeks
                               });
                             }
                           },
+
+
                           style: TextButton.styleFrom(
                             padding: const EdgeInsets.symmetric(horizontal: 4),
                             minimumSize: const Size(0, 30),
