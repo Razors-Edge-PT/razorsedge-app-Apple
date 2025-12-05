@@ -1206,58 +1206,124 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     final activeBlockTemplates =
     _activeBlockId != null ? _templatesForBlock(_activeBlockId) : <Template>[];
 
-    // legacy / unassigned → show them in active too
-    final allToShow = activeBlockTemplates; // only those tied to the active block
-
+    // only those tied to the active block
+    final allToShow = activeBlockTemplates;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // 🔹 main list area (takes all the height)
-          Expanded(
-            child: allToShow.isEmpty
-                ? const Center(
-              child: Text(
-                'No workouts in active block',
-                style: TextStyle(color: Colors.white54),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // 🔹 Active block templates (reorderable)
+            if (allToShow.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12.0),
+                child: Center(
+                  child: Text(
+                    'No workouts in active block',
+                    style: TextStyle(color: Colors.white54),
+                  ),
+                ),
+              )
+            else
+              ReorderableListView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(), // ✔ outer scroll handles it
+                itemCount: allToShow.length,
+                onReorder: (oldIndex, newIndex) {
+                  setState(() {
+                    if (newIndex > oldIndex) newIndex--;
+                    final moved = allToShow.removeAt(oldIndex);
+                    allToShow.insert(newIndex, moved);
+
+                    // reflect in global list, simplest way:
+                    templates
+                      ..removeWhere((t) => t.id == moved.id)
+                      ..insert(newIndex, moved);
+                  });
+                },
+                buildDefaultDragHandles: false,
+                itemBuilder: (context, index) {
+                  final template = allToShow[index];
+                  return _buildTemplateCard(template, index: index);
+                },
               ),
-            )
-                : ReorderableListView.builder(
-              itemCount: allToShow.length,
-              onReorder: (oldIndex, newIndex) {
-                setState(() {
-                  if (newIndex > oldIndex) newIndex--;
-                  final moved = allToShow.removeAt(oldIndex);
-                  allToShow.insert(newIndex, moved);
 
-                  // reflect in global list, simplest way:
-                  templates
-                    ..removeWhere((t) => t.id == moved.id)
-                    ..insert(newIndex, moved);
-                });
-              },
-              buildDefaultDragHandles: false,
-              itemBuilder: (context, index) {
-                final template = allToShow[index];
-                return _buildTemplateCard(template, index: index);
-              },
-            ),
-          ),
+            const SizedBox(height: 8),
 
-          const SizedBox(height: 2),
+            // 🔹 previous & upcoming block sections
+            _buildPreviousBlocksSection(),
+            const SizedBox(height: 4),
+            _buildUpcomingBlocksSection(),
+            const SizedBox(height: 8),
 
-          // 🔹 now, AFTER the active list, show previous & upcoming
-          _buildPreviousBlocksSection(),
-          const SizedBox(height: 1),
-          _buildUpcomingBlocksSection(),
+            // 🔹 other/unassigned templates at the bottom
+            _buildOtherTemplatesSection(),
 
-          const SizedBox(height: 54),
-        ],
+            const SizedBox(height: 54),
+          ],
+        ),
       ),
     );
   }
+
+
+
+  Widget _buildOtherTemplatesSection() {
+    // Templates with NO blockId and NO blockAssignment
+    final otherTemplates = templates.where((t) {
+      final id = t.blockId?.trim();
+      final assign = t.blockAssignment?.trim();
+      final noId = id == null || id.isEmpty;
+      final noAssign = assign == null || assign.isEmpty;
+      return noId && noAssign;
+    }).toList();
+
+    if (otherTemplates.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Padding(
+          padding: EdgeInsets.only(top: 8.0, bottom: 4.0),
+          child: Text(
+            'Other templates',
+            style: TextStyle(
+              color: Colors.white70,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+        ReorderableListView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          buildDefaultDragHandles: false,
+          itemCount: otherTemplates.length,
+          itemBuilder: (context, index) {
+            final template = otherTemplates[index];
+            return _buildTemplateCard(template, index: index);
+          },
+          onReorder: (oldIndex, newIndex) {
+            setState(() {
+              if (newIndex > oldIndex) newIndex--;
+              final moved = otherTemplates.removeAt(oldIndex);
+              otherTemplates.insert(newIndex, moved);
+
+              // reflect in global list
+              templates
+                ..removeWhere((t) => t.id == moved.id)
+                ..insert(newIndex, moved);
+            });
+          },
+        ),
+      ],
+    );
+  }
+
+
 
 
   Widget _buildTemplateCard(Template template, {int? index}) {
