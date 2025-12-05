@@ -8602,14 +8602,33 @@ class _WorkoutPageState extends State<WorkoutPage>
     });
   }
 
+  String _blockHeaderTitle(String blockId, List<Template> templates) {
+    // Try to get a friendly label from the first template’s blockAssignment.
+    final Template first = templates.first;
+    final String? assignment = first.blockAssignment;
+
+    String base;
+    if (assignment != null && assignment.isNotEmpty) {
+      base = 'Block $assignment';
+    } else {
+      base = 'Block';
+    }
+
+    if (blockId == _selectedBlockId) {
+      return '$base (current)';
+    } else {
+      return base;
+    }
+  }
+
 
   void _showTemplateSelectionDialog() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    final uid = userId;
+    if (uid == null || uid.isEmpty) return;
 
     final snapshot = await FirebaseFirestore.instance
         .collection('users')
-        .doc(userId)
+        .doc(uid)
         .collection('templates')
         .get();
 
@@ -8617,36 +8636,170 @@ class _WorkoutPageState extends State<WorkoutPage>
         .map((doc) => Template.fromFirestore(doc.data(), doc.id))
         .toList();
 
+    if (templates.isEmpty) {
+      await showDialog<void>(
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            backgroundColor: Colors.blueGrey.shade900,
+            title: const Text(
+              'Select Template',
+              style: TextStyle(color: Colors.white),
+            ),
+            content: const Text(
+              'No templates available.',
+              style: TextStyle(color: Colors.white70),
+            ),
+          );
+        },
+      );
+      return;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Group templates by blockId; collect "other" templates.
+    // ─────────────────────────────────────────────────────────────
+    final Map<String, List<Template>> templatesByBlockId = {};
+    final List<Template> otherTemplates = [];
+
+    for (final t in templates) {
+      final blockId = t.blockId?.trim();
+      if (blockId == null || blockId.isEmpty) {
+        otherTemplates.add(t);
+      } else {
+        templatesByBlockId.putIfAbsent(blockId, () => []).add(t);
+      }
+    }
+
+    final entries = templatesByBlockId.entries.toList()
+      ..sort((a, b) {
+        if (a.key == _selectedBlockId) return -1;
+        if (b.key == _selectedBlockId) return 1;
+        return 0;
+      });
+
+    // 🔑 PERSISTENT EXPANSION STATE (outside StatefulBuilder)
+    final Map<String, bool> expandedBlocks = {
+      for (final e in entries)
+        e.key: e.key == _selectedBlockId, // current block open by default
+    };
+    bool otherExpanded = false;
+
     final selectedTemplate = await showDialog<Template>(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          backgroundColor: Colors.blueGrey.shade800,
-          title: const Text('Select Template',
-              style: TextStyle(color: Colors.white)),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: templates.isEmpty
-                ? const Center(
-              child: Text(
-                'No templates available.',
-                style: TextStyle(color: Colors.white70),
+        return StatefulBuilder(
+          builder: (ctx, setStateDialog) {
+            return AlertDialog(
+              backgroundColor: Colors.blueGrey.shade900,
+              insetPadding:
+              const EdgeInsets.symmetric(horizontal: 24, vertical: 2),
+              contentPadding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              title: const Text(
+                'Select Template',
+                style: TextStyle(fontSize: 13, color: Colors.white),
               ),
-            )
-                : ListView.builder(
-              shrinkWrap: true,
-              itemCount: templates.length,
-              itemBuilder: (context, index) {
-                final template = templates[index];
-                return ListTile(
-                  title: Text(template.name,
-                      style: const TextStyle(color: Colors.white)),
-                  dense: true, // ✅ THIS is what reduces vertical space
-                  onTap: () => Navigator.pop(context, template),
-                );
-              },
-            ),
-          ),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    // One collapsible section per blockId
+                    for (final entry in entries) ...[
+                      Builder(
+                        builder: (_) {
+                          final blockId = entry.key;
+                          final isExpanded = expandedBlocks[blockId] ?? false;
+
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              ListTile(
+                                tileColor: Colors.blueGrey.shade800,
+                                title: Text(
+                                  _blockHeaderTitle(blockId, entry.value),
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                trailing: Icon(
+                                  isExpanded
+                                      ? Icons.expand_less
+                                      : Icons.expand_more,
+                                  color: Colors.white70,
+                                ),
+                                onTap: () {
+                                  setStateDialog(() {
+                                    expandedBlocks[blockId] = !isExpanded;
+                                  });
+                                },
+                              ),
+                              if (isExpanded)
+                                ...entry.value.map((template) {
+                                  return ListTile(
+                                    dense: true,
+                                    title: Text(
+                                      template.name,
+                                      style:
+                                      const TextStyle(color: Colors.white),
+                                    ),
+                                    onTap: () =>
+                                        Navigator.pop(context, template),
+                                  );
+                                }),
+                              const Divider(
+                                height: 10,
+                                color: Colors.grey,
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                    ],
+
+                    // "Other templates" group at the bottom
+                    if (otherTemplates.isNotEmpty) ...[
+                      ListTile(
+                        tileColor: Colors.blueGrey.shade800,
+                        title: const Text(
+                          'Other templates',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        trailing: Icon(
+                          otherExpanded
+                              ? Icons.expand_less
+                              : Icons.expand_more,
+                          color: Colors.white70,
+                        ),
+                        onTap: () {
+                          setStateDialog(() {
+                            otherExpanded = !otherExpanded;
+                          });
+                        },
+                      ),
+                      if (otherExpanded)
+                        ...otherTemplates.map((template) {
+                          return ListTile(
+                            dense: true,
+                            title: Text(
+                              template.name,
+                              style: const TextStyle(color: Colors.white),
+                            ),
+                            onTap: () =>
+                                Navigator.pop(context, template),
+                          );
+                        }),
+                    ],
+                  ],
+                ),
+              ),
+            );
+          },
         );
       },
     );
@@ -8655,6 +8808,9 @@ class _WorkoutPageState extends State<WorkoutPage>
       _loadTemplate(selectedTemplate);
     }
   }
+
+
+
 
   void _addNewCircuitExercise() {
     setState(() {

@@ -2,18 +2,24 @@ class Template {
   final String id;
   final String name;
   final String? day;
-  final String? blockId; // 🔗 which block this template belongs to (active/upcoming/etc)
 
-  final List<Map<String, dynamic>> exercises; // ✅ circuit-aware
+  /// Which block this template belongs to (Firestore block doc ID)
+  final String? blockId;
+
+  /// Human-friendly block label (e.g. "B1", "B2")
+  /// Used for grouping templates in the selection dialog
+  final String? blockAssignment;
+
+  final List<Map<String, dynamic>> exercises; // circuit-aware
 
   Template({
     required this.id,
     required this.name,
     this.day,
     required this.exercises,
-    this.blockId, // 👈 add
+    this.blockId,
+    this.blockAssignment,
   });
-
 
   Map<String, dynamic> toJson() {
     return {
@@ -21,6 +27,7 @@ class Template {
       'name': name,
       if (day != null) 'day': day,
       if (blockId != null) 'blockId': blockId,
+      if (blockAssignment != null) 'blockAssignment': blockAssignment,
       'exercises': exercises,
     };
   }
@@ -31,6 +38,7 @@ class Template {
     String? day,
     List<Map<String, dynamic>>? exercises,
     String? blockId,
+    String? blockAssignment,
   }) {
     return Template(
       id: id ?? this.id,
@@ -38,29 +46,32 @@ class Template {
       day: day ?? this.day,
       exercises: exercises ?? List.from(this.exercises),
       blockId: blockId ?? this.blockId,
+      blockAssignment: blockAssignment ?? this.blockAssignment,
     );
   }
 
-
-  // 🧠 Helper: create from Firestore snapshot with backward compatibility
+  /// Create from Firestore snapshot with backward compatibility
   factory Template.fromFirestore(Map<String, dynamic> data, String docId) {
     final rawExercises = data['exercises'];
 
-    // Backward compatibility with string-only exercise templates
+    // Backward compatibility for older string-only templates
     final parsedExercises = rawExercises is List && rawExercises.isNotEmpty
         ? (rawExercises.first is Map
         ? List<Map<String, dynamic>>.from(rawExercises)
         : rawExercises
-        .map((e) => {'name': e.toString(), 'circuitIndex': 0})
+        .map((e) =>
+    {'name': e.toString(), 'circuitIndex': 0})
         .toList())
         : <Map<String, dynamic>>[];
 
     return Template(
       id: docId,
       name: data['name'] ?? 'Unnamed',
-      blockId: data['blockId'] as String?, // may be null for legacy docs
-      day: data.containsKey('day') ? data['day'] : null,
+      day: data['day'],
+      blockId: data['blockId'],
+      blockAssignment: data['blockAssignment'],       // ← NEW
       exercises: parsedExercises,
     );
   }
 }
+
