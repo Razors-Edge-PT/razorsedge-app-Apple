@@ -239,6 +239,320 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
     }
   }
 
+  Future<void> _showChangePasswordDialog() async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+
+    // Only allow if we have an email/password user
+    if (currentUser == null || currentUser.email == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('You need an email/password account to change password.'),
+        ),
+      );
+      return;
+    }
+
+    final currentPasswordCtrl = TextEditingController();
+    final newPasswordCtrl = TextEditingController();
+    final confirmPasswordCtrl = TextEditingController();
+
+    String? localError;
+    bool localSaving = false;
+
+    // 👁️ visibility toggles
+    bool showCurrent = false;
+    bool showNew = false;
+    bool showConfirm = false;
+
+    // ✅ passwords match flag (for green confirm styling)
+    bool passwordsMatch = false;
+
+    // ✅ current password check state
+    bool currentPasswordChecking = false;
+    bool? currentPasswordValid; // null = unknown, true = ok, false = wrong
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (ctx, setStateDialog) {
+            final baseTheme = Theme.of(ctx);
+            final baseSelection = baseTheme.textSelectionTheme;
+
+            void _updateMatch() {
+              final newPass = newPasswordCtrl.text.trim();
+              final confirm = confirmPasswordCtrl.text.trim();
+              setStateDialog(() {
+                passwordsMatch = newPass.isNotEmpty && newPass == confirm;
+              });
+            }
+
+            Future<void> _checkCurrentPassword() async {
+              final current = currentPasswordCtrl.text.trim();
+              if (current.isEmpty) {
+                setStateDialog(() {
+                  currentPasswordValid = null;
+                });
+                return;
+              }
+
+              setStateDialog(() {
+                currentPasswordChecking = true;
+                currentPasswordValid = null;
+              });
+
+              try {
+                final cred = EmailAuthProvider.credential(
+                  email: currentUser.email!,
+                  password: current,
+                );
+
+                // Just reauthenticate to verify password
+                await currentUser.reauthenticateWithCredential(cred);
+
+                setStateDialog(() {
+                  currentPasswordChecking = false;
+                  currentPasswordValid = true;
+                });
+              } on FirebaseAuthException catch (e) {
+                setStateDialog(() {
+                  currentPasswordChecking = false;
+                  if (e.code == 'wrong-password') {
+                    currentPasswordValid = false;
+                  } else {
+                    // treat other auth errors as "unknown" for this UX
+                    currentPasswordValid = false;
+                  }
+                });
+              } catch (_) {
+                setStateDialog(() {
+                  currentPasswordChecking = false;
+                  currentPasswordValid = false;
+                });
+              }
+            }
+
+            Future<void> handleSave() async {
+              final current = currentPasswordCtrl.text.trim();
+              final newPass = newPasswordCtrl.text.trim();
+              final confirm = confirmPasswordCtrl.text.trim();
+
+              if (current.isEmpty || newPass.isEmpty || confirm.isEmpty) {
+                setStateDialog(() {
+                  localError = 'Please fill in all fields.';
+                });
+                return;
+              }
+              if (newPass.length < 6) {
+                setStateDialog(() {
+                  localError = 'New password must be at least 6 characters.';
+                });
+                return;
+              }
+              if (newPass != confirm) {
+                setStateDialog(() {
+                  localError = 'New password and confirmation do not match.';
+                  passwordsMatch = false;
+                });
+                return;
+              }
+
+              setStateDialog(() {
+                localSaving = true;
+                localError = null;
+              });
+
+              try {
+                final cred = EmailAuthProvider.credential(
+                  email: currentUser.email!,
+                  password: current,
+                );
+
+                // Re-authenticate
+                await currentUser.reauthenticateWithCredential(cred);
+
+                // Update password
+                await currentUser.updatePassword(newPass);
+
+                if (mounted) {
+                  Navigator.of(dialogCtx).pop(); // close dialog
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Password updated successfully.')),
+                  );
+                }
+              } on FirebaseAuthException catch (e) {
+                setStateDialog(() {
+                  localSaving = false;
+                  if (e.code == 'wrong-password') {
+                    localError = 'Current password is incorrect.';
+                    currentPasswordValid = false;
+                  } else {
+                    localError = e.message ?? 'Failed to update password.';
+                  }
+                });
+              } catch (_) {
+                setStateDialog(() {
+                  localSaving = false;
+                  localError = 'Failed to update password.';
+                });
+              }
+            }
+
+            return AlertDialog(
+              title: const Text('Change password'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // ✅ Conditional label above current password
+                    if (currentPasswordChecking) ...[
+                      const Text('Checking current password...'),
+                      const SizedBox(height: 4),
+                    ] else if (currentPasswordValid != null) ...[
+                      if (currentPasswordValid == true)
+                        const Text(
+                          '✅',
+                          style: TextStyle(fontSize: 18),
+                        )
+                      else
+                        const Text(
+                          'bro that ain’t your password 💀',
+                          style: TextStyle(color: Colors.red),
+                        ),
+                      const SizedBox(height: 4),
+                    ],
+
+                    // Current password field with focus-based check
+                    Focus(
+                      onFocusChange: (hasFocus) {
+                        if (!hasFocus) {
+                          _checkCurrentPassword();
+                        }
+                      },
+                      child: TextField(
+                        controller: currentPasswordCtrl,
+                        obscureText: !showCurrent,
+                        decoration: InputDecoration(
+                          labelText: 'Current password',
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              showCurrent ? Icons.visibility_off : Icons.visibility,
+                            ),
+                            onPressed: () {
+                              setStateDialog(() {
+                                showCurrent = !showCurrent;
+                              });
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 8),
+
+                    TextField(
+                      controller: newPasswordCtrl,
+                      obscureText: !showNew,
+                      onChanged: (_) => _updateMatch(),
+                      decoration: InputDecoration(
+                        labelText: 'New password',
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            showNew ? Icons.visibility_off : Icons.visibility,
+                          ),
+                          onPressed: () {
+                            setStateDialog(() {
+                              showNew = !showNew;
+                            });
+                          },
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 8),
+
+                    // ✅ Confirm field with green label & selection when matching
+                    Theme(
+                      data: baseTheme.copyWith(
+                        textSelectionTheme: TextSelectionThemeData(
+                          selectionColor: passwordsMatch
+                              ? Colors.green.withOpacity(0.4)
+                              : baseSelection.selectionColor,
+                          cursorColor: passwordsMatch
+                              ? Colors.green
+                              : baseSelection.cursorColor,
+                          selectionHandleColor: passwordsMatch
+                              ? Colors.green
+                              : baseSelection.selectionHandleColor,
+                        ),
+                      ),
+                      child: TextField(
+                        controller: confirmPasswordCtrl,
+                        obscureText: !showConfirm,
+                        onChanged: (_) => _updateMatch(),
+                        decoration: InputDecoration(
+                          labelText: 'Confirm new password',
+                          labelStyle: TextStyle(
+                            color: passwordsMatch ? Colors.green : Colors.black54,
+                          ),
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              showConfirm
+                                  ? Icons.visibility_off
+                                  : Icons.visibility,
+                              color: passwordsMatch ? Colors.green : null,
+                            ),
+                            onPressed: () {
+                              setStateDialog(() {
+                                showConfirm = !showConfirm;
+                              });
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    if (localError != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        localError!,
+                        style: const TextStyle(color: Colors.red),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: localSaving
+                      ? null
+                      : () {
+                    Navigator.of(dialogCtx).pop();
+                  },
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: localSaving ? null : handleSave,
+                  child: localSaving
+                      ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                      : const Text('Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+
+
   // ------------------- UI -------------------
 
   @override
@@ -413,6 +727,34 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                       ),
                       validator: (v) => (v == null || v.isEmpty) ? 'Please select' : null,
                     ),
+
+                    const SizedBox(height: 12),
+
+                    InkWell(
+                      onTap: _showChangePasswordDialog,
+                      borderRadius: BorderRadius.circular(12),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Row(
+                          children: const [
+                            Icon(Icons.lock_reset, color: Colors.white70, size: 20),
+                            SizedBox(width: 12),
+                            Text(
+                              'Change password',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            Spacer(),
+                            Icon(Icons.chevron_right, color: Colors.white38, size: 20),
+                          ],
+                        ),
+                      ),
+                    ),
+
+
 
                     if (_error != null) ...[
                       const SizedBox(height: 12),
