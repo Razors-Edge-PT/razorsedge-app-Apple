@@ -1209,6 +1209,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
     'Lat Pull Down',
     'Cable Stack',
     'Suspension Training system',
+    '45 Degree Hip Extension',
   ];
   static const List<int> _powerDb = [40, 50, 60];
 
@@ -1216,16 +1217,19 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
     'Squat Rack, Barbell',
     'Bench Press, Barbell',
     'Smith Machine',
+    '45 Degree Hip Extension',
     'Leg Extension Machine',
     'Seated Leg Curl Machine',
     'Standing Leg Curl Machine',
     'lying Leg Curl Machine',
     'Leg Press',
+    'Hack Squat',
     'Chest Press Machine',
     'Seated Row',
     'Lat Pull Down',
     'Cable Stack',
     'Suspension Training system',
+    'Seated Calf Raise',
   ];
   static const List<int> _homeDb = [10, 20, 30, 40, 50, 60];
 
@@ -1238,22 +1242,26 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
   // ── Commercial gym equipment (full list shown)
   final List<String> _commercialEquip = const [
     'Seated leg curl',
+    'Standing Leg Curl Machine'
     '45 Degree Hip Extension',
     'Hack Squat',
     'Triceps Dip Machine',
-    'Hip Thrust Machine',
+    'Machine Hip Thrust',
     'Suspension Training System (like TRX)',
+    'Seated Calf Raise',
     // add any other commercial items you want to show here...
   ];
 
 // ── Defaults pre-selected for commercial gyms
   final Set<String> _commercialDefaults = const {
     'Seated leg curl',
+    'Standing Leg Curl Machine',
     '45 Degree Hip Extension',
     'Hack Squat',
     'Triceps Dip Machine',
-    'Hip Thrust Machine',
+    'Machine Hip Thrust',
     'Suspension Training System (like TRX)',
+    'Seated Calf Raise',
   };
 
 
@@ -2840,7 +2848,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                           ['Typical gym in NZ', 'commercial'],
                           ['Powerlifting gym', 'powerlifting'],
                           ['Home gym', 'home'],
-                          ['Travelling', 'travelling'],
+                         // ['Travelling', 'travelling'],
                         ])
                           ChoiceChip(
                             label: Text(

@@ -146,6 +146,19 @@ class TemplateGenerator {
       onboarding: onboarding,
     );
 
+    // 🩹 Injury filters (lower back, shoulders, elbow, knees)
+    workingLib = _applyInjuryFilters(
+      lib: workingLib,
+      onboarding: onboarding,
+    );
+
+    // 🏋️ Equipment filters (machines / TRX etc.)
+    workingLib = _applyEquipmentFilters(
+      lib: workingLib,
+      onboarding: onboarding,
+    );
+
+
 
     // 2) Read knobs from onboarding
     final int weeklyFrequency = _readWeeklyFrequency(onboarding) ?? 4; // default to 4
@@ -736,6 +749,389 @@ class TemplateGenerator {
 
     return out;
   }
+
+  /// Apply equipment filters to the working exercise library.
+  ///
+  /// Reads from onboarding['equipment']['items'] (array of strings).
+  ///
+  /// Behaviour:
+  ///   • If environment == 'powerlifting' → use the powerlifting rules below.
+  ///   • Else (commercial / default)      → use the original commercial list.
+  static List<ExLite> _applyEquipmentFilters({
+    required List<ExLite> lib,
+    required Map<String, dynamic> onboarding,
+  }) {
+    final eqRaw = onboarding['equipment'];
+    if (eqRaw is! Map) {
+      debugPrint('🏋️ [EQ] onboarding.equipment missing → no equipment filters');
+      return lib;
+    }
+
+    final eqMap = Map<String, dynamic>.from(eqRaw as Map);
+    final itemsRaw = eqMap['items'];
+
+    if (itemsRaw is! List || itemsRaw.isEmpty) {
+      debugPrint('🏋️ [EQ] onboarding.equipment.items empty → no equipment filters');
+      return lib;
+    }
+
+    // Normalised list of owned equipment strings
+    final owned = <String>{};
+    for (final item in itemsRaw) {
+      if (item == null) continue;
+      owned.add(item.toString().trim());
+    }
+    final ownedLower = owned.map((e) => e.toLowerCase().trim()).toList();
+
+    // Environment (e.g. "commercial", "powerlifting", "home")
+    final envRaw = onboarding['environment'];
+    final env = envRaw is String ? envRaw.toLowerCase().trim() : '';
+
+    debugPrint('🏋️ [EQ] env="$env", owned equipment = $owned');
+
+    // ─────────────────────────────────────────────────────────────
+    // HOME GYM RULES  (INSERTED HERE — before powerlifting)
+    // ─────────────────────────────────────────────────────────────
+    if (env == 'home') {
+      return lib.where((ex) {
+        String nameLower = ex.name.toLowerCase();
+
+        // Home gym expected equipment
+        final homeReq = [
+          'Squat Rack, Barbell',
+          'Bench Press, Barbell',
+          'Smith Machine',
+          '45 Degree Hip Extension',
+          'Leg Extension Machine',
+          'Seated Leg Curl Machine',
+          'Standing Leg Curl Machine',
+          'lying Leg Curl Machine',
+          'Leg Press',
+          'Hack Squat',
+          'Chest Press Machine',
+          'Seated Row',
+          'Lat Pull Down',
+          'Cable Stack',
+          'Suspension Training system',
+          'Seated Calf Raise',
+        ];
+
+        // Missing equipment lookup
+        final missing = <String, bool>{};
+        for (final item in homeReq) {
+          final key = item.toLowerCase();
+          missing[item] = !ownedLower.any((e) => e.contains(key));
+        }
+
+        bool keep = true;
+
+        final hasSquatRack   = !missing['Squat Rack, Barbell']!;
+        final hasBenchPress  = !missing['Bench Press, Barbell']!;
+        final hasSmith       = !missing['Smith Machine']!;
+        final hasHipExt      = !missing['45 Degree Hip Extension']!;
+        final hasLegExt      = !missing['Leg Extension Machine']!;
+        final hasSeatedCurl  = !missing['Seated Leg Curl Machine']!;
+        final hasStandingCurl= !missing['Standing Leg Curl Machine']!;
+        final hasLyingCurl   = !missing['lying Leg Curl Machine']!;
+        final hasLegPress    = !missing['Leg Press']!;
+        final hasHackSquat   = !missing['Hack Squat']!;
+        final hasChestPress  = !missing['Chest Press Machine']!;
+        final hasSeatedRow   = !missing['Seated Row']!;
+        final hasLatPull     = !missing['Lat Pull Down']!;
+        final hasCableStack  = !missing['Cable Stack']!;
+        final hasSuspension  = !missing['Suspension Training system']!;
+        final hasSeatedCalf  = !missing['Seated Calf Raise']!;
+
+        // Apply equipment-based exclusions
+        if (!hasSquatRack && (nameLower.contains('squat') || nameLower.contains('barbell'))) keep = false;
+        if (keep && !hasBenchPress && nameLower.contains('bench press')) keep = false;
+        if (keep && !hasSmith && nameLower.contains('smith')) keep = false;
+        if (keep && !hasHipExt && nameLower.contains('hip extension')) keep = false;
+        if (keep && !hasLegExt && nameLower.contains('leg extension')) keep = false;
+
+        if (keep && !hasSeatedCurl && nameLower.contains('seated leg curl')) keep = false;
+        if (keep && !hasStandingCurl && nameLower.contains('standing leg curl')) keep = false;
+        if (keep && !hasLyingCurl && nameLower.contains('lying leg curl')) keep = false;
+
+        if (keep && !hasLegPress && nameLower.contains('leg press')) keep = false;
+        if (keep && !hasHackSquat && nameLower.contains('hack squat')) keep = false;
+        if (keep && !hasChestPress && nameLower.contains('chest press')) keep = false;
+        if (keep && !hasSeatedRow && nameLower.contains('seated row')) keep = false;
+        if (keep && !hasLatPull && nameLower.contains('lat pull')) keep = false;
+
+        // Cable dependency filter
+        if (!hasCableStack) {
+          final isCableDependent =
+              nameLower.contains('bayesian') ||
+                  nameLower.contains('lat prayer') ||
+                  nameLower.contains('triceps push down') ||
+                  nameLower.contains('triceps pushdown') ||
+                  nameLower.contains('cable');
+
+          if (keep && isCableDependent) keep = false;
+        }
+
+        if (keep && !hasSuspension && nameLower.contains('suspended')) keep = false;
+        if (keep && !hasSeatedCalf && nameLower.contains('seated calf')) keep = false;
+
+        return keep;
+      }).toList();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // POWERLIFTING GYM RULES
+    // ─────────────────────────────────────────────────────────────
+    if (env == 'powerlifting') {
+      // Booleans: does the user *have* each thing?
+      bool hasLegExtensionMachine =
+      ownedLower.contains('leg extension machine');
+
+      bool hasSeatedLegCurlMachine =
+      ownedLower.contains('seated leg curl machine');
+
+      bool hasStandingLegCurlMachine =
+      ownedLower.contains('standing leg curl machine');
+
+      bool hasLyingLegCurlMachine =
+      ownedLower.contains('lying leg curl machine');
+
+      bool hasLegPress =
+      ownedLower.contains('leg press');
+
+      bool hasLatPullDown =
+          ownedLower.contains('lat pull down') ||
+              ownedLower.contains('lat pulldown');
+
+      bool hasCableStack =
+      ownedLower.contains('cable stack');
+
+      bool hasSuspension =
+      ownedLower.any((s) =>
+      s.contains('suspension training') || s.contains('trx'));
+
+      bool has45HipExt =
+      ownedLower.contains('45 degree hip extension');
+
+      bool hasHackSquat =
+      ownedLower.contains('hack squat');
+
+      bool hasMachineHipThrust =
+      ownedLower.contains('machine hip thrust');
+
+      bool hasSeatedCalfRaiseEquip =
+      ownedLower.contains('seated calf raise');
+
+      // Standing calf raise can be done on either a standing calf machine OR smith
+      bool hasStandingCalfOrSmith =
+          ownedLower.contains('standing calf raise') ||
+              ownedLower.contains('smith machine');
+
+      debugPrint(
+          '🏋️ [EQ] powerlifting: '
+              'legExt=$hasLegExtensionMachine, '
+              'LCurl(seated)=$hasSeatedLegCurlMachine, '
+              'LCurl(standing)=$hasStandingLegCurlMachine, '
+              'LCurl(lying)=$hasLyingLegCurlMachine, '
+              'legPress=$hasLegPress, '
+              'latPD=$hasLatPullDown, '
+              'cableStack=$hasCableStack, '
+              'suspension=$hasSuspension, '
+              '45HipExt=$has45HipExt, '
+              'hackSquat=$hasHackSquat, '
+              'machHipThrust=$hasMachineHipThrust, '
+              'seatedCalf=$hasSeatedCalfRaiseEquip, '
+              'standingCalfOrSmith=$hasStandingCalfOrSmith');
+
+      final out = lib.where((ex) {
+        bool keep = true;
+        final nameLower = ex.name.toLowerCase().trim();
+        final cat = _normCat(ex.category);
+
+        // Leg Extension Machine → all Leg Extension category
+        if (keep &&
+            !hasLegExtensionMachine &&
+            cat == 'Leg Extension') {
+          keep = false;
+        }
+
+        // Seated Leg Curl Machine → seated leg curl
+        if (keep &&
+            !hasSeatedLegCurlMachine &&
+            cat == 'Leg Curl' &&
+            nameLower.contains('seated')) {
+          keep = false;
+        }
+
+        // Standing Leg Curl Machine → standing leg curl
+        if (keep &&
+            !hasStandingLegCurlMachine &&
+            cat == 'Leg Curl' &&
+            nameLower.contains('standing')) {
+          keep = false;
+        }
+
+        // Lying Leg Curl Machine → lying leg curl
+        if (keep &&
+            !hasLyingLegCurlMachine &&
+            cat == 'Leg Curl' &&
+            nameLower.contains('lying')) {
+          keep = false;
+        }
+
+        // Leg Press machine → any leg press
+        if (keep &&
+            !hasLegPress &&
+            nameLower.contains('leg press')) {
+          keep = false;
+        }
+
+        // Lat Pull Down → all lat pulldown variants
+        if (keep &&
+            !hasLatPullDown &&
+            (nameLower.contains('lat pull down') ||
+                nameLower.contains('lat pulldown'))) {
+          keep = false;
+        }
+
+        // Cable Stack → ONLY remove exercises that are truly cable-dependent.
+// (We avoid blanket nameLower.contains('cable') because many exercises
+// include "cable" in the name but are substitutable.)
+        if (!hasCableStack) {
+          final isCableDependent =
+              nameLower.contains('bayesian') ||
+                  nameLower.contains('lat prayer') ||
+                  nameLower.contains('triceps push down') ||
+                  nameLower.contains('cable') ||
+                  nameLower.contains('Face Pull') ||
+                  nameLower.contains('triceps pushdown'); // covers wording variations
+
+          if (keep && isCableDependent) {
+            keep = false;
+          }
+        }
+
+
+        // Suspension Training system → any "suspended" exercise
+        if (keep &&
+            !hasSuspension &&
+            nameLower.contains('suspended')) {
+          keep = false;
+        }
+
+        // 45 Degree Hip Extension
+        if (keep &&
+            !has45HipExt &&
+            nameLower.contains('45 degree hip extension')) {
+          keep = false;
+        }
+
+        // Hack Squat
+        if (keep &&
+            !hasHackSquat &&
+            nameLower.contains('hack squat')) {
+          keep = false;
+        }
+
+        // Machine Hip Thrust
+        if (keep &&
+            !hasMachineHipThrust &&
+            nameLower.contains('machine hip thrust')) {
+          keep = false;
+        }
+
+        // Seated Calf Raise
+        if (keep &&
+            !hasSeatedCalfRaiseEquip &&
+            cat == 'Calf Raise' &&
+            nameLower.contains('seated')) {
+          keep = false;
+        }
+
+        // Standing Calf Raise (needs either standing calf machine OR Smith)
+        if (keep &&
+            !hasStandingCalfOrSmith &&
+            cat == 'Calf Raise' &&
+            nameLower.contains('standing')) {
+          keep = false;
+        }
+
+        return keep;
+      }).toList();
+
+      debugPrint(
+          '🏋️ [EQ] After powerlifting equipment filters → final size=${out.length} (removed ${lib.length - out.length})');
+      return out;
+    }
+
+
+
+    // ─────────────────────────────────────────────────────────────
+    // DEFAULT / COMMERCIAL RULES (your original 7-item list)
+    // ─────────────────────────────────────────────────────────────
+    const List<String> restrictedEquipment = [
+      '45 Degree Hip Extension',
+      'Hack Squat',
+      'Triceps Dip Machine',
+      'Machine Hip Thrust',
+      'Suspension Training System (like TRX)',
+      'Seated leg curl',
+      'Seated Calf Raise',
+    ];
+
+    final missing = <String>{};
+    for (final req in restrictedEquipment) {
+      final hasIt = owned.any(
+            (o) => o.toLowerCase().trim() == req.toLowerCase().trim(),
+      );
+      if (!hasIt) missing.add(req);
+    }
+
+    if (missing.isEmpty) {
+      debugPrint(
+          '🏋️ [EQ] commercial/default: all restricted equipment present → no filters; size=${lib.length}');
+      return lib;
+    }
+
+    debugPrint('🏋️ [EQ] commercial/default: missing equipment items: $missing');
+    debugPrint(
+        '🏋️ [EQ] Applying equipment filters → starting size=${lib.length}');
+
+    final out = lib.where((ex) {
+      bool keep = true;
+      final name = ex.name;
+      final nameLower = name.toLowerCase().trim();
+
+      // If Suspension / TRX is missing, drop any exercise with "suspended" in the name
+      if (keep &&
+          missing.contains('Suspension Training System (like TRX)') &&
+          nameLower.contains('suspended')) {
+        keep = false;
+      }
+
+      // For other missing equipment, drop the SINGLE matching exercise by name
+      if (keep) {
+        for (final eq in missing) {
+          if (eq == 'Suspension Training System (like TRX)') {
+            // already handled
+            continue;
+          }
+          if (nameLower == eq.toLowerCase().trim()) {
+            keep = false;
+            break;
+          }
+        }
+      }
+
+      return keep;
+    }).toList();
+
+    debugPrint(
+        '🏋️ [EQ] After commercial/default equipment filters → final size=${out.length} (removed ${lib.length - out.length})');
+
+    return out;
+  }
+
+
 
   /// Apply injury / pain-slider filters to the working exercise library.
   ///
