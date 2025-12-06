@@ -338,6 +338,155 @@ class TemplateGenerator {
 // 🧮 Track how many times each category is already seeded
     final Map<String, int> _seededCountByCategory = {};
 
+    // Build a fresh block (B2 / B3) using the same pipeline as Block 1:
+    // - _seedDailyMinimums
+    // - greedy round-robin fill
+    // - _chooseExercise / _canJoin / _placeIntoCircuit
+    // - spacing rules, per-exercise caps, muscle overlap, etc.
+    List<_DayPlan> _buildBlockFromScratch({
+      required int weeklyFrequency,
+      required bool isFemale,
+      required bool isHypertrophyMale,
+      required int requiredHPullPrimaryDays,
+      required Map<String, List<ExLite>> byCat,
+      required Map<String, Map<String, int>> freqCaps,
+      required Map<String, int> weeklyPlanTemplate,
+      required int age,
+    }) {
+      // Fresh days list for this block
+      final days = List<_DayPlan>.generate(
+        weeklyFrequency,
+            (idx) => _DayPlan(index: idx, totalDays: weeklyFrequency),
+      );
+
+      // Fresh mutable copies so we don't touch the originals
+      final Map<String, int> weeklyPlan =
+      Map<String, int>.from(weeklyPlanTemplate);
+      final Map<String, int> _seededCountByCategory = {};
+      final Map<String, int> _idTargetsRemaining = {};
+
+      // Optionally shuffle pools so B2/B3 pick different exercises
+      final Map<String, List<ExLite>> shuffledByCat = <String, List<ExLite>>{};
+      byCat.forEach((cat, list) {
+        final copy = List<ExLite>.from(list);
+        copy.shuffle();
+        shuffledByCat[cat] = copy;
+      });
+
+      // 1) Seed daily minimums (same rules as B1)
+      _seedDailyMinimums(
+        days: days,
+        isFemale: isFemale,
+        byCat: shuffledByCat,
+        allDays: days,
+        idTargetsRemaining: _idTargetsRemaining,
+        isHypertrophyMale: isHypertrophyMale,
+        requiredHPullPrimaryDays: requiredHPullPrimaryDays,
+        weeklyPlan: weeklyPlan,
+        seededCountByCategory: _seededCountByCategory,
+        userAge: age,
+      );
+
+      // 2) Adjust weeklyPlan by subtracting what seeding already placed
+      final Map<String, int> seededCount = {};
+      for (final d in days) {
+        d.countByCategory.forEach((cat, count) {
+          seededCount[cat] = (seededCount[cat] ?? 0) + count;
+        });
+      }
+
+      final Map<String, int> remainingPlan = {};
+      weeklyPlan.forEach((cat, planned) {
+        final seeded = seededCount[cat] ?? 0;
+        final remaining = planned - seeded;
+        if (remaining > 0) {
+          remainingPlan[cat] = remaining;
+        }
+      });
+
+      // 3) Greedy round-robin placement (copy of your Step 7)
+      const int perDayCategoryHardCap = 2;
+
+      final workList = <String>[];
+      remainingPlan.forEach((cat, n) {
+        for (int i = 0; i < n; i++) {
+          workList.add(cat);
+        }
+      });
+
+      int cursor = 0;
+      for (final cat in workList) {
+        bool placed = false;
+
+        // lighter-day-first + round-robin flavour
+        final dayIndices = List<int>.generate(
+          weeklyFrequency,
+              (offset) => (cursor + offset) % weeklyFrequency,
+        );
+
+        dayIndices.sort((a, b) {
+          final int aLoad = days[a].circuits.fold<int>(
+            0,
+                (sum, circ) => sum + circ.length,
+          );
+          final int bLoad = days[b].circuits.fold<int>(
+            0,
+                (sum, circ) => sum + circ.length,
+          );
+
+          if (aLoad != bLoad) {
+            return aLoad.compareTo(bLoad);
+          }
+
+          final int aDist =
+          (a - cursor) >= 0 ? (a - cursor) : (a - cursor + weeklyFrequency);
+          final int bDist =
+          (b - cursor) >= 0 ? (b - cursor) : (b - cursor + weeklyFrequency);
+          return aDist.compareTo(bDist);
+        });
+
+        for (final dayIdx in dayIndices) {
+          final day = days[dayIdx];
+
+          final usedThisCat = day.countByCategory[cat] ?? 0;
+          if (usedThisCat >= perDayCategoryHardCap) continue;
+
+          const pressCats = {'Horizontal Press', 'Vertical Press'};
+          if (pressCats.contains(cat)) {
+            final int pressesToday =
+                (day.countByCategory['Horizontal Press'] ?? 0) +
+                    (day.countByCategory['Vertical Press'] ?? 0);
+            if (pressesToday >= 2) {
+              continue;
+            }
+          }
+
+          final chosen = _chooseExercise(
+            pool: shuffledByCat[cat] ?? const [],
+            day: day,
+            category: cat,
+            allDays: days,
+            idTargetsRemaining: _idTargetsRemaining,
+          );
+
+          if (chosen == null) continue;
+
+          final circuitIdx = _placeIntoCircuit(day, chosen);
+          day.addExercise(chosen, cat, circuitIdx);
+
+          seededCount[cat] = (seededCount[cat] ?? 0) + 1;
+
+          placed = true;
+          cursor = (dayIdx + 1) % weeklyFrequency;
+          break;
+        }
+
+        // If we couldn't place it anywhere, we just skip – same behaviour as B1.
+      }
+
+      return days;
+    }
+
 // Seed each day with the requested “minimum per day” set for the user’s sex.
 // (This is a soft seed; further placements will still obey pairing rules.)
     _seedDailyMinimums(
@@ -372,10 +521,10 @@ class TemplateGenerator {
     });
 
     // 7) Greedy round-robin placement following pairing & overlap rules.
-    // Per-day category cap: "prefer 1, allow 2" → enforce hard cap = 2
+// Per-day category cap: "prefer 1, allow 2" → enforce hard cap = 2
     const int perDayCategoryHardCap = 2;
 
-    // Make a working list of categories expanded by their *remaining* weekly counts.
+// Make a working list of categories expanded by their *remaining* weekly counts.
     final workList = <String>[];
     remainingPlan.forEach((cat, n) {
       for (int i = 0; i < n; i++) {
@@ -383,36 +532,27 @@ class TemplateGenerator {
       }
     });
 
+// INSERT HERE ⬇️
+    workList.shuffle();   // 🔀 More aggressive variation
 
-    // Rotation pointer
+
+// EXTRA VARIATION: randomize day evaluation order
+    final dayOrder = List<int>.generate(days.length, (i) => i)..shuffle();
+
+// Rotation pointer
     int cursor = 0;
     for (final cat in workList) {
       bool placed = false;
 
-      // 🔁 Build candidate day order:
-      //   - sort by total exercises (lighter days first)
-      //   - tie-break by distance from cursor (keeps round-robin flavour)
-      final dayIndices = List<int>.generate(
-        weeklyFrequency,
-            (offset) => (cursor + offset) % weeklyFrequency,
-      );
+      // Start with the shuffled day order, then apply light-day + round-robin sorting
+      final dayIndices = List<int>.from(dayOrder);
 
       dayIndices.sort((a, b) {
-        // Total exercises = sum of all circuit lengths for that day
-        final int aLoad = days[a].circuits.fold<int>(
-          0,
-              (sum, circ) => sum + circ.length,
-        );
-        final int bLoad = days[b].circuits.fold<int>(
-          0,
-              (sum, circ) => sum + circ.length,
-        );
+        final int aLoad = days[a].circuits.fold<int>(0, (s, c) => s + c.length);
+        final int bLoad = days[b].circuits.fold<int>(0, (s, c) => s + c.length);
 
-        if (aLoad != bLoad) {
-          return aLoad.compareTo(bLoad); // lighter day first
-        }
+        if (aLoad != bLoad) return aLoad.compareTo(bLoad);
 
-        // Tie-break: keep nearer-to-cursor earlier
         final int aDist = (a - cursor) >= 0 ? (a - cursor) : (a - cursor + weeklyFrequency);
         final int bDist = (b - cursor) >= 0 ? (b - cursor) : (b - cursor + weeklyFrequency);
         return aDist.compareTo(bDist);
@@ -518,8 +658,17 @@ class TemplateGenerator {
     // 🧮 DEBUG: Weekly category & muscle hit counts (Block 1 only)
     debugWeeklyCategoryAndMuscleCounts(days);
 
-    // 9) Create Block 2 variants (same categories, but we’ll bias toward alternates)
-    final daysB2 = _alternateBlock(days, byCat);
+    // 9) Build Block 2 by re-running the full pipeline
+    final daysB2 = _buildBlockFromScratch(
+      weeklyFrequency: weeklyFrequency,
+      isFemale: isFemale,
+      isHypertrophyMale: isHypertrophyMale,
+      requiredHPullPrimaryDays: requiredHPullPrimaryDays,
+      byCat: byCat,
+      freqCaps: freqCaps,
+      weeklyPlanTemplate: weeklyPlan,
+      age: age ?? 27,
+    );
     for (int i = 0; i < daysB2.length; i++) {
       out.add({
         'name': 'B2 Day ${i + 1}',
@@ -527,8 +676,17 @@ class TemplateGenerator {
       });
     }
 
-    // 10) Create Block 3 variants (another alternate pass off B2)
-    final daysB3 = _alternateBlock(daysB2, byCat);
+    // 10) Build Block 3 by re-running the full pipeline again
+    final daysB3 = _buildBlockFromScratch(
+      weeklyFrequency: weeklyFrequency,
+      isFemale: isFemale,
+      isHypertrophyMale: isHypertrophyMale,
+      requiredHPullPrimaryDays: requiredHPullPrimaryDays,
+      byCat: byCat,
+      freqCaps: freqCaps,
+      weeklyPlanTemplate: weeklyPlan,
+      age: age ?? 27,
+    );
     for (int i = 0; i < daysB3.length; i++) {
       out.add({
         'name': 'B3 Day ${i + 1}',
@@ -550,8 +708,8 @@ class TemplateGenerator {
           for (int ci = 0; ci < d.circuits.length; ci++) {
             buffer.writeln('  Circuit $ci:');
             for (final p in d.circuits[ci]) {
-              buffer.writeln('    • ${p.ex.name} '
-                  '(id=${p.ex.id}, cat=${p.category})');
+              buffer.writeln(
+                  '    • ${p.ex.name} (id=${p.ex.id}, cat=${p.category})');
             }
           }
           buffer.writeln('');
@@ -567,8 +725,10 @@ class TemplateGenerator {
       debugPrint(s2);
       debugPrint(s3);
     }
-// Call it:
+
+    // Call it:
     _debugPrintBlocks(days, daysB2, daysB3);
+
 
 // ──────────────────────────────────────────────────────────────────
 
