@@ -31,6 +31,8 @@ import 'dart:math';
 import 'leaderboard_page.dart';
 import 'template_bootstrapper.dart';
 import 'debug_utils.dart';
+import 'block_exercise_defaults_repository.dart';
+
 
  import 'dart:convert';
  import 'package:cloud_firestore/cloud_firestore.dart';
@@ -830,6 +832,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       final block1Id = block1Ref.id;
       print('✅ [Home] Block 1 created id=$block1Id (${swCreate1.elapsed.inMilliseconds} ms)');
 
+      await BlockExerciseDefaultsRepository.seedDefaultsForBlock(
+        uid: uid,
+        blockId: block1Id,
+        exerciseIds: seededExerciseIds,
+      );
+
+
       // Pointer write to current_block → Block 1
       final swPtr = Stopwatch()..start();
       await FirebaseFirestore.instance
@@ -897,12 +906,18 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         exerciseIds: block2ExerciseIds, // ✅ now uses sex-specific adjusted list
       );
 
-
       final swCreate2 = Stopwatch()..start();
       final block2Ref = await blocksRef.add(block2Payload);
       swCreate2.stop();
       final block2Id = block2Ref.id;
       print('✅ [Home] Block 2 created id=$block2Id (${swCreate2.elapsed.inMilliseconds} ms)');
+
+      await BlockExerciseDefaultsRepository.seedDefaultsForBlock(
+        uid: uid,
+        blockId: block2Id,
+        exerciseIds: block2ExerciseIds,
+      );
+
 
       // Scaffold weeks & days for Block 2
       final swScaffold2 = Stopwatch()..start();
@@ -964,6 +979,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       swCreate3.stop();
       final block3Id = block3Ref.id;
       print('✅ [Home] Block 3 created id=$block3Id (${swCreate3.elapsed.inMilliseconds} ms)');
+
+      await BlockExerciseDefaultsRepository.seedDefaultsForBlock(
+        uid: uid,
+        blockId: block3Id,
+        exerciseIds: block3ExerciseIds,
+      );
+
 
 // Scaffold weeks & days for Block 3
       final swScaffold3 = Stopwatch()..start();
