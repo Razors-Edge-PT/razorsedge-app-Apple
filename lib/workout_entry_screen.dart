@@ -13098,6 +13098,65 @@ class _WorkoutPageState extends State<WorkoutPage>
       });
     }
 
+    // ─────────────────────────────────────────────
+    // ✅ Compute *real* RIR session index (0-based),
+    //    matching getRirFromPlanOrInput logic
+    // ─────────────────────────────────────────────
+    int currentRirSessionIndex = 0; // 0 → Session 1, 1 → Session 2, etc.
+
+    try {
+      if (blockStartDate != null && _selectedDate != null) {
+        final String trimmedName = exerciseName.trim();
+        final int resolvedWeekIndex = _getApplicableWeekIndex(exerciseId) ?? 0;
+
+        final Map<String, dynamic> plannedDetails =
+        Map<String, dynamic>.from(
+          PeriodizationModelUtils.plannedExerciseDetails[exerciseId] ??
+              const {},
+        );
+
+        // Same effectiveFreq logic as getRirFromPlanOrInput
+        final Map<String, dynamic> repWeek1 =
+            (plannedDetails['repTargets']?['week1'] as Map?)
+                ?.cast<String, dynamic>() ??
+                <String, dynamic>{};
+
+        final repInstanceKeys = repWeek1.keys
+            .where((k) => k.toString().startsWith('instance'))
+            .toList()
+          ..sort();
+
+        final int repInstancesCount = repInstanceKeys.length;
+        final int effectiveFreq = repInstancesCount > 0
+            ? repInstancesCount
+            : (plannedDetails['weeklyFrequency'] as int? ?? 1);
+
+        final int rawSessionIndex =
+        PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+          exerciseName: trimmedName,
+          savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+          blockStartDate: blockStartDate!,
+          weekIndex: resolvedWeekIndex,
+          selectedDate: _selectedDate,
+        );
+
+        final int desiredSessionIndex =
+        (effectiveFreq > 0) ? (rawSessionIndex % effectiveFreq) : 0;
+
+        currentRirSessionIndex =
+        desiredSessionIndex < 0 ? 0 : desiredSessionIndex;
+
+        debugPrint(
+          '🎯 [WES/RIR-Dialog] ex="$exerciseName" weekIdx=$resolvedWeekIndex '
+              'rawSession=$rawSessionIndex effectiveFreq=$effectiveFreq '
+              '→ currentRirSessionIndex=$currentRirSessionIndex',
+        );
+      }
+    } catch (e) {
+      debugPrint('⚠️ [WES/RIR-Dialog] Failed to compute RIR session index: $e');
+    }
+
+
 
     await showDialog(
     context: context,
@@ -13215,8 +13274,12 @@ class _WorkoutPageState extends State<WorkoutPage>
                       ) ??
                           0;
 
-                      final repsForSession =
-                      repsBySession[sessionKey]; // from helper above
+                      // ⭐ NEW: 0-based index + highlight flag
+                      final sessionIdx = sessionNumber - 1;
+                      final bool isCurrentRirSession =
+                          sessionIdx == currentRirSessionIndex;
+
+                      final repsForSession = repsBySession[sessionKey];
 
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 8.0),
@@ -13242,12 +13305,8 @@ class _WorkoutPageState extends State<WorkoutPage>
                                       final setNumber = i + 1;
                                       final controller = entries[i].value;
 
-                                      // sessionKey is in scope from the outer map() (e.g. "session1")
-                                      final controllerKey =
-                                          '$sessionKey.set$setNumber';
-
-                                      final reps =
-                                      repsBySessionSet[controllerKey];
+                                      final controllerKey = '$sessionKey.set$setNumber';
+                                      final reps = repsBySessionSet[controllerKey];
 
                                       final labelText = (reps != null)
                                           ? 'Set $setNumber: $reps @ RIR'
@@ -13257,29 +13316,50 @@ class _WorkoutPageState extends State<WorkoutPage>
                                         width: 110,
                                         child: TextField(
                                           controller: controller,
-                                          keyboardType:
-                                          const TextInputType
-                                              .numberWithOptions(
-                                              decimal: true),
+                                          keyboardType: const TextInputType.numberWithOptions(
+                                            decimal: true,
+                                          ),
                                           style: const TextStyle(
                                             color: Colors.white,
                                             fontSize: 12,
                                           ),
                                           decoration: InputDecoration(
                                             labelText: labelText,
-                                            labelStyle: const TextStyle(
-                                              color: Colors.white70,
-                                            ),
+                                            labelStyle: const TextStyle(color: Colors.white70),
                                             filled: true,
-                                            fillColor:
-                                            Colors.blueGrey.shade700,
+                                            fillColor: Colors.blueGrey.shade700,
+
+                                            // ⭐⭐⭐ NEW: cyan border when RIR session matches
                                             border: OutlineInputBorder(
-                                              borderRadius:
-                                              BorderRadius.circular(6),
+                                              borderRadius: BorderRadius.circular(6),
+                                              borderSide: BorderSide(
+                                                color: isCurrentRirSession
+                                                    ? Colors.cyanAccent
+                                                    : Colors.grey,
+                                                width: isCurrentRirSession ? 2 : 1,
+                                              ),
                                             ),
+                                            enabledBorder: OutlineInputBorder(
+                                              borderRadius: BorderRadius.circular(6),
+                                              borderSide: BorderSide(
+                                                color: isCurrentRirSession
+                                                    ? Colors.cyanAccent
+                                                    : Colors.grey,
+                                                width: isCurrentRirSession ? 2 : 1,
+                                              ),
+                                            ),
+                                            focusedBorder: OutlineInputBorder(
+                                              borderRadius: BorderRadius.circular(6),
+                                              borderSide: BorderSide(
+                                                color: isCurrentRirSession
+                                                    ? Colors.cyanAccent
+                                                    : Colors.lightBlueAccent,
+                                                width: isCurrentRirSession ? 2 : 1.5,
+                                              ),
+                                            ),
+
                                             isDense: true,
-                                            contentPadding:
-                                            const EdgeInsets.symmetric(
+                                            contentPadding: const EdgeInsets.symmetric(
                                               horizontal: 6,
                                               vertical: 6,
                                             ),
@@ -13290,11 +13370,11 @@ class _WorkoutPageState extends State<WorkoutPage>
                                   ),
                               ],
                             ),
-
                           ],
                         ),
                       );
                     }).toList();
+
                   })(),
                 ] else ...[
                   const Text(
