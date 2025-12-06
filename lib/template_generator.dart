@@ -536,6 +536,43 @@ class TemplateGenerator {
       });
     }
 
+    // ───────────────────── DEBUG PRINT ALL BLOCKS ─────────────────────
+    void _debugPrintBlocks(
+        List<_DayPlan> b1,
+        List<_DayPlan> b2,
+        List<_DayPlan> b3,
+        ) {
+      String dump(String name, List<_DayPlan> block) {
+        final buffer = StringBuffer();
+        buffer.writeln('================ $name ================');
+        for (final d in block) {
+          buffer.writeln('Day ${d.index + 1}:');
+          for (int ci = 0; ci < d.circuits.length; ci++) {
+            buffer.writeln('  Circuit $ci:');
+            for (final p in d.circuits[ci]) {
+              buffer.writeln('    • ${p.ex.name} '
+                  '(id=${p.ex.id}, cat=${p.category})');
+            }
+          }
+          buffer.writeln('');
+        }
+        return buffer.toString();
+      }
+
+      final s1 = dump('BLOCK 1', b1);
+      final s2 = dump('BLOCK 2', b2);
+      final s3 = dump('BLOCK 3', b3);
+
+      debugPrint(s1);
+      debugPrint(s2);
+      debugPrint(s3);
+    }
+// Call it:
+    _debugPrintBlocks(days, daysB2, daysB3);
+
+// ──────────────────────────────────────────────────────────────────
+
+
 
     return out;
   }
@@ -2638,28 +2675,79 @@ class TemplateGenerator {
   }
 
 
-  /// Produce alternate versions for Block-2 by swapping in different exercises
-  /// from the same categories where available.
-  static List<_DayPlan> _alternateBlock(List<_DayPlan> b1, Map<String, List<ExLite>> byCat) {
+  /// Produce alternate versions for Block-2/Block-3 by rebuilding the block
+  /// from scratch using the SAME rules as Block 1 (chooseExercise / canJoin /
+  /// placeIntoCircuit / caps / spacing / overlap / variety / bench-first).
+  ///
+  /// We use Block 1's final per-day category counts as the blueprint, but
+  /// pick fresh exercises from the given byCat pools.
+  static List<_DayPlan> _alternateBlock(
+      List<_DayPlan> b1,
+      Map<String, List<ExLite>> byCat,
+      ) {
+    // 1. Make a shuffled copy of byCat so that selection order differs from Block 1.
+    final Map<String, List<ExLite>> shuffledByCat = <String, List<ExLite>>{};
+    byCat.forEach((cat, list) {
+      final copy = List<ExLite>.from(list);
+      copy.shuffle();
+      shuffledByCat[cat] = copy;
+    });
+
+    // 2. Rebuild a brand-new block using the same legality rules as Block 1,
+    //    but matching Block 1's category pattern per day.
     final out = <_DayPlan>[];
-    for (final d in b1) {
-      final clone = d.clone();
-      for (int ci = 0; ci < clone.circuits.length; ci++) {
-        for (int ei = 0; ei < clone.circuits[ci].length; ei++) {
-          final placed = clone.circuits[ci][ei];
-          final pool = byCat[placed.category] ?? const [];
-          // try to find a different exercise with the same category
-          final alt = pool.firstWhere(
-                (x) => x.id != placed.ex.id,
-            orElse: () => placed.ex,
-          );
-          clone.circuits[ci][ei] = _Placed(ex: alt, category: placed.category);
+
+    for (final originalDay in b1) {
+      final d = _DayPlan(
+        index: originalDay.index,
+        totalDays: originalDay.totalDays,
+      );
+
+      // For spacing & weekly caps inside _chooseExercise:
+      // we pass the list of already-built days in this new block.
+      final List<_DayPlan> allDaysSoFar = out;
+
+      // Build a flat "demand list" of categories we need to place on this day,
+      // based on Block 1's final category counts (e.g. 2x HP, 1x VP, 1x Squat).
+      final List<String> categorySlots = <String>[];
+      originalDay.countByCategory.forEach((cat, count) {
+        for (int i = 0; i < count; i++) {
+          categorySlots.add(cat);
         }
+      });
+
+      // Shuffle the order we satisfy categories to increase variety.
+      categorySlots.shuffle();
+
+      // For each category slot, try to pick a legal exercise & place it.
+      for (final cat in categorySlots) {
+        final pool = shuffledByCat[cat];
+        if (pool == null || pool.isEmpty) continue;
+
+        final ex = _chooseExercise(
+          pool: pool,
+          day: d,
+          category: cat,
+          allDays: allDaysSoFar,
+          // idTargetsRemaining is optional; we skip it for alternates for now.
+        );
+
+        if (ex == null) {
+          // No legal choice for this slot → skip; better to leave the day slightly lighter
+          // than violate pairing/spacing rules.
+          continue;
+        }
+
+        final ci = _placeIntoCircuit(d, ex);
+        d.addExercise(ex, cat, ci);
       }
-      out.add(clone);
+
+      out.add(d);
     }
+
     return out;
   }
+
 
 }
 
