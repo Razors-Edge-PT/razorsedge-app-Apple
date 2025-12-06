@@ -196,6 +196,94 @@ class _WorkoutPageState extends State<WorkoutPage>
     return '$n|$ci';
   }
 
+  // 🔢 Ensure rows are ordered by circuitIndex, then by original row order
+  void _sortRowsByCircuitIndex() {
+    if (_selectedExercisesWithCircuits.length <= 1) return;
+
+    final List<int> indices = List<int>.generate(
+      _selectedExercisesWithCircuits.length,
+          (i) => i,
+    );
+
+    int _ciFor(int idx) {
+      final raw = _selectedExercisesWithCircuits[idx]['circuitIndex'];
+      if (raw is int) return raw;
+      return int.tryParse('$raw') ?? 0;
+    }
+
+    indices.sort((a, b) {
+      final ca = _ciFor(a);
+      final cb = _ciFor(b);
+      if (ca != cb) {
+        // Circuit 0 first, then 1, then 2, etc.
+        return ca.compareTo(cb);
+      }
+      // Within same circuit, keep original order stable.
+      return a.compareTo(b);
+    });
+
+    final List<Map<String, dynamic>> newSelected = [];
+    final List<List<SetDetails>> newWorkoutSets = [];
+    final List<List<TextEditingController>> newRepsCtr = [];
+    final List<List<TextEditingController>> newWeightCtr = [];
+    final List<List<TextEditingController>> newRirCtr = [];
+    final List<List<TextEditingController>> newVelocityCtr = [];
+    final List<List<TextEditingController>> newNotesCtr = [];
+
+    for (final idx in indices) {
+      newSelected.add(_selectedExercisesWithCircuits[idx]);
+      if (_workoutSets.length > idx) {
+        newWorkoutSets.add(_workoutSets[idx]);
+      }
+      if (_repsControllers.length > idx) {
+        newRepsCtr.add(_repsControllers[idx]);
+      }
+      if (_weightControllers.length > idx) {
+        newWeightCtr.add(_weightControllers[idx]);
+      }
+      if (_rirControllers.length > idx) {
+        newRirCtr.add(_rirControllers[idx]);
+      }
+      if (_velocityControllers.length > idx) {
+        newVelocityCtr.add(_velocityControllers[idx]);
+      }
+      if (_notesControllers.length > idx) {
+        newNotesCtr.add(_notesControllers[idx]);
+      }
+    }
+
+    _selectedExercisesWithCircuits
+      ..clear()
+      ..addAll(newSelected);
+    if (_workoutSets.length == newWorkoutSets.length) {
+      _workoutSets
+        ..clear()
+        ..addAll(newWorkoutSets);
+      _repsControllers
+        ..clear()
+        ..addAll(newRepsCtr);
+      _weightControllers
+        ..clear()
+        ..addAll(newWeightCtr);
+      _rirControllers
+        ..clear()
+        ..addAll(newRirCtr);
+      _velocityControllers
+        ..clear()
+        ..addAll(newVelocityCtr);
+      _notesControllers
+        ..clear()
+        ..addAll(newNotesCtr);
+    }
+
+    // Optional: debug the final order
+    // for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+    //   final r = _selectedExercisesWithCircuits[i];
+    //   debugPrint('🔢 [WES sort] row=$i ci=${r['circuitIndex']} name=${r['name']}');
+    // }
+  }
+
+
 
   int _buildN = 0;
 
@@ -8073,6 +8161,10 @@ class _WorkoutPageState extends State<WorkoutPage>
         }
       }
 
+
+      // 🔒 SAFETY NET: keep final order as circuit 0,1,2,... (within circuit: stable)
+      _sortRowsByCircuitIndex();
+
       // 7) Ensure listeners on any new controllers
       _attachDirtyListeners();
 
@@ -8598,7 +8690,11 @@ class _WorkoutPageState extends State<WorkoutPage>
         },
       ));
 
+      // ✅ Ensure template rows are ordered by circuitIndex, then by original order
+      _sortRowsByCircuitIndex();
+
       _initializeControllers();
+
     });
   }
 
@@ -9623,43 +9719,94 @@ class _WorkoutPageState extends State<WorkoutPage>
 
 
     setState(() {
+      // 🧠 1) Capture current circuitIndex per exercise name
+      final Map<String, int> existingCircuitByName = {};
+      int lastCircuit = 0;
+
+      for (final row in _selectedExercisesWithCircuits) {
+        final name = (row['name'] ?? '').toString();
+        if (name.isEmpty) continue;
+        final ci = (row['circuitIndex'] ?? 0) as int;
+        existingCircuitByName[name] = ci;
+        if (ci > lastCircuit) lastCircuit = ci;
+      }
+
+      // 🧠 2) Rebuild rows based on the new selection:
+      //    - keep existing circuitIndex where possible
+      //    - brand-new exercises go into the last circuit
       _selectedExercisesWithCircuits.clear();
       _selectedExercisesWithCircuits.addAll(
         selected.asMap().entries.map((entry) {
           final idx = entry.key;
           final name = entry.value;
           final exId = (nameToIdMap[name] ?? name).trim().toLowerCase();
+
+          // If this exercise already existed, keep its circuitIndex.
+          // Otherwise, put it into the last circuit.
+          final int circuitIndex =
+              existingCircuitByName[name] ?? lastCircuit;
+
           // wes|<YYYY-MM-DD>|<unique-ts>|<exercise-id>|<circuitIndex>
-          final cardId = 'wes|$ymd|${_ts() + idx}|$exId|0';
+          final cardId = 'wes|$ymd|${_ts() + idx}|$exId|$circuitIndex';
+
           return {
             'name': name,
             'category': nameToCategoryMap[name] ?? '',
-            'circuitIndex': 0,
+            'circuitIndex': circuitIndex,
             'cardId': cardId,
           };
         }),
       );
 
-
+      // 🔁 3) Rebuild sets/controllers for the new list (same behaviour as before)
       _workoutSets.clear();
+      _repsControllers.clear();
+      _weightControllers.clear();
+      _rirControllers.clear();
+      _velocityControllers.clear();
+      _notesControllers.clear();
 
       for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
         final setCount = _plannedSetCountFor(i);
+        final int desiredSets =
+        (setCount <= 0) ? _defaultSets : setCount;
+
         _workoutSets.add(
-          List.generate(setCount, (_) => SetDetails()),
+          List.generate(desiredSets, (_) => SetDetails()),
+        );
+        _repsControllers.add(
+          List.generate(desiredSets, (_) => TextEditingController()),
+        );
+        _weightControllers.add(
+          List.generate(desiredSets, (_) => TextEditingController()),
+        );
+        _rirControllers.add(
+          List.generate(desiredSets, (_) => TextEditingController()),
+        );
+        _velocityControllers.add(
+          List.generate(desiredSets, (_) => TextEditingController()),
+        );
+        _notesControllers.add(
+          List.generate(desiredSets, (_) => TextEditingController()),
         );
       }
 
+      // ✅ 4) Keep circuits ordered 0,1,2,… and preserve order within each circuit
+      _sortRowsByCircuitIndex();
 
       _initializeControllers();
       _populateVelocityFlags();
       () async {
         try {
-          await _upsertWorkoutToFirestore(alsoPushToBB2: false, markAllSaved: false);
+          await _upsertWorkoutToFirestore(
+          alsoPushToBB2: false,
+          markAllSaved: false,
+          );
         } catch (_) {}
       }();
-
     });
+
+
   }
 
   void _showExercisePickerForRow(int index) async {
@@ -11629,18 +11776,15 @@ class _WorkoutPageState extends State<WorkoutPage>
 
             final circuitIndex = (newEx['circuitIndex'] ?? 0) as int;
 
-            // Resolve a stable cardId for WES row
             final String cardId = (newEx['cardId'] as String?) ??
                 'bb2|$ymd|${DateTime.now().microsecondsSinceEpoch}|$lower|$circuitIndex';
 
-            // Insert into the list of exercises for this day's WES
             _selectedExercisesWithCircuits.add({
               'name': name,
               'circuitIndex': circuitIndex,
               'cardId': cardId,
             });
 
-            /// 🔥 Use the SAME set-count logic as showExercisePickerDialog
             final int setCount = _plannedSetCountFor(
               _selectedExercisesWithCircuits.length - 1,
             );
@@ -11652,10 +11796,13 @@ class _WorkoutPageState extends State<WorkoutPage>
             _velocityControllers.add(List.generate(setCount, (_) => TextEditingController()));
             _notesControllers.add(List.generate(setCount, (_) => TextEditingController()));
 
-            // Track to avoid future duplicates in this batch
             existingNamesLower.add(lower);
           }
+
+          // ✅ Keep circuits in numeric order after merging BB2 rows
+          _sortRowsByCircuitIndex();
         });
+
 
 
 

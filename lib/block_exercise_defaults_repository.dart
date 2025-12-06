@@ -15,7 +15,7 @@ class BlockExerciseDefaultsRepository {
     // ⬇️ PASTE your _explicitDefaults from BP here, exactly as-is:
     'Bench Press, Barbell': {
       'weeklyFrequency': 4,
-      'increments': '2.5, 1',
+      'increments': '2.5',
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [9, 5, 12, 3],
       'rirModel': 'Static RIR',
@@ -28,7 +28,7 @@ class BlockExerciseDefaultsRepository {
     },
     'Back Squat, Barbell': {
       'weeklyFrequency': 2,
-      'increments': '2.5, 1',
+      'increments': '2.5',
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [8, 3],
       'rirModel': 'Static RIR',
@@ -41,7 +41,7 @@ class BlockExerciseDefaultsRepository {
     },
     'Deadlift, Conventional': {
       'weeklyFrequency': 4,
-      'increments': '2.5, 1',
+      'increments': '2.5',
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [9, 5, 3, 1],
       'rirModel': 'Static RIR',
@@ -54,7 +54,7 @@ class BlockExerciseDefaultsRepository {
     },
     'Deadlift, Sumo': {
       'weeklyFrequency': 3,
-      'increments': '2.5, 1',
+      'increments': '2.5',
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [15, 9, 5],
       'rirModel': 'Static RIR',
@@ -119,7 +119,7 @@ class BlockExerciseDefaultsRepository {
     },
     'Horizontal Press': {
       'weeklyFrequency': 3,
-      'increments': '2.5, 1',
+      'increments': '2.5',
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [9, 15, 5],
       'rirModel': 'Static RIR',
@@ -129,7 +129,7 @@ class BlockExerciseDefaultsRepository {
     },
     'Vertical Press': {
       'weeklyFrequency': 3,
-      'increments': '2.5, 1',
+      'increments': '2.5',
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [9, 15, 6],
       'rirModel': 'Static RIR',
@@ -139,7 +139,7 @@ class BlockExerciseDefaultsRepository {
     },
     'Vertical Pull': {
       'weeklyFrequency': 3,
-      'increments': '2.5, 1',
+      'increments': '2.5',
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [9, 15, 5],
       'rirModel': 'Static RIR',
@@ -149,7 +149,7 @@ class BlockExerciseDefaultsRepository {
     },
     'Horizontal Pull': {
       'weeklyFrequency': 3,
-      'increments': '2.5, 1',
+      'increments': '2.5',
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [9, 15, 5],
       'rirModel': 'Static RIR',
@@ -159,7 +159,7 @@ class BlockExerciseDefaultsRepository {
     },
     'Core': {
       'weeklyFrequency': 4,
-      'increments': '2.5, 1',
+      'increments': '5',
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [9, 14, 6, 18],
       'rirModel': 'Static RIR',
@@ -169,7 +169,7 @@ class BlockExerciseDefaultsRepository {
     },
     'isolation': {
       'weeklyFrequency': 4,
-      'increments': '2.5, 1.25',
+      'increments': '2.5',
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [9, 14, 6, 18],
       'rirModel': 'Static RIR',

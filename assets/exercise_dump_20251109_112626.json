@@ -1,0 +1,1522 @@
+{
+  "Arm Curl": [
+    {
+      "id": "0dZrCqZ8M7Q1sAn0zeeb",
+      "name": "Dumbbell Biceps Curl",
+      "category": "Arm Curl",
+      "bodyParts": [
+        "Biceps"
+      ]
+    },
+    {
+      "id": "0h3rJfPtx1beUw0TIUzU",
+      "name": "Hammer Curl",
+      "category": "Arm Curl",
+      "bodyParts": [
+        "Biceps"
+      ]
+    },
+    {
+      "id": "F76PnvlLLVF6hviuhRfH",
+      "name": "Seated Dumbbell Biceps Curl",
+      "category": "Arm Curl",
+      "bodyParts": [
+        "Biceps",
+        "Forearms"
+      ]
+    },
+    {
+      "id": "FaEA5tyZG9MyOZmXIqhF",
+      "name": "Cable High Curl",
+      "category": "Arm Curl",
+      "bodyParts": [
+        "Biceps"
+      ]
+    },
+    {
+      "id": "MgRQpEe7dLX2NmBWg7Hh",
+      "name": "Barbell Biceps Curl",
+      "category": "Arm Curl",
+      "bodyParts": [
+        "Biceps"
+      ]
+    },
+    {
+      "id": "WPb8rtRTupKIBzgydB5k",
+      "name": "Cable Biceps Curl",
+      "category": "Arm Curl",
+      "bodyParts": [
+        "Biceps"
+      ]
+    },
+    {
+      "id": "fDiank9RJXbMiTuxVjq5",
+      "name": "Machine Biceps Curl",
+      "category": "Arm Curl",
+      "bodyParts": [
+        "Biceps"
+      ]
+    },
+    {
+      "id": "iQJ4IrLKu3wMhh0VmsKd",
+      "name": "Preacher Biceps Curl",
+      "category": "Arm Curl",
+      "bodyParts": [
+        "Biceps"
+      ]
+    },
+    {
+      "id": "oKiDOcP7b7zb9pxR05W6",
+      "name": "Machine Preacher Biceps Curl",
+      "category": "Arm Curl",
+      "bodyParts": [
+        "Biceps"
+      ]
+    },
+    {
+      "id": "u65dikgnXWDXBM4VmGmr",
+      "name": "Cable Biceps Curl, Unilateral",
+      "category": "Arm Curl",
+      "bodyParts": [
+        "Biceps"
+      ]
+    },
+    {
+      "id": "zn5PgKNRrWo1MTE4wnCy",
+      "name": "Bayesian Biceps Curl",
+      "category": "Arm Curl",
+      "bodyParts": [
+        "Biceps"
+      ]
+    }
+  ],
+  "Arm Extension": [
+    {
+      "id": "9Oovma2yszjmSm420awp",
+      "name": "Suspended Triceps Extension",
+      "category": "Arm Extension",
+      "bodyParts": [
+        "Triceps"
+      ]
+    },
+    {
+      "id": "Ah9XLjbWvLJOWxb6e1H0",
+      "name": "Triceps Push down, Unilateral",
+      "category": "Arm Extension",
+      "bodyParts": [
+        "Triceps"
+      ]
+    },
+    {
+      "id": "CzFYt5cFZBX4VVZiYE5c",
+      "name": "Skull Crusher, Dumbbells",
+      "category": "Arm Extension",
+      "bodyParts": [
+        "Triceps"
+      ]
+    },
+    {
+      "id": "E6jPE8YYR0KA3xtVaKJo",
+      "name": "Triceps Push Down",
+      "category": "Arm Extension",
+      "bodyParts": [
+        "Triceps"
+      ]
+    },
+    {
+      "id": "FtayDmR5BVnGS1FXlXLL",
+      "name": "Triceps Dip",
+      "category": "Arm Extension",
+      "bodyParts": [
+        "Triceps",
+        "Chest"
+      ]
+    },
+    {
+      "id": "QacImADmlpljltUvB0dD",
+      "name": "Overhead Cable Triceps Extension",
+      "category": "Arm Extension",
+      "bodyParts": [
+        "Triceps"
+      ]
+    },
+    {
+      "id": "jRDb5LbN9e7PyiQMQcPn",
+      "name": "Suspended Triceps Extension, Unilateral",
+      "category": "Arm Extension",
+      "bodyParts": [
+        "Triceps"
+      ]
+    },
+    {
+      "id": "t66qeWQqnuEtaoyZqRp0",
+      "name": "Triceps Dip Machine",
+      "category": "Arm Extension",
+      "bodyParts": [
+        "Triceps",
+        "Chest"
+      ]
+    },
+    {
+      "id": "z5gs1ilr4DpKlSZaRNG5",
+      "name": "Overhead Cable Triceps Extension, Unilateral",
+      "category": "Arm Extension",
+      "bodyParts": [
+        "Triceps"
+      ]
+    }
+  ],
+  "Calf Raise": [
+    {
+      "id": "9G2lziiEVNh06EXjfQyI",
+      "name": "Leg Press Calf Raise, Unilateral",
+      "category": "Calf Raise",
+      "bodyParts": [
+        "Calves"
+      ]
+    },
+    {
+      "id": "Dr6BSN9wrnUFGzA0bQ8i",
+      "name": "Seated Calf Raise, Unilateral",
+      "category": "Calf Raise",
+      "bodyParts": [
+        "Calves"
+      ]
+    },
+    {
+      "id": "JGqiVFGe0cX5bad1hAbK",
+      "name": "Standing Calf Raise, Unilateral",
+      "category": "Calf Raise",
+      "bodyParts": [
+        "Calves"
+      ]
+    },
+    {
+      "id": "LVMQEQl6ZWBcgEUdk2tP",
+      "name": "Leg Press Calf Raise",
+      "category": "Calf Raise",
+      "bodyParts": [
+        "Calves"
+      ]
+    },
+    {
+      "id": "ci3KpMTEacH4bw8ZumJW",
+      "name": "Standing Calf Raise",
+      "category": "Calf Raise",
+      "bodyParts": [
+        "Calves"
+      ]
+    },
+    {
+      "id": "spGqXXReJNHMcc62YgZX",
+      "name": "Seated Calf Raise",
+      "category": "Calf Raise",
+      "bodyParts": [
+        "Calves"
+      ]
+    }
+  ],
+  "Core": [
+    {
+      "id": "0d1HmQpwesdOESqoQHBq",
+      "name": "Russian Twist",
+      "category": "Core",
+      "bodyParts": [
+        "Core"
+      ]
+    },
+    {
+      "id": "3PEkNNkqhDMFxi7v7thc",
+      "name": "Spiderman Plank",
+      "category": "Core",
+      "bodyParts": [
+        "Abs"
+      ]
+    },
+    {
+      "id": "8CIXN12uS2xwF4JzVLq3",
+      "name": "Long Lever Plank",
+      "category": "Core",
+      "bodyParts": [
+        "Core"
+      ]
+    },
+    {
+      "id": "BpO7e9KsDJsvwhfo09uU",
+      "name": "Hanging Knee Raise",
+      "category": "Core",
+      "bodyParts": [
+        "Core"
+      ]
+    },
+    {
+      "id": "DTkkN5pi05RWQyNYhizQ",
+      "name": "Weighted Plank",
+      "category": "Core",
+      "bodyParts": [
+        "Core"
+      ]
+    },
+    {
+      "id": "Ei4x9i5mirIUdMxWKZCk",
+      "name": "Side Plank",
+      "category": "Core",
+      "bodyParts": [
+        "Core"
+      ]
+    },
+    {
+      "id": "P88Vj5pBydqmiEzFowag",
+      "name": "Hanging Straight Leg Raise",
+      "category": "Core",
+      "bodyParts": [
+        "Core"
+      ]
+    },
+    {
+      "id": "SoHQVtsCQreaHM8LUI5F",
+      "name": "Bicycle Crunch",
+      "category": "Core",
+      "bodyParts": [
+        "Abs"
+      ]
+    },
+    {
+      "id": "YrwqLg6c9CJLu7yfLYn0",
+      "name": "Alternating Plank",
+      "category": "Core",
+      "bodyParts": [
+        "Core"
+      ]
+    },
+    {
+      "id": "kxgQUX7Cr75l1kOwRaqc",
+      "name": "Spider-Girl Plank",
+      "category": "Core",
+      "bodyParts": [
+        "Abs"
+      ]
+    },
+    {
+      "id": "lGaQiv5BwE1H5eJSkesj",
+      "name": "Weighted Long Lever Plank",
+      "category": "Core",
+      "bodyParts": [
+        "Core"
+      ]
+    },
+    {
+      "id": "qU2wXMth4duOhhzTUWet",
+      "name": "Decline Crunch",
+      "category": "Core",
+      "bodyParts": [
+        "Core"
+      ]
+    },
+    {
+      "id": "xU7MNEvnaoSwz5jy3uHw",
+      "name": "Plank",
+      "category": "Core",
+      "bodyParts": [
+        "Core"
+      ]
+    }
+  ],
+  "Hip Abduction": [
+    {
+      "id": "7WBffXwK7vJcMi3mtJTF",
+      "name": "Machine Hip Abduction",
+      "category": "Hip Abduction",
+      "bodyParts": [
+        "Glutes"
+      ]
+    }
+  ],
+  "Hip Adduction": [
+    {
+      "id": "hCpQR1NgeEAp31lVRWLw",
+      "name": "Machine Hip Adduction",
+      "category": "Hip Adduction",
+      "bodyParts": [
+        "Inner Thigh"
+      ]
+    }
+  ],
+  "Hip Hinge": [
+    {
+      "id": "10pEctikt6PP8eAg9Eip",
+      "name": "Sumo Deadlift",
+      "category": "Hip Hinge",
+      "bodyParts": [
+        "Hamstrings",
+        "Glutes",
+        "Lower Back"
+      ]
+    },
+    {
+      "id": "3dWgorRmtgzsV0U4qu47",
+      "name": "Glute Cable Kick Back",
+      "category": "Hip Hinge",
+      "bodyParts": [
+        "Glutes"
+      ]
+    },
+    {
+      "id": "BiJsmBeyrAX2ot8CQkxa",
+      "name": "Romanian Deadlift, Unilateral",
+      "category": "Hip Hinge",
+      "bodyParts": [
+        "Hamstrings",
+        "Glutes",
+        "Lower Back"
+      ]
+    },
+    {
+      "id": "EQL6s4QJnXApe8DdmJbX",
+      "name": "Deadlift, Deficit",
+      "category": "Hip Hinge",
+      "bodyParts": [
+        "Hamstrings",
+        "Glutes",
+        "Lower Back"
+      ]
+    },
+    {
+      "id": "GU4jUgMGvN7yc4nk4YZp",
+      "name": "Machine Hip Thrust, Unilateral",
+      "category": "Hip Hinge",
+      "bodyParts": [
+        "Hamstrings",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "LGhFj8o0sG3X12296UAh",
+      "name": "Hip Thrust, Barbell",
+      "category": "Hip Hinge",
+      "bodyParts": [
+        "Hamstrings",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "MsGl7e9yanDeEnYX0e4X",
+      "name": "Deadlift, Conventional",
+      "category": "Hip Hinge",
+      "bodyParts": [
+        "Hamstrings",
+        "Glutes",
+        "Lower Back"
+      ]
+    },
+    {
+      "id": "NkctO0XmQrUHfLCkpRXr",
+      "name": "Sumo Deadlift, Deficit",
+      "category": "Hip Hinge",
+      "bodyParts": [
+        "Hamstrings",
+        "Glutes",
+        "Lower Back"
+      ]
+    },
+    {
+      "id": "YaQ0FCQEUAk4ALwAPhv2",
+      "name": "Machine Hip Thrust",
+      "category": "Hip Hinge",
+      "bodyParts": [
+        "Hamstrings",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "eyh76KELuuO805rZBpMa",
+      "name": "45 Degree Hip Extension",
+      "category": "Hip Hinge",
+      "bodyParts": [
+        "Hamstrings",
+        "Glutes",
+        "Lower Back"
+      ]
+    },
+    {
+      "id": "iiFvIJZEw9eFESL8I8Zr",
+      "name": "Banded Hip Thrust, Barbell",
+      "category": "Hip Hinge",
+      "bodyParts": [
+        "Hamstrings",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "visub8iG0LIXYYCv5Qom",
+      "name": "Hip Thrust, Unilateral",
+      "category": "Hip Hinge",
+      "bodyParts": [
+        "Hamstrings",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "y5q9OU9OBzZQMkfPzFrf",
+      "name": "Romanian Deadlift",
+      "category": "Hip Hinge",
+      "bodyParts": [
+        "Hamstrings",
+        "Glutes",
+        "Lower Back"
+      ]
+    },
+    {
+      "id": "zOib63bPhajFz3DCJwon",
+      "name": "Single Leg Deadlift",
+      "category": "Hip Hinge",
+      "bodyParts": [
+        "Hamstrings",
+        "Glutes",
+        "Lower Back"
+      ]
+    }
+  ],
+  "Horizontal Press": [
+    {
+      "id": "0P4ECDHtfF7oKExmNhbN",
+      "name": "Push Up, Decline",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "0YNV3P4D7QaN6xLI9lo8",
+      "name": "Push Up, Weighted",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "AmfUWbF1DH3I7qPAdh5k",
+      "name": "Bench Press, Barbell",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "Da2xWZqbeCsbGCwdbwbs",
+      "name": "Push Up, Deficit",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "EFbQl9i9NdYi13F3DqHr",
+      "name": "Push Up, Suspended ",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "GVtqhrhqIjpxqbbxCenD",
+      "name": "Cable Fly",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts"
+      ]
+    },
+    {
+      "id": "IECRZ5GJrc78DRnyuhtQ",
+      "name": "Bench Press, Narrow Grip",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "ImsyZFlElon47oilIxbr",
+      "name": "Incline Press, Barbell",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "KNLnmx1VSxvVfMfmXI6j",
+      "name": "partylift",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Biceps"
+      ]
+    },
+    {
+      "id": "M1cAq1IgEHqvjehpTVz2",
+      "name": "Decline Bench Press, Barbell",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "TBSudbow1OLdX6mSCC6S",
+      "name": "Machine Chest Fly",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts"
+      ]
+    },
+    {
+      "id": "U4k0jdt0FIfo8nKVGKIB",
+      "name": "k8ng",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest"
+      ]
+    },
+    {
+      "id": "WH2qpYjDeb6M0j2FtlGs",
+      "name": "Bench Press, Touch n Go",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "YnWk5T98DTGreybZpaxh",
+      "name": "Banded Push Up, Suspended",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "YvwK9kwc1hcA2omz1g4r",
+      "name": "Larsen Bench Press",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "ZH6VIWHexxxlpKRYgwil",
+      "name": "Bench Press, Pin Press",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "ZKrfhPhJIiC1hRuwBEw1",
+      "name": "Bayesian Fly",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts"
+      ]
+    },
+    {
+      "id": "iPaRtXsLXcXHQg5vmVA0",
+      "name": "Suspended Fly",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts"
+      ]
+    },
+    {
+      "id": "jSC34DLH5C7t9jH0pWfo",
+      "name": "Push Up Off Bench",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "jtMoW3Nht1k97YgweteC",
+      "name": "Incline Bench Dumbbell Press",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "kTs5fLSTKjUkUZL10iii",
+      "name": "Flat Bench Dumbbell Press",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "m6zHYgovIiYPM7NgqoeR",
+      "name": "Bench Press, Banded",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "pJQaGJlTAOoyZ8TyEmrY",
+      "name": "Push Up, Banded",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "pU7wce56hFDsam53aKDr",
+      "name": "Bench Press, Larsen Press",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "qSaKrrHAbWjTHSEdSYdk",
+      "name": "Richard Lift",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Biceps"
+      ]
+    },
+    {
+      "id": "uY8uJaSFK9czKIX4TLc4",
+      "name": "Machine Chest Press",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "v7rob21ibsCI9y6q9vT8",
+      "name": "Decline Dumbbell Bench Press",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "wrCwLDvwMYAgQtoiaJTh",
+      "name": "Weighted Push Up, Deficit ",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "wtrVB88vFR0EDRc7Uli0",
+      "name": "Bench Press, Long Pause",
+      "category": "Horizontal Press",
+      "bodyParts": [
+        "Chest",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    }
+  ],
+  "Horizontal Pull": [
+    {
+      "id": "0s4yMXygBXZZJH66Yi6h",
+      "name": "Seated Face Pull, Unilateral",
+      "category": "Horizontal Pull",
+      "bodyParts": [
+        "Mid Traps",
+        "Rear Delts",
+        "Forearms"
+      ]
+    },
+    {
+      "id": "6SGWrCKfe7KQLThRYXQ6",
+      "name": "One Arm Row, Dumbbell",
+      "category": "Horizontal Pull",
+      "bodyParts": [
+        "Lats",
+        "Biceps",
+        "Rhomboids"
+      ]
+    },
+    {
+      "id": "6d9Ud7ffAHpljWsSKrFe",
+      "name": "Seated Face Pull",
+      "category": "Horizontal Pull",
+      "bodyParts": [
+        "Mid Traps",
+        "Rear Delts",
+        "Forearms"
+      ]
+    },
+    {
+      "id": "72HAT6Od4iJodEFxzw62",
+      "name": "Machine Reverse Fly",
+      "category": "Horizontal Pull",
+      "bodyParts": [
+        "Mid Traps",
+        "Rear Delts"
+      ]
+    },
+    {
+      "id": "B9MMfwwFulfJO59eSN5X",
+      "name": "Cable Low Row",
+      "category": "Horizontal Pull",
+      "bodyParts": [
+        "Lats",
+        "Rhomboids",
+        "Biceps"
+      ]
+    },
+    {
+      "id": "FgK60hjk4WBMhuPVyTKP",
+      "name": "Cable High Row",
+      "category": "Horizontal Pull",
+      "bodyParts": [
+        "Rear Delts",
+        "Mid Traps",
+        "Biceps"
+      ]
+    },
+    {
+      "id": "KPewxxYYrhsOp84lIQr5",
+      "name": "Suspended High Row",
+      "category": "Horizontal Pull",
+      "bodyParts": [
+        "Rear Delts",
+        "Mid Traps",
+        "Biceps"
+      ]
+    },
+    {
+      "id": "KvT5S7JRKUVlzZOxmZ53",
+      "name": "Bent Over Row, Barbell",
+      "category": "Horizontal Pull",
+      "bodyParts": [
+        "Lats",
+        "Rhomboids",
+        "Biceps"
+      ]
+    },
+    {
+      "id": "OJaMXFKgMnM0X5xttBE1",
+      "name": "Cable Face Pull",
+      "category": "Horizontal Pull",
+      "bodyParts": [
+        "Mid Traps",
+        "Rear Delts",
+        "Forearms"
+      ]
+    },
+    {
+      "id": "PTLckobiCR1VliZzGdJ2",
+      "name": "Cable Low Row, Unilateral",
+      "category": "Horizontal Pull",
+      "bodyParts": [
+        "Lats",
+        "Rhomboids",
+        "Biceps"
+      ]
+    },
+    {
+      "id": "eeEXnmSXv90q0rUgGECq",
+      "name": "KP Face Pull",
+      "category": "Horizontal Pull",
+      "bodyParts": [
+        "Rear Delts",
+        "Mid Traps",
+        "Biceps"
+      ]
+    },
+    {
+      "id": "ewJBWuDzj1CxfQ3vI3QS",
+      "name": "Reverse Bayesian Fly",
+      "category": "Horizontal Pull",
+      "bodyParts": [
+        "Rear Delts",
+        "Mid Traps"
+      ]
+    },
+    {
+      "id": "mJKwE9Fc2opMiiy7yUFt",
+      "name": "Suspended Reverse Fly",
+      "category": "Horizontal Pull",
+      "bodyParts": [
+        "Rear Delts",
+        "Mid Traps"
+      ]
+    },
+    {
+      "id": "ocNWJv7xLrlinGmjG6cV",
+      "name": "Machine Row, Supported",
+      "category": "Horizontal Pull",
+      "bodyParts": [
+        "Lats",
+        "Mid Traps",
+        "Biceps"
+      ]
+    },
+    {
+      "id": "oiQ7EJsGLgJG3Sx9m2sB",
+      "name": "Suspended High Row, Unilateral",
+      "category": "Horizontal Pull",
+      "bodyParts": [
+        "Rear Delts",
+        "Mid Traps",
+        "Biceps",
+        "Forearms"
+      ]
+    },
+    {
+      "id": "xWpCQO504iGfU3LKLZlD",
+      "name": "Cable High Row, Unilateral",
+      "category": "Horizontal Pull",
+      "bodyParts": [
+        "Rear Delts",
+        "Mid Traps",
+        "Biceps",
+        "Forearms"
+      ]
+    },
+    {
+      "id": "yiTmu2Ul6TwYs3XiXauz",
+      "name": "Seated Row, Cable",
+      "category": "Horizontal Pull",
+      "bodyParts": [
+        "Lats",
+        "Rhomboids",
+        "Biceps"
+      ]
+    },
+    {
+      "id": "zpNb7HgXjtcrzR14F3iF",
+      "name": "Cable One Arm Row",
+      "category": "Horizontal Pull",
+      "bodyParts": [
+        "Lats",
+        "Rhomboids",
+        "Mid Traps",
+        "Forearms"
+      ]
+    }
+  ],
+  "Lateral Raise": [
+    {
+      "id": "C4JVrxApu1y4kXB5qD7v",
+      "name": "Dumbbell Lateral Raise",
+      "category": "Lateral Raise",
+      "bodyParts": [
+        "Lateral Delts",
+        "Anterior Delts"
+      ]
+    },
+    {
+      "id": "EbWEhqYgBQttbSEMFUTD",
+      "name": "Seated Lateral Raise Machine",
+      "category": "Lateral Raise",
+      "bodyParts": [
+        "Lateral Delts",
+        "Anterior Delts"
+      ]
+    },
+    {
+      "id": "MLVe5O3fmwO5QAyeFNA9",
+      "name": "Standing Lateral Raise Machine",
+      "category": "Lateral Raise",
+      "bodyParts": [
+        "Lateral Delts",
+        "Anterior Delts"
+      ]
+    },
+    {
+      "id": "RcC48r0oLsNCH798d3jc",
+      "name": "Butterfly Dumbbell Raise",
+      "category": "Lateral Raise",
+      "bodyParts": [
+        "Lateral Delts",
+        "Anterior Delts"
+      ]
+    },
+    {
+      "id": "igNo9pSuaOFt0GVX0zBG",
+      "name": "Cable Lateral Raise",
+      "category": "Lateral Raise",
+      "bodyParts": [
+        "Lateral Delts",
+        "Anterior Delts"
+      ]
+    },
+    {
+      "id": "kpnNqzA2hhYPIS9FLb7G",
+      "name": "Seated Dumbbell Raise",
+      "category": "Lateral Raise",
+      "bodyParts": [
+        "Lateral Delts",
+        "Anterior Delts"
+      ]
+    },
+    {
+      "id": "n92rgf5y30dlNsfkHOnE",
+      "name": "Standing Lateral Raise Machine",
+      "category": "Lateral Raise",
+      "bodyParts": [
+        "Lateral Delts",
+        "Anterior Delts"
+      ]
+    },
+    {
+      "id": "vrUvHdZFMd9QVhmJXzi9",
+      "name": "Reverse Seated Dumbbell Raise",
+      "category": "Lateral Raise",
+      "bodyParts": [
+        "Lateral Delts",
+        "Anterior Delts"
+      ]
+    }
+  ],
+  "Leg Curl": [
+    {
+      "id": "4OGEYz0YdAPwhBjl9jfL",
+      "name": "Lying Leg Curl, Unilateral",
+      "category": "Leg Curl",
+      "bodyParts": [
+        "Hamstrings"
+      ]
+    },
+    {
+      "id": "7gc2YEj9ZQe6A0kr5NcX",
+      "name": "Suspended Leg Curl, Unilateral",
+      "category": "Leg Curl",
+      "bodyParts": [
+        "Hamstrings",
+        "Calves"
+      ]
+    },
+    {
+      "id": "ETm055bydWtUCxTMu3MR",
+      "name": "Seated Leg Curl",
+      "category": "Leg Curl",
+      "bodyParts": [
+        "Hamstrings"
+      ]
+    },
+    {
+      "id": "PXqhBA8ib7FWAcPjDlES",
+      "name": "Suspended Leg Curl",
+      "category": "Leg Curl",
+      "bodyParts": [
+        "Hamstrings",
+        "Calves"
+      ]
+    },
+    {
+      "id": "bjt79xNF2EJnq1JgeEjC",
+      "name": "Standing Leg Curl",
+      "category": "Leg Curl",
+      "bodyParts": [
+        "Hamstrings"
+      ]
+    },
+    {
+      "id": "uP3mxsrRYRYTOSuP7jYS",
+      "name": "Seated Leg Curl, Unilateral",
+      "category": "Leg Curl",
+      "bodyParts": [
+        "Hamstrings"
+      ]
+    },
+    {
+      "id": "wIcMsf2J9cswJRs1GuYX",
+      "name": "Lying Leg Curl",
+      "category": "Leg Curl",
+      "bodyParts": [
+        "Hamstrings"
+      ]
+    }
+  ],
+  "Leg Extension": [
+    {
+      "id": "QkEgE8gnIva2kkNJEfxw",
+      "name": "Leg Extension",
+      "category": "Leg Extension",
+      "bodyParts": [
+        "Quads"
+      ]
+    },
+    {
+      "id": "ZKpGshMxFl2dxNmYSATj",
+      "name": "Leg Extension, Unilateral",
+      "category": "Leg Extension",
+      "bodyParts": [
+        "Quads"
+      ]
+    }
+  ],
+  "Squat Pattern": [
+    {
+      "id": "04TXXSiV2id2zQJVU0fi",
+      "name": "Hack Squat, Unilateral",
+      "category": "Squat Pattern",
+      "bodyParts": [
+        "Quads",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "2ckJbysOt1aIj2vqTsxe",
+      "name": "Sissy Squat",
+      "category": "Squat Pattern",
+      "bodyParts": [
+        "Quads",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "44cn7eXYrSnA7JlXLfbV",
+      "name": "Front Squat, Barbell",
+      "category": "Squat Pattern",
+      "bodyParts": [
+        "Quads",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "5hcaBugbwCjii2QuPZQZ",
+      "name": "Back Squat, Low bar",
+      "category": "Squat Pattern",
+      "bodyParts": [
+        "Quads",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "AJIQi4kzUVb7IfOyxfZs",
+      "name": "Back Squat, Pin Squat",
+      "category": "Squat Pattern",
+      "bodyParts": [
+        "Quads",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "Ddf2E7HzQJha9S6zdgMl",
+      "name": "Back Squat, Paused Squat",
+      "category": "Squat Pattern",
+      "bodyParts": [
+        "Quads",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "I4021icWTx3EAnAe1eHf",
+      "name": "Box Jump Squat",
+      "category": "Squat Pattern",
+      "bodyParts": [
+        "Quads",
+        "Glutes",
+        "Calves"
+      ]
+    },
+    {
+      "id": "ISXQqOEXLjMrPEs0xjgJ",
+      "name": "Bulgarian Split Squat",
+      "category": "Squat Pattern",
+      "bodyParts": [
+        "Quads",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "TsYKKbyGEct0M1Kah4WL",
+      "name": "Smith Machine Squat",
+      "category": "Squat Pattern",
+      "bodyParts": [
+        "Quads",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "Wo8la9B8Cnbqhf9igfEt",
+      "name": "Split Squat, Regular",
+      "category": "Squat Pattern",
+      "bodyParts": [
+        "Quads",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "Z1LpfaEBvHBDMsJ54pgw",
+      "name": "Hack Squat",
+      "category": "Squat Pattern",
+      "bodyParts": [
+        "Quads",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "fbVQO6ITQCmti3fboLkS",
+      "name": "Back Squat, Banded",
+      "category": "Squat Pattern",
+      "bodyParts": [
+        "Quads",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "heeBViVINHO6tUScSd6y",
+      "name": "Back Squat, Barbell",
+      "category": "Squat Pattern",
+      "bodyParts": [
+        "Quads",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "l4XQAoJeENeWl3y8IjKw",
+      "name": "Walking Lunge",
+      "category": "Squat Pattern",
+      "bodyParts": [
+        "Quads",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "roD1QyP7Nbnii5TzFzVv",
+      "name": "Leg Press, Unilateral",
+      "category": "Squat Pattern",
+      "bodyParts": [
+        "Quads",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "tGj4yuPuIagfgHmbEJo7",
+      "name": "Goblet Squat",
+      "category": "Squat Pattern",
+      "bodyParts": [
+        "Quads",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "v2XlZUvFfBUhogOdKtJ8",
+      "name": "Leg Press",
+      "category": "Squat Pattern",
+      "bodyParts": [
+        "Quads",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "wVNyffCmGtEh0Gz8X8Mp",
+      "name": "Split Squat, Standard",
+      "category": "Squat Pattern",
+      "bodyParts": [
+        "Quads",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "xO7SEkUMPNOcRvhLYWpv",
+      "name": "Smith Machine Leg Press",
+      "category": "Squat Pattern",
+      "bodyParts": [
+        "Quads",
+        "Glutes"
+      ]
+    },
+    {
+      "id": "xbePAZEtQIFEjvu2YaPV",
+      "name": "Bulgarian Split Squat, Deficit",
+      "category": "Squat Pattern",
+      "bodyParts": [
+        "Quads",
+        "Glutes"
+      ]
+    }
+  ],
+  "Vertical Press": [
+    {
+      "id": "2yJSfLMfOnNDSeZ7DqZT",
+      "name": "Overhead Dumbbell Press",
+      "category": "Vertical Press",
+      "bodyParts": [
+        "Lateral Delts",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "9siQpXF2KLCj7M9kCy2m",
+      "name": "Seated Shoulder Dumbbell Press",
+      "category": "Vertical Press",
+      "bodyParts": [
+        "Anterior Delts",
+        "Lateral Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "H9yrbuLXWV4vVkpI4sMi",
+      "name": "Machine Shoulder Press, Plate Loaded",
+      "category": "Vertical Press",
+      "bodyParts": [
+        "Anterior Delts",
+        "Lateral Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "LLOiHOiZivL1M8b9oOtM",
+      "name": "Land Mine Press",
+      "category": "Vertical Press",
+      "bodyParts": [
+        "Lateral Delts",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "RdsGazgdH0xgpjek0n3u",
+      "name": "Overhead Dumbbell Press, Unilateral",
+      "category": "Vertical Press",
+      "bodyParts": [
+        "Lateral Delts",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "YAUmfxTCbQMpoMXjZBEE",
+      "name": "Hand Stand Press Up",
+      "category": "Vertical Press",
+      "bodyParts": [
+        "Anterior Delts",
+        "Lateral Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "bqBSEPjBI96dW8fghN9F",
+      "name": "Log Press",
+      "category": "Vertical Press",
+      "bodyParts": [
+        "Anterior Delts",
+        "Lateral Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "evJdhRrgzy9LbYL5397S",
+      "name": "Hand Stand Press Up, Deficit",
+      "category": "Vertical Press",
+      "bodyParts": [
+        "Anterior Delts",
+        "Lateral Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "kwRLaGpWNKyssIeIRKai",
+      "name": "Circus Dumbbell Press",
+      "category": "Vertical Press",
+      "bodyParts": [
+        "Lateral Delts",
+        "Anterior Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "lVDG90yN6Z8aPjRNV2wc",
+      "name": "Overhead Barbell Press",
+      "category": "Vertical Press",
+      "bodyParts": [
+        "Anterior Delts",
+        "Lateral Delts",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "vrSYibzR5DHzl6Gzp4ER",
+      "name": "Machine Shoulder Press, Pin Loaded",
+      "category": "Vertical Press",
+      "bodyParts": [
+        "Anterior Delts",
+        "Lateral Delts",
+        "Triceps"
+      ]
+    }
+  ],
+  "Vertical Pull": [
+    {
+      "id": "1XOIXxeLFhgmgjZS9Cyq",
+      "name": "Lat Pull Down, Supinated",
+      "category": "Vertical Pull",
+      "bodyParts": [
+        "Lats",
+        "Biceps"
+      ]
+    },
+    {
+      "id": "62bgcaH7M4TpeIXR8HZ9",
+      "name": "Bench Lat Pull Down, Straight Arm",
+      "category": "Vertical Pull",
+      "bodyParts": [
+        "Lats",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "63ryIPxgXVPX7jLtAecC",
+      "name": "Pull-Up, Wide Arm",
+      "category": "Vertical Pull",
+      "bodyParts": [
+        "Lats",
+        "Biceps",
+        "Forearms"
+      ]
+    },
+    {
+      "id": "7x7nEW5Goq8fu8fggUNL",
+      "name": "Straight Arm Lat Pull Down",
+      "category": "Vertical Pull",
+      "bodyParts": [
+        "Lats",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "8saP9lWMoQffuh30A99K",
+      "name": "Lat Prayer",
+      "category": "Vertical Pull",
+      "bodyParts": [
+        "Lats",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "C9Rg2kpIeYmV6ahXzJN2",
+      "name": "Machine Lat Pull Down, Plate Loaded",
+      "category": "Vertical Pull",
+      "bodyParts": [
+        "Lats",
+        "Biceps"
+      ]
+    },
+    {
+      "id": "JbthLLjMF6xRvvaUY8PU",
+      "name": "Lat Pull Down, Unilateral ",
+      "category": "Vertical Pull",
+      "bodyParts": [
+        "Lats",
+        "Biceps"
+      ]
+    },
+    {
+      "id": "LoP1i0MF2Q09q6JPonpe",
+      "name": "Lat Pull Over, Straight Arm",
+      "category": "Vertical Pull",
+      "bodyParts": [
+        "Lats",
+        "Biceps"
+      ]
+    },
+    {
+      "id": "RFyjAjezFs8Rf7CQoaXz",
+      "name": "Pull-Up",
+      "category": "Vertical Pull",
+      "bodyParts": [
+        "Lats",
+        "Biceps"
+      ]
+    },
+    {
+      "id": "Url65Q2RxZa00dkDpUdl",
+      "name": "Lat Pull Down, Wide Arm ",
+      "category": "Vertical Pull",
+      "bodyParts": [
+        "Lats",
+        "Biceps"
+      ]
+    },
+    {
+      "id": "XM9026peNIu0R8qh7UqY",
+      "name": "Chin-Up",
+      "category": "Vertical Pull",
+      "bodyParts": [
+        "Lats",
+        "Biceps"
+      ]
+    },
+    {
+      "id": "mqVHoXE3ZhrH7Ef8F9Ms",
+      "name": "Bench Cable Straight Arm Lat Pull",
+      "category": "Vertical Pull",
+      "bodyParts": [
+        "Lats",
+        "Triceps"
+      ]
+    },
+    {
+      "id": "nbhT3v7xmO7WGGKCF74t",
+      "name": "Machine Lat Pull Down",
+      "category": "Vertical Pull",
+      "bodyParts": [
+        "Lats",
+        "Biceps"
+      ]
+    },
+    {
+      "id": "tDj2ANzvibnKSuKKgJVd",
+      "name": "Lat Pull Over, Machine",
+      "category": "Vertical Pull",
+      "bodyParts": [
+        "Lats",
+        "Biceps"
+      ]
+    }
+  ]
+}
