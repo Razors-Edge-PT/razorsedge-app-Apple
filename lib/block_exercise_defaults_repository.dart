@@ -157,6 +157,16 @@ class BlockExerciseDefaultsRepository {
       'defaultSets': 3,
       'progressionModel': 'Smart Progression',
     },
+    'Lateral Raise': {
+      'weeklyFrequency': 3,
+      'increments': '2.5',
+      'periodizationModel': 'DUP, By Exposure',
+      'repTargets': [9, 13, 18],
+      'rirModel': 'Static RIR',
+      'rirTargets': [1.5, 1, 1],
+      'defaultSets': 3,
+      'progressionModel': 'Smart Progression',
+    },
     'Core': {
       'weeklyFrequency': 4,
       'increments': '5',

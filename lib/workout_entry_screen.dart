@@ -13018,6 +13018,29 @@ class _WorkoutPageState extends State<WorkoutPage>
 
     final Map<String, TextEditingController> rirControllers = {};
 
+    // 🎯 Per-session rep-target controllers: "instance1", "instance2", ...
+    final Map<String, TextEditingController> repTargetControllers = {};
+
+    if (existingRepTargets is Map && existingRepTargets['week1'] is Map) {
+      final Map<String, dynamic> week1RT =
+      Map<String, dynamic>.from(existingRepTargets['week1'] as Map);
+
+      for (int s = 1; s <= weeklyFrequency; s++) {
+        final instanceKey = 'instance$s';
+        final existingVal = week1RT[instanceKey]?.toString() ?? '';
+        repTargetControllers[instanceKey] =
+            TextEditingController(text: existingVal);
+      }
+    } else {
+      // No existing repTargets – create empty controllers for each session
+      for (int s = 1; s <= weeklyFrequency; s++) {
+        final instanceKey = 'instance$s';
+        repTargetControllers[instanceKey] =
+            TextEditingController(text: '');
+      }
+    }
+
+
 // 🔎 Figure out which week we're in for pre-filling the dialog
     int? dialogWeekIndex = _getApplicableWeekIndex(exerciseId);
     dialogWeekIndex ??= 0; // fallback to week1 if null
@@ -13176,10 +13199,10 @@ class _WorkoutPageState extends State<WorkoutPage>
                   exerciseName,
                   style: const TextStyle(
                     color: Colors.white70,
-                    fontSize: 13,
+                    fontSize: 15,
                   ),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 14),
 
                 // Increments
                 SizedBox(
@@ -13212,32 +13235,59 @@ class _WorkoutPageState extends State<WorkoutPage>
                 ),
                 const SizedBox(height: 10),
 
-                // Rep Targets
-                SizedBox(
-                  width: 220,
-                  height: 40,
-                  child: TextField(
-                    controller: repTargetsController,
-                    keyboardType: TextInputType.text,
-                    style: const TextStyle(color: Colors.white, fontSize: 13),
-                    decoration: InputDecoration(
-                      labelText: 'Rep targets (week 1)',
-                      hintText: '9 x 3, 15 x 3, 5 x 3',
-                      labelStyle: const TextStyle(color: Colors.white),
-                      hintStyle: const TextStyle(color: Colors.white38),
-                      filled: true,
-                      fillColor: Colors.blueGrey.shade700,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 10,
-                      ),
+                // Rep Targets (one box per session, like RIR)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Rep targets (week 1)',
+                      style: TextStyle(color: Colors.white, fontSize: 13),
                     ),
-                  ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 10,
+                      children: [
+                        for (int s = 1; s <= weeklyFrequency; s++)
+                          SizedBox(
+                            width: 110,
+                            child: TextField(
+                              controller:
+                              repTargetControllers['instance$s'],
+                              keyboardType: TextInputType.text,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                              ),
+                              decoration: InputDecoration(
+                                labelText: 'Session $s',
+                                hintText: '9 x 3',
+                                labelStyle: const TextStyle(
+                                  color: Colors.white70,
+                                ),
+                                hintStyle: const TextStyle(
+                                  color: Colors.white38,
+                                ),
+                                filled: true,
+                                fillColor: Colors.blueGrey.shade700,
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                isDense: true,
+                                contentPadding:
+                                const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 6,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ],
                 ),
+                const SizedBox(height: 10),
+
                 const SizedBox(height: 10),
 
                 // Week 1 RIR targets (all sessions / sets)
@@ -13297,7 +13347,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                             const SizedBox(height: 4),
                             Wrap(
                               spacing: 6,
-                              runSpacing: 4,
+                              runSpacing: 10,
                               children: [
                                 for (int i = 0; i < entries.length; i++)
                                   Builder(
@@ -13403,12 +13453,26 @@ class _WorkoutPageState extends State<WorkoutPage>
                 // --- BUILD UPDATED MAPS ---
                 final newIncrements =
                 _parseIncrements(incrementsController.text);
-                final newRepTargets =
-                _parseRepTargets(repTargetsController.text);
+
+                // Build repTargets as: { week1: { instance1: '9 x 3', ... } }
+                final Map<String, dynamic> newRepTargets = {};
+                final Map<String, String> week1RepMap = {};
+
+                repTargetControllers.forEach((instanceKey, ctrl) {
+                  final txt = ctrl.text.trim();
+                  if (txt.isNotEmpty) {
+                    week1RepMap[instanceKey] = txt;
+                  }
+                });
+
+                if (week1RepMap.isNotEmpty) {
+                  newRepTargets['week1'] = week1RepMap;
+                }
 
                 // Decide which repTargets drive the RIR plan:
                 final dynamic repTargetsForRir =
                 newRepTargets.isNotEmpty ? newRepTargets : existingRepTargets;
+
 
                 // 🔥 NEW: update entire week1 RIR plan (all sessions + sets),
                 // also stamping REPS for each set from repTargets
