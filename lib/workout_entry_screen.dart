@@ -14164,10 +14164,12 @@ class _WorkoutPageState extends State<WorkoutPage>
                                       left: 0, top: 2, right: 0, bottom: 0),
 
                                   child: ExpansionTile(
-                                    key: ValueKey('wes_ex_tile_$cardId'),
+                                    key: ValueKey('wes_ex_tile_${cardId}_$isSaved'),
+                                    // 👆 include isSaved in the key so the tile fully rebuilds when saved state changes
 
-                                    // force rebuild when state flips
+                                    // saved → collapsed by default
                                     initiallyExpanded: !isSaved,
+
                                     // saved → collapsed by default
                                     tilePadding: const EdgeInsets.symmetric(
                                         horizontal: 8),
