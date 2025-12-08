@@ -1,7 +1,9 @@
+import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:http/http.dart' as http;
 
 import 'login_screen.dart';   // only as a very defensive fallback
 
@@ -105,10 +107,23 @@ class MembershipGate extends StatelessWidget {
 }
 
 /// Screen shown when the user is logged in but their membership is inactive.
+/// Screen shown when the user is logged in but their membership is inactive.
 class MembershipInactiveScreen extends StatelessWidget {
   const MembershipInactiveScreen({super.key});
 
-  static const String _websiteUrl = 'https://www.razorsedgept.com/goodlift-membership';
+  // 🔗 Your marketing page (still used for "Learn more")
+  static const String _websiteUrl =
+      'https://www.razorsedgept.com/goodlift-membership';
+
+  // 🔗 HTTPS Function URL for createCheckoutSession
+  // Make sure the project + region match your Firebase project.
+  // This is the URL you get from the Firebase console for the function.
+  //
+  // For goodlift-us-storage in us-central1 it should look like:
+  // https://us-central1-goodlift-us-storage.cloudfunctions.net/createCheckoutSession
+  static const String _checkoutFunctionUrl =
+      'https://createcheckoutsession-eot2loyyrq-uc.a.run.app';
+
 
   Future<void> _openWebsite() async {
     final uri = Uri.parse(_websiteUrl);
@@ -120,6 +135,91 @@ class MembershipInactiveScreen extends StatelessWidget {
 
     // Ensures app returns to login screen cleanly.
     Navigator.pushReplacementNamed(context, '/login');
+  }
+
+  Future<void> _startCheckout(BuildContext context) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You must be logged in to subscribe.')),
+      );
+      return;
+    }
+
+    final uid = user.uid;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Opening Stripe checkout…')),
+    );
+
+    try {
+      final uri = Uri.parse(_checkoutFunctionUrl);
+
+      final response = await http.post(
+        uri,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode(<String, dynamic>{
+          'uid': uid,
+          // Optional: you can override these later if you build a hosted success page.
+          // 'success_url': 'https://your-site.com/success',
+          // 'cancel_url': 'https://your-site.com/cancel',
+        }),
+      );
+      debugPrint("STATUS: ${response.statusCode}");
+      debugPrint("BODY: ${response.body}");
+
+
+      if (response.statusCode != 200) {
+        debugPrint(
+          'createCheckoutSession failed: ${response.statusCode} ${response.body}',
+        );
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Error starting checkout (${response.statusCode}). Please try again.',
+            ),
+          ),
+        );
+        return;
+      }
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final url = data['url'] as String?;
+
+      if (url == null || url.isEmpty) {
+        debugPrint('createCheckoutSession returned no URL: ${response.body}');
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No checkout URL returned. Please try again later.'),
+          ),
+        );
+        return;
+      }
+
+      final checkoutUri = Uri.parse(url);
+      final launched = await launchUrl(
+        checkoutUri,
+        mode: LaunchMode.externalApplication,
+      );
+
+      if (!launched) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not open Stripe checkout.'),
+          ),
+        );
+      }
+    } catch (e, st) {
+      debugPrint('Error in _startCheckout: $e');
+      debugPrint(st.toString());
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Unexpected error starting checkout.'),
+        ),
+      );
+    }
+
   }
 
   @override
@@ -152,14 +252,22 @@ class MembershipInactiveScreen extends StatelessWidget {
                 const Text(
                   'Your GOODLIFT membership is inactive.\n\n'
                       'To activate your account and unlock your training plan, '
-                      'please visit our website.',
+                      'tap the button below to start your subscription.',
                   style: TextStyle(fontSize: 15),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 24),
 
-                // 🔵 Learn More → Website button
+                // ✅ Activate membership → Stripe Checkout
                 ElevatedButton(
+                  onPressed: () => _startCheckout(context),
+                  child: const Text('Activate membership'),
+                ),
+
+                const SizedBox(height: 16),
+
+                // 🔵 Learn More → Website button
+                OutlinedButton(
                   onPressed: _openWebsite,
                   child: const Text('Learn more'),
                 ),
@@ -172,15 +280,17 @@ class MembershipInactiveScreen extends StatelessWidget {
                   icon: const Icon(Icons.logout, color: Colors.white),
                   label: const Text('Log out'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blueGrey.shade700,   // same as Learn More
+                    backgroundColor: Colors.blueGrey.shade700,
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(8),
                     ),
                   ),
                 ),
-
               ],
             ),
           ),
