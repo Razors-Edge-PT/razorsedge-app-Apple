@@ -14,7 +14,7 @@ const Stripe = require('stripe');
 // In production, you should move the literal keys into env via the new
 // Firebase runtime config / GCP env vars instead of keeping them in code.
 const stripeSecret = process.env.STRIPE_SECRET || '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';
-const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || 'whsec_Ki7kQNYi73ipyEZPImu6BBDg08to5OF5';
+const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || 'whsec_4tRDzNm2iM9BnpNXAqqkwO0yHMreBQU3';
 
 if (!stripeSecret) {
   logger.error('❌ Missing Stripe secret key. Set STRIPE_SECRET env var.');
@@ -54,7 +54,7 @@ const RE_DAILY_PATH = 'users/{uid}/re_daily/{dayKey}';
 // Membership doc path
 const MEMBERSHIP_DOC_PATH = (uid) => `users/${uid}/profile/membership`;
 
-// TODO: put your actual Stripe Price ID here (NZD $29/month)
+
 const MONTHLY_PRICE_ID = 'price_1SKtWlBoDt989R6zJyzciOlF'; // <-- CHANGE THIS
 
 // -------------------------
