@@ -61,6 +61,12 @@ const MEMBERSHIP_DOC_PATH = (uid) => `users/${uid}/profile/membership`;
 //const MONTHLY_PRICE_ID = 'price_1SbxI4BoDt989R6zoUAC0L8w'; // <-- The test price tag
 const MONTHLY_PRICE_ID = 'price_1SKtWlBoDt989R6zJyzciOlF'; // <-- CHANGE THIS
 
+
+//$1 deal set up
+const EARLY_BIRD_PRICE_ID = 'price_1SKtXpBoDt989R6zQB9GHcYG';
+
+
+
 // -------------------------
 // Helper functions (existing)
 // -------------------------
@@ -243,11 +249,13 @@ exports.createCheckoutSession = onRequest(
             quantity: 1,
           },
         ],
-        success_url:
-          success_url ||
-          'https://your-site.com/success?session_id={CHECKOUT_SESSION_ID}',
-        cancel_url:
-          cancel_url || 'https://your-site.com/cancel',
+       success_url:
+         success_url ||
+         'https://www.razorsedgept.com/goodlift-membership?status=success&session_id={CHECKOUT_SESSION_ID}',
+       cancel_url:
+         cancel_url ||
+         'https://www.razorsedgept.com/goodlift-membership?status=cancel',
+
         metadata: {
           firebaseUid: uid,
         },
@@ -260,6 +268,99 @@ exports.createCheckoutSession = onRequest(
     }
   }
 );
+
+exports.createEarlyBirdCheckoutSession = onRequest(
+  { cors: true },
+  async (req, res) => {
+    if (req.method !== 'POST') {
+      return res.status(405).send('Method Not Allowed');
+    }
+
+    if (!stripe) {
+      logger.error('Stripe not initialized in createEarlyBirdCheckoutSession');
+      return res.status(500).json({ error: 'Stripe not configured' });
+    }
+
+    try {
+      const { uid, success_url, cancel_url } = req.body || {};
+
+      if (!uid) {
+        logger.warn('Missing uid in createEarlyBirdCheckoutSession');
+        return res.status(400).json({ error: 'Missing uid' });
+      }
+
+      // --- Fetch or create Stripe Customer ---
+      const membershipRef = db.doc(MEMBERSHIP_DOC_PATH(uid));
+      const membershipSnap = await membershipRef.get();
+      let stripeCustomerId = null;
+
+      if (membershipSnap.exists) {
+        const data = membershipSnap.data();
+        if (data && data.stripeCustomerId) {
+          stripeCustomerId = data.stripeCustomerId;
+        }
+      }
+
+      if (!stripeCustomerId) {
+        const customer = await stripe.customers.create({
+          metadata: { firebaseUid: uid },
+        });
+        stripeCustomerId = customer.id;
+
+        await updateMembershipForUid(uid, {
+          stripeCustomerId: stripeCustomerId,
+        });
+      }
+
+      // --- Create Early Bird Checkout Session ---
+      const session = await stripe.checkout.sessions.create({
+        mode: 'subscription',
+        customer: stripeCustomerId,
+        line_items: [
+          // Recurring monthly subscription
+          {
+            price: MONTHLY_PRICE_ID,
+            quantity: 1,
+          },
+          // One-time $1 Early Bird charge
+          {
+            price: EARLY_BIRD_PRICE_ID,
+            quantity: 1,
+          },
+        ],
+        // Your success & cancel URLs (fallbacks preserved)
+        success_url:
+          success_url ||
+          'https://www.razorsedgept.com/goodlift-membership?status=success&session_id={CHECKOUT_SESSION_ID}',
+
+        cancel_url:
+          cancel_url ||
+          'https://www.razorsedgept.com/goodlift-membership?status=cancel',
+
+
+        // --- Metadata passed through to Stripe & webhook ---
+        metadata: {
+          firebaseUid: uid,
+          planType: 'earlyBird',
+        },
+        subscription_data: {
+          metadata: {
+            firebaseUid: uid,
+            planType: 'earlyBird',
+          },
+          // KEEP YOUR TRIAL LOGIC CONSISTENT
+          trial_period_days: 30,
+        },
+      });
+
+      return res.status(200).json({ url: session.url });
+    } catch (err) {
+      logger.error('Error in createEarlyBirdCheckoutSession', err);
+      return res.status(500).json({ error: 'Internal Server Error' });
+    }
+  }
+);
+
 
 
 // ====================================
