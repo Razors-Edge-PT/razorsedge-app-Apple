@@ -13,11 +13,11 @@ const Stripe = require('stripe');
 // ⚠️ For now, simplest: read from env, with optional fallback literals.
 // In production, you should move the literal keys into env via the new
 // Firebase runtime config / GCP env vars instead of keeping them in code.
-//const stripeSecret = process.env.STRIPE_SECRET || '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';
-//const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || 'whsec_Ki7kQNYi73ipyEZPImu6BBDg08to5OF5';
+const stripeSecret = process.env.STRIPE_SECRET || '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'; // real deal
+const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || 'whsec_Ki7kQNYi73ipyEZPImu6BBDg08to5OF5'; // real deal
 
-const stripeSecret = process.env.STRIPE_SECRET || 'sk_test_51PuTPmBoDt989R6zy9h9tkRoV9r9RjGyyJO7G5ukqv7sb8eFQdShoK4vRZ6e5satjZ0d7yzV0ixXWf9g7Ri00upN008Puqquqv';
-const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || 'whsec_4tRDzNm2iM9BnpNXAqqkwO0yHMreBQU3';
+//const stripeSecret = process.env.STRIPE_SECRET || 'sk_test_51PuTPmBoDt989R6zy9h9tkRoV9r9RjGyyJO7G5ukqv7sb8eFQdShoK4vRZ6e5satjZ0d7yzV0ixXWf9g7Ri00upN008Puqquqv'; // test key
+//const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || 'whsec_4tRDzNm2iM9BnpNXAqqkwO0yHMreBQU3'; // test key
 if (!stripeSecret) {
   logger.error('❌ Missing Stripe secret key. Set STRIPE_SECRET env var.');
 }
@@ -57,8 +57,9 @@ const RE_DAILY_PATH = 'users/{uid}/re_daily/{dayKey}';
 const MEMBERSHIP_DOC_PATH = (uid) => `users/${uid}/profile/membership`;
 
 
-//const MONTHLY_PRICE_ID = 'price_1SKtWlBoDt989R6zJyzciOlF'; // <-- CHANGE THIS
-const MONTHLY_PRICE_ID = 'price_1SbxI4BoDt989R6zoUAC0L8w'; // <-- CHANGE THIS
+//const MONTHLY_PRICE_ID = 'price_1SKtWlBoDt989R6zJyzciOlF'; // < -- The real deal pricetag
+//const MONTHLY_PRICE_ID = 'price_1SbxI4BoDt989R6zoUAC0L8w'; // <-- The test price tag
+const MONTHLY_PRICE_ID = 'price_1SKtWlBoDt989R6zJyzciOlF'; // <-- CHANGE THIS
 
 // -------------------------
 // Helper functions (existing)
