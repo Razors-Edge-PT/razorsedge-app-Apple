@@ -115,20 +115,40 @@ class MembershipInactiveScreen extends StatelessWidget {
   static const String _websiteUrl =
       'https://www.razorsedgept.com/goodlift-membership';
 
-  // 🔗 HTTPS Function URL for createCheckoutSession
-  // Make sure the project + region match your Firebase project.
-  // This is the URL you get from the Firebase console for the function.
-  //
-  // For goodlift-us-storage in us-central1 it should look like:
-  // https://us-central1-goodlift-us-storage.cloudfunctions.net/createCheckoutSession
+  // 🔗 HTTPS Function URL for createCheckoutSession (used by _startCheckout)
   static const String _checkoutFunctionUrl =
       'https://createcheckoutsession-eot2loyyrq-uc.a.run.app';
 
+  /// Open the website *with the current Firebase uid/email attached*,
+  /// so the landing page can start Stripe Checkout for this user.
+  Future<void> _openWebsiteWithUid() async {
+    final user = FirebaseAuth.instance.currentUser;
+    final uid = user?.uid;
+    final email = user?.email;
 
-  Future<void> _openWebsite() async {
-    final uri = Uri.parse(_websiteUrl);
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
+    // Base URL for your Wix membership landing page
+    const baseUrl = 'https://www.razorsedgept.com/goodlift-membership';
+
+    Uri uri;
+
+    if (uid == null) {
+      // If somehow no user is logged in, just open the landing page without params.
+      uri = Uri.parse(baseUrl);
+    } else {
+      // Append uid (and email if available)
+      uri = Uri.parse(baseUrl).replace(queryParameters: {
+        'uid': uid,
+        if (email != null && email.isNotEmpty) 'email': email,
+      });
+    }
+
+    await launchUrl(
+      uri,
+      mode: LaunchMode.externalApplication,
+    );
   }
+
+
 
   Future<void> _logout(BuildContext context) async {
     await FirebaseAuth.instance.signOut();
@@ -260,17 +280,17 @@ class MembershipInactiveScreen extends StatelessWidget {
 
                 // ✅ Activate membership → Stripe Checkout
                 ElevatedButton(
-                  onPressed: () => _startCheckout(context),
+                  onPressed: () => _startCheckout(context),  // keep for now (dev / v1.1)
                   child: const Text('Activate membership'),
                 ),
 
                 const SizedBox(height: 16),
 
-                // 🔵 Learn More → Website button
                 OutlinedButton(
-                  onPressed: _openWebsite,
+                  onPressed: _openWebsiteWithUid,           // ✅ changed line
                   child: const Text('Learn more'),
                 ),
+
 
                 const SizedBox(height: 20),
 
