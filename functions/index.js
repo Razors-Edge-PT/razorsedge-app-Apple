@@ -7,6 +7,27 @@ const admin = require('firebase-admin');
 const Stripe = require('stripe');
 
 // -------------------------
+// Stripe init (no functions.config; using env or hardcoded for now)
+// -------------------------
+
+// ⚠️ For now, simplest: read from env, with optional fallback literals.
+// In production, you should move the literal keys into env via the new
+// Firebase runtime config / GCP env vars instead of keeping them in code.
+const stripeSecret = process.env.STRIPE_SECRET || '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';
+const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || 'whsec_Ki7kQNYi73ipyEZPImu6BBDg08to5OF5';
+
+if (!stripeSecret) {
+  logger.error('❌ Missing Stripe secret key. Set STRIPE_SECRET env var.');
+}
+
+if (!webhookSecret) {
+  logger.error('❌ Missing Stripe webhook secret. Set STRIPE_WEBHOOK_SECRET env var.');
+}
+
+const stripe = stripeSecret ? Stripe(stripeSecret) : null;
+
+
+// -------------------------
 // Firebase Admin init
 // -------------------------
 try { admin.initializeApp(); } catch (_) {}
@@ -15,32 +36,6 @@ const db = admin.firestore();
 // -------------------------
 // Stripe init (from env or functions:config)
 // -------------------------
-// -------------------------
-// Stripe init (from env or functions:config, but never crash)
-// -------------------------
-let stripeSecret = process.env.STRIPE_SECRET || null;
-let webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || null;
-
-try {
-  const cfg = functions.config();
-  if (cfg && cfg.stripe) {
-    if (!stripeSecret && cfg.stripe.secret) {
-      stripeSecret = cfg.stripe.secret;
-    }
-    if (!webhookSecret && cfg.stripe.webhook_secret) {
-      webhookSecret = cfg.stripe.webhook_secret;
-    }
-  }
-} catch (err) {
-  // In 2nd gen / Node 22, functions.config() can be touchy; don't let it crash the process.
-  logger.warn('functions.config() not available or misconfigured; relying on process.env only', err);
-}
-
-if (!stripeSecret) {
-  logger.error('❌ Missing Stripe secret key. Set stripe.secret via functions:config or STRIPE_SECRET env var.');
-}
-
-const stripe = stripeSecret ? Stripe(stripeSecret) : null;
 
 
 // -------------------------
@@ -59,7 +54,7 @@ const RE_DAILY_PATH = 'users/{uid}/re_daily/{dayKey}';
 // Membership doc path
 const MEMBERSHIP_DOC_PATH = (uid) => `users/${uid}/profile/membership`;
 
-
+// TODO: put your actual Stripe Price ID here (NZD $29/month)
 const MONTHLY_PRICE_ID = 'price_1SKtWlBoDt989R6zJyzciOlF'; // <-- CHANGE THIS
 
 // -------------------------
