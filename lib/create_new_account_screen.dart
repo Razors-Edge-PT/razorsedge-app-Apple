@@ -6,7 +6,7 @@ import 'package:flutter/services.dart'; // for TextInputFormatter
 import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:provider/provider.dart'; // for context.read()
 import 'package:localtest222/user_context.dart'; // <-- adjust path to your actual file
-
+import 'membership_gate.dart';
 
 import 'package:localtest222/login_screen.dart';
 import 'periodization_model_utils.dart';
@@ -1081,6 +1081,7 @@ class OnboardingAnswers {
         ?.map((e) => BestEffort.fromJson(Map<String, dynamic>.from(e as Map)))
         .toList(),
     minTrainingDaysPerWeek: (j['minTrainingDaysPerWeek'] as num?)?.toInt(), // 👈 NEW
+    trainingEffort: (j['trainingEffort'] as num?)?.toInt(), // 👈 add this
     createdAt: (j['createdAt'] != null) ? DateTime.tryParse(j['createdAt'].toString()) : null,
     version: j['version']?.toString(),
   );
@@ -1401,6 +1402,10 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
         throw Exception('No user after registration');
       }
 
+      // 🔐 Ensure membership doc exists for this new account.
+      // Idempotent: if Stripe/webhook already created it, we don't overwrite.
+      await ensureMembershipDoc(user.uid);
+
       // 2) Write profile payload to users & users_public
       final username = (widget.username ?? '').trim();
       final payload = {
@@ -1412,6 +1417,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
         'sex': widget.sex,    // 'M'|'F'|'N'
         'createdAt': FieldValue.serverTimestamp(),
       };
+
 
       final db = FirebaseFirestore.instance;
       await db.collection('users').doc(user.uid).set(payload, SetOptions(merge: true));

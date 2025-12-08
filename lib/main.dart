@@ -25,6 +25,9 @@ import 'user_context.dart';
 import 'coach_home_screen.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
+import 'membership_gate.dart';
+
+
 
 
 final RouteObserver<ModalRoute<void>> routeObserver = RouteObserver<ModalRoute<void>>();
@@ -41,6 +44,10 @@ class AppRoot extends StatelessWidget {
         }
 
         final user = snapshot.data!;
+
+        // 🔄 Ensure this user has a membership doc (non-blocking, idempotent).
+        ensureMembershipDoc(user.uid);
+
         return FutureBuilder<IdTokenResult>(
           future: user.getIdTokenResult(),
           builder: (context, tokenSnap) {
@@ -222,11 +229,12 @@ class MyApp extends StatelessWidget {
       ),
       navigatorObservers: [routeObserver],
 
-      // ✅ Provider< UserContext > is now already wrapping this via AppRoot
-      home: const HomeScreen(),
+      // ✅ Home is now gated by membership
+      home: const MembershipGate(child: HomeScreen()),
       routes: {
         '/login': (context) => const LoginScreen(),
-        '/home': (context) => const HomeScreen(),
+        '/home': (context) => const MembershipGate(child: HomeScreen()),
+
         '/exercises': (context) => const ExercisesScreen(),
         '/templates': (context) => const TemplatesScreen(),
         '/workouts': (context) => const WorkoutPage(),
