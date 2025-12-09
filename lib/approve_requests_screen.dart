@@ -168,7 +168,7 @@ class ApproveRequestsScreen extends StatelessWidget {
 
 
       debugPrint(
-          '🤝 [addGymBuddyByUid] request from $actorUid → $athleteUid ($username)');
+          '🤝  V2 [addGymBuddyByUid] request from $actorUid → $athleteUid ($username)');
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

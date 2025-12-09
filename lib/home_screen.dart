@@ -33,7 +33,6 @@ import 'template_bootstrapper.dart';
 import 'debug_utils.dart';
 import 'block_exercise_defaults_repository.dart';
 
-
  import 'dart:convert';
  import 'package:cloud_firestore/cloud_firestore.dart';
  import 'local_cache/block_plan_cache.dart';
@@ -102,6 +101,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   Workout? mostRecentWorkout;
   bool isLoading = true;
   String errorMessage = '';
+
+  // Firestore subscription for active block changes (training days refresh)
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _activeBlockSub;
 
   final CalendarFormat _calendarFormat = CalendarFormat.month;
   DateTime _focusedDay = DateTime.now();
@@ -388,7 +390,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       _fetchRecentData();
       _fetchTrainingDaysForMonth(_focusedDay);
 
-      FirebaseFirestore.instance
+      _activeBlockSub = FirebaseFirestore.instance
           .collection('planned_blocks')
           .doc(actingUid) //
           .collection('blocks')
@@ -397,6 +399,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           .listen((_) {
         _fetchTrainingDaysForMonth(_focusedDay);
       });
+
 
       // 🔎 Kick the 8-day local/FS scan once (post-frame so context is ready)
       WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -1066,18 +1069,27 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   @override
   void dispose() {
-    Provider.of<UserContext>(context, listen: false).removeListener(_onUserContextChange);
+    // Stop listening to UserContext changes
+    Provider.of<UserContext>(context, listen: false)
+        .removeListener(_onUserContextChange);
+
+    // Unsubscribe from route observer
+    routeObserver.unsubscribe(this);
+
+    // Cancel Firestore listener for active block changes
+    _activeBlockSub?.cancel();
+
+    // Scroll controllers
     _homeScrollCtrl.removeListener(_onHomeScroll);
     _homeScrollCtrl.dispose();
-    routeObserver.unsubscribe(this); // 👈 unsubscribe
-    _homeScrollCtrl.removeListener(_onHomeScroll);
-    _homeScrollCtrl.dispose();
+
     _pointsScrollCtrl.removeListener(_onPointsScroll);
     _pointsScrollCtrl.dispose();
 
-    super.dispose();
     debugPrint('❌ [HOME] dispose() called');
+    super.dispose();
   }
+
 
   @override
   void didPopNext() {
