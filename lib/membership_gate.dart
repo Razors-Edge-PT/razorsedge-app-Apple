@@ -279,16 +279,16 @@ class MembershipInactiveScreen extends StatelessWidget {
                 const SizedBox(height: 24),
 
                 // ✅ Activate membership → Stripe Checkout
-                ElevatedButton(
+               /* ElevatedButton(
                   onPressed: () => _startCheckout(context),  // keep for now (dev / v1.1)
                   child: const Text('Activate membership'),
-                ),
+                ), */
 
                 const SizedBox(height: 16),
 
-                OutlinedButton(
-                  onPressed: _openWebsiteWithUid,           // ✅ changed line
-                  child: const Text('Learn more'),
+                ElevatedButton(
+                    onPressed: _openWebsiteWithUid,  // keep for now (dev / v1.1)
+                  child: const Text('Activate membership'),
                 ),
 
 

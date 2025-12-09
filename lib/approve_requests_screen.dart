@@ -110,25 +110,71 @@ class ApproveRequestsScreen extends StatelessWidget {
         return;
       }
 
-      await FirebaseFirestore.instance
-          .collection('buddyAssignments')
-          .doc(actorUid)
-          .set({
-        'athletes': {
-          athleteUid: {
-            'displayName': username,    // placeholder until you add full name
-            'email': emailLower,        // kept for reference; not shown in UI
-            'addedAt': FieldValue.serverTimestamp(),
-          }
-        }
-      }, SetOptions(merge: true));
+      final db = FirebaseFirestore.instance;
 
-      debugPrint('🤝 [addGymBuddyByUid] $athleteUid ($username) added for $actorUid');
+      // Get the actor's display name for the notification
+      final actorPublicSnap =
+      await db.collection('users_public').doc(actorUid).get();
+      final actorData = actorPublicSnap.data() ?? {};
+      final actorDisplayName = (actorData['username'] ??
+          actorData['displayName'] ??
+          '') as String;
+
+      // 1) Owner’s buddyAssignments doc (like in your screenshot)
+      final assignmentRef = db.collection('buddyAssignments').doc(actorUid);
+
+      // 2) Invite doc under the *buddy* user
+      final inviteRef = db
+          .collection('users')
+          .doc(athleteUid)
+          .collection('buddyInvites')
+          .doc(actorUid); // one invite per owner
+
+      // --- A) ALWAYS try to write buddyAssignments as before (now with status: pending)
+      await assignmentRef.set(
+        {
+          'athletes': {
+            athleteUid: {
+              'displayName': username,
+              'email': emailLower,
+              'addedAt': FieldValue.serverTimestamp(),
+              'status': 'pending', // 👈 requires approval
+            }
+          }
+        },
+        SetOptions(merge: true),
+      );
+
+      // --- B) BEST-EFFORT: create invite (if rules block it, don't break the add)
+      try {
+        debugPrint(
+            '📨 [addGymBuddyByUid] creating invite doc at: ${inviteRef.path} '
+                'from $actorUid → $athleteUid ($username)');
+        await inviteRef.set({
+          'status': 'pending', // "pending" | "accepted" | "denied"
+          'fromUid': actorUid,
+          'fromDisplayName': actorDisplayName,
+          'createdAt': FieldValue.serverTimestamp(),
+          'buddyUid': athleteUid,
+          'buddyDisplayName': username,
+        });
+        debugPrint('✅ [addGymBuddyByUid] invite created at ${inviteRef.path}');
+      } catch (e, st) {
+        debugPrint('⚠️ [addGymBuddyByUid] failed to create invite at '
+            '${inviteRef.path}: $e\n$st');
+        // silently continue; buddyAssignments already updated
+      }
+
+
+
+      debugPrint(
+          '🤝 [addGymBuddyByUid] request from $actorUid → $athleteUid ($username)');
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Added $username')),
+        SnackBar(content: Text('Request sent to $username')),
       );
+
     } catch (e) {
       debugPrint('❌ addGymBuddyByUid error: $e');
       if (!context.mounted) return;
@@ -172,25 +218,68 @@ class ApproveRequestsScreen extends StatelessWidget {
         return;
       }
 
-      await FirebaseFirestore.instance
-          .collection('buddyAssignments')
-          .doc(actorUid)
-          .set({
-        'athletes': {
-          athleteUid: {
-            'displayName': displayName,
-            'email': trimmed,
-            'addedAt': FieldValue.serverTimestamp(),
-          }
-        }
-      }, SetOptions(merge: true));
+      final db = FirebaseFirestore.instance;
 
-      debugPrint('🤝 [addGymBuddyByEmail] $athleteUid ($displayName) added as read-only for $actorUid');
+      // Get the actor's display name for the notification
+      final actorPublicSnap =
+      await db.collection('users_public').doc(actorUid).get();
+      final actorData = actorPublicSnap.data() ?? {};
+      final actorDisplayName = (actorData['username'] ??
+          actorData['displayName'] ??
+          '') as String;
+
+      final assignmentRef = db.collection('buddyAssignments').doc(actorUid);
+      final inviteRef = db
+          .collection('users')
+          .doc(athleteUid)
+          .collection('buddyInvites')
+          .doc(actorUid);
+
+      // --- A) pending buddy under buddyAssignments (always do this)
+      await assignmentRef.set(
+        {
+          'athletes': {
+            athleteUid: {
+              'displayName': displayName,
+              'email': trimmed,
+              'addedAt': FieldValue.serverTimestamp(),
+              'status': 'pending', // 👈 requires approval
+            }
+          }
+        },
+        SetOptions(merge: true),
+      );
+
+      // --- B) best-effort invite under the buddy user
+      try {
+        debugPrint(
+            '📨 [addGymBuddyByEmail] creating invite doc at: ${inviteRef.path} '
+                'from $actorUid → $athleteUid ($displayName)');
+        await inviteRef.set({
+          'status': 'pending',
+          'fromUid': actorUid,
+          'fromDisplayName': actorDisplayName,
+          'createdAt': FieldValue.serverTimestamp(),
+          'buddyUid': athleteUid,
+          'buddyDisplayName': displayName,
+        });
+        debugPrint('✅ [addGymBuddyByEmail] invite created at ${inviteRef.path}');
+      } catch (e, st) {
+        debugPrint('⚠️ [addGymBuddyByEmail] failed to create invite at '
+            '${inviteRef.path}: $e\n$st');
+        // don't rethrow; buddyAssignments already updated
+      }
+
+
+
+      debugPrint(
+          '🤝 [addGymBuddyByEmail] request from $actorUid → $athleteUid ($displayName)');
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Added $trimmed as a read-only gym buddy')),
+        SnackBar(content: Text('Request sent to $displayName')),
       );
+
 
     } catch (e) {
       debugPrint('❌ addGymBuddyByEmail error: $e');
@@ -547,6 +636,7 @@ class ApproveRequestsScreen extends StatelessWidget {
                         final uid = e.key;
                         final v = Map<String, dynamic>.from(e.value ?? {});
                         final email = (v['email'] ?? '').toString();
+                        final status = (v['status'] ?? 'accepted').toString(); // 👈 default accepted for old data
 
                         final public = publicByUid[uid] ?? const {};
                         final rp = public['rePoints'];
@@ -557,6 +647,7 @@ class ApproveRequestsScreen extends StatelessWidget {
                           'email': email,
                           'public': public,
                           'rePoints': rePoints,
+                          'status': status, // 👈 carry status forward
                         };
                       }).toList()
                       // Sort: RE points desc; tie-break by username asc for stability
@@ -569,6 +660,7 @@ class ApproveRequestsScreen extends StatelessWidget {
                           final bu = ((b['public'] as Map)['username'] ?? '').toString();
                           return au.toLowerCase().compareTo(bu.toLowerCase());
                         });
+
 
                       return ListView.builder(
                         shrinkWrap: true,
@@ -591,6 +683,9 @@ class ApproveRequestsScreen extends StatelessWidget {
                               ? 'RE Pts: ${rePoints.toStringAsFixed(0)}'
                               : 'RE Pts: —';
 
+                          final status = (item['status'] as String?) ?? 'accepted';
+
+
 
 
                           return ListTile(
@@ -612,23 +707,31 @@ class ApproveRequestsScreen extends StatelessWidget {
 
                             // Line 2: full name • RE Points (placeholder)
                             subtitle: Text(
-                              rePointsStr,
+                              status == 'accepted' ? rePointsStr : 'Pending approval',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(fontSize: 12, color: Colors.white70),
                             ),
 
-
                             onTap: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) => ProfilePage(
-                                    viewedUid: athleteUid,
-                                    readOnly: true,
+                              if (status == 'accepted') {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => ProfilePage(
+                                      viewedUid: athleteUid,
+                                      readOnly: true,
+                                    ),
                                   ),
-                                ),
-                              );
+                                );
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Buddy request is still pending approval.'),
+                                  ),
+                                );
+                              }
                             },
+
 
                             trailing: Padding(
                               padding: const EdgeInsets.only(right: 0),
@@ -907,4 +1010,56 @@ class ApproveRequestsScreen extends StatelessWidget {
 
     );
   }
+}
+Future<void> acceptBuddyInvite({
+  required String ownerUid,
+  required String buddyUid,
+}) async {
+  final db = FirebaseFirestore.instance;
+  final batch = db.batch();
+
+  final assignmentRef = db.collection('buddyAssignments').doc(ownerUid);
+  final inviteRef = db
+      .collection('users')
+      .doc(buddyUid)
+      .collection('buddyInvites')
+      .doc(ownerUid);
+
+  batch.update(assignmentRef, {
+    'athletes.$buddyUid.status': 'accepted',
+    'athletes.$buddyUid.acceptedAt': FieldValue.serverTimestamp(),
+  });
+
+  batch.update(inviteRef, {
+    'status': 'accepted',
+    'respondedAt': FieldValue.serverTimestamp(),
+  });
+
+  await batch.commit();
+}
+
+Future<void> denyBuddyInvite({
+  required String ownerUid,
+  required String buddyUid,
+}) async {
+  final db = FirebaseFirestore.instance;
+  final batch = db.batch();
+
+  final assignmentRef = db.collection('buddyAssignments').doc(ownerUid);
+  final inviteRef = db
+      .collection('users')
+      .doc(buddyUid)
+      .collection('buddyInvites')
+      .doc(ownerUid);
+
+  batch.update(assignmentRef, {
+    'athletes.$buddyUid': FieldValue.delete(),
+  });
+
+  batch.update(inviteRef, {
+    'status': 'denied',
+    'respondedAt': FieldValue.serverTimestamp(),
+  });
+
+  await batch.commit();
 }

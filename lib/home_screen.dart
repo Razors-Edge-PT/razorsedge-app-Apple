@@ -1690,33 +1690,37 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         backgroundColor: Colors.blueGrey,
         automaticallyImplyLeading: false,
         actions: [
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // 👤 Logged-in / impersonated user banner
-              Padding(
-                padding: const EdgeInsets.only(right: 8.0),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
+      Flexible(
+      child: SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(width: 15),
+            // 👤 Logged-in / impersonated user banner
+            Padding(
+              padding: const EdgeInsets.only(right: 1.0),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
 
-                    SizedBox(
-                      width: 120, // max width
-                      child: Text(
-                        _actingAsEmail ?? 'loading...',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        maxLines: 1,
+                  SizedBox(
+                    width: 95, // max width
+                    child: Text(
+                      _actingAsEmail ?? 'loading...',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                        overflow: TextOverflow.ellipsis,
                       ),
+                      maxLines: 1,
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
+            ),
 
               // 👤 Profile picture (Home)
               Material(
@@ -1735,7 +1739,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     );
                   },
                   child: Padding(
-                    padding: const EdgeInsets.all(4.0),
+                    padding: const EdgeInsets.all(2.0),
                     child: Builder(
                       builder: (context) {
                         final uc = context.watch<UserContext>();
@@ -1832,7 +1836,120 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               ),
 
 
-              const SizedBox(width: 3),
+              const SizedBox(width: 1),
+
+              // Buddy invite notifications
+              StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('users')
+                    .doc(FirebaseAuth.instance.currentUser!.uid)
+                    .collection('buddyInvites')
+                    .where('status', isEqualTo: 'pending')
+                    .snapshots(),
+                builder: (context, snapshot) {
+                  final int buddyCount = snapshot.hasData ? snapshot.data!.docs.length : 0;
+
+                  return Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.person_add_alt_1, size: 24, color: Colors.cyanAccent),
+                        onPressed: () {
+                          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text("No buddy requests.")),
+                            );
+                            return;
+                          }
+
+                          showDialog(
+                            context: context,
+                            builder: (ctx) {
+                              return AlertDialog(
+                                title: const Text("Buddy Requests"),
+                                content: SizedBox(
+                                  width: 310,
+                                  child: ListView.builder(
+                                    shrinkWrap: true,
+                                    itemCount: snapshot.data!.docs.length,
+                                    itemBuilder: (_, i) {
+                                      final doc = snapshot.data!.docs[i];
+                                      final data = doc.data() as Map<String, dynamic>;
+
+                                      final fromUid = data['fromUid'] ?? '';
+                                      final fromName = data['fromDisplayName'] ?? 'Someone';
+
+                                      return Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            "$fromName added you!",
+                                            style: const TextStyle(fontWeight: FontWeight.bold),
+                                          ),
+                                          const SizedBox(height: 6),
+                                          Row(
+                                            children: [
+                                              TextButton(
+                                                onPressed: () async {
+                                                  await acceptBuddyInvite(
+                                                    ownerUid: fromUid,
+                                                    buddyUid: FirebaseAuth.instance.currentUser!.uid,
+                                                  );
+                                                  Navigator.pop(ctx);
+                                                },
+                                                child: const Text("Accept"),
+                                              ),
+                                              const SizedBox(width: 12),
+                                              TextButton(
+                                                onPressed: () async {
+                                                  await denyBuddyInvite(
+                                                    ownerUid: fromUid,
+                                                    buddyUid: FirebaseAuth.instance.currentUser!.uid,
+                                                  );
+                                                  Navigator.pop(ctx);
+                                                },
+                                                child: const Text("Deny"),
+                                              ),
+                                            ],
+                                          ),
+                                          const Divider(),
+                                        ],
+                                      );
+                                    },
+                                  ),
+                                ),
+                              );
+                            },
+                          );
+                        },
+                      ),
+
+                      if (buddyCount > 0)
+                        Positioned(
+                          right: 6,
+                          top: 6,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.redAccent,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              buddyCount.toString(),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
+              const SizedBox(width: 1),
+
 
               // 📩 Direct Messages icon with unread badge
               StreamBuilder<QuerySnapshot>(
@@ -1891,7 +2008,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                 },
               ),
 
-              const SizedBox(width: 3),
+              const SizedBox(width: 1),
 
               // App logo
               Image.asset(
@@ -1899,13 +2016,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                 height: 36,
                 fit: BoxFit.contain,
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 2),
 
               // Menu icon
               GestureDetector(
                 onTap: () => _scaffoldKey.currentState?.openDrawer(),
                 child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 8.0),
+                  padding: EdgeInsets.symmetric(horizontal: 3.0),
                   child: Icon(
                     Icons.menu,
                     size: 28,
@@ -1915,6 +2032,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               ),
             ],
           ),
+      ),
+      ),
         ],
       ),
 

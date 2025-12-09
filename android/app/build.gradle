@@ -1,3 +1,4 @@
+
 plugins {
     id "com.android.application"
     id "org.jetbrains.kotlin.android"   // <- was "kotlin-android"
@@ -10,12 +11,12 @@ def flutterVersionName = project.hasProperty('flutter.versionName') ? project.ge
 
 android {
     namespace = "com.goodlift.razorsedge"
-    compileSdk = 35                     // <- set explicitly (fixes lStar error)
+    compileSdk = 35
     ndkVersion = flutter.ndkVersion
 
     defaultConfig {
         applicationId = "com.goodlift.razorsedge"
-        minSdk = 23                     // 23+ recommended; if you must keep 30, it’s OK
+        minSdk = 23
         targetSdk = 35
         versionCode = flutterVersionCode.toInteger()
         versionName = flutterVersionName
@@ -27,12 +28,30 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 
-    buildTypes {
+    // 🔐 Release signing config (matches the keystore you just made)
+    signingConfigs {
         release {
-            signingConfig = signingConfigs.debug
+            // keystore is in android/app
+            storeFile file("goodlift-upload-keystore.jks")
+            storePassword "GOODLIFTupload2025"
+            keyAlias "upload"
+            keyPassword "GOODLIFTupload2025"
+        }
+    }
+
+    buildTypes {
+        debug {
+            // default debug signing
+        }
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled false
+            shrinkResources false
         }
     }
 }
+
+
 
 flutter {
     source = "../.."
@@ -48,5 +67,3 @@ dependencies {
     implementation "androidx.appcompat:appcompat:1.6.1"
     implementation "com.google.android.material:material:1.11.0"
 }
-
-
