@@ -116,21 +116,20 @@ class ApproveRequestsScreen extends StatelessWidget {
       final actorPublicSnap =
       await db.collection('users_public').doc(actorUid).get();
       final actorData = actorPublicSnap.data() ?? {};
-      final actorDisplayName = (actorData['username'] ??
-          actorData['displayName'] ??
-          '') as String;
+      final actorDisplayName =
+      (actorData['username'] ?? actorData['displayName'] ?? '') as String;
 
-      // 1) Owner’s buddyAssignments doc (like in your screenshot)
+      // 1) Owner’s buddyAssignments doc (sender)
       final assignmentRef = db.collection('buddyAssignments').doc(actorUid);
 
-      // 2) Invite doc under the *buddy* user
+      // 2) Invite doc under the *receiver* user
       final inviteRef = db
           .collection('users')
           .doc(athleteUid)
           .collection('buddyInvites')
-          .doc(actorUid); // one invite per owner
+          .doc(actorUid); // one invite per sender → receiver
 
-      // --- A) ALWAYS try to write buddyAssignments as before (now with status: pending)
+      // --- A) Write buddyAssignments with status: pending
       await assignmentRef.set(
         {
           'athletes': {
@@ -138,51 +137,46 @@ class ApproveRequestsScreen extends StatelessWidget {
               'displayName': username,
               'email': emailLower,
               'addedAt': FieldValue.serverTimestamp(),
-              'status': 'pending', // 👈 requires approval
+              'status': 'pending', // requires approval
             }
           }
         },
         SetOptions(merge: true),
       );
 
-      // --- B) BEST-EFFORT: create invite (if rules block it, don't break the add)
-      try {
-        debugPrint(
-            '📨 [addGymBuddyByUid] creating invite doc at: ${inviteRef.path} '
-                'from $actorUid → $athleteUid ($username)');
-        await inviteRef.set({
-          'status': 'pending', // "pending" | "accepted" | "denied"
-          'fromUid': actorUid,
-          'fromDisplayName': actorDisplayName,
-          'createdAt': FieldValue.serverTimestamp(),
-          'buddyUid': athleteUid,
-          'buddyDisplayName': username,
-        });
-        debugPrint('✅ [addGymBuddyByUid] invite created at ${inviteRef.path}');
-      } catch (e, st) {
-        debugPrint('⚠️ [addGymBuddyByUid] failed to create invite at '
-            '${inviteRef.path}: $e\n$st');
-        // silently continue; buddyAssignments already updated
-      }
-
-
-
+      // --- B) Create invite under the receiver user
       debugPrint(
-          '🤝  V2 [addGymBuddyByUid] request from $actorUid → $athleteUid ($username)');
+        '📨 [addGymBuddyByUid] creating invite at: ${inviteRef.path} '
+            'from $actorUid → $athleteUid ($username)',
+      );
+
+      await inviteRef.set({
+        'status': 'pending', // "pending" | "accepted" | "denied"
+        'fromUid': actorUid,
+        'fromDisplayName': actorDisplayName,
+        'createdAt': FieldValue.serverTimestamp(),
+        'buddyUid': athleteUid,
+        'buddyDisplayName': username,
+      });
+
+      debugPrint('✅ [addGymBuddyByUid] invite created at ${inviteRef.path}');
+      debugPrint(
+        '🤝 V2 [addGymBuddyByUid] request from $actorUid → $athleteUid ($username)',
+      );
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Request sent to $username')),
       );
-
-    } catch (e) {
-      debugPrint('❌ addGymBuddyByUid error: $e');
+    } catch (e, st) {
+      debugPrint('❌ addGymBuddyByUid error: $e\n$st');
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Failed to add gym buddy')),
       );
     }
   }
+
 
 
   Future<void> _addGymBuddyByEmail(BuildContext context, String email) async {
@@ -224,9 +218,8 @@ class ApproveRequestsScreen extends StatelessWidget {
       final actorPublicSnap =
       await db.collection('users_public').doc(actorUid).get();
       final actorData = actorPublicSnap.data() ?? {};
-      final actorDisplayName = (actorData['username'] ??
-          actorData['displayName'] ??
-          '') as String;
+      final actorDisplayName =
+      (actorData['username'] ?? actorData['displayName'] ?? '') as String;
 
       final assignmentRef = db.collection('buddyAssignments').doc(actorUid);
       final inviteRef = db
@@ -235,7 +228,7 @@ class ApproveRequestsScreen extends StatelessWidget {
           .collection('buddyInvites')
           .doc(actorUid);
 
-      // --- A) pending buddy under buddyAssignments (always do this)
+      // --- A) pending buddy under buddyAssignments
       await assignmentRef.set(
         {
           'athletes': {
@@ -243,52 +236,46 @@ class ApproveRequestsScreen extends StatelessWidget {
               'displayName': displayName,
               'email': trimmed,
               'addedAt': FieldValue.serverTimestamp(),
-              'status': 'pending', // 👈 requires approval
+              'status': 'pending',
             }
           }
         },
         SetOptions(merge: true),
       );
 
-      // --- B) best-effort invite under the buddy user
-      try {
-        debugPrint(
-            '📨 [addGymBuddyByEmail] creating invite doc at: ${inviteRef.path} '
-                'from $actorUid → $athleteUid ($displayName)');
-        await inviteRef.set({
-          'status': 'pending',
-          'fromUid': actorUid,
-          'fromDisplayName': actorDisplayName,
-          'createdAt': FieldValue.serverTimestamp(),
-          'buddyUid': athleteUid,
-          'buddyDisplayName': displayName,
-        });
-        debugPrint('✅ [addGymBuddyByEmail] invite created at ${inviteRef.path}');
-      } catch (e, st) {
-        debugPrint('⚠️ [addGymBuddyByEmail] failed to create invite at '
-            '${inviteRef.path}: $e\n$st');
-        // don't rethrow; buddyAssignments already updated
-      }
-
-
-
+      // --- B) invite under the receiver user
       debugPrint(
-          '🤝 [addGymBuddyByEmail] request from $actorUid → $athleteUid ($displayName)');
+        '📨 [addGymBuddyByEmail] creating invite at: ${inviteRef.path} '
+            'from $actorUid → $athleteUid ($displayName)',
+      );
+
+      await inviteRef.set({
+        'status': 'pending',
+        'fromUid': actorUid,
+        'fromDisplayName': actorDisplayName,
+        'createdAt': FieldValue.serverTimestamp(),
+        'buddyUid': athleteUid,
+        'buddyDisplayName': displayName,
+      });
+
+      debugPrint('✅ [addGymBuddyByEmail] invite created at ${inviteRef.path}');
+      debugPrint(
+        '🤝 V2 [addGymBuddyByEmail] request from $actorUid → $athleteUid ($displayName)',
+      );
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Request sent to $displayName')),
       );
-
-
-    } catch (e) {
-      debugPrint('❌ addGymBuddyByEmail error: $e');
+    } catch (e, st) {
+      debugPrint('❌ addGymBuddyByEmail error: $e\n$st');
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Failed to add gym buddy')),
       );
     }
   }
+
 
   Future<void> _showAddGymBroPicker(BuildContext context) async {
     final controller = TextEditingController();

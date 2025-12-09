@@ -1848,120 +1848,161 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               ),
 
 
-              const SizedBox(width: 1),
+            const SizedBox(width: 1),
 
-              // Buddy invite notifications
-              StreamBuilder<QuerySnapshot>(
-                stream: FirebaseFirestore.instance
-                    .collection('users')
-                    .doc(FirebaseAuth.instance.currentUser!.uid)
-                    .collection('buddyInvites')
-                    .where('status', isEqualTo: 'pending')
-                    .snapshots(),
-                builder: (context, snapshot) {
-                  final int buddyCount = snapshot.hasData ? snapshot.data!.docs.length : 0;
+            // Buddy invite notifications
+            Builder(
+              builder: (context) {
+                final userCtx = context.watch<UserContext>();
+                final String? invitesUid =
+                    userCtx.actingAsUid ??
+                        userCtx.actorUid ??
+                        FirebaseAuth.instance.currentUser?.uid;
 
-                  return Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.person_add_alt_1, size: 24, color: Colors.cyanAccent),
-                        onPressed: () {
-                          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text("No buddy requests.")),
-                            );
-                            return;
-                          }
+                // If we somehow have no uid yet, show plain icon with simple message.
+                if (invitesUid == null) {
+                  return IconButton(
+                    icon: const Icon(Icons.person_add_alt_1,
+                        size: 24, color: Colors.cyanAccent),
+                    onPressed: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text("No user loaded."),
+                        ),
+                      );
+                    },
+                  );
+                }
 
-                          showDialog(
-                            context: context,
-                            builder: (ctx) {
-                              return AlertDialog(
-                                title: const Text("Buddy Requests"),
-                                content: SizedBox(
-                                  width: 310,
-                                  child: ListView.builder(
-                                    shrinkWrap: true,
-                                    itemCount: snapshot.data!.docs.length,
-                                    itemBuilder: (_, i) {
-                                      final doc = snapshot.data!.docs[i];
-                                      final data = doc.data() as Map<String, dynamic>;
+                return StreamBuilder<QuerySnapshot>(
+                  stream: FirebaseFirestore.instance
+                      .collection('users')
+                      .doc(invitesUid)
+                      .collection('buddyInvites')
+                      .where('status', isEqualTo: 'pending')
+                      .snapshots(),
+                  builder: (context, snapshot) {
+                    final int buddyCount =
+                    snapshot.hasData ? snapshot.data!.docs.length : 0;
 
-                                      final fromUid = data['fromUid'] ?? '';
-                                      final fromName = data['fromDisplayName'] ?? 'Someone';
-
-                                      return Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            "$fromName added you!",
-                                            style: const TextStyle(fontWeight: FontWeight.bold),
-                                          ),
-                                          const SizedBox(height: 6),
-                                          Row(
-                                            children: [
-                                              TextButton(
-                                                onPressed: () async {
-                                                  await acceptBuddyInvite(
-                                                    ownerUid: fromUid,
-                                                    buddyUid: FirebaseAuth.instance.currentUser!.uid,
-                                                  );
-                                                  Navigator.pop(ctx);
-                                                },
-                                                child: const Text("Accept"),
-                                              ),
-                                              const SizedBox(width: 12),
-                                              TextButton(
-                                                onPressed: () async {
-                                                  await denyBuddyInvite(
-                                                    ownerUid: fromUid,
-                                                    buddyUid: FirebaseAuth.instance.currentUser!.uid,
-                                                  );
-                                                  Navigator.pop(ctx);
-                                                },
-                                                child: const Text("Deny"),
-                                              ),
-                                            ],
-                                          ),
-                                          const Divider(),
-                                        ],
-                                      );
-                                    },
-                                  ),
-                                ),
+                    return Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.person_add_alt_1,
+                              size: 24, color: Colors.cyanAccent),
+                          onPressed: () {
+                            if (!snapshot.hasData ||
+                                snapshot.data!.docs.isEmpty) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                    content: Text("No buddy requests.")),
                               );
-                            },
-                          );
-                        },
-                      ),
+                              return;
+                            }
 
-                      if (buddyCount > 0)
-                        Positioned(
-                          right: 6,
-                          top: 6,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: Colors.redAccent,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Text(
-                              buddyCount.toString(),
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
+                            showDialog(
+                              context: context,
+                              builder: (ctx) {
+                                return AlertDialog(
+                                  title: const Text("Buddy Requests"),
+                                  content: SizedBox(
+                                    width: 310,
+                                    child: ListView.builder(
+                                      shrinkWrap: true,
+                                      itemCount:
+                                      snapshot.data!.docs.length,
+                                      itemBuilder: (_, i) {
+                                        final doc =
+                                        snapshot.data!.docs[i];
+                                        final data = doc.data()
+                                        as Map<String, dynamic>;
+
+                                        final fromUid =
+                                            data['fromUid'] ?? '';
+                                        final fromName =
+                                            data['fromDisplayName'] ??
+                                                'Someone';
+
+                                        return Column(
+                                          crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              "$fromName added you!",
+                                              style: const TextStyle(
+                                                  fontWeight:
+                                                  FontWeight.bold),
+                                            ),
+                                            const SizedBox(height: 6),
+                                            Row(
+                                              children: [
+                                                TextButton(
+                                                  onPressed: () async {
+                                                    await acceptBuddyInvite(
+                                                      ownerUid: fromUid,
+                                                      buddyUid: invitesUid,
+                                                    );
+                                                    Navigator.pop(ctx);
+                                                  },
+                                                  child:
+                                                  const Text("Accept"),
+                                                ),
+                                                const SizedBox(width: 12),
+                                                TextButton(
+                                                  onPressed: () async {
+                                                    await denyBuddyInvite(
+                                                      ownerUid: fromUid,
+                                                      buddyUid: invitesUid,
+                                                    );
+                                                    Navigator.pop(ctx);
+                                                  },
+                                                  child:
+                                                  const Text("Deny"),
+                                                ),
+                                              ],
+                                            ),
+                                            const Divider(),
+                                          ],
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                );
+                              },
+                            );
+                          },
+                        ),
+
+                        if (buddyCount > 0)
+                          Positioned(
+                            right: 6,
+                            top: 6,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 3, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.redAccent,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Text(
+                                buddyCount.toString(),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                    ],
-                  );
-                },
-              ),
-              const SizedBox(width: 1),
+                      ],
+                    );
+                  },
+                );
+              },
+            ),
 
+            const SizedBox(width: 1),
 
               // 📩 Direct Messages icon with unread badge
               StreamBuilder<QuerySnapshot>(
