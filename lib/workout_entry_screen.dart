@@ -7170,6 +7170,29 @@ class _WorkoutPageState extends State<WorkoutPage>
 // final prevVelCtr   = _velocityControllers;
 // final prevNotesCtr = _notesControllers;
 
+      // 🔑 Build maps of previous controllers keyed by exerciseId|circuitIndex
+      final Map<String, List<TextEditingController>> prevWtsByKey  = {};
+      final Map<String, List<TextEditingController>> prevRepsByKey = {};
+      final Map<String, List<TextEditingController>> prevRirByKey  = {};
+
+      for (var i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+        final row  = _selectedExercisesWithCircuits[i];
+        final name = ((row['name'] ?? '') as String).trim();
+        if (name.isEmpty) continue;
+
+        final int ci = (row['circuitIndex'] is int)
+            ? row['circuitIndex'] as int
+            : int.tryParse('${row['circuitIndex'] ?? 0}') ?? 0;
+
+        // Uses exercise ID primarily, with fallback to name
+        final String key = _wesKeyPrefId(name, ci);
+
+        if (i < prevWtsCtr.length)  prevWtsByKey[key]  = prevWtsCtr[i];
+        if (i < prevRepsCtr.length) prevRepsByKey[key] = prevRepsCtr[i];
+        if (i < prevRirCtr.length)  prevRirByKey[key]  = prevRirCtr[i];
+      }
+
+
 
       // ⚙️ Build controllers and sets in locals and hydrate BEFORE setState
       final List<List<SetDetails>> tmpSets = [];
@@ -7197,6 +7220,13 @@ class _WorkoutPageState extends State<WorkoutPage>
         final name = (tmpRows[i]['name'] ?? '').toString().trim();
         final ci   = (tmpRows[i]['circuitIndex'] ?? 0) as int;
         if (name.isEmpty) continue;
+
+
+        final String ctrlKey = _wesKeyPrefId(name, ci);
+        final prevWtsRow  = prevWtsByKey[ctrlKey];
+        final prevRepsRow = prevRepsByKey[ctrlKey];
+        final prevRirRow  = prevRirByKey[ctrlKey];
+
 
         final key = '${name.toLowerCase()}|$ci';
         final h   = hintsByKey[key];
@@ -7241,29 +7271,30 @@ class _WorkoutPageState extends State<WorkoutPage>
             }
 
             // Controllers text — set actual values (not hints)
-            // Controllers text — keep any user-entered text from previous controllers;
-// otherwise set to the completed value for this set.
+            // Controllers text — keep any user-entered text from previous controllers
+            // for THIS exercise (by exerciseId|circuitIndex), otherwise use completed value.
             String? userWt, userReps, userRir;
 
-// weight
-            if (i < prevWtsCtr.length && k < prevWtsCtr[i].length) {
-              final prev = prevWtsCtr[i][k];
+            // weight
+            if (prevWtsRow != null && k < prevWtsRow.length) {
+              final prev = prevWtsRow[k];
               if (prev.text.isNotEmpty) userWt = prev.text;
             }
-// reps
-            if (i < prevRepsCtr.length && k < prevRepsCtr[i].length) {
-              final prev = prevRepsCtr[i][k];
+            // reps
+            if (prevRepsRow != null && k < prevRepsRow.length) {
+              final prev = prevRepsRow[k];
               if (prev.text.isNotEmpty) userReps = prev.text;
             }
-// rir
-            if (i < prevRirCtr.length && k < prevRirCtr[i].length) {
-              final prev = prevRirCtr[i][k];
+            // rir
+            if (prevRirRow != null && k < prevRirRow.length) {
+              final prev = prevRirRow[k];
               if (prev.text.isNotEmpty) userRir = prev.text;
             }
 
             if (k < tmpWts[i].length)   tmpWts[i][k].text  = userWt   ?? ((displayWeight == null) ? '' : displayWeight.toString());
             if (k < tmpReps[i].length)  tmpReps[i][k].text = userReps ?? ((reps == null) ? '' : reps.toString());
             if (k < tmpRir[i].length)   tmpRir[i][k].text  = userRir  ?? ((rir == null) ? '' : rir.toString());
+
 
             if (k < tmpVel[i].length && vel != null)   tmpVel[i][k].text   = vel.toString();
             if (k < tmpNotes[i].length && notes != null && notes.trim().isNotEmpty) {
@@ -7322,27 +7353,28 @@ class _WorkoutPageState extends State<WorkoutPage>
         final reps = (h['s1_reps'] as num?)?.toInt();
         final rir  = (h['s1_rir'] as num?)?.toString();
 
-        // Controllers (Set 1): keep any user-entered text from previous controllers;
-// otherwise leave empty so hintText shows (newest hints will be “underneath”)
+        // Controllers (Set 1): keep any user-entered text from previous controllers
+        // for THIS exercise (by exerciseId|circuitIndex); else keep empty so hint shows.
         String? userWt, userReps, userRir;
-        final bool havePrevRows =
-            i < prevWtsCtr.length && i < prevRepsCtr.length && i < prevRirCtr.length;
 
-        if (havePrevRows) {
-          final prevWt   = (prevWtsCtr[i].isNotEmpty)  ? prevWtsCtr[i][0]  : null;
-          final prevReps = (prevRepsCtr[i].isNotEmpty) ? prevRepsCtr[i][0] : null;
-          final prevRir  = (prevRirCtr[i].isNotEmpty)  ? prevRirCtr[i][0]  : null;
-
-          if (prevWt   != null && prevWt.text.isNotEmpty)   userWt   = prevWt.text;
-          if (prevReps != null && prevReps.text.isNotEmpty) userReps = prevReps.text;
-          if (prevRir  != null && prevRir.text.isNotEmpty)  userRir  = prevRir.text;
-
+        if (prevWtsRow != null && prevWtsRow.isNotEmpty) {
+          final prev = prevWtsRow[0];
+          if (prev.text.isNotEmpty) userWt = prev.text;
+        }
+        if (prevRepsRow != null && prevRepsRow.isNotEmpty) {
+          final prev = prevRepsRow[0];
+          if (prev.text.isNotEmpty) userReps = prev.text;
+        }
+        if (prevRirRow != null && prevRirRow.isNotEmpty) {
+          final prev = prevRirRow[0];
+          if (prev.text.isNotEmpty) userRir = prev.text;
         }
 
-// Set the new controllers to the user’s prior text if present; else keep empty to show hint
+        // Set the new controllers to the user’s prior text if present; else keep empty to show hint
         tmpWts[i][0].text  = userWt   ?? '';
         tmpReps[i][0].text = userReps ?? '';
         tmpRir[i][0].text  = userRir  ?? '';
+
 
 
         print('🟢 [FastPaint Row $i] ${name}|$ci '
@@ -7354,28 +7386,28 @@ class _WorkoutPageState extends State<WorkoutPage>
         tmpSets[i][0].reps   = reps;
         tmpSets[i][0].rir    = double.tryParse(rir ?? '');
 
-// 🔒 Preserve user-typed values for Set 2+ from the prior controllers
-// (Do not write hints here; only copy user text so typed wins across fast-paint)
+        // 🔒 Preserve user-typed values for Set 2+ from the prior controllers
+        // for THIS exercise (by exerciseId|circuitIndex).
         final int _maxSets = _defaultSets;
         for (var k = 1; k < _maxSets; k++) {
           // weight
-          if (i < prevWtsCtr.length && k < prevWtsCtr[i].length) {
-            final t = prevWtsCtr[i][k].text.trim();
+          if (prevWtsRow != null && k < prevWtsRow.length) {
+            final t = prevWtsRow[k].text.trim();
             if (t.isNotEmpty) tmpWts[i][k].text = t;
           }
           // reps
-          if (i < prevRepsCtr.length && k < prevRepsCtr[i].length) {
-            final t = prevRepsCtr[i][k].text.trim();
+          if (prevRepsRow != null && k < prevRepsRow.length) {
+            final t = prevRepsRow[k].text.trim();
             if (t.isNotEmpty) tmpReps[i][k].text = t;
           }
           // RIR
-          if (i < prevRirCtr.length && k < prevRirCtr[i].length) {
-            final t = prevRirCtr[i][k].text.trim();
+          if (prevRirRow != null && k < prevRirRow.length) {
+            final t = prevRirRow[k].text.trim();
             if (t.isNotEmpty) tmpRir[i][k].text = t;
           }
           // (Optional: preserve velocity/notes typed by user too)
-          // if (i < prevVelCtr.length && k < prevVelCtr[i].length) { ... }
-          // if (i < prevNotesCtr.length && k < prevNotesCtr[i].length) { ... }
+          // if (prevVelRow != null && k < prevVelRow.length) { ... }
+          // if (prevNotesRow != null && k < prevNotesRow.length) { ... }
         }
 
 
@@ -8660,18 +8692,51 @@ class _WorkoutPageState extends State<WorkoutPage>
   }
 
   void _loadTemplate(Template template) {
+    // Match the cardId format used in _showExercisePickerDialog
+    final String ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+    int _ts() => DateTime.now().microsecondsSinceEpoch;
+
     setState(() {
       _workoutNameController.text = template.name;
       _selectedExercisesWithCircuits.clear();
       _workoutSets.clear();
 
-      // ✅ Convert each exercise into a Map with name + circuitIndex
-      for (var e in template.exercises) {
+      // ✅ Convert each exercise into a Map with:
+      //    - name
+      //    - circuitIndex
+      //    - cardId (includes exerciseId + circuitIndex)
+      //    - category (if available on the template)
+      for (final entry in template.exercises.asMap().entries) {
+        final int idx = entry.key;
+        final dynamic e = entry.value;
+
+        // Name (String or Map)
+        final String name = (e is String) ? e : (e['name'] ?? 'Unnamed');
+
+        // Circuit index (from template if present, else 0)
+        final int circuitIndex =
+        (e is Map && e.containsKey('circuitIndex'))
+            ? (e['circuitIndex'] as int)
+            : 0;
+
+        // Exercise ID: use global name→id map if available, else fallback to name
+        final String exId =
+        (PeriodizationModelUtils.nameToId[name] ?? name).trim().toLowerCase();
+
+        // Category: use template's category if present, else empty string
+        final String category =
+        (e is Map && e.containsKey('category'))
+            ? (e['category'] ?? '') as String
+            : '';
+
+        // wes|<YYYY-MM-DD>|<unique-ts+idx>|<exercise-id>|<circuitIndex>
+        final String cardId = 'wes|$ymd|${_ts() + idx}|$exId|$circuitIndex';
+
         _selectedExercisesWithCircuits.add({
-          'name': (e is String) ? e : (e['name'] ?? 'Unnamed'),
-          'circuitIndex': (e is Map && e.containsKey('circuitIndex'))
-              ? e['circuitIndex']
-              : 0,
+          'name': name,
+          'circuitIndex': circuitIndex,
+          'cardId': cardId,
+          'category': category,
         });
       }
 
@@ -8694,7 +8759,8 @@ class _WorkoutPageState extends State<WorkoutPage>
       _sortRowsByCircuitIndex();
 
       _initializeControllers();
-
+      // (Optional) If you use this elsewhere and want parity with picker:
+      // _populateVelocityFlags();
     });
   }
 
