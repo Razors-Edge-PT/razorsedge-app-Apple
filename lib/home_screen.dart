@@ -1093,22 +1093,32 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   @override
   void didPopNext() {
-    // 🟢 Existing logic — re-fetch whichever feed is active
-    if (_feedOwnersResolved) {
-      if (_selectedFeed == SelectedFeed.home) {
-        _loadInitialHomeFeed();
-      } else {
-        _loadInitialPointsFeed();
+    // If our State is gone, do nothing
+    if (!mounted) return;
+
+    // Run after the current frame so the tree is stable again
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+
+      // 🟢 Existing logic — re-fetch whichever feed is active
+      if (_feedOwnersResolved) {
+        if (_selectedFeed == SelectedFeed.home) {
+          await _loadInitialHomeFeed();
+        } else {
+          await _loadInitialPointsFeed();
+        }
       }
-    }
-    // 🔥 NEW: also warm up BB2 cache on resume
-    final userContext = Provider.of<UserContext>(context, listen: false);
-    final actingUid = userContext.actingAsUid ?? userContext.actorUid;
-    debugPrint('🔁 [HOME] didPopNext: resume WarmupBB2 for $actingUid');
-    if (actingUid != null && actingUid.isNotEmpty) {
-      unawaited(WarmupBB2.runForActiveBlock(uid: actingUid));
-    }
+
+      // 🔥 Warm up BB2 cache on resume
+      final userContext = Provider.of<UserContext>(context, listen: false);
+      final actingUid = userContext.actingAsUid ?? userContext.actorUid;
+      debugPrint('🔁 [HOME] didPopNext: resume WarmupBB2 for $actingUid');
+      if (actingUid != null && actingUid.isNotEmpty) {
+        unawaited(WarmupBB2.runForActiveBlock(uid: actingUid));
+      }
+    });
   }
+
 
 //Home FEED functions
   Future<void> _loadInitialHomeFeed() async {
