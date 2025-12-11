@@ -757,6 +757,211 @@ class _WorkoutPageState extends State<WorkoutPage>
         'prefs: drafts=$prefsDraftDel bb2=$prefsBb2Del warm=$prefsWarmKeys)');
   }
 
+  Future<void> _deleteExerciseEverywhereForDate({
+    required Map<String, dynamic> exerciseRow,
+    required DateTime date,
+  }) async {
+    final uid = _cachedUid ??
+        UserContext.of(context, listen: false).currentUid!;
+    final blockId = _selectedBlockId ?? _activeBlockId!;
+    final ymd = DateFormat('yyyy-MM-dd').format(date);
+
+    final String removedName =
+    (exerciseRow['name'] ?? '').toString().trim();
+    final int removedCi = (exerciseRow['circuitIndex'] is num)
+        ? (exerciseRow['circuitIndex'] as num).toInt()
+        : 0;
+    final String? removedExId =
+    (exerciseRow['exerciseId'] ?? exerciseRow['id'])?.toString();
+
+    debugPrint(
+        '🧨 [DEL] removing exercise "$removedName" (id=$removedExId ci=$removedCi) '
+            'for uid=$uid block=$blockId date=$ymd');
+
+    // ───────── 1) Firestore: wesPlannedExercises for that date ─────────
+    try {
+      final fs = FirebaseFirestore.instance;
+      final docRef = fs
+          .collection('users')
+          .doc(uid)
+          .collection('workouts')
+          .doc(ymd);
+
+      await fs.runTransaction((tx) async {
+        final snap = await tx.get(docRef);
+        if (!snap.exists) {
+          debugPrint('ℹ️ [DEL→FS] no workout doc for $ymd');
+          return;
+        }
+
+        final data =
+            (snap.data() as Map<String, dynamic>?) ?? <String, dynamic>{};
+        final raw = data['wesPlannedExercises'];
+
+        if (raw is! List) {
+          debugPrint(
+              'ℹ️ [DEL→FS] "wesPlannedExercises" not a List for $ymd; nothing to prune');
+          return;
+        }
+
+        final filtered = raw.where((e) {
+          // keep everything that is NOT the removed exercise
+          return !_isSameExerciseRow(e, removedExId, removedName, removedCi);
+        }).toList();
+
+        tx.update(docRef, {'wesPlannedExercises': filtered});
+      });
+
+      debugPrint('🗑️ [DEL→FS] pruned wesPlannedExercises for $ymd');
+    } catch (e) {
+      debugPrint('🟥 [DEL→FS] failed: $e');
+    }
+
+    // ───────── 2) ISAR: WESInitSnapshot + WorkoutDayCache for that date ─────────
+    try {
+      final isar = await IsarDb.instance;
+
+      await isar.writeTxn(() async {
+        // 2a) WESInitSnapshot (FastPaint super-cache)
+        final initSnaps = await isar.wESInitSnapshots
+            .filter()
+            .uidEqualTo(uid)
+            .and()
+            .blockIdEqualTo(blockId)
+            .and()
+            .dateYmdEqualTo(ymd)
+            .findAll();
+
+        for (final snap in initSnaps) {
+          // plannedExercisesJson: list of planned exercises
+          try {
+            final planned = (jsonDecode(snap.plannedExercisesJson) as List?) ??
+                <dynamic>[];
+            final filteredPlanned = planned
+                .where((e) =>
+            !_isSameExerciseRow(e, removedExId, removedName, removedCi))
+                .toList();
+            snap.plannedExercisesJson = jsonEncode(filteredPlanned);
+          } catch (e) {
+            debugPrint('⚠️ [DEL→ISAR] failed to prune plannedExercisesJson: $e');
+          }
+
+          // wesPlannedExercisesJson: list of WES-planned exercises
+          try {
+            final wesPlanned =
+                (jsonDecode(snap.wesPlannedExercisesJson) as List?) ??
+                    <dynamic>[];
+            final filteredWesPlanned = wesPlanned
+                .where((e) =>
+            !_isSameExerciseRow(e, removedExId, removedName, removedCi))
+                .toList();
+            snap.wesPlannedExercisesJson = jsonEncode(filteredWesPlanned);
+          } catch (e) {
+            debugPrint(
+                '⚠️ [DEL→ISAR] failed to prune wesPlannedExercisesJson: $e');
+          }
+
+          await isar.wESInitSnapshots.put(snap);
+        }
+
+        // 2b) WorkoutDayCache (WES local day cache)
+        final dayCaches = await isar.workoutDayCaches
+            .filter()
+            .uidEqualTo(uid)
+            .and()
+            .dateKeyEqualTo(ymd)
+            .findAll();
+
+        for (final cache in dayCaches) {
+          // exListJson: exercises list used to rebuild rows
+          try {
+            final exList =
+                (jsonDecode(cache.exListJson) as List?) ?? <dynamic>[];
+            final filteredExList = exList
+                .where((e) =>
+            !_isSameExerciseRow(e, removedExId, removedName, removedCi))
+                .toList();
+            cache.exListJson = jsonEncode(filteredExList);
+          } catch (e) {
+            debugPrint('⚠️ [DEL→ISAR] failed to prune exListJson: $e');
+          }
+
+          // wesPlannedJson: cached wesPlannedExercises[]
+          try {
+            final wesPlanned =
+                (jsonDecode(cache.wesPlannedJson) as List?) ?? <dynamic>[];
+            final filteredWesPlanned = wesPlanned
+                .where((e) =>
+            !_isSameExerciseRow(e, removedExId, removedName, removedCi))
+                .toList();
+            cache.wesPlannedJson = jsonEncode(filteredWesPlanned);
+          } catch (e) {
+            debugPrint('⚠️ [DEL→ISAR] failed to prune wesPlannedJson: $e');
+          }
+
+          await isar.workoutDayCaches.put(cache);
+        }
+      });
+
+      debugPrint('🗑️ [DEL→ISAR] pruned WESInitSnapshot + WorkoutDayCache for $ymd');
+    } catch (e) {
+      debugPrint('🟥 [DEL→ISAR] failed: $e');
+    }
+
+
+    // ───────── 3) SharedPreferences: WES draft + BB2 day JSON for that date ─────────
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      // 3a) WES draft (same key pattern used in nukeLocalWorkoutsForDay)
+      final draftKey = _getDraftKeyFor(date);
+      if (prefs.containsKey(draftKey)) {
+        final raw = prefs.getString(draftKey);
+        if (raw != null) {
+          final map = jsonDecode(raw) as Map<String, dynamic>;
+
+          final exList =
+              (map['selectedExercisesWithCircuits'] as List?) ?? <dynamic>[];
+          map['selectedExercisesWithCircuits'] = exList
+              .where((e) =>
+          !_isSameExerciseRow(e, removedExId, removedName, removedCi))
+              .toList();
+
+          await prefs.setString(draftKey, jsonEncode(map));
+          debugPrint('🗑️ [DEL→Prefs] pruned WES draft "$draftKey"');
+        }
+      } else {
+        debugPrint('ℹ️ [DEL→Prefs] no WES draft "$draftKey"');
+      }
+
+      // 3b) BB2 per-day JSON (if you want to also prune this; your BB2 helper
+      //     may already cover part of this via _pruneBb2DayCacheForSelectedDate)
+      final bb2Key = 'bb2_dayData_$ymd';
+      if (prefs.containsKey(bb2Key)) {
+        final raw = prefs.getString(bb2Key);
+        if (raw != null) {
+          final map = jsonDecode(raw) as Map<String, dynamic>;
+          final exList = (map['exList'] as List?) ?? <dynamic>[];
+
+          map['exList'] = exList
+              .where((e) =>
+          !_isSameExerciseRow(e, removedExId, removedName, removedCi))
+              .toList();
+
+          await prefs.setString(bb2Key, jsonEncode(map));
+          debugPrint('🗑️ [DEL→Prefs] pruned "$bb2Key"');
+        }
+      } else {
+        debugPrint('ℹ️ [DEL→Prefs] no "$bb2Key"');
+      }
+    } catch (e) {
+      debugPrint('🟥 [DEL→Prefs] failed: $e');
+    }
+
+    debugPrint('✅ [DEL] finished pruning exercise for $ymd');
+  }
+
+
   String _getDraftKeyFor(DateTime d) {
     // if your _getDraftKey() currently uses _selectedDate internally,
     // copy its logic here but base it on `d` instead.
@@ -857,6 +1062,30 @@ class _WorkoutPageState extends State<WorkoutPage>
       print('⚠️ [WES→BB2 Cache] prune failed: $e');
     }
   }
+
+  bool _isSameExerciseRow(
+      Object? raw,
+      String? removedExId,
+      String removedName,
+      int removedCi,
+      ) {
+    if (raw is! Map) return false;
+    final map = raw as Map;
+
+    final itemId = (map['exerciseId'] ?? map['id'])?.toString();
+    final itemName = (map['name'] ?? '').toString().trim();
+    final itemCi = (map['circuitIndex'] is num)
+        ? (map['circuitIndex'] as num).toInt()
+        : 0;
+
+    final idMatches   = removedExId != null && itemId == removedExId;
+    final nameMatches = removedName.isNotEmpty && itemName == removedName;
+    final ciMatches   = itemCi == removedCi;
+
+    // same if (IDs match OR names match) AND circuitIndex matches
+    return (idMatches || nameMatches) && ciMatches;
+  }
+
 
   /// Restore the exercise back into the **BB2 day cache** (used by Undo).
   Future<void> _restoreBb2DayCacheForSelectedDate({
@@ -14167,10 +14396,11 @@ class _WorkoutPageState extends State<WorkoutPage>
                               exerciseId: removedExId,
                             );
 
-                            // 3) Your existing deletes (keep whatever you already do):
-                            //    - remove from WES Firestore wesPlannedExercises for this date
-                            //    - prune WESInitSnapshot planned/wesPlanned for this date
-                            // (Call your existing methods right here.)
+                            await _deleteExerciseEverywhereForDate(
+                              exerciseRow: removedExercise,
+                              date: _selectedDate,
+                            );
+
 
                             // 4) Undo restores everything (UI + BB2 cache)
                             _lastUndoAction = () async {
