@@ -757,6 +757,186 @@ class _WorkoutPageState extends State<WorkoutPage>
         'prefs: drafts=$prefsDraftDel bb2=$prefsBb2Del warm=$prefsWarmKeys)');
   }
 
+  Future<void> _debugPrintLocalForDate(
+      DateTime date, {
+        String? label,
+      }) async {
+    final tag = label ?? 'DAY';
+    final ymd = DateFormat('yyyy-MM-dd').format(date);
+    debugPrint('🔍 [DEBUG-$tag] ====== $ymd ======');
+
+    final uid = _cachedUid ?? UserContext.of(context, listen: false).currentUid;
+    final blockId = _selectedBlockId ?? _activeBlockId;
+
+    if (uid == null || uid.isEmpty) {
+      debugPrint('🔍 [DEBUG-$tag] uid missing, abort');
+      return;
+    }
+
+    // ───────── 1) Firestore: workouts/{ymd}.wesPlannedExercises ─────────
+    try {
+      final fs = FirebaseFirestore.instance;
+      final docRef = fs
+          .collection('users')
+          .doc(uid)
+          .collection('workouts')
+          .doc(ymd);
+
+      final snap = await docRef.get();
+      if (!snap.exists) {
+        debugPrint('🔍 [DEBUG-$tag→FS] no workout doc for $ymd');
+      } else {
+        final data = (snap.data() as Map<String, dynamic>?) ?? {};
+        final raw = data['wesPlannedExercises'];
+        if (raw is List) {
+          debugPrint('🔍 [DEBUG-$tag→FS] wesPlannedExercises ($ymd):');
+          for (final e in raw) {
+            debugPrint('  • $e');
+          }
+        } else {
+          debugPrint('🔍 [DEBUG-$tag→FS] wesPlannedExercises not a List ($ymd): $raw');
+        }
+      }
+    } catch (e) {
+      debugPrint('🟥 [DEBUG-$tag→FS] error: $e');
+    }
+
+    // ───────── 2) ISAR: WESInitSnapshot + WorkoutDayCache ─────────
+    try {
+      final isar = await IsarDb.instance;
+
+      // 2a) WESInitSnapshot
+      if (blockId != null) {
+        final initSnaps = await isar.wESInitSnapshots
+            .filter()
+            .uidEqualTo(uid)
+            .and()
+            .blockIdEqualTo(blockId)
+            .and()
+            .dateYmdEqualTo(ymd)
+            .findAll();
+
+        if (initSnaps.isEmpty) {
+          debugPrint('🔍 [DEBUG-$tag→ISAR] no WESInitSnapshot for $ymd');
+        } else {
+          for (final snap in initSnaps) {
+            debugPrint('🔍 [DEBUG-$tag→ISAR] WESInitSnapshot id=${snap.id} ($ymd)');
+
+            try {
+              final planned = (jsonDecode(snap.plannedExercisesJson) as List?) ?? <dynamic>[];
+              debugPrint('  plannedExercisesJson:');
+              for (final e in planned) {
+                debugPrint('    • $e');
+              }
+            } catch (e) {
+              debugPrint('  ⚠️ failed to decode plannedExercisesJson: $e');
+            }
+
+            try {
+              final wesPlanned =
+                  (jsonDecode(snap.wesPlannedExercisesJson) as List?) ?? <dynamic>[];
+              debugPrint('  wesPlannedExercisesJson:');
+              for (final e in wesPlanned) {
+                debugPrint('    • $e');
+              }
+            } catch (e) {
+              debugPrint('  ⚠️ failed to decode wesPlannedExercisesJson: $e');
+            }
+          }
+        }
+      } else {
+        debugPrint('🔍 [DEBUG-$tag→ISAR] blockId null, skipping WESInitSnapshot');
+      }
+
+      // 2b) WorkoutDayCache
+      final dayCaches = await isar.workoutDayCaches
+          .filter()
+          .uidEqualTo(uid)
+          .and()
+          .dateKeyEqualTo(ymd)
+          .findAll();
+
+      if (dayCaches.isEmpty) {
+        debugPrint('🔍 [DEBUG-$tag→ISAR] no WorkoutDayCache for $ymd');
+      } else {
+        for (final cache in dayCaches) {
+          debugPrint('🔍 [DEBUG-$tag→ISAR] WorkoutDayCache id=${cache.id} ($ymd)');
+
+          try {
+            final exList =
+                (jsonDecode(cache.exListJson) as List?) ?? <dynamic>[];
+            debugPrint('  exListJson:');
+            for (final e in exList) {
+              debugPrint('    • $e');
+            }
+          } catch (e) {
+            debugPrint('  ⚠️ failed to decode exListJson: $e');
+          }
+
+          try {
+            final wesPlanned =
+                (jsonDecode(cache.wesPlannedJson) as List?) ?? <dynamic>[];
+            debugPrint('  wesPlannedJson:');
+            for (final e in wesPlanned) {
+              debugPrint('    • $e');
+            }
+          } catch (e) {
+            debugPrint('  ⚠️ failed to decode wesPlannedJson: $e');
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('🟥 [DEBUG-$tag→ISAR] error: $e');
+    }
+
+    // ───────── 3) SharedPreferences: WES draft + BB2 dayData ─────────
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      // 3a) WES draft
+      final draftKey = _getDraftKeyFor(date);
+      if (prefs.containsKey(draftKey)) {
+        final raw = prefs.getString(draftKey);
+        if (raw != null) {
+          final map = jsonDecode(raw) as Map<String, dynamic>;
+          final exList =
+              (map['selectedExercisesWithCircuits'] as List?) ?? <dynamic>[];
+          debugPrint('🔍 [DEBUG-$tag→Prefs] WES draft "$draftKey" exercises:');
+          for (final e in exList) {
+            debugPrint('  • $e');
+          }
+        } else {
+          debugPrint('🔍 [DEBUG-$tag→Prefs] WES draft "$draftKey" is null');
+        }
+      } else {
+        debugPrint('🔍 [DEBUG-$tag→Prefs] no WES draft "$draftKey"');
+      }
+
+      // 3b) BB2 per-day JSON
+      final bb2Key = 'bb2_dayData_$ymd';
+      if (prefs.containsKey(bb2Key)) {
+        final raw = prefs.getString(bb2Key);
+        if (raw != null) {
+          final map = jsonDecode(raw) as Map<String, dynamic>;
+          final exList = (map['exList'] as List?) ?? <dynamic>[];
+          debugPrint('🔍 [DEBUG-$tag→Prefs] BB2 "$bb2Key" exList:');
+          for (final e in exList) {
+            debugPrint('  • $e');
+          }
+        } else {
+          debugPrint('🔍 [DEBUG-$tag→Prefs] BB2 "$bb2Key" is null');
+        }
+      } else {
+        debugPrint('🔍 [DEBUG-$tag→Prefs] no "$bb2Key"');
+      }
+    } catch (e) {
+      debugPrint('🟥 [DEBUG-$tag→Prefs] error: $e');
+    }
+
+    debugPrint('🔍 [DEBUG-$tag] ====== end $ymd ======');
+  }
+
+
   Future<void> _deleteExerciseEverywhereForDate({
     required Map<String, dynamic> exerciseRow,
     required DateTime date,
@@ -767,12 +947,14 @@ class _WorkoutPageState extends State<WorkoutPage>
     final ymd = DateFormat('yyyy-MM-dd').format(date);
 
     final String removedName =
-    (exerciseRow['name'] ?? '').toString().trim();
+    ((exerciseRow['name'] ?? exerciseRow['exerciseName'] ?? '') as String)
+        .trim();
     final int removedCi = (exerciseRow['circuitIndex'] is num)
         ? (exerciseRow['circuitIndex'] as num).toInt()
         : 0;
     final String? removedExId =
     (exerciseRow['exerciseId'] ?? exerciseRow['id'])?.toString();
+
 
     debugPrint(
         '🧨 [DEL] removing exercise "$removedName" (id=$removedExId ci=$removedCi) '
@@ -796,20 +978,38 @@ class _WorkoutPageState extends State<WorkoutPage>
 
         final data =
             (snap.data() as Map<String, dynamic>?) ?? <String, dynamic>{};
-        final raw = data['wesPlannedExercises'];
 
-        if (raw is! List) {
+        final rawPlanned    = data['wesPlannedExercises'];
+        final rawExercises  = data['exercises'];
+
+        final Map<String, dynamic> updates = {};
+
+// 📝 1) Prune wesPlannedExercises if present
+        if (rawPlanned is List) {
+          final filteredPlanned = rawPlanned
+              .where((e) =>
+          !_isSameExerciseRow(e, removedExId, removedName, removedCi))
+              .toList();
+          updates['wesPlannedExercises'] = filteredPlanned;
+        } else {
           debugPrint(
-              'ℹ️ [DEL→FS] "wesPlannedExercises" not a List for $ymd; nothing to prune');
-          return;
+              'ℹ️ [DEL→FS] "wesPlannedExercises" not a List for $ymd; skipping that field');
         }
 
-        final filtered = raw.where((e) {
-          // keep everything that is NOT the removed exercise
-          return !_isSameExerciseRow(e, removedExId, removedName, removedCi);
-        }).toList();
+// 📝 2) Prune COMPLETED exercises list as well
+        if (rawExercises is List) {
+          final filteredExercises = rawExercises
+              .where((e) =>
+          !_isSameExerciseRow(e, removedExId, removedName, removedCi))
+              .toList();
+          updates['exercises'] = filteredExercises;
+        }
 
-        tx.update(docRef, {'wesPlannedExercises': filtered});
+// Only write if something to update
+        if (updates.isNotEmpty) {
+          tx.update(docRef, updates);
+        }
+
       });
 
       debugPrint('🗑️ [DEL→FS] pruned wesPlannedExercises for $ymd');
@@ -833,36 +1033,65 @@ class _WorkoutPageState extends State<WorkoutPage>
             .findAll();
 
         for (final snap in initSnaps) {
-          // plannedExercisesJson: list of planned exercises
+          bool changed = false;
+
+          // 2a) plannedExercisesJson: list of planned exercises
           try {
-            final planned = (jsonDecode(snap.plannedExercisesJson) as List?) ??
-                <dynamic>[];
+            final planned =
+                (jsonDecode(snap.plannedExercisesJson) as List?) ?? <dynamic>[];
             final filteredPlanned = planned
                 .where((e) =>
             !_isSameExerciseRow(e, removedExId, removedName, removedCi))
                 .toList();
-            snap.plannedExercisesJson = jsonEncode(filteredPlanned);
+            if (filteredPlanned.length != planned.length) {
+              snap.plannedExercisesJson = jsonEncode(filteredPlanned);
+              changed = true;
+            }
           } catch (e) {
             debugPrint('⚠️ [DEL→ISAR] failed to prune plannedExercisesJson: $e');
           }
 
-          // wesPlannedExercisesJson: list of WES-planned exercises
+          // 2b) wesPlannedExercisesJson: list of WES-planned exercises
           try {
             final wesPlanned =
-                (jsonDecode(snap.wesPlannedExercisesJson) as List?) ??
-                    <dynamic>[];
+                (jsonDecode(snap.wesPlannedExercisesJson) as List?) ?? <dynamic>[];
             final filteredWesPlanned = wesPlanned
                 .where((e) =>
             !_isSameExerciseRow(e, removedExId, removedName, removedCi))
                 .toList();
-            snap.wesPlannedExercisesJson = jsonEncode(filteredWesPlanned);
+            if (filteredWesPlanned.length != wesPlanned.length) {
+              snap.wesPlannedExercisesJson = jsonEncode(filteredWesPlanned);
+              changed = true;
+            }
           } catch (e) {
             debugPrint(
                 '⚠️ [DEL→ISAR] failed to prune wesPlannedExercisesJson: $e');
           }
 
-          await isar.wESInitSnapshots.put(snap);
+          // 2c) 🔥 NEW: previousWorkoutJson – this is what _loadExistingWorkoutIfAny uses for exList
+          try {
+            if ((snap.previousWorkoutJson ?? '').isNotEmpty) {
+              final prev =
+                  (jsonDecode(snap.previousWorkoutJson) as List?) ?? <dynamic>[];
+              final filteredPrev = prev
+                  .where((e) =>
+              !_isSameExerciseRow(e, removedExId, removedName, removedCi))
+                  .toList();
+              if (filteredPrev.length != prev.length) {
+                snap.previousWorkoutJson = jsonEncode(filteredPrev);
+                changed = true;
+              }
+            }
+          } catch (e) {
+            debugPrint(
+                '⚠️ [DEL→ISAR] failed to prune previousWorkoutJson: $e');
+          }
+
+          if (changed) {
+            await isar.wESInitSnapshots.put(snap);
+          }
         }
+
 
         // 2b) WorkoutDayCache (WES local day cache)
         final dayCaches = await isar.workoutDayCaches
@@ -1064,27 +1293,46 @@ class _WorkoutPageState extends State<WorkoutPage>
   }
 
   bool _isSameExerciseRow(
-      Object? raw,
+      dynamic e,
       String? removedExId,
       String removedName,
       int removedCi,
       ) {
-    if (raw is! Map) return false;
-    final map = raw as Map;
+    if (e is! Map) return false;
 
-    final itemId = (map['exerciseId'] ?? map['id'])?.toString();
-    final itemName = (map['name'] ?? '').toString().trim();
-    final itemCi = (map['circuitIndex'] is num)
+    // Normalize map
+    final map = Map<String, dynamic>.from(e as Map);
+
+    // 1) Extract ID from the stored row
+    final String? exId = (map['exerciseId'] ??
+        map['exercise_id'] ??
+        map['id'])
+        ?.toString();
+
+    // 2) Extract name, supporting both "name" and "exerciseName"
+    final String name = (map['name'] ?? map['exerciseName'] ?? '')
+        .toString()
+        .trim();
+
+    // 3) Extract circuit index (both spellings)
+    final int ci = (map['circuitIndex'] is num)
         ? (map['circuitIndex'] as num).toInt()
+        : (map['circuit_index'] is num)
+        ? (map['circuit_index'] as num).toInt()
         : 0;
 
-    final idMatches   = removedExId != null && itemId == removedExId;
-    final nameMatches = removedName.isNotEmpty && itemName == removedName;
-    final ciMatches   = itemCi == removedCi;
+    // 🔥 PRIMARY MATCH: exerciseId match
+    // If both sides have ids, and they match → delete it.
+    if (removedExId != null && exId != null && exId == removedExId) {
+      return true;
+    }
 
-    // same if (IDs match OR names match) AND circuitIndex matches
-    return (idMatches || nameMatches) && ciMatches;
+    // 🔥 SECONDARY MATCH: name + circuitIndex
+    // Used only when ID is missing.
+    return name == removedName && ci == removedCi;
   }
+
+
 
 
   /// Restore the exercise back into the **BB2 day cache** (used by Undo).
@@ -9062,6 +9310,17 @@ class _WorkoutPageState extends State<WorkoutPage>
       }
     }
 
+    // 🔤 Sort templates within each block alphabetically by name
+    templatesByBlockId.forEach((blockId, list) {
+      list.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    });
+
+    // 🔤 Also sort "other" templates alphabetically
+    otherTemplates.sort(
+          (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+    );
+
+
     final entries = templatesByBlockId.entries.toList()
       ..sort((a, b) {
         if (a.key == _selectedBlockId) return -1;
@@ -13984,10 +14243,6 @@ class _WorkoutPageState extends State<WorkoutPage>
             ),
 
 
-
-
-
-
             IconButton(
               icon: const Icon(
                 Icons.auto_awesome, // ✨ sparkle icon
@@ -14017,43 +14272,84 @@ class _WorkoutPageState extends State<WorkoutPage>
                 if (ok && mounted) {
                   _playSparkles();
                 }
-
               },
             ),
-
-
 
             IconButton(
               icon: const Icon(Icons.delete),
               onPressed: () {
                 showDialog(
                   context: context,
-                  builder: (BuildContext context) {
+                  builder: (BuildContext dialogCtx) {
                     return AlertDialog(
+                      backgroundColor: Colors.blueGrey.shade900,
                       title: const Text(
                         'Clear Workout',
-                        style:
-                        TextStyle(fontFamily: 'Verdana', color: Colors.white),
+                        style: TextStyle(fontFamily: 'Verdana', color: Colors.white),
                       ),
                       content: const Text(
                         'Delete this workout?',
-                        style:
-                        TextStyle(fontFamily: 'Verdana', color: Colors.white),
+                        style: TextStyle(fontFamily: 'Verdana', color: Colors.white),
                       ),
                       actions: <Widget>[
                         TextButton(
-                          onPressed: () => Navigator.of(context).pop(),
+                          onPressed: () => Navigator.of(dialogCtx).pop(),
                           child: const Text('Cancel'),
                         ),
                         TextButton(
-                          onPressed: () {
+                          onPressed: () async {
+                            // Close the dialog (same as before, just async now)
+                            Navigator.of(dialogCtx).pop();
+
+                            // 🔥 1) Run nukes (same as the bolt button)
+                            final uid = _cachedUid ??
+                                UserContext.of(context, listen: false).currentUid;
+                            final blockId = _selectedBlockId ?? _activeBlockId;
+
+                            if (uid != null && uid.isNotEmpty && blockId != null) {
+                              try {
+                                // Per-day nuke for this date
+                                await nukeLocalWorkoutsForDay(
+                                  uid: uid,
+                                  blockId: blockId,
+                                  date: _selectedDate,
+                                  blockStartDate: blockStartDate,
+                                  getWesDraftKeyForDate: (d) => _getDraftKeyFor(d),
+                                );
+
+                                // Global WES planned + local caches (all dates)
+                                await nukeAllWesPlannedAndLocalCaches(
+                                  uid: uid,
+                                  blockId: blockId,
+                                );
+
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('💥 Workout + local cache nuked'),
+                                  ),
+                                );
+                              } catch (e, st) {
+                                debugPrint('❌ [ClearWorkout] Nuke failed: $e');
+                                debugPrint('$st');
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content:
+                                    Text('⚠️ Failed to clear all caches, see logs'),
+                                  ),
+                                );
+                              }
+                            } else {
+                              debugPrint(
+                                  '⚠️ [ClearWorkout] Skipping nukes (uid/blockId missing)');
+                            }
+
+                            // ✅ 2) Original in-memory clear behaviour (unchanged)
                             setState(() {
                               _workoutNameController.clear();
                               _selectedExercisesWithCircuits.clear();
                               _workoutSets.clear();
                               _initializeControllers();
                             });
-                            Navigator.of(context).pop();
                           },
                           child: const Text('Yes'),
                         ),
@@ -14064,7 +14360,10 @@ class _WorkoutPageState extends State<WorkoutPage>
               },
             ),
 
-            IconButton(
+
+
+
+           /* IconButton(
               icon: const Icon(Icons.bolt, color: Colors.orange), // 💥 closest stock icon; swap if you add custom nuclear icon
               onPressed: () {
                 showDialog(
@@ -14116,7 +14415,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                   },
                 );
               },
-            ),
+            ), */
 
             IconButton(
               icon: const Icon(Icons.save),
@@ -14166,21 +14465,29 @@ class _WorkoutPageState extends State<WorkoutPage>
                   _dragX = 0;
                 },
                 child: Padding(
-
-                padding: const EdgeInsets.only(left: 8.0, bottom: 7.0), // 👈 shifts it to the right
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      DateFormat('EEE d MMM yyyy').format(_selectedDate),
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.white70,
+                  padding: const EdgeInsets.only(left: 8.0, bottom: 7.0),
+                  child: Row(
+                    children: [
+                      // Date text (same as before)
+                      Expanded(
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            DateFormat('EEE d MMM yyyy').format(_selectedDate),
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                              color: Colors.white70,
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
+                    ],
                   ),
                 ),
               ),
+
+
 
 
               const SizedBox(height: 0.0),

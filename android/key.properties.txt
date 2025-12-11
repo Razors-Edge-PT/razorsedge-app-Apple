@@ -1,0 +1,4 @@
+storePassword=GOODLIFT@keystore
+keyPassword=GOODLIFT@keystore...17
+keyAlias=upload
+storeFile=C:\\Users\\OEM\\goodlift-upload-keystore.jks
