@@ -10206,19 +10206,24 @@ class _WorkoutPageState extends State<WorkoutPage>
         final reps = s.reps ?? 0;
         final double? wOpt = s.weight; // preserve null vs 0.0
 
-        // BW: require reps AND an explicit weight entry (0 allowed if typed)
-        final hasWR = isBw
-            ? (reps > 0 && wOpt != null)
-            : (reps > 0 && (wOpt ?? 0.0) > 0.0); // non-BW unchanged
+        // "Any data" rule:
+        //  - Reps alone is enough
+        //  - Weight alone is enough
+        //  - Velocity / notes alone is enough
+        final bool hasReps = reps > 0;
 
-        final hasOther = ((s.velocity ?? 0.0) > 0) ||
-            ((s.notes ?? '')
-                .trim()
-                .isNotEmpty);
+        // BW: any explicitly typed value (including 0 = pure BW) counts as data.
+        // Non-BW: must be > 0 kg to count as a weight entry.
+        final bool hasWeight = isBw
+            ? (wOpt != null)
+            : ((wOpt ?? 0.0) > 0.0);
 
-        // BW must meet hasWR; non-BW can also save on notes/velocity
-        return isBw ? hasWR : (hasWR || hasOther);
+        final bool hasOther = ((s.velocity ?? 0.0) > 0) ||
+            ((s.notes ?? '').trim().isNotEmpty);
+
+        return hasReps || hasWeight || hasOther;
       }).toList();
+
 
       if (setsWithData.isEmpty) continue; // “No data gets nothing saved”
 
@@ -10278,11 +10283,12 @@ class _WorkoutPageState extends State<WorkoutPage>
 
 
       // Saved-format marker:
-      // - On global Save -> only if exercise has at least one set with BOTH weight & reps
+      // - On global Save -> mark saved if the exercise has at least one non-empty set
       // - Otherwise -> respect per-exercise "Done" state
       final bool markThisSaved = markAllSaved
-          ? _hasSetWithWeightAndReps(i)
+          ? setsWithData.isNotEmpty
           : _savedExerciseKeysForDate.contains(key);
+
 
       if (markThisSaved) {
         ex['saved'] = true; // optional boolean
