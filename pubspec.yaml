@@ -86,7 +86,9 @@ dev_dependencies:
 flutter_launcher_icons:
   android: true
   ios: false
-  image_path: assets/icon/newProjectIconTemp.png
+  image_path: assets/icon/Logo_beta.png
+  adaptive_icon_foreground: "assets/icon/Logo_beta_foreground.png"
+  adaptive_icon_background: "#000000"
 
 flutter_native_splash:
   color: "#0B0B0B"
@@ -130,6 +132,7 @@ flutter:
     - assets/branding/anatomy/female_anatomy.png
     - assets/exercise_dump_20251109_112626.json
     - assets/exercise_videos/
+    - assets/icon/Logo_beta.png
 
 
 
