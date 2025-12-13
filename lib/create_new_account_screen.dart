@@ -7,6 +7,7 @@ import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:provider/provider.dart'; // for context.read()
 import 'package:localtest222/user_context.dart'; // <-- adjust path to your actual file
 import 'membership_gate.dart';
+import 'demographics_cache.dart';
 
 import 'package:localtest222/login_screen.dart';
 import 'periodization_model_utils.dart';
@@ -1417,6 +1418,13 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
         'sex': widget.sex,    // 'M'|'F'|'N'
         'createdAt': FieldValue.serverTimestamp(),
       };
+
+      // ✅ Cache demographics locally for offline + fast access across the app
+      await DemographicsCache.save(
+        uid: user.uid,
+        sex: widget.sex,
+        dob: widget.dob, // yyyy-mm-dd
+      );
 
 
       final db = FirebaseFirestore.instance;

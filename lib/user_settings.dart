@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'demographics_cache.dart';
 import 'package:localtest222/user_context.dart'; // <-- your UserContext
 // import 'package:localtest222/theme.dart'; // if you have shared theme things
 
@@ -181,6 +182,8 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
   }
 
   Future<void> _save() async {
+    print('🧪 [UserSettings] _save() START');
+
     if (!_formKey.currentState!.validate()) return;
 
     setState(() { _saving = true; _error = null; });
@@ -225,6 +228,13 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
 
       await FirebaseFirestore.instance.collection('users_public').doc(userId)
           .set(payloadPublic, SetOptions(merge: true));
+      // ✅ Keep local demographics cache in sync (offline + no extra reads elsewhere)
+      await DemographicsCache.save(
+        uid: userId,
+        sex: sex,
+        dob: dobNorm, // normalized string
+      );
+
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

@@ -37,6 +37,7 @@ import 'exercise_video_button.dart';
 import 'package:video_player/video_player.dart';
 import 'exercise_video_assets.dart';
 import 'exercise_video_player_screen.dart';
+import 'demographics_cache.dart';
 
 import 'package:cloud_firestore/cloud_firestore.dart' as firebase_firestore;
 
@@ -757,185 +758,54 @@ class _WorkoutPageState extends State<WorkoutPage>
         'prefs: drafts=$prefsDraftDel bb2=$prefsBb2Del warm=$prefsWarmKeys)');
   }
 
-  Future<void> _debugPrintLocalForDate(
-      DateTime date, {
-        String? label,
-      }) async {
-    final tag = label ?? 'DAY';
-    final ymd = DateFormat('yyyy-MM-dd').format(date);
-    debugPrint('🔍 [DEBUG-$tag] ====== $ymd ======');
+  String _nukeSnackMessage({
+    required String? sexRaw,
+    required String? dobRaw,
+  }) {
+    const fallback = '💥 Workout + local cache nuked';
 
-    final uid = _cachedUid ?? UserContext.of(context, listen: false).currentUid;
-    final blockId = _selectedBlockId ?? _activeBlockId;
+    final sex = (sexRaw ?? '').trim().toUpperCase();
+    final dob = (dobRaw ?? '').trim();
 
-    if (uid == null || uid.isEmpty) {
-      debugPrint('🔍 [DEBUG-$tag] uid missing, abort');
-      return;
+    if (sex.isEmpty || dob.isEmpty) {
+      return fallback;
     }
 
-    // ───────── 1) Firestore: workouts/{ymd}.wesPlannedExercises ─────────
-    try {
-      final fs = FirebaseFirestore.instance;
-      final docRef = fs
-          .collection('users')
-          .doc(uid)
-          .collection('workouts')
-          .doc(ymd);
+    int? year;
 
-      final snap = await docRef.get();
-      if (!snap.exists) {
-        debugPrint('🔍 [DEBUG-$tag→FS] no workout doc for $ymd');
-      } else {
-        final data = (snap.data() as Map<String, dynamic>?) ?? {};
-        final raw = data['wesPlannedExercises'];
-        if (raw is List) {
-          debugPrint('🔍 [DEBUG-$tag→FS] wesPlannedExercises ($ymd):');
-          for (final e in raw) {
-            debugPrint('  • $e');
-          }
-        } else {
-          debugPrint('🔍 [DEBUG-$tag→FS] wesPlannedExercises not a List ($ymd): $raw');
-        }
+    final parts = dob.split('-');
+    if (parts.length == 3) {
+      // yyyy-mm-dd
+      if (parts[0].length == 4) {
+        year = int.tryParse(parts[0]);
       }
-    } catch (e) {
-      debugPrint('🟥 [DEBUG-$tag→FS] error: $e');
+      // dd-mm-yyyy
+      else if (parts[2].length == 4) {
+        year = int.tryParse(parts[2]);
+      }
     }
 
-    // ───────── 2) ISAR: WESInitSnapshot + WorkoutDayCache ─────────
-    try {
-      final isar = await IsarDb.instance;
-
-      // 2a) WESInitSnapshot
-      if (blockId != null) {
-        final initSnaps = await isar.wESInitSnapshots
-            .filter()
-            .uidEqualTo(uid)
-            .and()
-            .blockIdEqualTo(blockId)
-            .and()
-            .dateYmdEqualTo(ymd)
-            .findAll();
-
-        if (initSnaps.isEmpty) {
-          debugPrint('🔍 [DEBUG-$tag→ISAR] no WESInitSnapshot for $ymd');
-        } else {
-          for (final snap in initSnaps) {
-            debugPrint('🔍 [DEBUG-$tag→ISAR] WESInitSnapshot id=${snap.id} ($ymd)');
-
-            try {
-              final planned = (jsonDecode(snap.plannedExercisesJson) as List?) ?? <dynamic>[];
-              debugPrint('  plannedExercisesJson:');
-              for (final e in planned) {
-                debugPrint('    • $e');
-              }
-            } catch (e) {
-              debugPrint('  ⚠️ failed to decode plannedExercisesJson: $e');
-            }
-
-            try {
-              final wesPlanned =
-                  (jsonDecode(snap.wesPlannedExercisesJson) as List?) ?? <dynamic>[];
-              debugPrint('  wesPlannedExercisesJson:');
-              for (final e in wesPlanned) {
-                debugPrint('    • $e');
-              }
-            } catch (e) {
-              debugPrint('  ⚠️ failed to decode wesPlannedExercisesJson: $e');
-            }
-          }
-        }
-      } else {
-        debugPrint('🔍 [DEBUG-$tag→ISAR] blockId null, skipping WESInitSnapshot');
-      }
-
-      // 2b) WorkoutDayCache
-      final dayCaches = await isar.workoutDayCaches
-          .filter()
-          .uidEqualTo(uid)
-          .and()
-          .dateKeyEqualTo(ymd)
-          .findAll();
-
-      if (dayCaches.isEmpty) {
-        debugPrint('🔍 [DEBUG-$tag→ISAR] no WorkoutDayCache for $ymd');
-      } else {
-        for (final cache in dayCaches) {
-          debugPrint('🔍 [DEBUG-$tag→ISAR] WorkoutDayCache id=${cache.id} ($ymd)');
-
-          try {
-            final exList =
-                (jsonDecode(cache.exListJson) as List?) ?? <dynamic>[];
-            debugPrint('  exListJson:');
-            for (final e in exList) {
-              debugPrint('    • $e');
-            }
-          } catch (e) {
-            debugPrint('  ⚠️ failed to decode exListJson: $e');
-          }
-
-          try {
-            final wesPlanned =
-                (jsonDecode(cache.wesPlannedJson) as List?) ?? <dynamic>[];
-            debugPrint('  wesPlannedJson:');
-            for (final e in wesPlanned) {
-              debugPrint('    • $e');
-            }
-          } catch (e) {
-            debugPrint('  ⚠️ failed to decode wesPlannedJson: $e');
-          }
-        }
-      }
-    } catch (e) {
-      debugPrint('🟥 [DEBUG-$tag→ISAR] error: $e');
+    if (year == null) {
+      return fallback;
     }
 
-    // ───────── 3) SharedPreferences: WES draft + BB2 dayData ─────────
-    try {
-      final prefs = await SharedPreferences.getInstance();
+    final bornBefore1999 = year <= 1998;
 
-      // 3a) WES draft
-      final draftKey = _getDraftKeyFor(date);
-      if (prefs.containsKey(draftKey)) {
-        final raw = prefs.getString(draftKey);
-        if (raw != null) {
-          final map = jsonDecode(raw) as Map<String, dynamic>;
-          final exList =
-              (map['selectedExercisesWithCircuits'] as List?) ?? <dynamic>[];
-          debugPrint('🔍 [DEBUG-$tag→Prefs] WES draft "$draftKey" exercises:');
-          for (final e in exList) {
-            debugPrint('  • $e');
-          }
-        } else {
-          debugPrint('🔍 [DEBUG-$tag→Prefs] WES draft "$draftKey" is null');
-        }
-      } else {
-        debugPrint('🔍 [DEBUG-$tag→Prefs] no WES draft "$draftKey"');
-      }
-
-      // 3b) BB2 per-day JSON
-      final bb2Key = 'bb2_dayData_$ymd';
-      if (prefs.containsKey(bb2Key)) {
-        final raw = prefs.getString(bb2Key);
-        if (raw != null) {
-          final map = jsonDecode(raw) as Map<String, dynamic>;
-          final exList = (map['exList'] as List?) ?? <dynamic>[];
-          debugPrint('🔍 [DEBUG-$tag→Prefs] BB2 "$bb2Key" exList:');
-          for (final e in exList) {
-            debugPrint('  • $e');
-          }
-        } else {
-          debugPrint('🔍 [DEBUG-$tag→Prefs] BB2 "$bb2Key" is null');
-        }
-      } else {
-        debugPrint('🔍 [DEBUG-$tag→Prefs] no "$bb2Key"');
-      }
-    } catch (e) {
-      debugPrint('🟥 [DEBUG-$tag→Prefs] error: $e');
+    if (sex == 'M' && bornBefore1999) {
+      return '💥 That workout is gone, bro.';
+    }
+    if (sex == 'M' && !bornBefore1999) {
+      return '💥 Bro, that workout never happened.';
+    }
+    if (sex == 'F' && bornBefore1999) {
+      return '💥 All cleared — you’re good to go.';
+    }
+    if (sex == 'F' && !bornBefore1999) {
+      return '💥 Gone and dusted, queen.';
     }
 
-    debugPrint('🔍 [DEBUG-$tag] ====== end $ymd ======');
+    return fallback;
   }
-
 
   Future<void> _deleteExerciseEverywhereForDate({
     required Map<String, dynamic> exerciseRow,
@@ -14323,11 +14193,17 @@ class _WorkoutPageState extends State<WorkoutPage>
                                   blockId: blockId,
                                 );
 
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('💥 Workout + local cache nuked'),
-                                  ),
+                                final (sex, dob) = await DemographicsCache.load(uid);
+
+                                final msg = _nukeSnackMessage(
+                                  sexRaw: sex,
+                                  dobRaw: dob,
                                 );
+
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text(msg)),
+                                );
+
                               } catch (e, st) {
                                 debugPrint('❌ [ClearWorkout] Nuke failed: $e');
                                 debugPrint('$st');
