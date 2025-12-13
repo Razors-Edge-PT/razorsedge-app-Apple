@@ -638,17 +638,27 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
       print('🆕 [Home] No blocks found — creating "$block1Name" and "$block2Name"...');
 
-      // ── Dates: two 8-week blocks (56 days each) ──────────────────────────────
+      // ── Dates: start = Monday of the current week ("Monday just gone") ──────
       final now = DateTime.now();
-      final startDate1 = now;
-      final endDate1   = startDate1.add(const Duration(days: 56));
 
-      final startDate2 = endDate1.add(const Duration(days: 1)); // day after block 1 completes
-      final endDate2   = startDate2.add(const Duration(days: 56));
+      // Normalize to date-only (midnight) to avoid time-of-day drift in Firestore dates
+      final today = DateTime(now.year, now.month, now.day);
 
-      // ── Dates: third 8-week block (starts day after block 2 completes) ────────────
+      // DateTime.weekday: Mon=1 ... Sun=7
+      final startDate1 = today.subtract(Duration(days: today.weekday - DateTime.monday));
+
+      // 8 weeks = 56 days total. If start is day 0, last day is start + 55.
+      final endDate1 = startDate1.add(const Duration(days: 55));
+
+      // Next blocks start the day after the previous ends
+      final startDate2 = endDate1.add(const Duration(days: 1));
+      final endDate2   = startDate2.add(const Duration(days: 55));
+
       final startDate3 = endDate2.add(const Duration(days: 1));
-      final endDate3   = startDate3.add(const Duration(days: 56));
+      final endDate3   = startDate3.add(const Duration(days: 55));
+
+      debugPrint('📅 [Home] Block1 start=${startDate1.toIso8601String()} end=${endDate1.toIso8601String()} (today=${today.toIso8601String()})');
+
 
 
       // ── Base exercise IDs (shared by both sexes) ─────────────────────────────
