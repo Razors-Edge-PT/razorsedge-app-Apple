@@ -758,38 +758,57 @@ class _WorkoutPageState extends State<WorkoutPage>
         'prefs: drafts=$prefsDraftDel bb2=$prefsBb2Del warm=$prefsWarmKeys)');
   }
 
+
   String _nukeSnackMessage({
     required String? sexRaw,
     required String? dobRaw,
   }) {
-    const fallback = '💥 Workout + local cache nuked';
+    const fallback = '💥 Workout is deleted af now';
+
+    print('🧪 [NukeMsg] ENTRY sexRaw="$sexRaw" dobRaw="$dobRaw"');
 
     final sex = (sexRaw ?? '').trim().toUpperCase();
     final dob = (dobRaw ?? '').trim();
 
-    if (sex.isEmpty || dob.isEmpty) {
+    if (sex.isEmpty) {
+      print('🧪 [NukeMsg] FALLBACK → sex empty/null');
+      return fallback;
+    }
+
+    if (dob.isEmpty) {
+      print('🧪 [NukeMsg] FALLBACK → dob empty/null');
       return fallback;
     }
 
     int? year;
 
     final parts = dob.split('-');
+    print('🧪 [NukeMsg] dob parts=$parts');
+
     if (parts.length == 3) {
       // yyyy-mm-dd
       if (parts[0].length == 4) {
         year = int.tryParse(parts[0]);
+        print('🧪 [NukeMsg] Parsed yyyy-mm-dd → year=$year');
       }
       // dd-mm-yyyy
       else if (parts[2].length == 4) {
         year = int.tryParse(parts[2]);
+        print('🧪 [NukeMsg] Parsed dd-mm-yyyy → year=$year');
+      } else {
+        print('🧪 [NukeMsg] FALLBACK → unrecognised dob format');
       }
+    } else {
+      print('🧪 [NukeMsg] FALLBACK → dob does not have 3 parts');
     }
 
     if (year == null) {
+      print('🧪 [NukeMsg] FALLBACK → year == null after parse');
       return fallback;
     }
 
     final bornBefore1999 = year <= 1998;
+    print('🧪 [NukeMsg] sex=$sex bornBefore1999=$bornBefore1999');
 
     if (sex == 'M' && bornBefore1999) {
       return '💥 That workout is gone, bro.';
@@ -804,8 +823,40 @@ class _WorkoutPageState extends State<WorkoutPage>
       return '💥 Gone and dusted, queen.';
     }
 
+    print('🧪 [NukeMsg] FALLBACK → sex not M/F (sex="$sex")');
     return fallback;
   }
+
+  String _hintsReadySnackMessage({
+    required String? sexRaw,
+    required String? dobRaw,
+  }) {
+    const fallback = 'Suggested weights and reps are ready';
+
+    final sex = (sexRaw ?? '').trim().toUpperCase();
+    final dob = (dobRaw ?? '').trim();
+
+    if (sex.isEmpty || dob.isEmpty) return fallback;
+
+    int? year;
+    final parts = dob.split('-');
+    if (parts.length == 3) {
+      if (parts[0].length == 4) year = int.tryParse(parts[0]);      // yyyy-mm-dd
+      else if (parts[2].length == 4) year = int.tryParse(parts[2]); // dd-mm-yyyy
+    }
+    if (year == null) return fallback;
+
+    final bornBefore1999 = year <= 1998;
+
+    if (sex == 'M' && !bornBefore1999) return 'Dialled in, mate — your suggested weights and reps are ready.';
+    if (sex == 'M' && bornBefore1999)  return 'All sorted — suggested weights and rep targets are ready.';
+    if (sex == 'F' && !bornBefore1999) return 'Ready, queen — suggested weights and rep targets are set.';
+    if (sex == 'F' && bornBefore1999)  return 'Good to go — your suggested weights and rep targets are ready.';
+
+    return fallback;
+  }
+
+
 
   Future<void> _deleteExerciseEverywhereForDate({
     required Map<String, dynamic> exerciseRow,
@@ -2644,10 +2695,20 @@ class _WorkoutPageState extends State<WorkoutPage>
 
     // Optional: only toast when updated and NOT silent
     if (ok && !silent && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Hints updated')),
-      );
+      final uid = _cachedUid ?? UserContext.of(context, listen: false).currentUid;
+      if (uid != null && uid.isNotEmpty) {
+        final (sex, dob) = await DemographicsCache.load(uid);
+        final msg = _hintsReadySnackMessage(sexRaw: sex, dobRaw: dob);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(msg)),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Suggested weights and reps are ready')),
+        );
+      }
     }
+
   }
 
 
@@ -14139,9 +14200,28 @@ class _WorkoutPageState extends State<WorkoutPage>
                 debugPrint('✨ [SparkleBtn] refresh result ok=$ok (mounted=$mounted)');
 
                 scaffold.hideCurrentSnackBar();
-                scaffold.showSnackBar(
-                  SnackBar(content: Text(ok ? 'Workout updated' : 'Refresh failed')),
-                );
+
+                if (ok) {
+                  final uid = _cachedUid ?? UserContext.of(context, listen: false).currentUid;
+
+                  if (uid != null && uid.isNotEmpty) {
+                    final (sex, dob) = await DemographicsCache.load(uid);
+                    final msg = _hintsReadySnackMessage(sexRaw: sex, dobRaw: dob);
+
+                    scaffold.showSnackBar(
+                      SnackBar(content: Text(msg)),
+                    );
+                  } else {
+                    scaffold.showSnackBar(
+                      const SnackBar(content: Text('Suggested weights and reps are ready')),
+                    );
+                  }
+                } else {
+                  scaffold.showSnackBar(
+                    const SnackBar(content: Text('Refresh failed')),
+                  );
+                }
+
 
 // ✨ Run sparkles only when refresh succeeded
                 if (ok && mounted) {
