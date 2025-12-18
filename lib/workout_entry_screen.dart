@@ -7836,7 +7836,7 @@ class _WorkoutPageState extends State<WorkoutPage>
 
       if (_hasOpenedOnce) {
         print('🟢 [WES] _scheduleHeavyWork triggered via date change (not first open)');
-        _scheduleHeavyWork();
+      //  _scheduleHeavyWork();
       } else {
         print('🟣 [WES] First open → running immediate self-heal (no scheduled delay)');
         unawaited(_verifyAndSelfHealIfStale());
@@ -8978,6 +8978,11 @@ class _WorkoutPageState extends State<WorkoutPage>
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.detached) {
       print('📦 [WES] App $state — persisting local draft...');
+      // ✅ Force any active TextField to commit its value before saving
+      FocusManager.instance.primaryFocus?.unfocus();
+// Give Flutter a micro-moment to propagate controller changes
+      await Future.delayed(const Duration(milliseconds: 50));
+
       await _persistDraftLocally();
 
       // Guard against overlapping lifecycle saves
@@ -9018,19 +9023,16 @@ class _WorkoutPageState extends State<WorkoutPage>
           }
         }
 
-        final bool shouldSave = _pendingChanges || hasAnyRows || hasSavedFlags;
+        print('💾 [WES] Autosaving to Firestore (pushBB2=true)…');
+        await _upsertWorkoutToFirestore(
+          alsoPushToBB2: true, // match dispose() behavior
+          markAllSaved: false,
+        );
+        print('✅ [WES] Autosave complete.');
+        // ✅ Ensure Firestore has flushed queued writes before we might get killed
+        await FirebaseFirestore.instance.waitForPendingWrites();
+        print('✅ [WES] Pending writes flushed.');
 
-        if (shouldSave) {
-          final pushBB2 = hasQualifyingSets; // only push if we actually have completed sets
-          print('💾 [WES] Autosaving to Firestore (pushBB2=$pushBB2)…');
-          await _upsertWorkoutToFirestore(
-            alsoPushToBB2: pushBB2,
-            markAllSaved: false,
-          );
-          print('✅ [WES] Autosave complete.');
-        } else {
-          print('🔸 [WES] Nothing to save — skipping autosave.');
-        }
       } catch (e, st) {
         print('❌ [WES] Autosave failed: $e');
         print(st);
@@ -10958,7 +10960,7 @@ class _WorkoutPageState extends State<WorkoutPage>
       // Ensure controllers → _workoutSets are in sync for the first-exit case
     await _persistDraftLocally();
     bool _printedUpsertBw = false;
-    // Resolve the acting UID WITHOUT using context (dispose-safe)
+
     final uid = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) {
       return;
