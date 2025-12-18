@@ -12855,7 +12855,7 @@ class _WorkoutPageState extends State<WorkoutPage>
 
     // 🕒 Defer heavy work (merge + self-heal) after fast paint — except on very first open
     if (_hasOpenedOnce) {
-      _scheduleHeavyWork();  // delayed, cancellable heavy operations
+     // _scheduleHeavyWork();  // delayed, cancellable heavy operations
     } else {
       // 🚀 First open: run merge immediately, mark as opened
       if (blockStartDate == null) {
