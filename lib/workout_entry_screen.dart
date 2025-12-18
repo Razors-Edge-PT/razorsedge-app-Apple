@@ -2224,20 +2224,23 @@ class _WorkoutPageState extends State<WorkoutPage>
   }
 
   // ✅ Custom Hybrid E1RM Formula: Brzycki for ≤6 reps, Epley for >6 reps
-  double calculateE1RM(double? weight, double? reps, double? rir) {
+  static double calculateE1RM(double? weight, double? reps, double? rir) {
     double w = weight ?? 0.0;
     double r = reps ?? 0.0;
-    double rValue = rir ?? 0.0;
-    double totalReps = r + rValue; // ✅ No clamping, keeps raw calculation
+    double rValue = rir ?? 0.0; // ✅ default RIR = 0
 
-    if (totalReps <= 6) {
-      // ✅ Brzycki for low reps (≤6)
+    double totalReps = r + rValue;
+    totalReps = double.parse(totalReps.toStringAsFixed(4));
+
+    if (totalReps <= 25.0) {
+      // Brzycki
       return w * (36 / (37 - totalReps));
     } else {
-      // ✅ Epley for higher reps (>6)
-      return w * (1 + (0.0333 * totalReps));
+      // Epley
+      return w * (1 + 0.0333 * totalReps);
     }
   }
+
 
   /// ✅ Helper Function to Parse Any Firestore Value to a Double
   double _parseToDouble(dynamic value) {

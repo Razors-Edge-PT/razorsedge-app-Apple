@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'workout_model.dart';
 import 'user_context.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'periodization_model_utils.dart';
 
 class TopSetsScreen extends StatefulWidget {
   final String exerciseName; // ✅ Define exercise name
@@ -142,11 +143,9 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
 
 
   double calculateE1RM(double weight, double reps, double rir) {
-    double totalReps = reps + rir;
-    return (totalReps <= 6)
-        ? (weight * (36 / (37 - totalReps)))
-        : (weight * (1 + (0.0333 * totalReps)));
+    return PeriodizationModelUtils.calculateE1RM(weight, reps, rir);
   }
+
 
 
 

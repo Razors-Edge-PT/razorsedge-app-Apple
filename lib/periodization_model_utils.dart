@@ -65,14 +65,14 @@ class PeriodizationModelUtils {
   static double calculateE1RM(double? weight, double? reps, double? rir) {
     double w = weight ?? 0.0;
     double r = reps ?? 0.0;
-    double rValue = rir ?? 0.5;
+    double rValue = rir ?? 0.0;
 
     double totalReps = r + rValue;
 
     // Round to avoid floating point edge cases like 6.000000003
     totalReps = double.parse(totalReps.toStringAsFixed(4));
 
-    if (totalReps <= 6.0) {
+    if (totalReps <= 25.0) {
       // Brzycki
       return w * (36 / (37 - totalReps));
     } else {
@@ -85,11 +85,11 @@ class PeriodizationModelUtils {
   static double reverseCalculateWeight({
     required double targetE1RM,
     required int reps,
-    double rir = 0.5,
+    double rir = 0.0,
   }) {
     final double totalReps = reps + rir;
 
-    if (totalReps <= 6) {
+    if (totalReps <= 25) {
       // Invert: E1RM = W * (36 / (37 - reps))
       return targetE1RM * ((37 - totalReps) / 36);
     } else {
@@ -101,30 +101,41 @@ class PeriodizationModelUtils {
   static double reverseCalculateReps({
     required double targetE1RM,
     required double weight,
-    required double baseWeight,   // 👈 new param
-    double rir = 0.5,
+    required double baseWeight,
+    double rir = 0.0,
     double? minReps,
   }) {
     if (weight <= 0) return 0;
 
-    double totalReps;
+    const double switchTotalReps = 25.0; // set this to your chosen cutoff
+    final double ratio = targetE1RM / weight;
 
-    if (targetE1RM / weight < 1.1667) {
-      totalReps = 37 - (36 * weight / targetE1RM);
+    // Brzycki implied total reps
+    final double totalRepsBrzycki = 37.0 - (36.0 / ratio);
+
+    double totalReps;
+    if (totalRepsBrzycki.isFinite &&
+        totalRepsBrzycki >= 1.0 &&
+        totalRepsBrzycki <= switchTotalReps) {
+      totalReps = totalRepsBrzycki;
     } else {
-      totalReps = (targetE1RM / weight - 1) / 0.0333;
+      // Epley implied total reps
+      totalReps = (ratio - 1.0) / 0.0333;
     }
 
     double reps = totalReps - rir;
 
-    // ✅ Only clamp to minReps if weight DECREASED
     if (minReps != null && weight < baseWeight && reps < minReps) {
-      print('⚠️ [BB2] Reps would drop below planned ($reps < $minReps) after weight decreased ($weight < $baseWeight). Locking to $minReps.');
+      print(
+        '⚠️ [BB2] Reps would drop below planned ($reps < $minReps) '
+            'after weight decreased ($weight < $baseWeight). Locking to $minReps.',
+      );
       reps = minReps;
     }
 
     return reps.clamp(1.0, 45.0);
   }
+
 
 
 

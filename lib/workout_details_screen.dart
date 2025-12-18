@@ -5,6 +5,7 @@ import 'workout_model.dart'; // Import Workout and Exercise models
 import 'exercise_details_screen.dart'; // Import the ExerciseDetailsScreen
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'periodization_model_utils.dart';
 
 class WorkoutDetailsScreen extends StatefulWidget {
   final Workout workout;
@@ -19,12 +20,13 @@ class WorkoutDetailsScreen extends StatefulWidget {
 }
 
 double calculateE1RM(double? weight, int? reps, double? rir) {
-  double w = weight ?? 0.0;
-  int r = reps ?? 0;
-  double rValue = rir ?? 0.0;
-
-  return w * (1 + (0.0333 * (r + rValue)));
+  return PeriodizationModelUtils.calculateE1RM(
+    weight,
+    reps?.toDouble(),
+    rir,
+  );
 }
+
 
 class _WorkoutDetailsScreenState extends State<WorkoutDetailsScreen> {
   List<Workout> allWorkouts = [];

@@ -8,6 +8,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart'; // for Timestamp & Firestore
 import 'package:flutter/services.dart'; // for FilteringTextInputFormatter
 import 'user_context.dart';
+import 'periodization_model_utils.dart';
 
 enum TrendRange { d14, m1, m6, y1, y2 }
 
@@ -73,11 +74,9 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
 
 
   double calculateE1RM(double weight, double reps, double rir) {
-    final totalReps = reps + rir;
-    return (totalReps <= 6)
-        ? (weight * (36 / (37 - totalReps)))
-        : (weight * (1 + (0.0333 * totalReps)));
+    return PeriodizationModelUtils.calculateE1RM(weight, reps, rir);
   }
+
 
 
   List<Workout> _workouts = [];
