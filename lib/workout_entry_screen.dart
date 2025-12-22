@@ -10116,20 +10116,48 @@ class _WorkoutPageState extends State<WorkoutPage>
 
 
     setState(() {
-      // 🧠 1) Capture current circuitIndex per exercise name
-      final Map<String, int> existingCircuitByName = {};
-      int lastCircuit = 0;
+      // 🔒 Snapshot existing rows & data so we can preserve user-entered values.
+      final oldRows = List<Map<String, dynamic>>.from(_selectedExercisesWithCircuits);
+      final oldWorkoutSets = _workoutSets.map((row) => List<SetDetails>.from(row)).toList();
+      final oldRepsControllers = _repsControllers.map((row) => List<TextEditingController>.from(row)).toList();
+      final oldWeightControllers = _weightControllers.map((row) => List<TextEditingController>.from(row)).toList();
+      final oldRirControllers = _rirControllers.map((row) => List<TextEditingController>.from(row)).toList();
+      final oldVelocityControllers = _velocityControllers.map((row) => List<TextEditingController>.from(row)).toList();
+      final oldNotesControllers = _notesControllers.map((row) => List<TextEditingController>.from(row)).toList();
 
-      for (final row in _selectedExercisesWithCircuits) {
+      // Map from exerciseId|circuitIndex → old row index
+      final Map<String, int> oldIndexByKey = {};
+      for (int idx = 0; idx < oldRows.length; idx++) {
+        final row = oldRows[idx];
         final name = (row['name'] ?? '').toString();
         if (name.isEmpty) continue;
         final ci = (row['circuitIndex'] ?? 0) as int;
-        existingCircuitByName[name] = ci;
+        final exId = (PeriodizationModelUtils.nameToId[name] ?? name)
+            .toString()
+            .trim()
+            .toLowerCase();
+        final key = '$exId|$ci';
+        oldIndexByKey[key] = idx;
+      }
+
+      // 🧠 1) Capture current circuitIndex per exerciseId
+      final Map<String, int> existingCircuitByExId = {};
+      int lastCircuit = 0;
+
+      for (final row in oldRows) {
+        final name = (row['name'] ?? '').toString();
+        if (name.isEmpty) continue;
+        final ci = (row['circuitIndex'] ?? 0) as int;
+        final exId = (PeriodizationModelUtils.nameToId[name] ?? name)
+            .toString()
+            .trim()
+            .toLowerCase();
+        existingCircuitByExId[exId] = ci;
         if (ci > lastCircuit) lastCircuit = ci;
       }
 
       // 🧠 2) Rebuild rows based on the new selection:
-      //    - keep existing circuitIndex where possible
+      //    - keep existing circuitIndex where possible (by exerciseId)
       //    - brand-new exercises go into the last circuit
       _selectedExercisesWithCircuits.clear();
       _selectedExercisesWithCircuits.addAll(
@@ -10138,10 +10166,8 @@ class _WorkoutPageState extends State<WorkoutPage>
           final name = entry.value;
           final exId = (nameToIdMap[name] ?? name).trim().toLowerCase();
 
-          // If this exercise already existed, keep its circuitIndex.
-          // Otherwise, put it into the last circuit.
           final int circuitIndex =
-              existingCircuitByName[name] ?? lastCircuit;
+              existingCircuitByExId[exId] ?? lastCircuit;
 
           // wes|<YYYY-MM-DD>|<unique-ts>|<exercise-id>|<circuitIndex>
           final cardId = 'wes|$ymd|${_ts() + idx}|$exId|$circuitIndex';
@@ -10155,43 +10181,107 @@ class _WorkoutPageState extends State<WorkoutPage>
         }),
       );
 
-      // 🔁 3) Rebuild sets/controllers for the new list (same behaviour as before)
-      _workoutSets.clear();
-      _repsControllers.clear();
-      _weightControllers.clear();
-      _rirControllers.clear();
-      _velocityControllers.clear();
-      _notesControllers.clear();
+      // 🔁 3) Rebuild sets/controllers for the new list,
+      //       preserving user-entered data by exerciseId|circuitIndex
+      final List<List<SetDetails>> newWorkoutSets = [];
+      final List<List<TextEditingController>> newRepsControllers = [];
+      final List<List<TextEditingController>> newWeightControllers = [];
+      final List<List<TextEditingController>> newRirControllers = [];
+      final List<List<TextEditingController>> newVelocityControllers = [];
+      final List<List<TextEditingController>> newNotesControllers = [];
 
       for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
-        final setCount = _plannedSetCountFor(i);
-        final int desiredSets =
-        (setCount <= 0) ? _defaultSets : setCount;
+        final row = _selectedExercisesWithCircuits[i];
+        final String name = (row['name'] ?? '').toString();
+        final int circuitIndex = (row['circuitIndex'] ?? 0) as int;
+        final String exId =
+        (PeriodizationModelUtils.nameToId[name] ?? name)
+            .toString()
+            .trim()
+            .toLowerCase();
+        final String key = '$exId|$circuitIndex';
 
-        _workoutSets.add(
-          List.generate(desiredSets, (_) => SetDetails()),
-        );
-        _repsControllers.add(
-          List.generate(desiredSets, (_) => TextEditingController()),
-        );
-        _weightControllers.add(
-          List.generate(desiredSets, (_) => TextEditingController()),
-        );
-        _rirControllers.add(
-          List.generate(desiredSets, (_) => TextEditingController()),
-        );
-        _velocityControllers.add(
-          List.generate(desiredSets, (_) => TextEditingController()),
-        );
-        _notesControllers.add(
-          List.generate(desiredSets, (_) => TextEditingController()),
-        );
+        final int setCount = _plannedSetCountFor(i);
+        final int desiredSets = (setCount <= 0) ? _defaultSets : setCount;
+
+        final List<SetDetails> setsRow = [];
+        final List<TextEditingController> repsRow = [];
+        final List<TextEditingController> weightRow = [];
+        final List<TextEditingController> rirRow = [];
+        final List<TextEditingController> velRow = [];
+        final List<TextEditingController> notesRow = [];
+
+        final int? oldIdx = oldIndexByKey[key];
+
+        for (int s = 0; s < desiredSets; s++) {
+          if (oldIdx != null &&
+              oldIdx < oldWorkoutSets.length &&
+              s < oldWorkoutSets[oldIdx].length &&
+              oldIdx < oldRepsControllers.length &&
+              s < oldRepsControllers[oldIdx].length &&
+              oldIdx < oldWeightControllers.length &&
+              s < oldWeightControllers[oldIdx].length &&
+              oldIdx < oldRirControllers.length &&
+              s < oldRirControllers[oldIdx].length &&
+              oldIdx < oldVelocityControllers.length &&
+              s < oldVelocityControllers[oldIdx].length &&
+              oldIdx < oldNotesControllers.length &&
+              s < oldNotesControllers[oldIdx].length) {
+            // Reuse existing SetDetails + controllers
+            setsRow.add(oldWorkoutSets[oldIdx][s]);
+            repsRow.add(oldRepsControllers[oldIdx][s]);
+            weightRow.add(oldWeightControllers[oldIdx][s]);
+            rirRow.add(oldRirControllers[oldIdx][s]);
+            velRow.add(oldVelocityControllers[oldIdx][s]);
+            notesRow.add(oldNotesControllers[oldIdx][s]);
+          } else {
+            // New blank set
+            setsRow.add(SetDetails());
+            repsRow.add(TextEditingController());
+            weightRow.add(TextEditingController());
+            rirRow.add(TextEditingController());
+            velRow.add(TextEditingController());
+            notesRow.add(TextEditingController());
+          }
+        }
+
+        newWorkoutSets.add(setsRow);
+        newRepsControllers.add(repsRow);
+        newWeightControllers.add(weightRow);
+        newRirControllers.add(rirRow);
+        newVelocityControllers.add(velRow);
+        newNotesControllers.add(notesRow);
       }
+
+      _workoutSets
+        ..clear()
+        ..addAll(newWorkoutSets);
+
+      _repsControllers
+        ..clear()
+        ..addAll(newRepsControllers);
+
+      _weightControllers
+        ..clear()
+        ..addAll(newWeightControllers);
+
+      _rirControllers
+        ..clear()
+        ..addAll(newRirControllers);
+
+      _velocityControllers
+        ..clear()
+        ..addAll(newVelocityControllers);
+
+      _notesControllers
+        ..clear()
+        ..addAll(newNotesControllers);
+
 
       // ✅ 4) Keep circuits ordered 0,1,2,… and preserve order within each circuit
       _sortRowsByCircuitIndex();
 
-      _initializeControllers();
+      // 🚫 Do NOT re-initialize controllers here; we just reused them.
       _populateVelocityFlags();
       () async {
         try {
@@ -10202,6 +10292,7 @@ class _WorkoutPageState extends State<WorkoutPage>
         } catch (_) {}
       }();
     });
+
 
 
   }
@@ -10536,10 +10627,12 @@ class _WorkoutPageState extends State<WorkoutPage>
       final setsWithData = _workoutSets[i].where((s) {
         final reps = s.reps ?? 0;
         final double? wOpt = s.weight; // preserve null vs 0.0
+        final double? rirOpt = s.rir;
 
         // "Any data" rule:
         //  - Reps alone is enough
         //  - Weight alone is enough
+        //  - RIR alone is enough
         //  - Velocity / notes alone is enough
         final bool hasReps = reps > 0;
 
@@ -10549,11 +10642,14 @@ class _WorkoutPageState extends State<WorkoutPage>
             ? (wOpt != null)
             : ((wOpt ?? 0.0) > 0.0);
 
+        final bool hasRir = (rirOpt != null && rirOpt != 0.0);
+
         final bool hasOther = ((s.velocity ?? 0.0) > 0) ||
             ((s.notes ?? '').trim().isNotEmpty);
 
-        return hasReps || hasWeight || hasOther;
+        return hasReps || hasWeight || hasRir || hasOther;
       }).toList();
+
 
 
       if (setsWithData.isEmpty) continue; // “No data gets nothing saved”
