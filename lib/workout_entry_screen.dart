@@ -10550,6 +10550,9 @@ class _WorkoutPageState extends State<WorkoutPage>
       final movedReps = _repsControllers.removeAt(oldIndex);
       final movedWeight = _weightControllers.removeAt(oldIndex);
       final movedRir = _rirControllers.removeAt(oldIndex);
+      final movedVelocity = _velocityControllers.removeAt(oldIndex);
+      final movedNotes = _notesControllers.removeAt(oldIndex);
+
 
       // Get new circuit index from neighbor (fallback to 0)
       int newCircuitIndex = 0;
@@ -10576,6 +10579,9 @@ class _WorkoutPageState extends State<WorkoutPage>
       _repsControllers.insert(newIndex, movedReps);
       _weightControllers.insert(newIndex, movedWeight);
       _rirControllers.insert(newIndex, movedRir);
+      _velocityControllers.insert(newIndex, movedVelocity);
+      _notesControllers.insert(newIndex, movedNotes);
+
     });
   }
 
@@ -14555,14 +14561,15 @@ class _WorkoutPageState extends State<WorkoutPage>
                         i >= _workoutSets.length ||
                         i >= _repsControllers.length ||
                         i >= _weightControllers.length ||
-                        i >= _rirControllers.length) {
-                      print(
-                          "⚠️ Skipping index $i due to mismatched list lengths");
+                        i >= _rirControllers.length ||
+                        i >= _velocityControllers.length ||
+                        i >= _notesControllers.length) {
+                      print("⚠️ Skipping index $i due to mismatched list lengths");
                       return SizedBox(
-                        key: ValueKey(
-                            'skipped_$i'), // 🔑 Ensure even placeholder has a key
+                        key: ValueKey('skipped_$i'),
                       );
                     }
+
 
                     final current = _selectedExercisesWithCircuits[i];
                     final prev = i > 0
@@ -14638,6 +14645,9 @@ class _WorkoutPageState extends State<WorkoutPage>
                             final removedReps     = _repsControllers[i];
                             final removedWeight   = _weightControllers[i];
                             final removedRIR      = _rirControllers[i];
+                            final removedVelocity = _velocityControllers[i];
+                            final removedNotes    = _notesControllers[i];
+
 
                             // Extract keys for deletes
                             final String removedName = ((removedExercise['name'] ?? '') as String).trim();
@@ -14653,6 +14663,9 @@ class _WorkoutPageState extends State<WorkoutPage>
                               _repsControllers.removeAt(i);
                               _weightControllers.removeAt(i);
                               _rirControllers.removeAt(i);
+                              _velocityControllers.removeAt(i);
+                              _notesControllers.removeAt(i);
+
                             });
 
                             // 2) NEW: prune BB2 day cache (Isar BlockDay) for the selected date
@@ -14676,6 +14689,8 @@ class _WorkoutPageState extends State<WorkoutPage>
                                 _repsControllers.insert(i, removedReps);
                                 _weightControllers.insert(i, removedWeight);
                                 _rirControllers.insert(i, removedRIR);
+                                _velocityControllers.insert(i, removedVelocity);
+                                _notesControllers.insert(i, removedNotes);
                               });
                               await _restoreBb2DayCacheForSelectedDate(exerciseRow: removedExercise);
                             };
