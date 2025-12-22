@@ -8994,115 +8994,22 @@ class _WorkoutPageState extends State<WorkoutPage>
 
 
   @override
+  @override
   void didChangeAppLifecycleState(AppLifecycleState state) async {
     print('📱 [WES] AppLifecycleState changed: $state');
     print('📱 [WES] mounted = $mounted');
 
-    if (state == AppLifecycleState.resumed) {
-      final prefs = await SharedPreferences.getInstance();
-      final dateKey =
-          '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(
-          2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
-      final timestampStr = prefs.getString('draft_last_saved_$dateKey');
-
-      print(
-          '🔍 [WES] Checking last draft timestamp for key: $dateKey → $timestampStr');
-
-      if (timestampStr != null) {
-        final savedAt = DateTime.tryParse(timestampStr);
-        final now = DateTime.now();
-        print('🕒 [WES] Draft last saved at: $savedAt — now: $now');
-
-        if (savedAt != null && now
-            .difference(savedAt)
-            .inHours < 2) {
-          print('[WES] App resumed — refreshing draft with BB2 merge');
-          final __preStruct = _structureHash();
-          final __preS1     = _s1ValueHash();
-
-          await _mergeNewBB2ExercisesIntoDraft();
-
-          final __postStruct = _structureHash();
-          final __postS1     = _s1ValueHash();
-
-          if (mounted && (__postStruct != __preStruct || __postS1 != __preS1)) {
-            setState(() {}); // only if something visible changed
-          }
-
-        }
-      }
-      return; // nothing else to do on resumed
-    }
-
-    // For paused/inactive/detached → persist local draft AND autosave to Firestore (+ BB2 push)
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.detached) {
-      print('📦 [WES] App $state — persisting local draft...');
-      // ✅ Force any active TextField to commit its value before saving
-      FocusManager.instance.primaryFocus?.unfocus();
-// Give Flutter a micro-moment to propagate controller changes
-      await Future.delayed(const Duration(milliseconds: 50));
-
-      await _persistDraftLocally();
-
-      // Guard against overlapping lifecycle saves
-      if (_lifecycleSaveInFlight) {
-        print('⏳ [WES] Lifecycle save already in flight — skipping.');
-        return;
-      }
-      _lifecycleSaveInFlight = true;
-
-      try {
-        final bool hasAnyRows = _selectedExercisesWithCircuits
-            .isNotEmpty; // covers WES shells
-        final bool hasSavedFlags = _savedExerciseKeysForDate
-            .isNotEmpty; // covers completed rows
-
-// Reuse your existing completed semantics to detect "qualifying sets"
-        bool hasQualifyingSets = false;
-        for (int i = 0; i < _selectedExercisesWithCircuits.length &&
-            !hasQualifyingSets; i++) {
-          final name = ((_selectedExercisesWithCircuits[i]['name'] ??
-              '') as String).trim();
-          if (name.isEmpty) continue;
-          final exId = PeriodizationModelUtils.nameToId[name] ?? name;
-          final isBw = PeriodizationModelUtils.isBodyweightExercise(
-              id: exId, name: name);
-          for (final s in _workoutSets[i]) {
-            final reps = s.reps ?? 0;
-            final double? w = s.weight;
-            final hasWR = isBw ? (reps > 0 && w != null) : (reps > 0 &&
-                (w ?? 0.0) > 0.0);
-            final hasOther = ((s.velocity ?? 0.0) > 0) || ((s.notes ?? '')
-                .trim()
-                .isNotEmpty);
-            if (isBw ? hasWR : (hasWR || hasOther)) {
-              hasQualifyingSets = true;
-              break;
-            }
-          }
-        }
-
-        print('💾 [WES] Autosaving to Firestore (pushBB2=true)…');
-        await _upsertWorkoutToFirestore(
-          alsoPushToBB2: true, // match dispose() behavior
-          markAllSaved: false,
-        );
-        print('✅ [WES] Autosave complete.');
-        // ✅ Ensure Firestore has flushed queued writes before we might get killed
-        await FirebaseFirestore.instance.waitForPendingWrites();
-        print('✅ [WES] Pending writes flushed.');
-
-      } catch (e, st) {
-        print('❌ [WES] Autosave failed: $e');
-        print(st);
-        // We already persisted the local draft above; this gives resilience if the autosave fails.
-      } finally {
-        _lifecycleSaveInFlight = false;
-      }
-    }
+    // ✅ Disable ALL lifecycle behavior:
+    // - no BB2 merge on resumed
+    // - no local draft save
+    // - no Firestore autosave / pendingWrites flush
+    //
+    // Rely on:
+    // 1) inline saves (saveSingleRowToFirestore)
+    // 2) dispose / back navigation saves
+    return;
   }
+
 
   void _loadTemplate(Template template) {
     // Match the cardId format used in _showExercisePickerDialog
@@ -11002,9 +10909,6 @@ class _WorkoutPageState extends State<WorkoutPage>
       print(st);
     }
   }
-
-
-
 
 
 
@@ -14090,7 +13994,6 @@ class _WorkoutPageState extends State<WorkoutPage>
     // Non-blocking: always build the page; no spinner overlay.
     return _buildWesScaffold();
   }
-
 // Tiny helper used above. Your existing Scaffold body stays unchanged.
   Widget _buildWesScaffold() {
     // ── DEBUG: first rows visible (no spinner path at all) ─────────
@@ -14101,7 +14004,6 @@ class _WorkoutPageState extends State<WorkoutPage>
       });
     }
     // ───────────────────────────────────────────────────────────────
-
     return Stack(
         children: [
         // Your existing page (unchanged, just moved inside the Stack)
