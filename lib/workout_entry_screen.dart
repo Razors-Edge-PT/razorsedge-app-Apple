@@ -10674,45 +10674,62 @@ class _WorkoutPageState extends State<WorkoutPage>
         'sets': setsWithData.map((s) {
           final exId = PeriodizationModelUtils.nameToId[name] ?? name;
           final isBwEx = PeriodizationModelUtils.isBodyweightExercise(
-              id: exId, name: name);
+            id: exId,
+            name: name,
+          );
+
+          // 👉 Normalise blanks:
+          //    - reps == 0   → treat as null
+          //    - weight == 0 → treat as null
+          final int? repsVal =
+          (s.reps == null || s.reps == 0) ? null : s.reps;
+          final double? weightVal =
+          (s.weight == null || s.weight == 0.0) ? null : s.weight;
 
           if (isBwEx) {
-            final added = s.weight ?? 0.0; // user typed "weight added"
-            final abs = PeriodizationModelUtils.toAbsoluteWeight(
-              uid: uid,
-              displayAddedKg: added,
-              exerciseId: exId,
-              exerciseName: name,
-              asOfDate: _selectedDate, // ← DateTime for correct retro logic
-            );
+            // If user entered an added weight → treat normally
+            if (weightVal != null) {
+              final added = weightVal;
+              final abs = PeriodizationModelUtils.toAbsoluteWeight(
+                uid: uid,
+                displayAddedKg: added,
+                exerciseId: exId,
+                exerciseName: name,
+                asOfDate: _selectedDate,
+              );
+
+              return {
+                if (repsVal != null) 'reps': repsVal,   // 👈 omit if null
+                'weight': abs,
+                'weightAdded': added,
+                'addedWeight': added,
+                'rir': s.rir ?? 0.0,                    // 👈 ONLY RIR defaults to 0
+                if (s.velocity != null) 'velocity': s.velocity,
+                if ((s.notes ?? '').trim().isNotEmpty) 'notes': s.notes,
+              };
+            }
+
+            // If NO added weight was typed → reps/RIR-only BW set
             return {
-              'reps': s.reps ?? 0,
-              'weight': abs,
-              // ✅ persist ABSOLUTE for math/history
-              'weightAdded': added,
-              // ✅ persist ADDED for stable display
-              'addedWeight': added,
-              // 👈 add this key so upsert/loader can rely on it
+              if (repsVal != null) 'reps': repsVal,
               'rir': s.rir ?? 0.0,
               if (s.velocity != null) 'velocity': s.velocity,
-              if ((s.notes ?? '')
-                  .trim()
-                  .isNotEmpty) 'notes': s.notes,
+              if ((s.notes ?? '').trim().isNotEmpty) 'notes': s.notes,
             };
           }
 
-          // Non-BW exercises unchanged
+          // NON–bodyweight exercises
           return {
-            'reps': s.reps ?? 0,
-            'weight': s.weight ?? 0.0,
-            'rir': s.rir ?? 0.0,
+            if (repsVal != null) 'reps': repsVal,        // 👈 0 treated as blank
+            if (weightVal != null) 'weight': weightVal,  // 👈 0 treated as blank
+            'rir': s.rir ?? 0.0,                         // 👈 still 0 by default
             if (s.velocity != null) 'velocity': s.velocity,
-            if ((s.notes ?? '')
-                .trim()
-                .isNotEmpty) 'notes': s.notes,
+            if ((s.notes ?? '').trim().isNotEmpty) 'notes': s.notes,
           };
         }).toList(),
+
       };
+
 
 
       // Saved-format marker:
