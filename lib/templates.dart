@@ -751,7 +751,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     // 1) get active block id (same source of truth as BB2/BP)
     String? activeId;
     try {
-      activeId = await BlockRepository().fetchActiveBlockId();
+      activeId = await BlockRepository().fetchActiveBlockId(userId);
+
     } catch (e) {
       debugPrint('⚠️ [Templates] Could not fetch active block id: $e');
     }

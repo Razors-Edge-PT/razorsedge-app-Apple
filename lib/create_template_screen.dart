@@ -8,6 +8,10 @@ import 'template_model.dart';
 import 'template_utils.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'block_repository.dart';
+import 'user_context.dart';
+import 'package:provider/provider.dart';
+
+
 
 class CreateTemplateScreen extends StatefulWidget {
   final VoidCallback onTemplateCreated; // Callback to refresh template list
@@ -45,6 +49,9 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
   final generatedId =
       'template_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(1000)}';
 
+  String get userId => context.read<UserContext>().currentUid;
+
+
   @override
   void initState() {
     super.initState();
@@ -64,12 +71,14 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
     if (user == null) return;
 
     // 1) active block
-    _activeBlockId = await BlockRepository().fetchActiveBlockId();
+    _activeBlockId = await BlockRepository().fetchActiveBlockId(userId);
+
+
 
     // 2) load ALL blocks for dropdown
     final blocksSnap = await FirebaseFirestore.instance
         .collection('planned_blocks')
-        .doc(user.uid)
+        .doc(userId) // ✅ selected athlete
         .collection('blocks')
         .get();
 
@@ -110,10 +119,11 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
 
     final docSnap = await FirebaseFirestore.instance
         .collection('planned_blocks')
-        .doc(user.uid)
+        .doc(userId) // ✅ selected athlete
         .collection('blocks')
         .doc(_activeBlockId!)
         .get();
+
 
     if (docSnap.exists && docSnap.data()!.containsKey('plannedExercises')) {
       final List<dynamic> plannedList = docSnap.data()!['plannedExercises'];
@@ -190,7 +200,8 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
               ),
               IconButton(
                 icon: const Icon(Icons.save),
-                onPressed: () => _submitTemplate(context),
+                onPressed: _submitTemplate,
+
               ),
             ],
           ),
@@ -672,7 +683,7 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
   }
 
   // ----- Save (uses your existing addTemplateToFirestore and navigation)
-  void _submitTemplate(BuildContext context) {
+  Future<void> _submitTemplate() async {
     if (!_formKey.currentState!.validate()) return;
 
     final name = _nameController.text.trim();
@@ -693,14 +704,12 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
     }
 
     if (exerciseMaps.isEmpty) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please add at least one exercise')),
       );
       return;
     }
-
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
 
     final chosenBlockId = _selectedBlockId ?? _activeBlockId;
     final chosenBlockName = _selectedBlockName ??
@@ -717,37 +726,35 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
       'createdAt': FieldValue.serverTimestamp(),
     };
 
-    FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .collection('templates')
-        .doc(generatedId)
-        .set(payload)
-        .then((_) {
+    try {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(context.read<UserContext>().currentUid)
+          .collection('templates')
+          .doc(generatedId)
+          .set(payload);
+
+      if (!mounted) return;
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Template created successfully')),
       );
+
       widget.onTemplateCreated();
 
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (context) => TemplateDetailsScreen(
-            template: Template(
-              id: generatedId,
-              name: name,
-              exercises: exerciseMaps,
-            ),
-          ),
-        ),
-      );
-    }).catchError((error) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to create template')),
-      );
-    });
+      // ✅ Pop even if you're inside a nested navigator
+      Navigator.of(context, rootNavigator: true).pop(true);
+    } catch (e, st) {
+      print('❌ [CreateTemplate] save failed: $e');
+      print(st);
 
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to create template: $e')),
+      );
+    }
   }
+
 }
 
 // ===== local types for the editor =====

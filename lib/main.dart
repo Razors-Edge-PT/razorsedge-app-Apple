@@ -60,6 +60,7 @@ class AppRoot extends StatelessWidget {
               'yoVAqScwLMQLAgNHh8v9IK49fBw2', // Richard
               'wuiMe7phxYQh0MM39bfnhgv20yS2', //Campbell
               'SMTEVGPH1MXgOgbcBbJFU1HjU8G3', // Adam
+              'jhIB7Yi1whYwPvBSmK27KltJGn23' // Richard testing
             };
             final isCoachClaim = token.claims?['isCoach'] == true;
             final isCoach = isCoachClaim || devCoachUids.contains(user.uid);
