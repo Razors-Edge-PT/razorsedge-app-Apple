@@ -7992,7 +7992,7 @@ class _WorkoutPageState extends State<WorkoutPage>
         );
         if (snap == null || snap.dateYmd != ymd) {
           print('🛑 [FastPaint] ignoring snapshot (null or date mismatch)');
-          return;
+          // do NOT return here
         }
 
 
@@ -12778,7 +12778,7 @@ class _WorkoutPageState extends State<WorkoutPage>
     _lastMergedDate = null;                 // force merge to treat this as a new date
     _hasCompletedInitialMergeForThisDate = false;
 
-    // Best-effort autosave the current page in the background
+   /* // Best-effort autosave the current page in the background
     if (mounted) {
       // ignore: unawaited_futures
       (() async {
@@ -12793,6 +12793,8 @@ class _WorkoutPageState extends State<WorkoutPage>
         }
       })();
     }
+
+    */
 
     // Allow FastPaint to run for the new date
     _bootPaintDone = false;
