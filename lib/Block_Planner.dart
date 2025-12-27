@@ -225,6 +225,7 @@ class _BlockPlannerState extends State<Block_Planner> {
         .doc(blockIdToUse)
         .update({
       'exerciseSettings.$exerciseId.$key': safeValue,
+      'plannedExerciseDetails.$exerciseId.$key': safeValue,
     }).catchError((e) {
       print("❌ Failed to save $key for $exerciseId: $e");
     });
@@ -758,7 +759,7 @@ class _BlockPlannerState extends State<Block_Planner> {
   final Map<String, Map<String, dynamic>> _explicitDefaults = {
     'Bench Press, Barbell': {
       'weeklyFrequency': 4,
-      'increments': '2.5, 1',
+      'increments': '2.5',
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [9, 5, 12, 3],
       'rirModel': 'Static RIR',
@@ -772,7 +773,7 @@ class _BlockPlannerState extends State<Block_Planner> {
     },
     'Back Squat, Barbell': {
       'weeklyFrequency': 2,
-      'increments': '2.5, 1',
+      'increments': '2.5',
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [8, 3],
       'rirModel': 'Static RIR',
@@ -788,7 +789,7 @@ class _BlockPlannerState extends State<Block_Planner> {
 
     'Deadlift, Conventional': {
       'weeklyFrequency': 4,
-      'increments': '2.5, 1',
+      'increments': '2.5',
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [9, 5, 3, 1],
       'rirModel': 'Static RIR',
@@ -805,7 +806,7 @@ class _BlockPlannerState extends State<Block_Planner> {
 
     'Deadlift, Sumo': {
       'weeklyFrequency': 3,
-      'increments': '2.5, 1',
+      'increments': '2.5',
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [15, 9, 5],
       'rirModel': 'Static RIR',
@@ -868,7 +869,7 @@ class _BlockPlannerState extends State<Block_Planner> {
     },
     'Horizontal Press': {
       'weeklyFrequency': 3,
-      'increments': '2.5, 1',
+      'increments': '2.5',
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [9, 15, 5],
       'rirModel': 'Static RIR',
@@ -878,7 +879,7 @@ class _BlockPlannerState extends State<Block_Planner> {
     },
     'Vertical Press': {
       'weeklyFrequency': 3,
-      'increments': '2.5, 1',
+      'increments': '2.5',
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [9, 15, 6],
       'rirModel': 'Static RIR',
@@ -888,7 +889,7 @@ class _BlockPlannerState extends State<Block_Planner> {
     },
     'Vertical Pull': {
       'weeklyFrequency': 3,
-      'increments': '2.5, 1',
+      'increments': '2.5',
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [9, 15, 5],
       'rirModel': 'Static RIR',
@@ -898,7 +899,7 @@ class _BlockPlannerState extends State<Block_Planner> {
     },
     'Horizontal Pull': {
       'weeklyFrequency': 3,
-      'increments': '2.5, 1',
+      'increments': '2.5',
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [9, 15, 5],
       'rirModel': 'Static RIR',
@@ -908,7 +909,7 @@ class _BlockPlannerState extends State<Block_Planner> {
     },
     'Core': {
       'weeklyFrequency': 4,
-      'increments': '2.5, 1',
+      'increments': '5',
       'periodizationModel': 'DUP, By Exposure',
       'repTargets': [9, 14, 6, 18],
       'rirModel': 'Static RIR',
@@ -1137,13 +1138,21 @@ class _BlockPlannerState extends State<Block_Planner> {
           },
         ) ??
         [];
+// Capture current exercises BEFORE any mutation
+    final prevSelected = Set<String>.from(exercises);
 
-    // ✅ Only apply changes if user selected at least one item
+// Determine which ones are new
+    final newIds = selected.where((id) => !prevSelected.contains(id)).toList();
+
+// Now apply changes
     if (selected.isNotEmpty) {
       setState(() {
+        exerciseSettings.removeWhere((id, _) => !selected.contains(id));
+        _exerciseIdToName.removeWhere((id, _) => !selected.contains(id));
+
         exercises = selected;
 
-        for (final id in selected) {
+        for (final id in newIds) {
           final match = exercisesFromFirestore.firstWhere(
                 (ex) => ex['id'] == id,
             orElse: () => {}, // ✅ Works with match.isNotEmpty
@@ -1185,7 +1194,8 @@ class _BlockPlannerState extends State<Block_Planner> {
       });
 
       // 💾 Persist seeds so re-open uses explicit defaults (not PMU fallbacks)
-      for (final id in selected) {
+      for (final id in newIds) {
+
         final settings = exerciseSettings[id];
         if (settings != null) {
           _onUpdateSetting(id, 'repTargets', settings['repTargets']);
