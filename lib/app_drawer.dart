@@ -94,7 +94,7 @@ class AppDrawer extends StatelessWidget {
             );
           }),
 
-          _drawerTile(context, Icons.schedule, 'Week Planner', () {
+          _drawerTile(context, Icons.calendar_month, 'Week Planner', () {
             final userContext = UserContext.of(context, listen: false);
             Navigator.push(
               context,
@@ -107,7 +107,7 @@ class AppDrawer extends StatelessWidget {
             );
           }),
 
-          _drawerTile(context, Icons.auto_graph, 'Workout Planner', () {
+          _drawerTile(context, Icons.view_list, 'Workout Planner', () {
             final userContext = UserContext.of(context, listen: false);
             Navigator.push(
               context,

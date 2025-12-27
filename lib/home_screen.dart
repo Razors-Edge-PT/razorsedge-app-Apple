@@ -32,6 +32,8 @@ import 'leaderboard_page.dart';
 import 'template_bootstrapper.dart';
 import 'debug_utils.dart';
 import 'block_exercise_defaults_repository.dart';
+import 'templates.dart';
+import 'planned_blocks_screen.dart';
 
  import 'dart:convert';
  import 'package:cloud_firestore/cloud_firestore.dart';
@@ -2248,61 +2250,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
                               SizedBox(
                                 width: kFeatureCardWidth,
-                                child: GestureDetector(
-                                  onTap: () {
-                                    final userContext = UserContext.of(context, listen: false);
-
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                          value: userContext,
-                                          child: const Camp_BB2(), // your week planner screen
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                  child: Card(
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    color: Colors.blueGrey.shade800,
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(12),
-                                      child: Stack(
-                                        children: [
-                                          const Positioned(
-                                            top: 0,
-                                            left: 0,
-                                            child: Icon(
-                                              Icons.calendar_month,
-                                              size: 48,
-                                              color: Colors.cyanAccent,
-                                            ),
-                                          ),
-                                          Positioned(
-                                            bottom: 0,
-                                            right: 0,
-                                            left: 50,
-                                            child: Text(
-                                              'Week\nPlanner',
-                                              textAlign: TextAlign.center,
-                                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                                color: Colors.white,
-                                                height: 1.3,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                              maxLines: 2,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-
-                              SizedBox(
-                                width: kFeatureCardWidth,
                                 height: 125,
                                 child: GestureDetector(
                                   onTap: () => Navigator.pushNamed(context, '/body_weight'),
@@ -2361,8 +2308,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                       MaterialPageRoute(
                                         builder: (_) => ChangeNotifierProvider<UserContext>.value(
                                           value: userContext,
-                                          child: const ProfilePage(), // 👈 Navigate to your ProfilePage
-
+                                          child: const TemplatesScreen(), // Workout Planner
                                         ),
                                       ),
                                     );
@@ -2378,7 +2324,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                             top: 0,
                                             left: 0,
                                             child: Icon(
-                                              Icons.person_outline,
+                                              Icons.view_list,
                                               size: 48,
                                               color: Colors.cyanAccent,
                                             ),
@@ -2388,7 +2334,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                             right: 0,
                                             left: 50,
                                             child: Text(
-                                              'Profile',
+                                              'Workout\nPlanner',
                                               textAlign: TextAlign.center,
                                               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                                 color: Colors.white,
@@ -2406,60 +2352,174 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                 ),
                               ),
 
-                              //if (!UserContext.of(context).isCoach)
-                                SizedBox(
-                                  width: kFeatureCardWidth,
-                                  height: 125,
-                                  child: GestureDetector(
-                                    onTap: () {
-                                      final userContext = context.read<UserContext>();
-                                      Navigator.of(context).push(
-                                        MaterialPageRoute(
-                                          builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                            value: userContext,
-                                            child: const ApproveRequestsScreen(),
+                              SizedBox(
+                                width: kFeatureCardWidth,
+                                child: GestureDetector(
+                                  onTap: () {
+                                    final userContext = UserContext.of(context, listen: false);
+
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                          value: userContext,
+                                          child: const PlannedBlocksScreen(),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  child: Card(
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    color: Colors.blueGrey.shade800,
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(12),
+                                      child: Stack(
+                                        children: [
+                                          const Positioned(
+                                            top: 0,
+                                            left: 0,
+                                            child: Icon(
+                                              Icons.track_changes, // 🎯 Planned Blocks
+                                              size: 48,
+                                              color: Colors.cyanAccent,
+                                            ),
                                           ),
-                                        ),
-                                      );
-                                    },
-                                    child: Card(
-                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                      color: Colors.blueGrey.shade800,
-                                      child: Padding(
-                                        padding: const EdgeInsets.all(12),
-                                        child: Stack(
-                                          children: [
-                                            const Positioned(
-                                              top: 0,
-                                              left: 0,
-                                              child: Icon(
-                                                Icons.mail,
-                                                size: 48,
-                                                color: Colors.cyanAccent,
+                                          Positioned(
+                                            bottom: 0,
+                                            right: 0,
+                                            left: 50,
+                                            child: Text(
+                                              'Planned\nBlocks',
+                                              textAlign: TextAlign.center,
+                                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                                color: Colors.white,
+                                                height: 1.3,
+                                                fontWeight: FontWeight.bold,
                                               ),
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
                                             ),
-                                            Positioned(
-                                              bottom: 0,
-                                              right: 0,
-                                              left: 50,
-                                              child: Text(
-                                                'Access\nRequests',
-                                                textAlign: TextAlign.center,
-                                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                                  color: Colors.white,
-                                                  height: 1.3,
-                                                  fontWeight: FontWeight.bold,
-                                                ),
-                                                maxLines: 2,
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ),
                                 ),
+                              ),
+
+//if (!UserContext.of(context).isCoach)
+                              SizedBox(
+                                width: kFeatureCardWidth,
+                                height: 125,
+                                child: GestureDetector(
+                                  onTap: () {
+                                    final userContext = context.read<UserContext>();
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                          value: userContext,
+                                          child: const ApproveRequestsScreen(),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  child: Card(
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    color: Colors.blueGrey.shade800,
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+
+                                      child: Stack(
+                                        children: [
+                                          const Positioned(
+                                            top: 2,
+                                            left: 0,
+                                            child: Icon(
+                                              Icons.diversity_3,
+                                              size: 48,
+                                              color: Colors.cyanAccent,
+                                            ),
+                                          ),
+                                          Positioned(
+                                            bottom: 0,
+                                            right: 0,
+                                            left: 50,
+                                            child: Text(
+                                              'Your\nConnections',
+                                              textAlign: TextAlign.center,
+                                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                                color: Colors.white,
+                                                height: 1.3,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+
+
+                              SizedBox(
+                                width: kFeatureCardWidth,
+                                child: GestureDetector(
+                                  onTap: () {
+                                    final userContext = UserContext.of(context, listen: false);
+
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                          value: userContext,
+                                          child: const Camp_BB2(), // your week planner screen
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  child: Card(
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    color: Colors.blueGrey.shade800,
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(12),
+                                      child: Stack(
+                                        children: [
+                                          const Positioned(
+                                            top: 0,
+                                            left: 0,
+                                            child: Icon(
+                                              Icons.calendar_month,
+                                              size: 48,
+                                              color: Colors.cyanAccent,
+                                            ),
+                                          ),
+                                          Positioned(
+                                            bottom: 0,
+                                            right: 0,
+                                            left: 50,
+                                            child: Text(
+                                              'Week\nPlanner',
+                                              textAlign: TextAlign.center,
+                                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                                color: Colors.white,
+                                                height: 1.3,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+
+
 
                               SizedBox(
                                 width: kFeatureCardWidth,
@@ -2698,7 +2758,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                 ],
                               ),
 
-                              // ── Motivational tagline on the same row ───────────────
+                              /*// ── Motivational tagline on the same row ───────────────
                               Flexible(
                                 child: Text(
                                   _selectedFeed == SelectedFeed.home
@@ -2710,6 +2770,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                   textAlign: TextAlign.end,
                                 ),
                               ),
+                              */
                             ],
                           ),
                         ),
