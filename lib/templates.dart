@@ -1458,7 +1458,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         ],
       ),
 
-      onTap: () => _navigateToTemplateDetails(context, template),
+     // onTap: () => _navigateToTemplateDetails(context, template),
     );
   }
 
