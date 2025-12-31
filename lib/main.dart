@@ -102,8 +102,13 @@ void main() async {
     androidProvider: kReleaseMode
         ? AndroidProvider.playIntegrity
         : AndroidProvider.debug,
-    appleProvider: AppleProvider.deviceCheck, // harmless on Android
+
+    // ✅ iOS Simulator can't use DeviceCheck → use debug provider in dev
+    appleProvider: kReleaseMode
+        ? AppleProvider.deviceCheck
+        : AppleProvider.debug,
   );
+
 
   runApp(const AppRoot());
 }

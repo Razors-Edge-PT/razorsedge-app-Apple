@@ -1,15 +1,1 @@
-{
-  "functions": [
-    {
-      "source": "functions",
-      "codebase": "default",
-      "ignore": [
-        "node_modules",
-        ".git",
-        "firebase-debug.log",
-        "firebase-debug.*.log",
-        "*.local"
-      ]
-    }
-  ]
-}
+{"functions":[{"source":"functions","codebase":"default","ignore":["node_modules",".git","firebase-debug.log","firebase-debug.*.log","*.local"]}],"flutter":{"platforms":{"dart":{"lib/firebase_options.dart":{"projectId":"goodlift-us-storage","configurations":{"android":"1:659564418928:android:d21ae3148bf008d3b4a1b5","ios":"1:659564418928:ios:7460f78a3d7e1260b4a1b5"}}},"android":{"default":{"projectId":"goodlift-us-storage","appId":"1:659564418928:android:d21ae3148bf008d3b4a1b5","fileOutput":"android/app/google-services.json"}}}}}
