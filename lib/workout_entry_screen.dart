@@ -144,6 +144,8 @@ class _WorkoutPageState extends State<WorkoutPage>
   final List<List<TextEditingController>> _rirControllers = [];
   List<List<TextEditingController>> _velocityControllers = [];
   List<List<TextEditingController>> _notesControllers = [];
+  final Map<String, String> _blockNameById = {};
+
   Map<String, bool> _showVelocityByExercise = {
   }; // exerciseName.toLowerCase() → true/false
   double _dragX = 0;
@@ -6819,6 +6821,19 @@ class _WorkoutPageState extends State<WorkoutPage>
         blockId: _activeBlockId!,
       );
 
+// 🔍 Fetch block name directly (BlockMeta does not include it)
+      final blockDoc = await FirebaseFirestore.instance
+          .collection('planned_blocks')
+          .doc(userId)
+          .collection('blocks')
+          .doc(_activeBlockId!)
+          .get();
+
+      final blockName = blockDoc.data()?['name'];
+      if (blockName is String && blockName.isNotEmpty) {
+        _blockNameById[_activeBlockId!] = blockName;
+      }
+
 
       final start = meta.startDate;
       final end = meta.endDate;
@@ -9085,16 +9100,7 @@ class _WorkoutPageState extends State<WorkoutPage>
   }
 
   String _blockHeaderTitle(String blockId, List<Template> templates) {
-    // Try to get a friendly label from the first template’s blockAssignment.
-    final Template first = templates.first;
-    final String? assignment = first.blockAssignment;
-
-    String base;
-    if (assignment != null && assignment.isNotEmpty) {
-      base = 'Block $assignment';
-    } else {
-      base = 'Block';
-    }
+    final String base = _blockNameById[blockId] ?? 'Block';
 
     if (blockId == _selectedBlockId) {
       return '$base (current)';
@@ -9104,9 +9110,11 @@ class _WorkoutPageState extends State<WorkoutPage>
   }
 
 
+
   void _showTemplateSelectionDialog() async {
     final uid = userId;
     if (uid == null || uid.isEmpty) return;
+    print("🧩 [TemplatePicker] uid=$uid _activeBlockId=$_activeBlockId _selectedBlockId=$_selectedBlockId");
 
     final snapshot = await FirebaseFirestore.instance
         .collection('users')
@@ -9117,6 +9125,9 @@ class _WorkoutPageState extends State<WorkoutPage>
     final templates = snapshot.docs
         .map((doc) => Template.fromFirestore(doc.data(), doc.id))
         .toList();
+    print("🧩 [TemplatePicker] Loaded templates: ${templates.length}");
+    print("🧩 [TemplatePicker] template.blockId set = ${templates.map((t) => t.blockId?.trim()).toSet()}");
+
 
     if (templates.isEmpty) {
       await showDialog<void>(

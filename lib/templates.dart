@@ -88,6 +88,58 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     _loadBlocksThenTemplates();
   }
 
+  Future<void> editTemplateName(Template template) async {
+    final controller = TextEditingController(text: template.name);
+
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Rename workout'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textInputAction: TextInputAction.done,
+          onSubmitted: (_) => Navigator.of(ctx).pop(controller.text),
+          decoration: const InputDecoration(hintText: 'Workout name'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(null),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    final newName = (result ?? '').trim();
+    if (newName.isEmpty || newName == template.name) return;
+
+    // ✅ Update local UI (master list)
+    setState(() {
+      final i = templates.indexWhere((t) => t.id == template.id);
+      if (i != -1) {
+        templates[i].name = newName; // assumes Template.name is mutable (most common in your codebase)
+      } else {
+        template.name = newName;
+      }
+    });
+
+    // ✅ Persist to Firestore (same user switching system you’re using elsewhere)
+    final uid = UserContext.of(context, listen: false).currentUid;
+
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('templates')
+        .doc(template.id)
+        .update({'name': newName});
+  }
+
+
   Future<void> _showExercisePickerDialogForTemplate(Template template) async {
     // 1) load planned exercise ids (for planned-only toggle)
     Set<String> plannedExerciseIds = {};
@@ -1392,6 +1444,16 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+
+          IconButton(
+            icon: const Icon(Icons.edit, size: 16, color: Colors.white60),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+            onPressed: () => editTemplateName(template),
+          ),
+          const SizedBox(width: 6),
+
+
           // 🏁 cross-block drag handle
           LongPressDraggable<_DraggedTemplateCard>(
             data: _DraggedTemplateCard(

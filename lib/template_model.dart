@@ -1,6 +1,6 @@
 class Template {
   final String id;
-  final String name;
+  String name;
   final String? day;
 
   /// Which block this template belongs to (Firestore block doc ID)
