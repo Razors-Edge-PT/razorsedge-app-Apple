@@ -18,7 +18,7 @@ const Map<String, String> kExerciseVideoAssets = {
   'u65dikgnXWDXBM4VmGmr': 'assets/exercise_videos/Cable Biceps Curl, Unilateral.mp4', 'Cable Biceps Curl, Unilateral': 'assets/exercise_videos/Cable Biceps Curl, Unilateral.mp4',
   'igNo9pSuaOFt0GVX0zBG': 'assets/exercise_videos/Cable Lateral Raise.mp4', 'Cable Lateral Raise': 'assets/exercise_videos/Cable Lateral Raise.mp4',
   'XM9026peNIu0R8qh7UqY': 'assets/exercise_videos/Chin-Up.mp4', 'Chin-Up': 'assets/exercise_videos/Chin-Up.mp4',
-  'Z1LpfaEBvHBDMsJ54pgw': 'assets/exercise_videos/Deadlift, Conventional.mp4', 'Deadlift, Conventional': 'assets/exercise_videos/Deadlift, Conventional.mp4',
+  'MsGl7e9yanDeEnYX0e4X': 'assets/exercise_videos/Deadlift, Conventional.mp4', 'Deadlift, Conventional': 'assets/exercise_videos/Deadlift, Conventional.mp4',
   'kTs5fLSTKjUkUZL10iii': 'assets/exercise_videos/Flat Bench Dumbbell Press.mp4', 'Flat Bench Dumbbell Press': 'assets/exercise_videos/Flat Bench Dumbbell Press.mp4',
   'jtMoW3Nht1k97YgweteC': 'assets/exercise_videos/Incline Bench Dumbbell Press.mp4', 'Incline Bench Dumbbell Press': 'assets/exercise_videos/Incline Bench Dumbbell Press.mp4',
   'YvwK9kwc1hcA2omz1g4r': 'assets/exercise_videos/Larsen Bench Press.mp4', 'Larsen Bench Press': 'assets/exercise_videos/Larsen Bench Press.mp4',

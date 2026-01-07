@@ -8,6 +8,9 @@ import 'package:provider/provider.dart'; // for context.read()
 import 'package:localtest222/user_context.dart'; // <-- adjust path to your actual file
 import 'membership_gate.dart';
 import 'demographics_cache.dart';
+import 'block_repository.dart';
+import 'block_planner_repository.dart';
+import 'block_exercise_defaults_repository.dart';
 
 import 'package:localtest222/login_screen.dart';
 import 'periodization_model_utils.dart';
@@ -1312,6 +1315,476 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
   int? _trainingEffort; // 1..4, optional
   List<String> _trainingEffortLabels = const []; // built from sex + dob
 
+  Future<void> _ensureAtLeastOneBlockExists() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final swTotal = Stopwatch()..start();
+
+    final uid = user.uid;
+    final blocksRef = FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(uid)
+        .collection('blocks');
+
+    final existingBlocks = await blocksRef.get();
+
+    if (existingBlocks.docs.isEmpty) {
+      // ── Fetch username & sex from /users/{uid} ───────────────────────────────
+      final usersRef = FirebaseFirestore.instance.collection('users').doc(uid);
+      final userSnap = await usersRef.get();
+      final data = userSnap.data() ?? {};
+
+      // 🔒 Gate: wait until /users has core fields (prevents female default)
+      final hasCore = userSnap.exists &&
+          (data['sex'] != null) &&
+          (data['username'] != null || data['fullName'] != null);
+
+      if (!hasCore) {
+        debugPrint('🛑 [Home] Block gate: /users/$uid incomplete → retry in 800ms');
+        // tiny, non-blocking retry; won’t slow first paint
+        unawaited(Future.delayed(const Duration(milliseconds: 800), () async {
+          await _ensureAtLeastOneBlockExists();
+        }));
+        return;
+      }
+
+      print('🔎 [Home] Reading /users/$uid  exists=${userSnap.exists}');
+      print('🔎 [Home] /users/$uid keys=${data.keys.toList()}');
+
+      final usernameFromDoc = (data['username'] as String?)?.trim();
+      final sexRawFromDoc   = (data['sex'] as String?)?.trim();
+
+      // Fallbacks so we still name the block if the user doc isn't ready yet:
+      final auth = FirebaseAuth.instance.currentUser!;
+      final fallbackUsername = (auth.displayName?.trim().isNotEmpty == true)
+          ? auth.displayName!.trim()
+          : (auth.email?.split('@').first ?? '').trim();
+
+      final username = (usernameFromDoc?.isNotEmpty == true)
+          ? usernameFromDoc
+          : (fallbackUsername.isNotEmpty ? fallbackUsername : null);
+
+      final sex = (sexRawFromDoc == null || sexRawFromDoc.isEmpty)
+          ? 'N'  // default → treated as female branch per your rules
+          : sexRawFromDoc.toUpperCase();
+
+      print('🧬 [Home] Using uid=$uid username="$username" sex="$sex"');
+
+      final isFemale = sex == 'F' || sex == 'N';
+      print('🧬 [Home] Template branch = ${isFemale ? 'FEMALE' : 'MALE'}');
+
+      // Block names
+      final block1Name = (username != null && username.isNotEmpty)
+          ? "${username}'s First Block"
+          : "1st Block";
+      final block2Name = (username != null && username.isNotEmpty)
+          ? "${username}'s 2nd Block"
+          : "2nd Block";
+
+      print('🆕 [Home] No blocks found — creating "$block1Name" and "$block2Name"...');
+
+      // ── Dates: start = Monday of the current week ("Monday just gone") ──────
+      final now = DateTime.now();
+
+      // Normalize to date-only (midnight) to avoid time-of-day drift in Firestore dates
+      final today = DateTime(now.year, now.month, now.day);
+
+      // DateTime.weekday: Mon=1 ... Sun=7
+      final startDate1 = today.subtract(Duration(days: today.weekday - DateTime.monday));
+
+      // 8 weeks = 56 days total. If start is day 0, last day is start + 55.
+      final endDate1 = startDate1.add(const Duration(days: 55));
+
+      // Next blocks start the day after the previous ends
+      final startDate2 = endDate1.add(const Duration(days: 1));
+      final endDate2   = startDate2.add(const Duration(days: 55));
+
+      final startDate3 = endDate2.add(const Duration(days: 1));
+      final endDate3   = startDate3.add(const Duration(days: 55));
+
+      debugPrint('📅 [Home] Block1 start=${startDate1.toIso8601String()} end=${endDate1.toIso8601String()} (today=${today.toIso8601String()})');
+
+
+
+      // ── Base exercise IDs (shared by both sexes) ─────────────────────────────
+      const baseExercises = <String>[
+        'AmfUWbF1DH3I7qPAdh5k', // Bench Press, Barbell
+        'kTs5fLSTKjUkUZL10iii', // Flat Bench Dumbbell Press
+        'heeBViVINHO6tUScSd6y', // Back Squat, Barbell
+        'y5q9OU9OBzZQMkfPzFrf', // Romanian Deadlift
+        'v2XlZUvFfBUhogOdKtJ8', // Leg Press
+        'lVDG90yN6Z8aPjRNV2wc', // Overhead Barbell Press
+        '2yJSfLMfOnNDSeZ7DqZT', // Overhead Dumbbell Press
+        '9siQpXF2KLCj7M9kCy2m', // Seated Shoulder Dumbbell Press
+        '1XOIXxeLFhgmgjZS9Cyq', // Lat Pull Down, Supinated
+        'Url65Q2RxZa00dkDpUdl', // Lat Pull Down, Wide Arm
+        'JbthLLjMF6xRvvaUY8PU', // Lat Pull Down, Unilateral
+        'ETm055bydWtUCxTMu3MR', // Seated Leg Curl
+        'wIcMsf2J9cswJRs1GuYX', // Lying Leg Curl
+        'QkEgE8gnIva2kkNJEfxw', // Leg Extension
+        'ZKpGshMxFl2dxNmYSATj', // Leg Extension, Unilateral
+        'ci3KpMTEacH4bw8ZumJW', // Standing Calf Raise
+        'spGqXXReJNHMcc62YgZX', // Seated Calf Raise
+        'WPb8rtRTupKIBzgydB5k', // Cable Biceps Curl
+        '0dZrCqZ8M7Q1sAn0zeeb', // Dumbbell Biceps Curl
+        'zn5PgKNRrWo1MTE4wnCy', // Bayesian Biceps Curl
+        'E6jPE8YYR0KA3xtVaKJo', // Triceps Push Down
+        'QacImADmlpljltUvB0dD', // Overhead Cable Triceps Extension
+        'eeEXnmSXv90q0rUgGECq', // KP Face Pull
+        'KPewxxYYrhsOp84lIQr5', // Suspended High Row
+        'P88Vj5pBydqmiEzFowag', // Hanging Straight Leg Raise
+        'uY8uJaSFK9czKIX4TLc4', // Machine Chest Press
+        'FtayDmR5BVnGS1FX1XLL', // Triceps Dip
+        'OJaMXFKgMnM0X5xttBE1', // Cable Face Pull
+        '6SGWrCKfe7KQLThRYXQ6', // One Arm Row, Dumbbell
+        'Z1LpfaEBvHBDMsJ54pgw', // Hack Squat
+        'z5gs1ilr4DpKlSZaRNG5', // Overhead Cable Triceps Extension, Unilateral
+        'LVMQEQl6ZWBcgEUdk2tP', // Leg Press Calf Raise
+        'ISXQqOEXLjMrPEs0xjgJ', // Bulgarian Split Squat
+        'ocNWJv7xLrlinGmjG6cV', // Machine Row, Supported
+        'eyh76KELuuO805rZBpMa', // 45 Degree Hip Extension
+        'RdsGazgdH0xgpjek0n3u', // Overhead Dumbbell Press, Unilateral
+        'xWpCQO504iGfU3LKLZlD', // Cable High Row, Unilateral
+        'XM9026peNIu0R8qh7UqY', // Chin-Up
+        'WPb8rtRTupKIBzgydB5k', // Cable Biceps Curl
+
+      ];
+
+      // ── Male-specific exercises ─────────────────────────────────────────────
+      const maleSpecificExercises = <String>[
+        '6d9Ud7ffAHpljWsSKrFe', // Seated Face Pull
+        'TBSudbow1OLdX6mSCC6S', // Machine Chest Fly
+        '72HAT6Od4iJodEFxzw62', // Machine Reverse Fly
+        'igNo9pSuaOFt0GVX0zBG', // Cable Lateral Raise
+        'ZKrfhPhJIiC1hRuwBEw1', // Bayesian Fly
+        'RcC48r0oLsNCH798d3jc', // Butterfly Dumbbell Raise
+        'ewJBWuDzj1CxfQ3vI3QS', // Reverse Bayesian Fly
+        '8saP9lWMoQffuh30A99K', // Lat Prayer
+        '0s4yMXygBXZZJH66Yi6h', // Seated Face Pull, Unilateral
+      ];
+
+      // ── Female-specific exercises ───────────────────────────────────────────
+      const femaleSpecificExercises = <String>[
+        'vrSYibzR5DHzl6Gzp4ER', // Machine Shoulder Press, Pin Loaded
+        '3dWgorRmtgzsV0U4qu47', // Glute Cable Kick Back
+        'kxgQUX7Cr75l1kOwRaqc', // Spider-Girl Plank
+        'YaQ0FCQEUAk4ALwAPhv2', // Machine Hip Thrust
+        'visub8iG0LIXYYCv5Qom', // Hip Thrust, Unilateral
+        'LGhFj8o0sG3X12296UAh', // Hip Thrust, Barbell
+        'hCpQR1NgeEAp31lVRWLw', // Machine Hip Adduction
+        '7WBffXwK7vJcMi3mtJTF', // Machine Hip Abduction
+        't66qeWQqnuEtaoyZqRp0', // Triceps Dip Machine
+        'zpNb7HgXjtcrzR14F3iF', // Cable One Arm Row
+        '8CIXN12uS2xwF4JzVLq3', // Long Lever Plank
+        'SoHQVtsCQreaHM8LUI5F', // Bicycle Crunch
+        'qU2wXMth4duOhhzTUWet', // Decline Crunch
+      ];
+
+      // ── Build merged list based on sex ─────────────────────────────────────
+      final seededExerciseIds = [
+        ...baseExercises,
+        if (isFemale) ...femaleSpecificExercises else ...maleSpecificExercises,
+      ];
+
+      // ── Block 2 exercise adjustments (sex-specific ± tweaks) ─────────────────────
+// Base = all exercises from Block 1. Then apply -exclusions +additions.
+
+      const femaleAdditionsB2 = <String>[
+        // e.g., 'LGhFj8o0sG3X12296UAh', // Hip Thrust, Barbell
+        // e.g., 'F76PnvlLLVF6hviuhRfH', // Seated Dumbbell Biceps Curl
+      ];
+
+      const maleAdditionsB2 = <String>[
+        // e.g., '6d9Ud7ffAHpljWsSKrFe', // Seated Face Pull
+      ];
+
+      const femaleExclusionsB2 = <String>[
+        // e.g., 'heeBViVINHO6tUScSd6y', // Back Squat, Barbell
+      ];
+
+      const maleExclusionsB2 = <String>[
+        // e.g., 'wIcMsf2J9cswJRs1GuYX', // Lying Leg Curl
+      ];
+
+// Apply Block 2 adjustments dynamically
+      final block2ExerciseIds = <String>{
+        ...seededExerciseIds.where(
+              (id) => !(isFemale ? femaleExclusionsB2 : maleExclusionsB2).contains(id),
+        ),
+        ...(isFemale ? femaleAdditionsB2 : maleAdditionsB2),
+      }.toList(growable: false);
+
+
+      // ── Block 3 exercise adjustments (sex-specific ± tweaks) ───────────────────────
+// Use these four lists to easily fine-tune Block 3 composition.
+// Base = all exercises from Block 1/2. Then apply -exclusions +additions.
+
+      const femaleAdditions = <String>[
+        'I4021icWTx3EAnAe1eHf', // Box Jump Squat
+        // e.g., 'zpNb7HgXjtcrzR14F3iF', // Cable One Arm Row
+      ];
+
+      const maleAdditions = <String>[
+        'EFbQl9i9NdYi13F3DqHr', // Push Up, Suspended
+        'Ah9XLjbWvLJOWxb6e1H0', // Triceps Push Down, Unilateral
+
+      ];
+
+      const femaleExclusions = <String>[
+        'uY8uJaSFK9czKIX4TLc4', // Machine Chest Press
+      ];
+
+      const maleExclusions = <String>[
+        'eyh76KELuuO805rZBpMa', // 45 Degree Hip Extension
+      ];
+
+// Compute Block 3 exercises dynamically
+      final block3ExerciseIds = <String>{
+        ...seededExerciseIds.where(
+              (id) => !(isFemale ? femaleExclusions : maleExclusions).contains(id),
+        ),
+        ...(isFemale ? femaleAdditions : maleAdditions),
+      }.toList(growable: false);
+
+
+
+      // Helper to build a block payload
+      Map<String, dynamic> buildBlock({
+        required String name,
+        required bool isActive,
+        required DateTime start,
+        required DateTime end,
+        required List<String> exerciseIds,
+      }) {
+        return {
+          'name': name,
+          'isActive': isActive,
+          'createdAt': Timestamp.now(),
+          'startDate': Timestamp.fromDate(start),
+          'endDate': Timestamp.fromDate(end),
+          'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
+          'exercises': exerciseIds,
+          'plannedExercises': exerciseIds,
+          'plannedExerciseDetails': {
+            'blockMeta': {
+              'blockStartDate': start.toIso8601String(),
+              'blockEndDate': end.toIso8601String(),
+              'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
+            }
+          },
+        };
+      }
+
+      // ── Create Block 1 (active) ─────────────────────────────────────────────
+      final block1Payload = buildBlock(
+        name: block1Name,
+        isActive: true,
+        start: startDate1,
+        end: endDate1,
+        exerciseIds: seededExerciseIds,
+      );
+
+      final swCreate1 = Stopwatch()..start();
+      final block1Ref = await blocksRef.add(block1Payload);
+      swCreate1.stop();
+      final block1Id = block1Ref.id;
+      print('✅ [Home] Block 1 created id=$block1Id (${swCreate1.elapsed.inMilliseconds} ms)');
+
+      await BlockExerciseDefaultsRepository.seedDefaultsForBlock(
+        uid: uid,
+        blockId: block1Id,
+        exerciseIds: seededExerciseIds,
+      );
+
+
+      // Pointer write to current_block → Block 1
+      final swPtr = Stopwatch()..start();
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('block_planner')
+          .doc('current_block')
+          .set({
+        'blockId': block1Id,
+        'blockName': block1Name,
+        'plannedExercises': seededExerciseIds,
+        'plannedExerciseDetails': {
+          'blockMeta': {
+            'blockStartDate': startDate1.toIso8601String(),
+            'blockEndDate': endDate1.toIso8601String(),
+            'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
+          }
+        },
+        'blockMeta': {
+          'blockStartDate': startDate1.toIso8601String(),
+          'blockEndDate': endDate1.toIso8601String(),
+        },
+      }, SetOptions(merge: true));
+      swPtr.stop();
+      print('📌 [Home] Set current_block pointer → $block1Id (${swPtr.elapsed.inMilliseconds} ms)');
+
+      // Scaffold weeks & days for Block 1
+      final swScaffold1 = Stopwatch()..start();
+      {
+        final batch = FirebaseFirestore.instance.batch();
+        for (int week = 0; week < 8; week++) {
+          final weekRef = block1Ref.collection('weeks').doc('week_$week');
+          batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
+
+          final daysRef = weekRef.collection('days');
+          for (int day = 0; day < 7; day++) {
+            final currentDate = startDate1.add(Duration(days: week * 7 + day));
+            final weekday = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day];
+            final monthName = [
+              'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'
+            ][currentDate.month - 1];
+
+            final dayRef = daysRef.doc('day_$day');
+            batch.set(dayRef, {
+              'date': Timestamp.fromDate(currentDate),
+              'circuitStartIndices': [0],
+              'exercises': [],
+              'workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}',
+              'exists': true,
+            }, SetOptions(merge: true));
+          }
+        }
+        batch.set(block1Ref, {'scaffoldReady': true}, SetOptions(merge: true));
+        await batch.commit();
+      }
+      swScaffold1.stop();
+      print('🧱 [Home] Block 1 scaffold ready (${swScaffold1.elapsed.inMilliseconds} ms)');
+
+      // ── Create Block 2 (upcoming, not active) ───────────────────────────────
+      final block2Payload = buildBlock(
+        name: block2Name,
+        isActive: false, // keep only 1 active block
+        start: startDate2,
+        end: endDate2,
+        exerciseIds: block2ExerciseIds, // ✅ now uses sex-specific adjusted list
+      );
+
+      final swCreate2 = Stopwatch()..start();
+      final block2Ref = await blocksRef.add(block2Payload);
+      swCreate2.stop();
+      final block2Id = block2Ref.id;
+      print('✅ [Home] Block 2 created id=$block2Id (${swCreate2.elapsed.inMilliseconds} ms)');
+
+      await BlockExerciseDefaultsRepository.seedDefaultsForBlock(
+        uid: uid,
+        blockId: block2Id,
+        exerciseIds: block2ExerciseIds,
+      );
+
+
+      // Scaffold weeks & days for Block 2
+      final swScaffold2 = Stopwatch()..start();
+      {
+        final batch = FirebaseFirestore.instance.batch();
+        for (int week = 0; week < 8; week++) {
+          final weekRef = block2Ref.collection('weeks').doc('week_$week');
+          batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
+
+          final daysRef = weekRef.collection('days');
+          for (int day = 0; day < 7; day++) {
+            final currentDate = startDate2.add(Duration(days: week * 7 + day));
+            final weekday = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day];
+            final monthName = [
+              'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'
+            ][currentDate.month - 1];
+
+            final dayRef = daysRef.doc('day_$day');
+            batch.set(dayRef, {
+              'date': Timestamp.fromDate(currentDate),
+              'circuitStartIndices': [0],
+              'exercises': [],
+              'workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}',
+              'exists': true,
+            }, SetOptions(merge: true));
+          }
+        }
+        batch.set(block2Ref, {'scaffoldReady': true}, SetOptions(merge: true));
+        await batch.commit();
+      }
+      swScaffold2.stop();
+      print('🧱 [Home] Block 2 scaffold ready (${swScaffold2.elapsed.inMilliseconds} ms)');
+
+      debugPrint('🧪[B3 pre-add] seed=${seededExerciseIds.length} adj=${block3ExerciseIds.length} '
+          'hasAdd(EFbQl9i9NdYi13F3DqHr)=${block3ExerciseIds.contains('EFbQl9i9NdYi13F3DqHr')} '
+          'hasEx(eyh76KELuuO805rZBpMa)=${block3ExerciseIds.contains('eyh76KELuuO805rZBpMa')}');
+
+      // ── Create Block 3 (upcoming, not active) ─────────────────────────────────────
+      final block3Name = (username != null && username.isNotEmpty)
+          ? "${username}'s 3rd Block"
+          : "3rd Block";
+
+      final block3Payload = buildBlock(
+        name: block3Name,
+        isActive: false, // keep only 1 active block
+        start: startDate3,
+        end: endDate3,
+        exerciseIds: block3ExerciseIds,
+      );
+
+      final swCreate3 = Stopwatch()..start();
+      final block3Ref = await blocksRef.add(block3Payload);
+      final _savedB3 = await block3Ref.get();
+      final _savedPlanned = List<String>.from((_savedB3.data() ?? const {})['plannedExercises'] ?? const <String>[]);
+      debugPrint('🔎[B3 saved] planned=${_savedPlanned.length} '
+          'hasAdd(EFbQl9i9NdYi13F3DqHr)=${_savedPlanned.contains('EFbQl9i9NdYi13F3DqHr')} '
+          'hasEx(eyh76KELuuO805rZBpMa)=${_savedPlanned.contains('eyh76KELuuO805rZBpMa')}');
+
+      swCreate3.stop();
+      final block3Id = block3Ref.id;
+      print('✅ [Home] Block 3 created id=$block3Id (${swCreate3.elapsed.inMilliseconds} ms)');
+
+      await BlockExerciseDefaultsRepository.seedDefaultsForBlock(
+        uid: uid,
+        blockId: block3Id,
+        exerciseIds: block3ExerciseIds,
+      );
+
+
+// Scaffold weeks & days for Block 3
+      final swScaffold3 = Stopwatch()..start();
+      {
+        final batch = FirebaseFirestore.instance.batch();
+        for (int week = 0; week < 8; week++) {
+          final weekRef = block3Ref.collection('weeks').doc('week_$week');
+          batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
+
+          final daysRef = weekRef.collection('days');
+          for (int day = 0; day < 7; day++) {
+            final currentDate = startDate3.add(Duration(days: week * 7 + day));
+            final weekday = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day];
+            final monthName = [
+              'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'
+            ][currentDate.month - 1];
+
+            final dayRef = daysRef.doc('day_$day');
+            batch.set(dayRef, {
+              'date': Timestamp.fromDate(currentDate),
+              'circuitStartIndices': [0],
+              'exercises': [],
+              'workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}',
+              'exists': true,
+            }, SetOptions(merge: true));
+          }
+        }
+        batch.set(block3Ref, {'scaffoldReady': true}, SetOptions(merge: true));
+        await batch.commit();
+      }
+      swScaffold3.stop();
+      print('🧱 [Home] Block 3 scaffold ready (${swScaffold3.elapsed.inMilliseconds} ms)');
+
+    }
+
+
+
+    swTotal.stop();
+    print('⏱️ [Home] _ensureAtLeastOneBlockExists total: ${swTotal.elapsed.inMilliseconds} ms');
+  }
 
   bool _uiIsValid() {
     // Required: goals (we’ll require that user has at least ordered them once — always true here)
@@ -1552,6 +2025,112 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
         'weeklyFrequency': _minTrainingDays,
       }, SetOptions(merge: true));
 
+      // ─────────────────────────────────────────────────────────────
+      // 4) Ensure first planned block exists, then write best-effort PRs
+      //    into planned_blocks/<uid>/blocks/<blockId> under BOTH:
+      //    exerciseSettings + plannedExerciseDetails
+      // ─────────────────────────────────────────────────────────────
+
+      // IMPORTANT: call your existing block seeding logic here (move the function
+      // into this page, or import it). This ensures new users have Block 1 created.
+      await _ensureAtLeastOneBlockExists();
+
+      // Resolve the active/current blockId from the pointer doc
+      final currentBlockSnap = await db
+          .collection('users')
+          .doc(user.uid)
+          .collection('block_planner')
+          .doc('current_block')
+          .get();
+
+      final currentBlockData = currentBlockSnap.data() ?? {};
+      final String? blockIdToUse = currentBlockData['blockId'] as String?;
+
+      if (blockIdToUse == null || blockIdToUse.trim().isEmpty) {
+        debugPrint('❌ [Onboarding Finish] No current blockId found after seeding.');
+      } else {
+        // Map liftKey (from _collectBestEfforts) → exerciseId in Firestore
+        const Map<String, String> liftKeyToExerciseId = {
+          // Bench variants
+          'bench_barbell': 'AmfUWbF1DH3I7qPAdh5k', // Bench Press, Barbell
+          'bench_db': 'kTs5fLSTKjUkUZL10iii',      // Flat Bench Dumbbell Press
+          'chest_press': 'uY8uJaSFK9czKIX4TLc4',   // Machine Chest Press
+
+          // Squat variants
+          'back_squat': 'heeBViVINHO6tUScSd6y',    // Back Squat, Barbell
+          'leg_press': 'v2XlZUvFfBUhogOdKtJ8',     // Leg Press
+
+          // Pull variants
+          'lat_pulldown_supinated': '1XOIXxeLFhgmgjZS9Cyq', // Lat Pull Down, Supinated
+          'lat_pulldown_wide': 'Url65Q2RxZa00dkDpUdl',      // Lat Pull Down, Wide Arm
+
+          // Deadlift
+          'deadlift': 'MsGl7e9yanDeEnYX0e4X', // Deadlift, Conventional
+        };
+
+        // Build updates
+        final bestEfforts = _collectBestEfforts();
+
+        // Helper to format weight: 150.0 -> "150", 45.5 -> "45.5"
+        String _fmtWeight(double w) {
+          final isInt = w % 1 == 0;
+          return isInt ? w.toInt().toString() : w.toString();
+        }
+
+        final Map<String, dynamic> updates = {};
+
+        for (final be in bestEfforts) {
+          final exerciseId = liftKeyToExerciseId[be.liftKey];
+          if (exerciseId == null) {
+            debugPrint('⚠️ [Onboarding Finish] Unknown liftKey: ${be.liftKey}');
+            continue;
+          }
+
+          final weight = be.weightKg;
+          if (weight == null) continue; // per your rule: skip if weight missing
+
+          final int reps = (be.reps == null || be.reps! <= 0) ? 1 : be.reps!;
+          final manual = '${_fmtWeight(weight)} X $reps';
+
+          final double e1rm = PeriodizationModelUtils.calculateE1RM(
+            weight,
+            reps.toDouble(),
+            0.0, // ignore RIR, default 0
+          );
+
+          // Write into BOTH maps
+          // Ensure root maps exist
+          updates['exerciseSettings'] ??= <String, dynamic>{};
+          updates['plannedExerciseDetails'] ??= <String, dynamic>{};
+
+// Ensure per-exercise maps exist
+          (updates['exerciseSettings'] as Map<String, dynamic>)
+              .putIfAbsent(exerciseId, () => <String, dynamic>{});
+          (updates['plannedExerciseDetails'] as Map<String, dynamic>)
+              .putIfAbsent(exerciseId, () => <String, dynamic>{});
+
+// Write values
+          (updates['exerciseSettings'][exerciseId] as Map<String, dynamic>)['maxWeightByReps_manual'] = manual;
+          (updates['exerciseSettings'][exerciseId] as Map<String, dynamic>)['e1rm'] = e1rm;
+
+          (updates['plannedExerciseDetails'][exerciseId] as Map<String, dynamic>)['maxWeightByReps_manual'] = manual;
+          (updates['plannedExerciseDetails'][exerciseId] as Map<String, dynamic>)['e1rm'] = e1rm;
+
+        }
+
+        if (updates.isNotEmpty) {
+          await db
+              .collection('planned_blocks')
+              .doc(user.uid)
+              .collection('blocks')
+              .doc(blockIdToUse)
+              .set(updates, SetOptions(merge: true));
+
+          debugPrint('✅ [Onboarding Finish] Wrote best-efforts into block=$blockIdToUse');
+        } else {
+          debugPrint('ℹ️ [Onboarding Finish] No best-effort values provided; skipping block writes.');
+        }
+      }
 
 
       if (!mounted) return;
