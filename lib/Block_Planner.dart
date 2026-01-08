@@ -159,12 +159,39 @@ class _BlockPlannerState extends State<Block_Planner> {
 
     final data = doc.data()!;
 
+    final loaded = List<String>.from(data['exercises'] ?? const <String>[]);
+    final u = loaded.toSet().length;
+    if (u != loaded.length) {
+      print('❌ [BP._loadExistingBlock] DUPLICATES IN FIRESTORE exercises: len=${loaded.length} unique=$u');
+      print('❌ [BP._loadExistingBlock] exercises=$loaded');
+      print('❌ [BP._loadExistingBlock] blockId=$blockId');
+    }
+
     setState(() {
       _blockNameController.text = data['name'] ?? '';
       _blockStartDate = (data['startDate'] as Timestamp).toDate();
       _blockEndDate = (data['endDate'] as Timestamp).toDate();
       selectedDays = List<String>.from(data['selectedDays'] ?? []);
-      exercises = List<String>.from(data['exercises'] ?? []);
+      final loadedExercises = List<String>.from(data['exercises'] ?? const <String>[]);
+      final fixed = <String>[];
+      for (final id in loadedExercises) {
+        if (!fixed.contains(id)) fixed.add(id);
+      }
+      exercises = fixed;
+
+// 🔧 Self-heal corrupted blocks (safe, idempotent)
+      if (fixed.length != loadedExercises.length) {
+        FirebaseFirestore.instance
+            .collection('planned_blocks')
+            .doc(userId)
+            .collection('blocks')
+            .doc(blockId)
+            .update({
+          'exercises': fixed,
+          'plannedExercises': fixed,
+        }).catchError((_) {});
+      }
+
       exerciseSettings = Map<String, Map<String, dynamic>>.from(
         (data['exerciseSettings'] ?? {})
             .map((key, val) => MapEntry(key, Map<String, dynamic>.from(val))),
@@ -304,7 +331,23 @@ class _BlockPlannerState extends State<Block_Planner> {
     setState(() {
       _blockStartDate = (data['startDate'] as Timestamp).toDate();
       _blockEndDate = (data['endDate'] as Timestamp).toDate();
-      exercises = List<String>.from(data['exercises'] ?? []);
+      final loadedExercises = List<String>.from(data['exercises'] ?? const <String>[]);
+      final fixed = <String>[];
+      for (final id in loadedExercises) {
+        if (!fixed.contains(id)) fixed.add(id);
+      }
+      exercises = fixed;
+
+// Optional: write the cleaned list back to Firestore immediately (self-heal)
+      if (fixed.length != loadedExercises.length) {
+        FirebaseFirestore.instance
+            .collection('planned_blocks')
+            .doc(userId)
+            .collection('blocks')
+            .doc(blockId)
+            .update({'exercises': fixed}).catchError((_) {});
+      }
+
       selectedDays = List<String>.from(data['selectedDays'] ?? []);
 
       exerciseSettings = Map<String, Map<String, dynamic>>.from(
@@ -1235,6 +1278,18 @@ class _BlockPlannerState extends State<Block_Planner> {
 
     print("📤 Writing full block to Firestore...");
 
+    // 🧼 Robustness: enforce unique exercise IDs (preserve order)
+    final uniqueExercises = <String>[];
+    for (final id in exercises) {
+      if (!uniqueExercises.contains(id)) uniqueExercises.add(id);
+    }
+    if (uniqueExercises.length != exercises.length) {
+      print('🧼 [BP.save] deduped exercises: ${exercises.length} -> ${uniqueExercises.length}');
+      exercises
+        ..clear()
+        ..addAll(uniqueExercises);
+    }
+
     // Read-modify your exerciseDetails as before
     final snapshot = await docRef.get();
     final data = snapshot.data() ?? {};
@@ -1349,7 +1404,7 @@ class _BlockPlannerState extends State<Block_Planner> {
           '${jsonEncode(existingSettings[exercise])}');
     }
 
-    // ✅ Inject block meta into plannedExerciseDetails if dates are valid
+
     if (_blockStartDate != null && _blockEndDate != null) {
       existingDetails['blockMeta'] = {
         'blockStartDate': _blockStartDate!.toIso8601String(),
@@ -1507,6 +1562,7 @@ class _BlockPlannerState extends State<Block_Planner> {
     // ✅ Restore planned exercise IDs (only if no local edits)
     if (data.containsKey('plannedExercises') && !_hasLocalEdits) {
       final remote = List<String>.from(data['plannedExercises'] ?? const <String>[]);
+
       setState(() {
         exercises = remote;
       });
@@ -1533,8 +1589,6 @@ class _BlockPlannerState extends State<Block_Planner> {
             (e) => e.value.containsKey('rirPlan'),
         orElse: () => const MapEntry('none', {}),
       );
-      debugPrint('🧪 [BP.load] Found rirPlan under: ${rir.key}');
-      debugPrint('📋 [BP.load] Loaded plannedExerciseDetails for ${converted.length} exercises');
     }
   }
 
@@ -1667,7 +1721,6 @@ class _BlockPlannerState extends State<Block_Planner> {
                     "Add Exercises",
                     style: TextStyle(color: Colors.white),
                   ),
-
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.blueGrey.shade700,
                     foregroundColor: Colors.white,
@@ -1682,8 +1735,7 @@ class _BlockPlannerState extends State<Block_Planner> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.blueGrey.shade700,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     ),
                     onPressed: () async {
                       final confirm = await showDialog<bool>(
@@ -1691,7 +1743,8 @@ class _BlockPlannerState extends State<Block_Planner> {
                         builder: (ctx) => AlertDialog(
                           title: const Text("Clear All Exercises?"),
                           content: const Text(
-                              "This will remove all selected exercises from the planner."),
+                            "This will remove all selected exercises from the planner.",
+                          ),
                           actions: [
                             TextButton(
                               onPressed: () => Navigator.pop(ctx, false),
@@ -1715,104 +1768,118 @@ class _BlockPlannerState extends State<Block_Planner> {
               ],
             ),
             const SizedBox(height: 12),
-            SizedBox(
-              height: math.max(exercises.length * 380, 550).toDouble(),
-              // 👈 Tweak if your cards are taller/shorter
-              child: ReorderableListView.builder(
-                shrinkWrap: true,
-                physics:
-                    const NeverScrollableScrollPhysics(), // Prevent internal scrolling
-                onReorder: (oldIndex, newIndex) {
-                  setState(() {
-                    if (newIndex > oldIndex) newIndex -= 1;
-                    final item = exercises.removeAt(oldIndex);
-                    exercises.insert(newIndex, item);
-                  });
-                },
-                itemCount: exercises.length,
-                  itemBuilder: (context, index) {
-                    final exercise = exercises[index];
-
-                    final settingsExist = exerciseSettings.containsKey(exercise);
-                    final datesLoaded = _blockStartDate != null && _blockEndDate != null;
-
-                    return Dismissible(
-                      key: ValueKey(exercise),
-                      direction: DismissDirection.endToStart,
-                      onDismissed: (_) {
-                        final removedExercise = exercises[index];
-
-                        final messenger = ScaffoldMessenger.of(context); // capture BEFORE list mutation
-
-
-                        setState(() {
-                          exercises.removeAt(index);
-                          // 🧼 Also drop its settings locally so save won’t re-add details
-                          exerciseSettings.remove(removedExercise);
-                        });
-
-                        // 💾 Fire-and-forget save so deletion persists immediately
-                        Future.microtask(() => _savePlannedExercises(suppressSnack: true));
-
-
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          if (!mounted) return;
-                          try {
-                            ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-                              SnackBar(
-                                content: Text('Removed "${_exerciseIdToName[removedExercise] ?? 'Unknown Exercise'}"'),
-                                action: SnackBarAction(
-                                  label: 'Undo',
-                                  textColor: Colors.amberAccent,
-                                  onPressed: () {
-                                    if (!mounted) return;
-                                    setState(() { exercises.insert(index, removedExercise); });
-                                    Future.microtask(() => _savePlannedExercises(suppressSnack: true));
-                                  },
-                                ),
-                                duration: const Duration(seconds: 4),
-                                backgroundColor: Colors.blueGrey.shade700,
-                                behavior: SnackBarBehavior.floating,
-                                margin: const EdgeInsets.all(16),
-                              ),
-                            );
-                          } catch (_) {
-                            // ignore — context likely deactivated during dismiss animation
-                          }
-                        });
-
-
-
-
-                      },
-
-                      background: Container(
-                        color: Colors.red,
-                        padding: const EdgeInsets.only(left: 16),
-                        alignment: Alignment.centerLeft,
-                        child: const Icon(Icons.delete, color: Colors.white),
-                      ),
-
-                      // ✅ Only render _ExerciseCard once both block dates AND settings exist
-                      child: (!datesLoaded || !settingsExist)
-                          ? const SizedBox.shrink()
-                          : _ExerciseCard(
-                        exerciseId: exercise,
-                        exerciseName: _exerciseIdToName[exercise] ?? 'Unknown Exercise',
-                        exerciseSettings: exerciseSettings,
-                        blockStartDate: _blockStartDate,
-                        blockEndDate: _blockEndDate,
-                        onUpdateSetting: _onUpdateSetting, // ✅ Calls the real one that updates Firestore
-                      ),
-
-                    );
+            Builder(
+              builder: (context) {
+                final seen = <String>{};
+                for (final id in exercises) {
+                  if (!seen.add(id)) {
+                    print('❌ DUPLICATE exerciseId in exercises list: $id');
                   }
+                }
+                print('✅ exercises unique count=${seen.length} total=${exercises.length}');
 
-              ),
+                return SizedBox(
+                  height: math.max(exercises.length * 380, 550).toDouble(),
+                  // 👈 Tweak if your cards are taller/shorter
+                  child: ReorderableListView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(), // Prevent internal scrolling
+                    onReorder: (oldIndex, newIndex) {
+                      setState(() {
+                        if (newIndex > oldIndex) newIndex -= 1;
+                        final item = exercises.removeAt(oldIndex);
+                        exercises.insert(newIndex, item);
+                      });
+                    },
+                    itemCount: exercises.length,
+                    itemBuilder: (context, index) {
+                      final exercise = exercises[index];
+
+                      final u = exercises.toSet().length;
+                      if (u != exercises.length) {
+                        print('❌ [BP.UI] DUP PRESENT: len=${exercises.length} unique=$u exercises=$exercises');
+                        print(StackTrace.current);
+                      }
+
+                      final settingsExist = exerciseSettings.containsKey(exercise);
+                      final datesLoaded = _blockStartDate != null && _blockEndDate != null;
+
+                      return Dismissible(
+                        key: ValueKey('bp_${blockIdToUse}_${exercise}_$index'),
+
+                        direction: DismissDirection.endToStart,
+                        onDismissed: (_) {
+                          final removedExercise = exercises[index];
+
+                          final messenger = ScaffoldMessenger.of(context); // capture BEFORE list mutation
+
+                          setState(() {
+                            exercises.removeAt(index);
+                            // 🧼 Also drop its settings locally so save won’t re-add details
+                            exerciseSettings.remove(removedExercise);
+                          });
+
+                          // 💾 Fire-and-forget save so deletion persists immediately
+                          Future.microtask(() => _savePlannedExercises(suppressSnack: true));
+
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (!mounted) return;
+                            try {
+                              ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    'Removed "${_exerciseIdToName[removedExercise] ?? 'Unknown Exercise'}"',
+                                  ),
+                                  action: SnackBarAction(
+                                    label: 'Undo',
+                                    textColor: Colors.amberAccent,
+                                    onPressed: () {
+                                      if (!mounted) return;
+                                      setState(() {
+                                        exercises.insert(index, removedExercise);
+                                      });
+                                      Future.microtask(() => _savePlannedExercises(suppressSnack: true));
+                                    },
+                                  ),
+                                  duration: const Duration(seconds: 4),
+                                  backgroundColor: Colors.blueGrey.shade700,
+                                  behavior: SnackBarBehavior.floating,
+                                  margin: const EdgeInsets.all(16),
+                                ),
+                              );
+                            } catch (_) {
+                              // ignore — context likely deactivated during dismiss animation
+                            }
+                          });
+                        },
+                        background: Container(
+                          color: Colors.red,
+                          padding: const EdgeInsets.only(left: 16),
+                          alignment: Alignment.centerLeft,
+                          child: const Icon(Icons.delete, color: Colors.white),
+                        ),
+
+                        // ✅ Only render _ExerciseCard once both block dates AND settings exist
+                        child: (!datesLoaded || !settingsExist)
+                            ? const SizedBox.shrink()
+                            : _ExerciseCard(
+                          exerciseId: exercise,
+                          exerciseName: _exerciseIdToName[exercise] ?? 'Unknown Exercise',
+                          exerciseSettings: exerciseSettings,
+                          blockStartDate: _blockStartDate,
+                          blockEndDate: _blockEndDate,
+                          onUpdateSetting: _onUpdateSetting, // ✅ Calls the real one that updates Firestore
+                        ),
+                      );
+                    },
+                  ),
+                );
+              },
             ),
           ],
         ),
       ),
+
     ));
   }
 

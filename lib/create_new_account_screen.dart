@@ -1426,7 +1426,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
         'ZKpGshMxFl2dxNmYSATj', // Leg Extension, Unilateral
         'ci3KpMTEacH4bw8ZumJW', // Standing Calf Raise
         'spGqXXReJNHMcc62YgZX', // Seated Calf Raise
-        'WPb8rtRTupKIBzgydB5k', // Cable Biceps Curl
+
         '0dZrCqZ8M7Q1sAn0zeeb', // Dumbbell Biceps Curl
         'zn5PgKNRrWo1MTE4wnCy', // Bayesian Biceps Curl
         'E6jPE8YYR0KA3xtVaKJo', // Triceps Push Down
@@ -1447,7 +1447,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
         'RdsGazgdH0xgpjek0n3u', // Overhead Dumbbell Press, Unilateral
         'xWpCQO504iGfU3LKLZlD', // Cable High Row, Unilateral
         'XM9026peNIu0R8qh7UqY', // Chin-Up
-        'WPb8rtRTupKIBzgydB5k', // Cable Biceps Curl
+
 
       ];
 

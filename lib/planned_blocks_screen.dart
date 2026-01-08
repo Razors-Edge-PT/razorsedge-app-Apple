@@ -249,7 +249,7 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
           'RdsGazgdH0xgpjek0n3u', // Overhead Dumbbell Press, Unilateral
           'xWpCQO504iGfU3LKLZlD', // Cable High Row, Unilateral
           'XM9026peNIu0R8qh7UqY', // Chin-Up
-          'WPb8rtRTupKIBzgydB5k', // Cable Biceps Curl
+
 
         ];
 
