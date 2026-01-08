@@ -61,6 +61,9 @@ class _BlockPlannerState extends State<Block_Planner> {
 
   String get userId => UserContext.of(context, listen: false).currentUid;
 
+  ScaffoldMessengerState? _scaffoldMessenger;
+
+
   @override
   void dispose() {
     _blockNameController.dispose();
@@ -140,7 +143,7 @@ class _BlockPlannerState extends State<Block_Planner> {
     }
 
     _didRunInitOnce = true;
-
+    _scaffoldMessenger ??= ScaffoldMessenger.maybeOf(context);
   }
 
   Future<void> _loadExistingBlock(String blockId) async {
@@ -252,12 +255,25 @@ class _BlockPlannerState extends State<Block_Planner> {
       return;
     }
 
-    FirebaseFirestore.instance
+    final docRef = FirebaseFirestore.instance
         .collection('planned_blocks')
         .doc(userId)
         .collection('blocks')
-        .doc(bid)
-        .set({
+        .doc(bid);
+
+// ✅ Special-case repTargets so stale instances can't survive merge
+    if (key == 'repTargets') {
+      docRef.update({
+        'exerciseSettings.$exerciseId.repTargets': safeValue,
+        'plannedExerciseDetails.$exerciseId.repTargets': safeValue,
+      }).catchError((e) {
+        print("❌ Failed to save $key for $exerciseId: $e");
+      });
+      return;
+    }
+
+// ✅ Default path for all other keys (keep your existing merge behavior)
+    docRef.set({
       'exerciseSettings': {
         exerciseId: {
           key: safeValue,
@@ -268,11 +284,10 @@ class _BlockPlannerState extends State<Block_Planner> {
           key: safeValue,
         },
       },
-    }, SetOptions(merge: true))
-
-        .catchError((e) {
+    }, SetOptions(merge: true)).catchError((e) {
       print("❌ Failed to save $key for $exerciseId: $e");
     });
+
 
 
 
@@ -398,6 +413,17 @@ class _BlockPlannerState extends State<Block_Planner> {
 
         // ✅ Apply existing per-exercise defaults (same path as picker Save)
         await _seedDefaultsFor(_idsWithoutSettings(exercises));
+
+        if (!mounted) return;
+
+// 1) Ensure blockIdToUse exists (and save the base block doc)
+        await _savePlannedBlock(setActive: false);
+
+        if (!mounted) return;
+
+// 2) Save plannedExerciseDetails/exerciseSettings/week docs/current_block pointer, etc.
+        await _savePlannedExercises(suppressSnack: true);
+
       }
       else {
         // Default path: load dates & planned → hydrate any missing settings
@@ -527,6 +553,9 @@ class _BlockPlannerState extends State<Block_Planner> {
         : userBlocksRef.doc();
     blockIdToUse ??= blockDocRef.id;
 
+    // ✅ Capture messenger BEFORE any awaits (safe ancestor lookup)
+    final messenger = ScaffoldMessenger.of(context);
+
     await blockDocRef.set({
       'name': _blockNameController.text.trim().isEmpty
           ? 'Unnamed Block'
@@ -540,12 +569,18 @@ class _BlockPlannerState extends State<Block_Planner> {
       'createdAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
 
+    if (!mounted) return;
+
     setState(() => _isSavedBlock = true);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('✅ Block saved${setActive ? ' and activated' : ''}.')),
-      );
-    }
+
+    _scaffoldMessenger?.showSnackBar(
+      SnackBar(
+        content: Text('✅ Block saved${setActive ? ' and activated' : ''}.'),
+      ),
+    );
+
+
+
 
     if (setActive) {
       final blockDataRef = FirebaseFirestore.instance
@@ -2214,6 +2249,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   bool isExpanded = false;
   final FocusNode _incrementsFocusNode = FocusNode();
   final FocusNode _rirFocusNode = FocusNode();
+  final FocusNode _weeklyFrequencyFocusNode = FocusNode();
   final TextEditingController _weeklyFrequencyController = TextEditingController(text: "7");
   final TextEditingController _repTargetsDisplayController = TextEditingController();
   final TextEditingController _rirDisplayController = TextEditingController();
@@ -2400,23 +2436,61 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       }
     }
 
-    // ✅ Live frequency update
-    _weeklyFrequencyController.addListener(() {
-      final value = int.tryParse(_weeklyFrequencyController.text.trim());
-      if (value != null) {
-        widget.onUpdateSetting(widget.exerciseId, 'weeklyFrequency', value);
+    // ✅ Commit frequency on UNFOCUS (avoid partial keystroke states)
+    _weeklyFrequencyFocusNode.addListener(() {
+      if (_weeklyFrequencyFocusNode.hasFocus) return; // only run on UNFOCUS
 
-        // 🧹 Also prune RIR sessions beyond the new frequency, update state + summary
-        _pruneRirPlanToFrequency(value);
-        if (mounted) {
-          setState(() {
-            // persist the pruned plan in settings immediately
-            widget.onUpdateSetting(widget.exerciseId, 'rirPlan', _cachedRirPlan);
-            _updateRirSummaryDisplay(freqOverride: value);
-          });
+      final parsed = int.tryParse(_weeklyFrequencyController.text.trim());
+      if (parsed == null) return;
+
+      final int freq = parsed.clamp(1, 14);
+
+      // ✅ Save weeklyFrequency
+      widget.onUpdateSetting(widget.exerciseId, 'weeklyFrequency', freq);
+
+      // 🧹 Prune RIR sessions beyond the new frequency
+      _pruneRirPlanToFrequency(freq);
+
+      if (mounted) {
+        setState(() {
+          widget.onUpdateSetting(widget.exerciseId, 'rirPlan', _cachedRirPlan);
+          _updateRirSummaryDisplay(freqOverride: freq);
+        });
+      }
+
+      // ✅ ALSO prune repTargets instances to match weeklyFrequency
+      final raw = widget.exerciseSettings[widget.exerciseId]?['repTargets'];
+      if (raw is Map) {
+        final pruned = <String, dynamic>{};
+
+        for (final entry in raw.entries) {
+          final key = entry.key.toString();
+          final val = entry.value;
+
+          // Keep non-week keys (e.g. repRange for DUP Signature)
+          if (!key.startsWith('week') || val is! Map) {
+            pruned[key] = val;
+            continue;
+          }
+
+          final weekMap = Map<String, dynamic>.from(val as Map);
+          final kept = <String, String>{};
+
+          for (int i = 1; i <= freq; i++) {
+            final k = 'instance$i';
+            if (weekMap.containsKey(k) && weekMap[k] != null) {
+              kept[k] = weekMap[k].toString();
+            }
+          }
+
+          pruned[key] = kept;
         }
+
+        widget.onUpdateSetting(widget.exerciseId, 'repTargets', pruned);
+        print("🧼 [FREQ UNFOCUS] Pruned repTargets to freq=$freq for ${widget.exerciseName} → ${jsonEncode(pruned)}");
       }
     });
+
 
 
 
@@ -2571,11 +2645,59 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     _maxWeightController.removeListener(_syncBestWeightXReps);
     _maxRepsController .removeListener(_syncBestWeightXReps);
 
-    final value = int.tryParse(_weeklyFrequencyController.text.trim());
-    if (value != null) {
-      safeSave('weeklyFrequency', value);
-      print("💾 [DISPOSE] Saved weeklyFrequency for ${widget.exerciseName}: $value");
+    final parsed = int.tryParse(_weeklyFrequencyController.text.trim());
+    if (parsed != null) {
+      final int freq = parsed; // ✅ non-null from here down
+      safeSave('weeklyFrequency', freq);
+      print("💾 [DISPOSE] Saved weeklyFrequency for ${widget.exerciseName}: $freq");
+
+      // ✅ Keep repTargets instance count aligned with weeklyFrequency
+      final raw = widget.exerciseSettings[widget.exerciseId]?['repTargets'];
+
+      if (raw is Map) {
+        final pruned = <String, dynamic>{};
+
+        for (final entry in raw.entries) {
+          final key = entry.key.toString();
+          final val = entry.value;
+
+          // Keep non-week keys (e.g. repRange for DUP Signature)
+          if (!key.startsWith('week') || val is! Map) {
+            pruned[key] = val;
+            continue;
+          }
+
+          // Prune week maps to instance1..instanceN
+          final weekMap = Map<String, dynamic>.from(val as Map);
+
+          final kept = <String, String>{};
+          for (int i = 1; i <= freq; i++) {
+            final k = 'instance$i';
+            if (weekMap.containsKey(k) && weekMap[k] != null) {
+              kept[k] = weekMap[k].toString();
+            }
+          }
+
+          pruned[key] = kept;
+        }
+
+        safeSave('repTargets', pruned);
+
+        // ✅ IMPORTANT: also push the pruned structure through the same path that writes to Firestore
+        widget.onUpdateSetting(widget.exerciseId, 'repTargets', pruned);
+
+        print(
+          "🧼 [DISPOSE] Pruned repTargets to weeklyFrequency=$freq "
+              "for ${widget.exerciseName} → ${jsonEncode(pruned)}",
+        );
+      } else {
+        print(
+          "🧼 [DISPOSE] repTargets not a Map for ${widget.exerciseName}; skip prune.",
+        );
+      }
     }
+
+
 
 
     final model = _selectedModel;
@@ -2819,6 +2941,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     }
 
     _weeklyFrequencyController.dispose();
+    _weeklyFrequencyFocusNode.dispose();
     _repTargetsDisplayController.dispose();
     _incrementsController.dispose();
     _notesController.dispose();
@@ -4538,23 +4661,32 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                                           controller: _rirControllers[controllerKey],
                                           keyboardType: TextInputType.number,
                                           onChanged: (v) {
-                                            // Keep cache hot as user types
+                                            // Keep cache hot locally while typing (NO Firestore writes)
                                             final txt = v.trim();
                                             _cachedRirPlan![weekKey]![sessionKey]![setKey]!['rir'] = txt;
-
-                                            // Push to parent maps (local) – this is what manual Save does
-                                            widget.onUpdateSetting(widget.exerciseId, 'rirPlan', _cachedRirPlan ?? {});
                                           },
 
                                           onTapOutside: (_) {
                                             FocusScope.of(context).unfocus();
 
-                                            // Finalize and flush again on "tap out"
+                                            // Finalize and flush once on "tap out"
                                             final txt = (_rirControllers[controllerKey]?.text ?? '').trim();
                                             _cachedRirPlan![weekKey]![sessionKey]![setKey]!['rir'] = txt;
 
                                             widget.onUpdateSetting(widget.exerciseId, 'rirPlan', _cachedRirPlan ?? {});
+                                            widget.onUpdateSetting(widget.exerciseId, 'rirModel', 'Static RIR'); // optional but good
                                           },
+
+                                          onEditingComplete: () {
+                                            FocusScope.of(context).unfocus();
+                                            final txt = (_rirControllers[controllerKey]?.text ?? '').trim();
+                                            _cachedRirPlan![weekKey]![sessionKey]![setKey]!['rir'] = txt;
+
+                                            widget.onUpdateSetting(widget.exerciseId, 'rirPlan', _cachedRirPlan ?? {});
+                                            widget.onUpdateSetting(widget.exerciseId, 'rirModel', 'Static RIR');
+                                          },
+
+
 
                                           style: const TextStyle(color: Colors.white),
                                           decoration: InputDecoration(
@@ -5030,6 +5162,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                 _smallInput(
                   "Weekly Frequency",
                   controller: _weeklyFrequencyController,
+                  focusNode: _weeklyFrequencyFocusNode, // 👈 THIS IS THE ANCHOR YOU ASKED FOR
                   width: 158,
                   inputFormatters: [
                     FilteringTextInputFormatter.digitsOnly,
@@ -5637,17 +5770,20 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   }
 
   Widget _smallInput(
-    String label, {
-    TextEditingController? controller,
-    bool multiline = false,
-    double width = 150,
-    double verticalPadding = 10,
-    TextInputType? keyboardType, // 👈 Add this
-    List<TextInputFormatter>? inputFormatters, // 👈 And this
-  }) {
+      String label, {
+        TextEditingController? controller,
+        FocusNode? focusNode, // 👈 ADD THIS
+        bool multiline = false,
+        double width = 150,
+        double verticalPadding = 10,
+        TextInputType? keyboardType,
+        List<TextInputFormatter>? inputFormatters,
+      }) {
+
     return SizedBox(
       width: width,
       child: TextField(
+        focusNode: focusNode, // 👈 ADD THIS
         controller: controller,
         keyboardType: keyboardType, // 👈 Apply here
         inputFormatters: inputFormatters, // 👈 And here

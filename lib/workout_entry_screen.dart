@@ -14215,54 +14215,55 @@ class _WorkoutPageState extends State<WorkoutPage>
 
             IconButton(
               icon: const Icon(
-                Icons.auto_awesome, // ✨ sparkle icon
-                color: Colors.amberAccent, // warm yellow
+                Icons.auto_awesome,
+                color: Colors.amberAccent,
               ),
               tooltip: 'Refresh hints',
               onPressed: () async {
                 debugPrint('✨ [SparkleBtn] pressed, mounted=$mounted');
 
-                final scaffold = ScaffoldMessenger.maybeOf(context);
-                if (scaffold == null) return; // 🔒 context not safe yet
+                // ✅ Capture uid BEFORE awaits (avoid context lookups later)
+                final String uid = (_cachedUid?.isNotEmpty == true)
+                    ? _cachedUid!
+                    : UserContext.of(context, listen: false).currentUid;
 
-                scaffold.hideCurrentSnackBar();
-                scaffold.showSnackBar(
-                  const SnackBar(content: Text('Refreshing ✨')),
-                );
+                void showSafeSnack(String text) {
+                  // ✅ Defer snackbar until next frame + re-resolve messenger fresh
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (!mounted) return;
+                    final m = ScaffoldMessenger.maybeOf(context);
+                    m?.hideCurrentSnackBar();
+                    m?.showSnackBar(SnackBar(content: Text(text)));
+                  });
+                }
+
+                // Immediate feedback (safe)
+                showSafeSnack('Refreshing ✨');
 
                 final ok = await _refreshHintsForSelectedDay(alsoWarmTomorrow: true);
                 debugPrint('✨ [SparkleBtn] refresh result ok=$ok (mounted=$mounted)');
 
-                scaffold.hideCurrentSnackBar();
+                if (!mounted) return;
 
                 if (ok) {
-                  final uid = _cachedUid ?? UserContext.of(context, listen: false).currentUid;
-
-                  if (uid != null && uid.isNotEmpty) {
+                  if (uid.isNotEmpty) {
                     final (sex, dob) = await DemographicsCache.load(uid);
+                    if (!mounted) return;
+
                     final msg = _hintsReadySnackMessage(sexRaw: sex, dobRaw: dob);
-
-                    scaffold.showSnackBar(
-                      SnackBar(content: Text(msg)),
-                    );
+                    showSafeSnack(msg);
                   } else {
-                    scaffold.showSnackBar(
-                      const SnackBar(content: Text('Suggested weights and reps are ready')),
-                    );
+                    showSafeSnack('Suggested weights and reps are ready');
                   }
+
+                  // ✨ Run sparkles only when refresh succeeded
+                  if (mounted) _playSparkles();
                 } else {
-                  scaffold.showSnackBar(
-                    const SnackBar(content: Text('Refresh failed')),
-                  );
-                }
-
-
-// ✨ Run sparkles only when refresh succeeded
-                if (ok && mounted) {
-                  _playSparkles();
+                  showSafeSnack('Refresh failed');
                 }
               },
             ),
+
 
             IconButton(
               icon: const Icon(Icons.delete),
