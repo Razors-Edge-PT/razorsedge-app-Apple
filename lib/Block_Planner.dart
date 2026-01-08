@@ -245,15 +245,31 @@ class _BlockPlannerState extends State<Block_Planner> {
     final safeValue = _sanitizeForFirestore(value);
 
     final userId = UserContext.of(context, listen: false).currentUid;
+    // 🧱 Hard guard: do NOT write unless we have a stable block id
+    final bid = blockIdToUse;
+    if (bid == null || bid.trim().isEmpty) {
+      print("⚠️ [TOP] Skipping write: blockIdToUse is null/empty ($exerciseId → $key)");
+      return;
+    }
+
     FirebaseFirestore.instance
         .collection('planned_blocks')
         .doc(userId)
         .collection('blocks')
-        .doc(blockIdToUse)
+        .doc(bid)
         .set({
-      'exerciseSettings.$exerciseId.$key': safeValue,
-      'plannedExerciseDetails.$exerciseId.$key': safeValue,
+      'exerciseSettings': {
+        exerciseId: {
+          key: safeValue,
+        },
+      },
+      'plannedExerciseDetails': {
+        exerciseId: {
+          key: safeValue,
+        },
+      },
     }, SetOptions(merge: true))
+
         .catchError((e) {
       print("❌ Failed to save $key for $exerciseId: $e");
     });
@@ -331,6 +347,7 @@ class _BlockPlannerState extends State<Block_Planner> {
         });
 
 
+        // ✅ Default dates for a NEW draft block: start = Monday just gone, length = 9 weeks
         final now = DateTime.now();
         final today = DateTime(now.year, now.month, now.day); // date-only
         final start =
@@ -340,18 +357,12 @@ class _BlockPlannerState extends State<Block_Planner> {
         setState(() {
           _blockStartDate = start;
           _blockEndDate = end;
-
-          // ✅ Ensure NEW draft has a blockId immediately
-          blockIdToUse ??= FirebaseFirestore.instance
-              .collection('planned_blocks')
-              .doc(userId) // ← reuse existing userId from function scope
-              .collection('blocks')
-              .doc()
-              .id;
         });
 
 // ✅ Default block name: "<username> 5 Jan - 8 Mar" (editable)
+// reuse existing userId (do NOT redeclare)
         String username = 'Block';
+
 
 
         if (userId != null) {
@@ -2202,6 +2213,7 @@ class _ExerciseCard extends StatefulWidget {
 class _ExerciseCardState extends State<_ExerciseCard> {
   bool isExpanded = false;
   final FocusNode _incrementsFocusNode = FocusNode();
+  final FocusNode _rirFocusNode = FocusNode();
   final TextEditingController _weeklyFrequencyController = TextEditingController(text: "7");
   final TextEditingController _repTargetsDisplayController = TextEditingController();
   final TextEditingController _rirDisplayController = TextEditingController();
@@ -2318,6 +2330,13 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         _incrementsController.text = cleaned;
       }
     });
+
+    _rirFocusNode.addListener(() {
+      if (!_rirFocusNode.hasFocus) {
+        _flushRirToFirestore(reason: 'focus_lost');
+      }
+    });
+
 
     final settings = widget.exerciseSettings[widget.exerciseId];
 
@@ -2475,6 +2494,52 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     _maxRepsController  .addListener(_syncBestWeightXReps);
 
   }
+
+  void _flushRirToFirestore({required String reason}) {
+    // Must be mounted to read context safely
+    if (!mounted) return;
+
+    final uid = UserContext.of(context, listen: false).currentUid;
+    final bid = context.findAncestorStateOfType<_BlockPlannerState>()?.blockIdToUse;
+
+    if (uid.isEmpty || bid == null || bid.isEmpty) {
+      print("⚠️ [RIR.flush] skip (uid=$uid blockId=$bid) reason=$reason");
+      return;
+    }
+
+    // Ensure latest local state is saved first
+    if (_cachedRirPlan != null) {
+      safeSave('rirPlan', _cachedRirPlan);
+    }
+
+    // Also persist rirModel if present (use id first)
+    final rirModel =
+        _selectedRirModel[widget.exerciseId] ?? _selectedRirModel[widget.exerciseName];
+    if (rirModel != null && rirModel.isNotEmpty) {
+      safeSave('rirModel', rirModel);
+    }
+
+    final entry = Map<String, dynamic>.from(
+      widget.exerciseSettings[widget.exerciseId] ?? {},
+    );
+
+    final payload = <String, dynamic>{
+      'exerciseSettings.${widget.exerciseId}.rirPlan': entry['rirPlan'],
+      'plannedExerciseDetails.${widget.exerciseId}.rirPlan': entry['rirPlan'],
+      'exerciseSettings.${widget.exerciseId}.rirModel': entry['rirModel'],
+      'plannedExerciseDetails.${widget.exerciseId}.rirModel': entry['rirModel'],
+    };
+
+    FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(uid)
+        .collection('blocks')
+        .doc(bid)
+        .set(payload, SetOptions(merge: true))
+        .then((_) => print("✅ [RIR.flush] wrote on $reason for ${widget.exerciseName}"))
+        .catchError((e) => print("❌ [RIR.flush] failed: $e"));
+  }
+
 
   void _syncBestWeightXReps() {
     final kg   = _maxWeightController.text.trim();
@@ -2709,9 +2774,49 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       final uid = _cachedUid;
       final bid = _parentBlockId;
 
+      if (uid != null && uid.isNotEmpty && bid != null && bid.isNotEmpty) {
+        final docRef = FirebaseFirestore.instance
+            .collection('planned_blocks')
+            .doc(uid)
+            .collection('blocks')
+            .doc(bid);
+
+        // Pull latest local entry (safeSave already wrote into exerciseSettings)
+        final entry = Map<String, dynamic>.from(
+          widget.exerciseSettings[widget.exerciseId] ?? {},
+        );
+
+        final payload = <String, dynamic>{
+          'exerciseSettings.${widget.exerciseId}.rirPlan': entry['rirPlan'],
+          'plannedExerciseDetails.${widget.exerciseId}.rirPlan': entry['rirPlan'],
+          'exerciseSettings.${widget.exerciseId}.rirModel': entry['rirModel'],
+          'plannedExerciseDetails.${widget.exerciseId}.rirModel': entry['rirModel'],
+        };
+
+        docRef.set(payload, SetOptions(merge: true)).catchError((e) {
+          print("❌ [DISPOSE] Firestore flush failed for ${widget.exerciseId}: $e");
+        });
+
+        print("📤 [DISPOSE] Flushed rirPlan/rirModel to Firestore for ${widget.exerciseName} (block=$bid)");
+
+        // ✅ Refresh the current_block pointer so WES re-reads the active block
+        FirebaseFirestore.instance
+            .collection('users')
+            .doc(uid)
+            .collection('block_planner')
+            .doc('current_block')
+            .set({
+          'blockId': bid,
+        }, SetOptions(merge: true)).catchError((e) {
+          print("❌ [DISPOSE] current_block update failed (uid=$uid blockId=$bid): $e");
+        });
+
+      } else {
+        print("⚠️ [DISPOSE] Skip Firestore flush (uid=$uid blockId=$bid)");
+      }
+
+
     }
-
-
 
     _weeklyFrequencyController.dispose();
     _repTargetsDisplayController.dispose();
@@ -2721,6 +2826,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     _maxRepsController.dispose();
     _rirDisplayController.dispose();
     _incrementsFocusNode.dispose();
+    _rirFocusNode.dispose();
 
 
     // ⬇️ Kick a WES warm for *today* based on these BP edits (fire-and-forget)
@@ -4431,6 +4537,25 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                                         child: TextField(
                                           controller: _rirControllers[controllerKey],
                                           keyboardType: TextInputType.number,
+                                          onChanged: (v) {
+                                            // Keep cache hot as user types
+                                            final txt = v.trim();
+                                            _cachedRirPlan![weekKey]![sessionKey]![setKey]!['rir'] = txt;
+
+                                            // Push to parent maps (local) – this is what manual Save does
+                                            widget.onUpdateSetting(widget.exerciseId, 'rirPlan', _cachedRirPlan ?? {});
+                                          },
+
+                                          onTapOutside: (_) {
+                                            FocusScope.of(context).unfocus();
+
+                                            // Finalize and flush again on "tap out"
+                                            final txt = (_rirControllers[controllerKey]?.text ?? '').trim();
+                                            _cachedRirPlan![weekKey]![sessionKey]![setKey]!['rir'] = txt;
+
+                                            widget.onUpdateSetting(widget.exerciseId, 'rirPlan', _cachedRirPlan ?? {});
+                                          },
+
                                           style: const TextStyle(color: Colors.white),
                                           decoration: InputDecoration(
                                             labelText: 'Set ${setIndex + 1} RIR',
@@ -5277,6 +5402,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                     child: AbsorbPointer(
                       child: TextFormField(
                         controller: _rirDisplayController, // ✅ ADD THIS LINE
+                        focusNode: _rirFocusNode, // ✅ ADD THIS LINE
                         readOnly: true,
                         style: const TextStyle(color: Colors.white, fontSize: 13),
                         decoration: InputDecoration(
