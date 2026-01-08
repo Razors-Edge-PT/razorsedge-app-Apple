@@ -250,12 +250,16 @@ class _BlockPlannerState extends State<Block_Planner> {
         .doc(userId)
         .collection('blocks')
         .doc(blockIdToUse)
-        .update({
+        .set({
       'exerciseSettings.$exerciseId.$key': safeValue,
       'plannedExerciseDetails.$exerciseId.$key': safeValue,
-    }).catchError((e) {
+    }, SetOptions(merge: true))
+        .catchError((e) {
       print("❌ Failed to save $key for $exerciseId: $e");
     });
+
+
+
   }
 
 
@@ -273,34 +277,118 @@ class _BlockPlannerState extends State<Block_Planner> {
         // Explicit block → load its dates/scaffold, then planned IDs & settings
         await _loadBlockFromFirestore(args['blockId']);
         await _seedDefaultsFor(_idsWithoutSettings(exercises)); // mirror “Save” in picker
+
+
       } else if (args != null && args['newBlock'] == true) {
-        // New block created via Home.ensure → hydrate from pointer and finish like picker Save
-        final userId = UserContext.of(context, listen: false).currentUid;
-        final ptrSnap = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(userId)
-            .collection('block_planner')
-            .doc('current_block')
-            .get();
+        // ✅ New block = local draft with default exercise IDs (no pointer hydration)
 
-        final ptr = ptrSnap.data();
-        final ptrBlockId = (ptr?['blockId'] as String?) ?? '';
-
-        if (ptrBlockId.isNotEmpty) {
-          await _loadBlockFromFirestore(ptrBlockId);  // dates/scaffold
-        } else {
-          await _loadBlockDatesFromFirestore();       // at least get dates
-        }
-
-        await _loadPlannedExercises();                // IDs + any existing settings
-        await _seedDefaultsFor(_idsWithoutSettings(exercises)); // same as picker Save
+        const defaultExerciseIds = <String>[
+          'AmfUWbF1DH3I7qPAdh5k',
+          'kTs5fLSTKjUkUZL10iii',
+          'heeBViVINHO6tUScSd6y',
+          'y5q9OU9OBzZQMkfPzFrf',
+          'v2XlZUvFfBUhogOdKtJ8',
+          'lVDG90yN6Z8aPjRNV2wc',
+          '2yJSfLMfOnNDSeZ7DqZT',
+          '9siQpXF2KLCj7M9kCy2m',
+          '1XOIXxeLFhgmgjZS9Cyq',
+          'Url65Q2RxZa00dkDpUdl',
+          'JbthLLjMF6xRvvaUY8PU',
+          'ETm055bydWtUCxTMu3MR',
+          'wIcMsf2J9cswJRs1GuYX',
+          'QkEgE8gnIva2kkNJEfxw',
+          'ZKpGshMxFl2dxNmYSATj',
+          'ci3KpMTEacH4bw8ZumJW',
+          'spGqXXReJNHMcc62YgZX',
+          'WPb8rtRTupKIBzgydB5k',
+          '0dZrCqZ8M7Q1sAn0zeeb',
+          'zn5PgKNRrWo1MTE4wnCy',
+          'E6jPE8YYR0KA3xtVaKJo',
+          'QacImADmlpljltUvB0dD',
+          'eeEXnmSXv90q0rUgGECq',
+          'KPewxxYYrhsOp84lIQr5',
+          'P88Vj5pBydqmiEzFowag',
+          'uY8uJaSFK9czKIX4TLc4',
+          'FtayDmR5BVnGS1FXlXLL',
+          'OJaMXFKgMnM0X5xttBE1',
+          '6SGWrCKfe7KQLThRYXQ6',
+          'Z1LpfaEBvHBDMsJ54pgw',
+          'z5gs1ilr4DpKlSZaRNG5',
+          'LVMQEQl6ZWBcgEUdk2tP',
+          'ISXQqOEXLjMrPEs0xjgJ',
+          'ocNWJv7xLrlinGmjG6cV',
+          'eyh76KELuuO805rZBpMa',
+          'RdsGazgdH0xgpjek0n3u',
+          'xWpCQO504iGfU3LKLZlD',
+          'XM9026peNIu0R8qh7UqY',
+        ];
 
         setState(() {
+          exercises = defaultExerciseIds.toSet().toList(); // defensive de-dupe
+          selectedDays = const ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
           _isSavedBlock = false;
           _isNewBlock = true;
-          // DO NOT clear exercises / exerciseSettings
         });
-      } else {
+
+
+        final now = DateTime.now();
+        final today = DateTime(now.year, now.month, now.day); // date-only
+        final start =
+        today.subtract(Duration(days: today.weekday - DateTime.monday));
+        final end = start.add(const Duration(days: 62)); // 9 weeks = 63 days, inclusive end
+
+        setState(() {
+          _blockStartDate = start;
+          _blockEndDate = end;
+
+          // ✅ Ensure NEW draft has a blockId immediately
+          blockIdToUse ??= FirebaseFirestore.instance
+              .collection('planned_blocks')
+              .doc(userId) // ← reuse existing userId from function scope
+              .collection('blocks')
+              .doc()
+              .id;
+        });
+
+// ✅ Default block name: "<username> 5 Jan - 8 Mar" (editable)
+        String username = 'Block';
+
+
+        if (userId != null) {
+          final userSnap = await FirebaseFirestore.instance.collection('users').doc(userId).get();
+          final udata = userSnap.data() ?? const <String, dynamic>{};
+
+          final u1 = (udata['username'] as String?)?.trim();
+          final u2 = (udata['fullName'] as String?)?.trim();
+          final fallback = (FirebaseAuth.instance.currentUser?.displayName ?? '')
+              .trim()
+              .isNotEmpty
+              ? FirebaseAuth.instance.currentUser!.displayName!.trim()
+              : (FirebaseAuth.instance.currentUser?.email?.split('@').first ?? '').trim();
+
+          username = (u1 != null && u1.isNotEmpty)
+              ? u1
+              : (u2 != null && u2.isNotEmpty)
+              ? u2
+              : (fallback.isNotEmpty ? fallback : 'Block');
+        }
+
+        final months = const ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        String fmt(DateTime d) => '${d.day} ${months[d.month - 1]}';
+
+        final defaultName = "$username ${fmt(start)} - ${fmt(end)}";
+
+// Only auto-fill if user hasn’t typed a name already
+        if (_blockNameController.text.trim().isEmpty) {
+          _blockNameController.text = defaultName;
+        }
+
+
+
+        // ✅ Apply existing per-exercise defaults (same path as picker Save)
+        await _seedDefaultsFor(_idsWithoutSettings(exercises));
+      }
+      else {
         // Default path: load dates & planned → hydrate any missing settings
         await _initData(); // see updated version below
       }
@@ -2129,7 +2217,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   Map<String, Map<String, Map<String, Map<String, String>>>>? _cachedRirPlan;
   String get userId => UserContext.of(context, listen: false).currentUid;
   String? _parentBlockId;
-
+  String? _cachedUid;
 
   double _currentE1RM = 0.0;
 
@@ -2618,6 +2706,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
       safeSave('rirPlan', _cachedRirPlan);
       print("💾 [DISPOSE] Saved rirPlan (pruned to $freqForSave) for ${widget.exerciseName}: ${jsonEncode(_cachedRirPlan)}");
+      final uid = _cachedUid;
+      final bid = _parentBlockId;
+
     }
 
 
@@ -2657,6 +2748,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     super.didChangeDependencies();
     // Safe time to read ancestors
     _parentBlockId = context.findAncestorStateOfType<_BlockPlannerState>()?.blockIdToUse;
+    _cachedUid = UserContext.of(context, listen: false).currentUid;
+
   }
 
 
