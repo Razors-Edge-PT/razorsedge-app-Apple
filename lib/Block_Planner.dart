@@ -858,9 +858,6 @@ class _BlockPlannerState extends State<Block_Planner> {
   }
 //Handles Default Settings for most Exercises
 
-
-
-
   Map<String, dynamic> getDefaultSettings(String name, String category, String bodyPart) {
     Map<String, dynamic> sanitize(Map<String, dynamic> def) {
       return {

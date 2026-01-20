@@ -6,8 +6,8 @@ plugins {
     id "com.google.gms.google-services"
 }
 
-def flutterVersionCode = project.hasProperty('flutter.versionCode') ? project.getProperty('flutter.versionCode') : "19"
-def flutterVersionName = project.hasProperty('flutter.versionName') ? project.getProperty('flutter.versionName') : "1.0.9"
+def flutterVersionCode = project.hasProperty('flutter.versionCode') ? project.getProperty('flutter.versionCode') : "21"
+def flutterVersionName = project.hasProperty('flutter.versionName') ? project.getProperty('flutter.versionName') : "1.2.1"
 
 android {
     namespace = "com.goodlift.razorsedge"
@@ -16,7 +16,7 @@ android {
 
     defaultConfig {
         applicationId = "com.goodlift.razorsedge"
-        minSdk = 23
+        minSdkVersion = flutter.minSdkVersion
         targetSdk = 35
         versionCode = flutterVersionCode.toInteger()
         versionName = flutterVersionName
