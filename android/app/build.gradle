@@ -11,13 +11,13 @@ def flutterVersionName = project.hasProperty('flutter.versionName') ? project.ge
 
 android {
     namespace = "com.goodlift.razorsedge"
-    compileSdk = 35
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     defaultConfig {
         applicationId = "com.goodlift.razorsedge"
         minSdkVersion = flutter.minSdkVersion
-        targetSdk = 35
+        targetSdk = 36
         versionCode = flutterVersionCode.toInteger()
         versionName = flutterVersionName
     }

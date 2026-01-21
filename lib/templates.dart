@@ -816,6 +816,17 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         .doc(uid)
         .collection('blocks')
         .get();
+    debugPrint('📦 [Templates] blocksSnap.docs=${blocksSnap.docs.length} for uid=$uid');
+    for (final d in blocksSnap.docs) {
+      final data = d.data();
+      debugPrint('🧱 [Templates] blockId=${d.id} keys=${data.keys.toList()} name=${data['name']} isActive=${data['isActive']}');
+      final bm = data['blockMeta'];
+      if (bm is Map) {
+        debugPrint('   ↳ blockMeta keys=${bm.keys.toList()} start=${bm['blockStartDate']} end=${bm['blockEndDate']}');
+      }
+    }
+    debugPrint('⭐ [Templates] activeId(from BlockRepository)=$activeId');
+
 
     final meta = <String, Map<String, dynamic>>{};
     for (final doc in blocksSnap.docs) {
@@ -897,31 +908,30 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   List<Template> _templatesForBlock(String? blockId) {
     if (blockId == null) return const [];
 
+    final blockMeta = _blockMetaById[blockId];
+    final blockName = blockMeta != null && (blockMeta['name'] is String)
+        ? (blockMeta['name'] as String).trim()
+        : null;
+
     final results = templates.where((t) {
-      final tmplBlockId = _templateBlockIds[t.id];
-      return tmplBlockId == blockId;
+      final tmplBlockId = _templateBlockIds[t.id]?.trim();
+      if (tmplBlockId == blockId) return true;
+
+      // ✅ fallback: match by blockAssignment name when ids are wrong/legacy
+      final assign = (t.blockAssignment ?? '').trim();
+      return blockName != null && assign.isNotEmpty && assign == blockName;
     }).toList();
 
-    // 🔢 NEW: sort by day number in the name (Day 1, Day 2, ...)
     results.sort((a, b) {
       final dayA = _extractDayNumberFromName(a.name);
       final dayB = _extractDayNumberFromName(b.name);
-
-      if (dayA != dayB) {
-        return dayA.compareTo(dayB); // Day 1 before Day 2, etc.
-      }
-
-      // If same day number (or both unknown), fall back to alphabetical name
+      if (dayA != dayB) return dayA.compareTo(dayB);
       return a.name.toLowerCase().compareTo(b.name.toLowerCase());
     });
 
-    // 👀 Debug only – check assignments
-    for (final t in results) {
-      debugPrint('📄 Template "${t.name}" → blockId=${_templateBlockIds[t.id]}');
-    }
-
     return results;
   }
+
 
 
 
@@ -1064,14 +1074,24 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
 
   String _fmtDate(dynamic ts) {
-    // supports both Timestamp and String
     if (ts == null) return '';
+
     if (ts is Timestamp) {
       final d = ts.toDate();
       return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
     }
+
+    // if it's an ISO string like "2026-01-12T00:00:00.000"
+    if (ts is String) {
+      final d = DateTime.tryParse(ts);
+      if (d != null) {
+        return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+      }
+    }
+
     return ts.toString();
   }
+
 
   String _blockTitle(String blockId, Map<String, dynamic> meta) {
     if (meta.containsKey('name') && (meta['name'] as String).isNotEmpty) {
@@ -1162,13 +1182,16 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
     String subtitle = '';
     if (meta != null) {
-      final start = meta['startDate'];
-      final end = meta['endDate'];
+      final bm = meta['blockMeta'];
+      final start = (bm is Map) ? bm['blockStartDate'] : null;
+      final end = (bm is Map) ? bm['blockEndDate'] : null;
+
       if (start != null && end != null) {
         subtitle = '${_fmtDate(start)} → ${_fmtDate(end)}';
       } else if (start != null) {
         subtitle = 'from ${_fmtDate(start)}';
       }
+
     }
 
     return DragTarget<_DraggedTemplateCard>(
@@ -1188,8 +1211,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
             });
           },
           child: Container(
-            margin: const EdgeInsets.symmetric(horizontal: 10),
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            margin: const EdgeInsets.symmetric(horizontal: 2),
+            padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
             decoration: BoxDecoration(
               color: isDrop
                   ? Colors.blueGrey.shade600.withOpacity(0.25)
@@ -1207,32 +1230,53 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                   size: 16,
                   color: Colors.cyanAccent.shade100,
                 ),
-                const SizedBox(width: 6),
-                const Text(
-                  'Active block',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 13.5,
+                const SizedBox(width: 4),
+
+                // 🔽 LEFT SIDE (takes ALL available space)
+                Expanded(
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Active block${(blockId != null && meta != null) ? ': ${_blockTitle(blockId, meta)}' : ''}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13.5,
+                          ),
+                        ),
+                      ),
+
+                      if (subtitle.isNotEmpty) ...[
+                        const SizedBox(width: 6),
+                        Text(
+                          subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white54,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
+
                 const SizedBox(width: 6),
-                if (subtitle.isNotEmpty)
-                  Text(
-                    subtitle,
-                    style: const TextStyle(
-                      color: Colors.white54,
-                      fontSize: 11,
-                    ),
-                  ),
-                const Spacer(),
-                // small pill on the right
+
+                // 🔽 RIGHT SIDE (fixed width)
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
                     color: Colors.tealAccent.withOpacity(0.05),
                     borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: Colors.tealAccent.withOpacity(0.25), width: 0.4),
+                    border: Border.all(
+                      color: Colors.tealAccent.withOpacity(0.25),
+                      width: 0.4,
+                    ),
                   ),
                   child: const Text(
                     'current',
@@ -1245,6 +1289,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                 ),
               ],
             ),
+
           ),
         );
       },
@@ -1324,13 +1369,22 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
 
   Widget _buildOtherTemplatesSection() {
-    // Templates with NO blockId and NO blockAssignment
+    // Templates that are NOT shown inside any known block group.
+    // Rule: if template has a valid blockId that exists in _blockMetaById -> it belongs to a block.
+    // Otherwise it's an orphan/unassigned and must appear here.
+
     final otherTemplates = templates.where((t) {
-      final id = t.blockId?.trim();
-      final assign = t.blockAssignment?.trim();
-      final noId = id == null || id.isEmpty;
-      final noAssign = assign == null || assign.isEmpty;
-      return noId && noAssign;
+      final bid = (_templateBlockIds[t.id])?.trim();
+
+      // no block id at all
+      if (bid == null || bid.isEmpty) return true;
+
+      // block id exists but we don't have that block loaded (deleted/mismatched/legacy)
+      final exists = _blockMetaById.containsKey(bid);
+      if (!exists) return true;
+
+      // otherwise it should appear under that block
+      return false;
     }).toList();
 
     if (otherTemplates.isEmpty) {
@@ -1365,7 +1419,6 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
               final moved = otherTemplates.removeAt(oldIndex);
               otherTemplates.insert(newIndex, moved);
 
-              // reflect in global list
               templates
                 ..removeWhere((t) => t.id == moved.id)
                 ..insert(newIndex, moved);
@@ -1375,6 +1428,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       ],
     );
   }
+
 
 
 
@@ -1422,7 +1476,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   Widget _buildTemplateHeaderRow(Template template) {
     return ListTile(
       dense: true,
-      contentPadding: const EdgeInsets.symmetric(horizontal:3, vertical: 0),
+      contentPadding: const EdgeInsets.symmetric(horizontal:2, vertical: 0),
       title: Text(
         template.name,
         style: const TextStyle(
@@ -1435,7 +1489,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
           ? Text(
         template.day!,
         style: const TextStyle(
-          fontSize: 11,
+          fontSize: 8,
           fontWeight: FontWeight.w500,
           color: Colors.white70,
         ),
@@ -1446,12 +1500,12 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         children: [
 
           IconButton(
-            icon: const Icon(Icons.edit, size: 16, color: Colors.white60),
+            icon: const Icon(Icons.edit, size: 15, color: Colors.white60),
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(),
             onPressed: () => editTemplateName(template),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 0),
 
 
           // 🏁 cross-block drag handle
@@ -1493,7 +1547,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
             TextButton(
               onPressed: () => _showExercisePickerDialogForTemplate(template),
               style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 1, vertical: 0),
+                padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 0),
                 minimumSize: Size.zero,
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
@@ -1526,7 +1580,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
   Widget _buildTemplateExpandedBody(Template template) {
     return Padding(
-      padding: const EdgeInsets.only(left: 12, right: 8, bottom: 8),
+      padding: const EdgeInsets.only(left: 9, right: 8, bottom: 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -1651,15 +1705,19 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
     // active block date
     final activeMeta = _activeBlockId != null ? _blockMetaById[_activeBlockId] : null;
-    final activeStartTs = activeMeta != null ? activeMeta['startDate'] : null;
+    final activeBm = activeMeta != null ? activeMeta['blockMeta'] : null;
+    final activeStartStr = (activeBm is Map) ? activeBm['blockStartDate'] : null;
     final DateTime? activeStart =
-    (activeStartTs is Timestamp) ? activeStartTs.toDate() : null;
+    (activeStartStr is String) ? DateTime.tryParse(activeStartStr) : null;
+
 
     _blockMetaById.forEach((blockId, meta) {
       if (blockId == _activeBlockId) return;
 
-      final startTs = meta['startDate'];
-      final DateTime? thisStart = (startTs is Timestamp) ? startTs.toDate() : null;
+      final bm = meta['blockMeta'];
+      final startStr = (bm is Map) ? bm['blockStartDate'] : null;
+      final DateTime? thisStart = (startStr is String) ? DateTime.tryParse(startStr) : null;
+
 
       // classify as previous
       final isPrevious = () {
@@ -1730,9 +1788,12 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                             ),
                           ),
                           const SizedBox(width: 6),
-                          if (meta['startDate'] != null)
+
+                          // ✅ UPDATED: read date from blockMeta.blockStartDate
+                          if (meta['blockMeta'] is Map &&
+                              (meta['blockMeta']['blockStartDate'] != null))
                             Text(
-                              _fmtDate(meta['startDate']),
+                              _fmtDate(meta['blockMeta']['blockStartDate']),
                               style: const TextStyle(
                                 color: Colors.white38,
                                 fontSize: 10,
@@ -1741,6 +1802,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                         ],
                       ),
                     ),
+
                   ),
                   if (_expandedPreviousBlockIds.contains(blockId))
                   // 🔽 NO extra left padding here so templates line up with active ones
@@ -2150,9 +2212,9 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       builder: (context, candidate, rejected) {
         final isActive = candidate.isNotEmpty;
         return Container(
-          width: 32,
+          width: 30,
           height: 26,
-          margin: const EdgeInsets.only(right: 4),
+          margin: const EdgeInsets.only(right: 2),
           decoration: BoxDecoration(
             color: isActive
                 ? Colors.redAccent.withOpacity(0.45)
@@ -2378,18 +2440,24 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
 // 🔁 Regenerate Templates
               ElevatedButton.icon(
-                icon: const Icon(Icons.refresh, size: 32), // ↓ smaller icon
+                icon: const Icon(
+                  Icons.refresh,
+                  size: 32,
+                  color: Colors.cyanAccent, // 👈 cyan icon
+                ),
                 label: const Text(
                   "Regen",
-                  style: TextStyle(fontSize: 13.5), // ↓ smaller text
+                  style: TextStyle(fontSize: 13.5),
                 ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.blueGrey.shade700,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2), // ↓ tighter
-                  minimumSize: const Size(0, 28), // ✅ short button
+                  foregroundColor: Colors.white, // text stays white
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  minimumSize: const Size(0, 28),
                   visualDensity: VisualDensity.compact,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
                 onPressed: _regenerateAllTemplates,
               ),
@@ -2397,18 +2465,24 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
               // ➕ Create New Workout (existing)
               ElevatedButton.icon(
-                icon: const Icon(Icons.add, size: 32), // ↓ slightly smaller icon
+                icon: const Icon(
+                  Icons.add,
+                  size: 32,
+                  color: Colors.cyanAccent, // 👈 cyan accent icon
+                ),
                 label: const Text(
                   "Add New Workout",
-                  style: TextStyle(fontSize: 14), // ✅ keep same text size
+                  style: TextStyle(fontSize: 14),
                 ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.blueGrey.shade700,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2), // ↓ tighter vertical padding
-                  minimumSize: const Size(0, 28), // ✅ ensures consistent short height
+                  foregroundColor: Colors.white, // text stays white
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  minimumSize: const Size(0, 28),
                   visualDensity: VisualDensity.compact,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
                 onPressed: _createTemplate,
               ),
