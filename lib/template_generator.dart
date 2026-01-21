@@ -98,6 +98,8 @@ class TemplateGenerator {
   static const String _assetPath = 'assets/exercise_dump_20251109_112626.json';
 // Max circuits per day (age-dependent). Default for younger / unknown age.
   static const int _defaultMaxCircuitsPerDay = 4;
+  static const int _maxExercisesPerCircuit = 3; // typical antagonist circuit size
+
   static int _maxCircuitsPerDay = _defaultMaxCircuitsPerDay;
 
 
@@ -146,11 +148,6 @@ class TemplateGenerator {
       onboarding: onboarding,
     );
 
-    // 🩹 Injury filters (lower back, shoulders, elbow, knees)
-    workingLib = _applyInjuryFilters(
-      lib: workingLib,
-      onboarding: onboarding,
-    );
 
     // 🏋️ Equipment filters (machines / TRX etc.)
     workingLib = _applyEquipmentFilters(
@@ -163,6 +160,11 @@ class TemplateGenerator {
     // 2) Read knobs from onboarding
     final int weeklyFrequency = _readWeeklyFrequency(onboarding) ?? 4; // default to 4
     final bool isFemale = sexU == 'F' || sexU == 'N';
+
+    debugPrint(
+      '🧬 [GEN] sexU=$sexU isFemale=$isFemale age=$age maxCircuits=$_maxCircuitsPerDay',
+    );
+
 
     // Training effort (1..4), default 3
     final int trainingEffort = (() {

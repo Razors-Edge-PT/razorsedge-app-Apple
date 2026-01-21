@@ -31,6 +31,10 @@ import 'membership_gate.dart';
 
 
 final RouteObserver<ModalRoute<void>> routeObserver = RouteObserver<ModalRoute<void>>();
+// ── ANCHOR ROOT-SNACKBAR-KEY:A — global messenger for SnackBars (no BuildContext needed)
+final GlobalKey<ScaffoldMessengerState> rootScaffoldMessengerKey =
+GlobalKey<ScaffoldMessengerState>();
+
 class AppRoot extends StatelessWidget {
   const AppRoot({super.key});
 
@@ -176,6 +180,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      scaffoldMessengerKey: rootScaffoldMessengerKey, // ✅ ROOT-SNACKBAR-KEY wired
       title: 'Re App',
 
 

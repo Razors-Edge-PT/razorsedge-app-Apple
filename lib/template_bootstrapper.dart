@@ -149,13 +149,51 @@ class TemplatesBootstrapper {
     debugPrint('🧰 [TB] demographics: sex="$sexU" age=$age');
 
     // Branch eligibility (legacy fallbacks still use this)
-    final femaleEligible = (sexU == 'F' || sexU == 'N') && (age != null && age >= 13 && age <= 30);
-    final male27to39     = (sexU == 'M') && (age != null && age >= 27 && age <= 39);
-    final male16to26     = (sexU == 'M') && (age != null && age >= 16 && age <= 26);
+    // 👩‍🦰 / 👩 / 🤷 Female (F) or Non-binary (N)
+    final isFemale = (sexU == 'F' || sexU == 'N');
 
-    debugPrint('🧰 [TB] eval femaleEligible=$femaleEligible, male27to39=$male27to39, male16to26=$male16to26');
+// 👨 Male
+    final isMale   = (sexU == 'M');
 
-    if (!femaleEligible && !male27to39 && !male16to26) {
+// 👩‍🦰 FEMALE: teens → 30 (legacy supported group)
+    final femaleEligible =
+        isFemale && age != null && age >= 13 && age <= 30;
+
+// 👩‍🦰 FEMALE: 31+ (NEW – allow template generation instead of exiting)
+    final female30plus =
+        isFemale && age != null && age >= 31;
+
+// 👨 MALE: 16 → 26 (younger male program)
+    final male16to26 =
+        isMale && age != null && age >= 16 && age <= 26;
+
+// 👨 MALE: 27 → 39 (standard adult male program)
+    final male27to39 =
+        isMale && age != null && age >= 27 && age <= 39;
+
+// 👨 MALE: 40+ (NEW – treated same as 27–39 for now)
+    final male40plus =
+        isMale && age != null && age >= 40;
+
+
+    debugPrint(
+        '🧰 [TB] eval '
+            'female13to30=$femaleEligible, '
+            'female30plus=$female30plus, '
+            'male16to26=$male16to26, '
+            'male27to39=$male27to39, '
+            'male40plus=$male40plus'
+    );
+
+
+    if (
+    !femaleEligible &&   // 👩‍🦰 13–30
+        !female30plus &&     // 👩‍🦰 31+
+        !male16to26 &&       // 👨 16–26
+        !male27to39 &&       // 👨 27–39
+        !male40plus          // 👨 40+
+    ) {
+
       debugPrint('🧰 [TB] not eligible for any branch → set flag and exit');
       await userRef.set(
         {_flagField: true, 'templatesBootstrappedAt': FieldValue.serverTimestamp()},
@@ -846,30 +884,43 @@ class TemplatesBootstrapper {
     late final List<Map<String, dynamic>> payloads;
     late final String branchLabel;
 
-    if (femaleEligible) {
+    if (femaleEligible || female30plus) {
+      // 👩‍🦰 FEMALE: 13–30 OR 31+
       payloads = [
         female_b1d1, female_b1d2, female_b1d3, female_b1d4,
         female_b2d1, female_b2d2, female_b2d3, female_b2d4,
         female_b3d1, female_b3d2, female_b3d3, female_b3d4,
       ];
-      branchLabel = 'FEMALE_13_30';
+      branchLabel = female30plus ? 'FEMALE_31_PLUS' : 'FEMALE_13_30';
+
     } else if (male16to26) {
-      // ✅ NEW: the 16–26 male set (rename here if your variable names differ)
+      // 👨 MALE: 16–26
       payloads = [
         m1626_b1d1, m1626_b1d2, m1626_b1d3, m1626_b1d4,
         m1626_b2d1, m1626_b2d2, m1626_b2d3, m1626_b2d4,
         m1626_b3d1, m1626_b3d2, m1626_b3d3, m1626_b3d4,
       ];
       branchLabel = 'MALE_16_26';
-    } else {
-      // Default male branch → 27–39 (your existing set)
+
+    } else if (male27to39 || male40plus) {
+      // 👨 MALE: 27–39 OR 40+
       payloads = [
         male_b1d1, male_b1d2, male_b1d3, male_b1d4,
         male_b2d1, male_b2d2, male_b2d3, male_b2d4,
         male_b3d1, male_b3d2, male_b3d3, male_b3d4,
       ];
-      branchLabel = 'MALE_27_39';
+      branchLabel = male40plus ? 'MALE_40_PLUS' : 'MALE_27_39';
+
+    } else {
+      // 🚨 Should never happen (guard above prevents this)
+      payloads = [
+        male_b1d1, male_b1d2, male_b1d3, male_b1d4,
+        male_b2d1, male_b2d2, male_b2d3, male_b2d4,
+        male_b3d1, male_b3d2, male_b3d3, male_b3d4,
+      ];
+      branchLabel = 'MALE_FALLBACK';
     }
+
 
     debugPrint('🧰 [TB] prepared ${payloads.length} templates to create (branch=$branchLabel)');
 

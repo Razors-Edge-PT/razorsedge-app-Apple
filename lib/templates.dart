@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'block_repository.dart'; // 👈 to get active block id + meta
 import 'template_bootstrapper.dart';
 import 'create_new_account_screen.dart';
+import 'main.dart';
 
 // Import the shared methods
 import 'create_template_screen.dart';
@@ -673,11 +674,12 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   Future<void> _regenerateAllTemplates() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No user logged in')),
+      rootScaffoldMessengerKey.currentState?.showSnackBar(
+        const SnackBar(content: Text('🚫 No user logged in')),
       );
       return;
     }
+
 
     final ok = await showDialog<bool>(
       context: context,
@@ -713,8 +715,11 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         await batch.commit();
       }
 
-      // 2️⃣ Clear the bootstrap flag
-      await userRef.set({'templatesBootstrapped': FieldValue.delete()}, SetOptions(merge: true));
+      // 2️⃣ Clear the bootstrap flag(s) (keep both for backward compatibility)
+      await userRef.set({
+        'templatesBootstrapped_v1': FieldValue.delete(),
+        'templatesBootstrapped': FieldValue.delete(), // older field if it exists anywhere
+      }, SetOptions(merge: true));
 
 
 
@@ -729,15 +734,20 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       // 4️⃣ ✅ Refresh your UI list using your actual method
       await _fetchTemplates();
 
-      ScaffoldMessenger.of(context).showSnackBar(
+      if (!mounted) return;
+      rootScaffoldMessengerKey.currentState?.showSnackBar(
         const SnackBar(content: Text('Templates regenerated successfully ✅')),
       );
+
     } catch (e, st) {
       debugPrint('❌ regenerate failed: $e\n$st');
-      ScaffoldMessenger.of(context).showSnackBar(
+      if (!mounted) return;
+      rootScaffoldMessengerKey.currentState?.showSnackBar(
         SnackBar(content: Text('Regenerate failed: $e')),
       );
-    } finally {
+
+    }
+    finally {
       if (mounted) setState(() => _loadingBlocks = false);
     }
   }
@@ -1350,14 +1360,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
             const SizedBox(height: 8),
 
-            // 🔹 previous & upcoming block sections
-            _buildPreviousBlocksSection(),
-            const SizedBox(height: 4),
-            _buildUpcomingBlocksSection(),
-            const SizedBox(height: 8),
 
-            // 🔹 other/unassigned templates at the bottom
-            _buildOtherTemplatesSection(),
 
             const SizedBox(height: 54),
           ],
@@ -2522,21 +2525,34 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
             )
           else
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+              child: ListView(
+                padding: EdgeInsets.zero,
                 children: [
+                  // 🔹 Active block (own header + dropdown)
                   _buildActiveBlockHeader(),
                   const SizedBox(height: 4),
-                  if (_showActiveBlock)
-                    Expanded(
-                      child: _buildActiveBlockTemplatesList(),
-                    )
-                  else
-                    const SizedBox.shrink(),
+                  if (_showActiveBlock) _buildActiveBlockTemplatesList(),
 
+                  const SizedBox(height: 8),
+
+                  // 🔹 Previous blocks (independent section)
+                  _buildPreviousBlocksSection(),
+
+                  const SizedBox(height: 8),
+
+                  // 🔹 Upcoming blocks (independent section)
+                  _buildUpcomingBlocksSection(),
+
+                  const SizedBox(height: 8),
+
+                  // 🔹 Other / orphan templates (independent section)
+                  _buildOtherTemplatesSection(),
+
+                  const SizedBox(height: 54), // bottom breathing room
                 ],
               ),
             ),
+
         ],
       ),
 
