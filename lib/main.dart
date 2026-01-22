@@ -1,4 +1,6 @@
 import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -98,8 +100,11 @@ class AppRoot extends StatelessWidget {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   if (Firebase.apps.isEmpty) {
-    await Firebase.initializeApp();
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
   }
+
 
   // 👇 App Check: Play Integrity in release, Debug provider in dev
   await FirebaseAppCheck.instance.activate(
