@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CLIENT_ID</key>
+	<string>659564418928-tb6thrajkglrsrmbv1tiu5jbtq2nka6q.apps.googleusercontent.com</string>
+	<key>REVERSED_CLIENT_ID</key>
+	<string>com.googleusercontent.apps.659564418928-tb6thrajkglrsrmbv1tiu5jbtq2nka6q</string>
+	<key>ANDROID_CLIENT_ID</key>
+	<string>659564418928-ohv0gvu4cp4uceg979efs347cj62s842.apps.googleusercontent.com</string>
+	<key>API_KEY</key>
+	<string>AIzaSyCno2XAn363PbSJqf9qHkRVMO7T4WW6uuI</string>
+	<key>GCM_SENDER_ID</key>
+	<string>659564418928</string>
+	<key>PLIST_VERSION</key>
+	<string>1</string>
+	<key>BUNDLE_ID</key>
+	<string>com.goodlift.razorsedge</string>
+	<key>PROJECT_ID</key>
+	<string>goodlift-us-storage</string>
+	<key>STORAGE_BUCKET</key>
+	<string>goodlift-us-storage.firebasestorage.app</string>
+	<key>IS_ADS_ENABLED</key>
+	<false></false>
+	<key>IS_ANALYTICS_ENABLED</key>
+	<false></false>
+	<key>IS_APPINVITE_ENABLED</key>
+	<true></true>
+	<key>IS_GCM_ENABLED</key>
+	<true></true>
+	<key>IS_SIGNIN_ENABLED</key>
+	<true></true>
+	<key>GOOGLE_APP_ID</key>
+	<string>1:659564418928:ios:7460f78a3d7e1260b4a1b5</string>
+</dict>
+</plist>
