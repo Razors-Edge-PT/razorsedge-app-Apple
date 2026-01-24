@@ -12,6 +12,7 @@ import 'periodization_model_utils.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/services.dart';
+import 'main.dart';
 
 // For JSON encoding
 import 'debounce_Utils.dart';
@@ -9026,45 +9027,80 @@ class _WorkoutPageState extends State<WorkoutPage>
   }
 
 
-  void _loadTemplate(Template template) {
+  Future<void> _loadTemplate(Template template) async {
+
     // Match the cardId format used in _showExercisePickerDialog
     final String ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
     int _ts() => DateTime.now().microsecondsSinceEpoch;
 
-    setState(() {
-      _workoutNameController.text = template.name;
-      _selectedExercisesWithCircuits.clear();
-      _workoutSets.clear();
+    // ✅ Persist current textfield values into _workoutSets BEFORE we rearrange anything
+    await _persistDraftLocally();
 
-      // ✅ Convert each exercise into a Map with:
-      //    - name
-      //    - circuitIndex
-      //    - cardId (includes exerciseId + circuitIndex)
-      //    - category (if available on the template)
+
+    // Build a lookup of existing rows by (exerciseId + circuitIndex) so values stay attached
+    String keyForExistingRow(Map<String, dynamic> row) {
+      // Prefer parsing from cardId: wes|YYYY-MM-DD|ts|exId|circuitIndex
+      final cardId = (row['cardId'] ?? '').toString();
+      final parts = cardId.split('|');
+      if (parts.length >= 5) {
+        final exId = parts[3].trim().toLowerCase();
+        final ci = parts[4].trim(); // keep as string
+        return '$exId|$ci';
+      }
+
+      // Fallback: compute from name + circuitIndex
+      final name = (row['name'] ?? '').toString();
+      final ci = (row['circuitIndex'] ?? 0).toString();
+      final exId = (PeriodizationModelUtils.nameToId[name] ?? name).trim().toLowerCase();
+      return '$exId|$ci';
+    }
+
+    // Snapshot existing rows + their attached data so we can rebuild without mixing anything
+    final existingExerciseIds = <String>{};
+
+    String exIdFromRow(Map<String, dynamic> row) {
+      final cardId = (row['cardId'] ?? '').toString();
+      final parts = cardId.split('|');
+      if (parts.length >= 5) {
+        return parts[3].trim().toLowerCase(); // exId
+      }
+      final name = (row['name'] ?? '').toString();
+      return (PeriodizationModelUtils.nameToId[name] ?? name).trim().toLowerCase();
+    }
+
+    for (final row in _selectedExercisesWithCircuits) {
+      existingExerciseIds.add(exIdFromRow(row));
+    }
+
+
+    setState(() {
+      // If you want template name ONLY when workout name is empty:
+      if (_workoutNameController.text.trim().isEmpty) {
+        _workoutNameController.text = template.name;
+      }
+
+      // Add missing template exercises (do NOT wipe existing ones)
       for (final entry in template.exercises.asMap().entries) {
         final int idx = entry.key;
         final dynamic e = entry.value;
 
-        // Name (String or Map)
         final String name = (e is String) ? e : (e['name'] ?? 'Unnamed');
 
-        // Circuit index (from template if present, else 0)
         final int circuitIndex =
-        (e is Map && e.containsKey('circuitIndex'))
-            ? (e['circuitIndex'] as int)
-            : 0;
+        (e is Map && e.containsKey('circuitIndex')) ? (e['circuitIndex'] as int) : 0;
 
-        // Exercise ID: use global name→id map if available, else fallback to name
         final String exId =
         (PeriodizationModelUtils.nameToId[name] ?? name).trim().toLowerCase();
 
-        // Category: use template's category if present, else empty string
         final String category =
-        (e is Map && e.containsKey('category'))
-            ? (e['category'] ?? '') as String
-            : '';
+        (e is Map && e.containsKey('category')) ? (e['category'] ?? '') as String : '';
 
-        // wes|<YYYY-MM-DD>|<unique-ts+idx>|<exercise-id>|<circuitIndex>
+        if (existingExerciseIds.contains(exId)) {
+          // ✅ Do not add duplicates via Load Template (one instance per exercise per day)
+          continue;
+        }
+
+
         final String cardId = 'wes|$ymd|${_ts() + idx}|$exId|$circuitIndex';
 
         _selectedExercisesWithCircuits.add({
@@ -9073,30 +9109,33 @@ class _WorkoutPageState extends State<WorkoutPage>
           'cardId': cardId,
           'category': category,
         });
+        existingExerciseIds.add(exId);
+
+
+        // Create sets + controllers for the new row, using planned set-count if available
+        final int newRowIndex = _selectedExercisesWithCircuits.length - 1;
+        final int plannedSetCount = _plannedSetCountFor(newRowIndex);
+        final int desiredSets = (plannedSetCount <= 0) ? _defaultSets : plannedSetCount;
+
+        _workoutSets.add(List.generate(
+          desiredSets,
+              (_) => SetDetails(reps: null, weight: null, rir: null),
+        ));
+
+        _repsControllers.add(List.generate(desiredSets, (_) => TextEditingController()));
+        _weightControllers.add(List.generate(desiredSets, (_) => TextEditingController()));
+        _rirControllers.add(List.generate(desiredSets, (_) => TextEditingController()));
+        _velocityControllers.add(List.generate(desiredSets, (_) => TextEditingController()));
+        _notesControllers.add(List.generate(desiredSets, (_) => TextEditingController()));
       }
 
-      // ✅ Initialize sets per row using planned set-count (fallback to _defaultSets)
-      _workoutSets.addAll(List.generate(
-        _selectedExercisesWithCircuits.length,
-            (rowIndex) {
-          final int plannedSetCount = _plannedSetCountFor(rowIndex);
-          final int desiredSets =
-          (plannedSetCount <= 0) ? _defaultSets : plannedSetCount;
-
-          return List.generate(
-            desiredSets,
-                (_) => SetDetails(reps: null, weight: null, rir: null),
-          );
-        },
-      ));
-
-      // ✅ Ensure template rows are ordered by circuitIndex, then by original order
+      // ✅ Keep everything aligned and ordered
       _sortRowsByCircuitIndex();
 
+      // ✅ Top-up any missing controller/sets + re-overlay values
       _initializeControllers();
-      // (Optional) If you use this elsewhere and want parity with picker:
-      // _populateVelocityFlags();
     });
+
   }
 
   String _blockHeaderTitle(String blockId, List<Template> templates) {
@@ -9309,8 +9348,9 @@ class _WorkoutPageState extends State<WorkoutPage>
     );
 
     if (selectedTemplate != null) {
-      _loadTemplate(selectedTemplate);
+      await _loadTemplate(selectedTemplate);
     }
+
   }
 
 
@@ -11505,7 +11545,8 @@ class _WorkoutPageState extends State<WorkoutPage>
   }
 
 
-  Future<void> _saveWorkout() async {
+  Future<String?> _saveWorkout() async {
+
     // 1) Mark every eligible exercise as "saved format" locally (strict: weight+reps in SAME set)
     int eligibleCount = 0;
 
@@ -11541,15 +11582,13 @@ class _WorkoutPageState extends State<WorkoutPage>
     await _upsertWorkoutToFirestore(alsoPushToBB2: true, markAllSaved: true);
 
     // 3) UI hint
-    if (mounted) {
-      final msg = (eligibleCount > 0)
-          ? 'Saved. $eligibleCount exercise${eligibleCount == 1
-          ? ''
-          : 's'} marked Done.'
-          : 'Brah you gotta do some work first, enter at least one set.';
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-      setState(() {}); // refresh saved-format visuals
-    }
+    if (!mounted) return null;
+    setState(() {}); // visuals only
+    return (eligibleCount > 0)
+        ? 'Saved. $eligibleCount exercise${eligibleCount == 1 ? '' : 's'} marked Done.'
+        : 'Brah you gotta do some work first, enter at least one set.';
+
+
   }
 
 
@@ -14289,6 +14328,8 @@ class _WorkoutPageState extends State<WorkoutPage>
                         TextButton(
                           onPressed: () async {
                             // Close the dialog (same as before, just async now)
+                            final messenger = rootScaffoldMessengerKey.currentState;
+
                             Navigator.of(dialogCtx).pop();
 
                             // 🔥 1) Run nukes (same as the bolt button)
@@ -14320,19 +14361,18 @@ class _WorkoutPageState extends State<WorkoutPage>
                                   dobRaw: dob,
                                 );
 
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text(msg)),
-                                );
+                                showAppSnack(msg);
+
+
 
                               } catch (e, st) {
                                 debugPrint('❌ [ClearWorkout] Nuke failed: $e');
                                 debugPrint('$st');
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content:
-                                    Text('⚠️ Failed to clear all caches, see logs'),
-                                  ),
-                                );
+                                showAppSnack('⚠️ Failed to clear all caches, see logs');
+
+
+
+
                               }
                             } else {
                               debugPrint(
@@ -14340,12 +14380,14 @@ class _WorkoutPageState extends State<WorkoutPage>
                             }
 
                             // ✅ 2) Original in-memory clear behaviour (unchanged)
+                            if (!mounted) return;
                             setState(() {
                               _workoutNameController.clear();
                               _selectedExercisesWithCircuits.clear();
                               _workoutSets.clear();
                               _initializeControllers();
                             });
+
                           },
                           child: const Text('Yes'),
                         ),
@@ -14415,7 +14457,24 @@ class _WorkoutPageState extends State<WorkoutPage>
 
             IconButton(
               icon: const Icon(Icons.save),
-              onPressed: _saveWorkout,
+              onPressed: () async {
+                final msg = await _saveWorkout();
+                if (msg == null) return;
+
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  final sm = rootScaffoldMessengerKey.currentState;
+                  if (sm == null || !sm.mounted) return;
+
+                  sm.clearSnackBars();
+                  sm.showSnackBar(
+                    SnackBar(
+                      content: Text(msg),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                });
+              },
+
             ),
           ],
         ),

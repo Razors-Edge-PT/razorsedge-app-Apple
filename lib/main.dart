@@ -37,6 +37,40 @@ final RouteObserver<ModalRoute<void>> routeObserver = RouteObserver<ModalRoute<v
 final GlobalKey<ScaffoldMessengerState> rootScaffoldMessengerKey =
 GlobalKey<ScaffoldMessengerState>();
 
+
+// ── ANCHOR ROOT-SNACKBAR:SHOW — ultra-safe snackbar (post-save)
+void showAppSnack(String message) {
+  Future<void>.delayed(const Duration(milliseconds: 250), () {
+    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+      debugPrint('⚠️ showAppSnack skipped (app not resumed)');
+      return;
+    }
+
+    final sm = rootScaffoldMessengerKey.currentState;
+    if (sm == null || !sm.mounted) {
+      debugPrint('⚠️ showAppSnack skipped (messenger not ready)');
+      return;
+    }
+
+    try {
+      sm.clearSnackBars();
+      sm.showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (e) {
+      debugPrint('⚠️ showAppSnack failed: $e');
+    }
+  });
+}
+
+
+
+
+
+
 class AppRoot extends StatelessWidget {
   const AppRoot({super.key});
 

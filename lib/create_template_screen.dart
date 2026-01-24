@@ -10,6 +10,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'block_repository.dart';
 import 'user_context.dart';
 import 'package:provider/provider.dart';
+import 'main.dart' show showAppSnack;
+
 
 
 
@@ -705,9 +707,8 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
 
     if (exerciseMaps.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please add at least one exercise')),
-      );
+      showAppSnack('Please add at least one exercise');
+
       return;
     }
 
@@ -727,18 +728,20 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
     };
 
     try {
+      final uid = context.read<UserContext>().currentUid;
+
       await FirebaseFirestore.instance
           .collection('users')
-          .doc(context.read<UserContext>().currentUid)
+          .doc(uid)
           .collection('templates')
           .doc(generatedId)
           .set(payload);
 
+
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Template created successfully')),
-      );
+      showAppSnack('Template created successfully');
+
 
       widget.onTemplateCreated();
 
@@ -749,9 +752,8 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
       print(st);
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to create template: $e')),
-      );
+      showAppSnack('Failed to create template: $e');
+
     }
   }
 
