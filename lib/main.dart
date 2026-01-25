@@ -78,55 +78,48 @@ class AppRoot extends StatelessWidget {
   Widget build(BuildContext context) {
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const MaterialApp(home: LoginScreen());
+      builder: (context, snap) {
+        final user = snap.data;
+
+        // Not logged in yet → no provider needed.
+        if (user == null) {
+          return const MyApp();
         }
 
-        final user = snapshot.data!;
-
-        // 🔄 Ensure this user has a membership doc (non-blocking, idempotent).
-        ensureMembershipDoc(user.uid);
-
+        // Logged in → build UserContext once and wrap app.
         return FutureBuilder<IdTokenResult>(
           future: user.getIdTokenResult(),
           builder: (context, tokenSnap) {
             if (!tokenSnap.hasData) {
-              return const MaterialApp(home: Scaffold(body: Center(child: CircularProgressIndicator())));
+              return const MyApp(); // MyApp will show a loader if needed
             }
 
             final token = tokenSnap.data!;
             const devCoachUids = {
-              'yoVAqScwLMQLAgNHh8v9IK49fBw2', // Richard
-              'wuiMe7phxYQh0MM39bfnhgv20yS2', //Campbell
-              'SMTEVGPH1MXgOgbcBbJFU1HjU8G3', // Adam
-              'jhIB7Yi1whYwPvBSmK27KltJGn23' // Richard testing
+              'yoVAqScwLMQLAgNHh8v9IK49fBw2',
+              'wuiMe7phxYQh0MM39bfnhgv20yS2',
+              'SMTEVGPH1MXgOgbcBbJFU1HjU8G3',
+              'jhIB7Yi1whYwPvBSmK27KltJGn23'
             };
+
             final isCoachClaim = token.claims?['isCoach'] == true;
             final isCoach = isCoachClaim || devCoachUids.contains(user.uid);
 
-            upsertUserLookup(); // fire and forget is fine here
+            ensureMembershipDoc(user.uid);
+            upsertUserLookup();
 
             final userContext = UserContext(actorUid: user.uid, isCoach: isCoach);
-
-            // 🐛 DEBUG: Confirm coach/admin flags for this login
-            print('🔍 UID: ${user.uid} | isCoach: $isCoach | isAdmin: ${userContext.isAdmin}');
-
-            // ── ANCHOR APP-ROOT:A — bootstrap global block meta (non-blocking; kicks WarmupService too)
-            // NOTE: safe to call before providing; it doesn't need BuildContext.
-            // Do NOT await—this hydrates from prefs instantly and refreshes server in background.
-            // If you prefer, you can import dart:async and use `unawaited(...)` here.
             userContext.bootstrapBlockMeta(uid: user.uid);
 
             return ChangeNotifierProvider<UserContext>.value(
               value: userContext,
-              child: const MyApp(), // 🟢 Now provider wraps entire app
+              child: const MyApp(),
             );
           },
         );
-
       },
     );
+
   }
 }
 
@@ -280,7 +273,17 @@ class MyApp extends StatelessWidget {
       navigatorObservers: [routeObserver],
 
       // ✅ Home is now gated by membership
-      home: const MembershipGate(child: HomeScreen()),
+      home: StreamBuilder<User?>(
+        stream: FirebaseAuth.instance.authStateChanges(),
+        builder: (context, snap) {
+          if (snap.connectionState == ConnectionState.waiting) {
+            return const Scaffold(body: Center(child: CircularProgressIndicator()));
+          }
+          if (!snap.hasData) return const LoginScreen();
+          return const MembershipGate(child: HomeScreen());
+        },
+      ),
+
       routes: {
         '/login': (context) => const LoginScreen(),
         '/home': (context) => const MembershipGate(child: HomeScreen()),
