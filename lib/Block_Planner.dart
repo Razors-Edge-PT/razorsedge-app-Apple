@@ -1465,12 +1465,32 @@ class _BlockPlannerState extends State<Block_Planner> {
         print("🛠️ Normalized legacy repTargets for $exercise: $nested");
       }
 
-      // ✅ Convert to proper Map<String, Map<String, String>>
-      final savedTargets = repTargets is Map<String, Map<String, String>>
-          ? repTargets
-          : _convertToMap(repTargets);
+      // ✅ Normalize Firestore dynamic maps into Map<String, Map<String, String>>
+      Map<String, Map<String, String>> _normalizeRepTargetsMap(dynamic value) {
+        if (value is Map) {
+          final out = <String, Map<String, String>>{};
+          value.forEach((k, v) {
+            final key = k.toString();
+            if (v is Map) {
+              out[key] = v.map((k2, v2) => MapEntry(k2.toString(), v2.toString()));
+            } else {
+              out[key] = <String, String>{};
+            }
+          });
+          return out;
+        }
+        return <String, Map<String, String>>{};
+      }
+
+// 🔎 Optional debug (leave it in while testing)
+      print("🔎 [$exercise] repTargets runtimeType = ${repTargets.runtimeType} | value=${jsonEncode(repTargets)}");
+
+// ✅ IMPORTANT: stop using the strict generic type check (it fails for Map<String, dynamic>)
+      final Map<String, Map<String, String>> savedTargets =
+      (repTargets is Map) ? _normalizeRepTargetsMap(repTargets) : _convertToMap(repTargets);
 
       entry['repTargets'] = savedTargets;
+      print("🧪 Saving repTargets for $exercise: ${jsonEncode(savedTargets)}");
 
       print("🧪 Saving repTargets for $exercise: ${jsonEncode(savedTargets)}");
 // ⬇️ Add this line here
