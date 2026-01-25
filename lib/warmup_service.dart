@@ -555,7 +555,7 @@ class WarmupService {
     }
 
     // Summary + detailed per-row print
-    print('🧰 [Warmup:4] exerciseSettings → ${settings.length} entries');
+
     for (final row in planned) {
       final name = (row['name'] ?? row['exercise'] ?? '').toString().trim();
       if (name.isEmpty) continue;
@@ -568,13 +568,13 @@ class WarmupService {
         try {
           final incMap = PeriodizationModelUtils.incMapFromRaw(s['increments']);
           final expanded = PeriodizationModelUtils.expandIncrementOptions(incMap);
-          print('[Warmup:4/inc] id=$id name="$name" raw=${s['increments']} expanded=$expanded');
+
         } catch (e) {
-          print('[Warmup:4/inc] id=$id name="$name" ❌ failed to expand increments: $e');
+
         }
 
       } else {
-        print('   • [$id] $name → (no settings found)');
+
       }
     }
 
@@ -658,7 +658,7 @@ class WarmupService {
     for (int di = 0; di < 7; di++) {
       final snap = await daysCol.doc('day_$di').get(const GetOptions(source: Source.server));
       if (!snap.exists) {
-        print('   • day_$di: (missing)');
+
         weekDocs[di] = {'id': 'day_$di', 'date': null, 'rows': const <Map<String, dynamic>>[]};
         continue;
       }
@@ -668,7 +668,7 @@ class WarmupService {
           ? raw.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList()
           : const <Map<String, dynamic>>[];
       final dateStr = _dateStr(data['date']);
-      print('   • day_$di: id=${snap.id} date=$dateStr rows=${rows.length}');
+
       if (rows.isNotEmpty) {
         final first = rows.first;
         final name = (first['name'] ?? first['exercise'] ?? '').toString();
@@ -695,7 +695,7 @@ class WarmupService {
     final sel = weekDocs[useDi] ?? const <String, dynamic>{};
     final selDateStr = _dateStr(sel['date']);
     final selRows = (sel['rows'] is List) ? List<Map<String, dynamic>>.from(sel['rows'] as List) : const <Map<String, dynamic>>[];
-    print('🎯 [Warmup:5] selected → day_$useDi (date=$selDateStr) rows=${selRows.length}');
+
 
 
     // 3) Build overrides for the selected day aligned to `planned` by index
@@ -726,8 +726,7 @@ class WarmupService {
         '_plannedId': pId,
       };
 
-      print('   [Warmup:5] row#$i override → wt=$weight add=$added reps=$reps rir=$rir '
-          '(planned="$pName" id=$pId)');
+
     }
 
     // 4) Lift to engine keys (exerciseId + normalized name)
@@ -940,11 +939,11 @@ class WarmupService {
       }) async {
 
     // ⛳ anchor: start of doWarmWES
-    print('[Warmup:0] incoming selectedDate=${selectedDate?.toIso8601String()}');
+
     final _sel = (selectedDate != null)
         ? DateTime(selectedDate!.year, selectedDate!.month, selectedDate!.day)
         : DateTime.now();
-    print('[Warmup:0] normalized selectedDate=${_sel.toIso8601String().substring(0,10)}');
+
 
     // ⛳ ANCHOR: WARM_ACTIVE_BLOCK_RESOLVE
     if (activeBlockId == null || activeBlockId.isEmpty) {
@@ -1796,7 +1795,6 @@ class WarmupService {
 
           for (int iRow = 0; iRow < planned.length; iRow++) {
             if (_skipRow[iRow]) {
-              print('⏭️  [Warmup:8] skip engine for row#$iRow "${(planned[iRow]['name'] ?? planned[iRow]['exercise'] ?? '').toString()}" (completed)');
               continue; // do not call the engine at all
             }
 
@@ -1919,7 +1917,7 @@ class WarmupService {
 
 // quick sanity peek
           hints.entries.take(2).forEach((e) {
-            print('🟣 [Warmup:8→9] hint ${e.key} → ${e.value}');
+
           });
 
 // JSON for Step 9 snapshot
@@ -2016,7 +2014,7 @@ class WarmupService {
 
 // (Optional) peek a couple for sanity
           hints.entries.take(2).forEach((e) {
-            print('🟣 [Warmup:8→9] hint ${e.key} → ${e.value}');
+
           });
 
 
@@ -2141,7 +2139,7 @@ class WarmupService {
               };
 
               hints[key] = entry;
-              print('🟣 [Warmup:8→9] hint $key → $entry'); // now shows s2..s8 if present
+
             }
 
 // JSON for Step 9 snapshot — compute AFTER filling `hints`

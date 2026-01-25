@@ -95,6 +95,8 @@ class HomeScreen extends StatefulWidget {
 enum HomeSection { calendar, topLifts }
 
 class _HomeScreenState extends State<HomeScreen> with RouteAware {
+  late final UserContext _uc;
+  bool _ucBound = false;
 
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   static const double kFeatureCardWidth = 150;
@@ -416,6 +418,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     });
 
     // 🔧 One-time default template bootstrap (non-blocking) — gated on users + fitness_onboarding
+    // 🚫 Auth stability guard — do NOT attach Firestore listeners if auth is unstable
+    final authUser = FirebaseAuth.instance.currentUser;
+    if (!mounted || authUser == null || authUser.uid != actingUid) {
+      debugPrint('🛑 [HOME] Skipping onboarding listeners (auth unstable)');
+      return;
+    }
+
     if (actingUid != null && actingUid.isNotEmpty) {
       final usersRef    = FirebaseFirestore.instance.collection('users').doc(actingUid);
       final onboardRef  = FirebaseFirestore.instance
@@ -455,49 +464,66 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
 
       // Non-blocking listeners; auto-cancel after first success
-      userSub = usersRef.snapshots().listen((u) async {
-        if (!u.exists) return;
-        final d = u.data();
-        final hasCore =
-            d != null &&
-                d['sex'] != null &&
-                d['dob'] != null &&
-                d['username'] != null;
+      userSub = usersRef
+          .snapshots()
+          .listen(
+            (u) async {
+          if (!u.exists) return;
+          final d = u.data();
+          final hasCore =
+              d != null &&
+                  d['sex'] != null &&
+                  d['dob'] != null &&
+                  d['username'] != null;
 
-        if (!hasCore) return;
+          if (!hasCore) return;
 
-        // Check onboarding doc in parallel
-        final oSnap = await onboardRef.get();
-        final onboardingReady = oSnap.exists && (oSnap.data()?.isNotEmpty ?? false);
+          // Check onboarding doc in parallel
+          final oSnap = await onboardRef.get();
+          final onboardingReady = oSnap.exists && (oSnap.data()?.isNotEmpty ?? false);
 
-        if (onboardingReady) {
-          await maybeRun();
-          await userSub?.cancel();
-          // onboardSub might be null if we never attached (see below)
-        }
-      });
+          if (onboardingReady) {
+            await maybeRun();
+            await userSub?.cancel();
+            // onboardSub might be null if we never attached (see below)
+          }
+        },
+        onError: (Object e, StackTrace st) async {
+          debugPrint('🟥 [HOME] usersRef.snapshots denied: $e');
+          // Optional: cancel so it doesn’t spam logs
+          try { await userSub?.cancel(); } catch (_) {}
+        },
+      );
+
 
       // Also watch onboarding; if onboarding arrives first, verify user core then run
-      onboardSub = onboardRef.snapshots().listen((o) async {
-        if (!o.exists || (o.data()?.isNotEmpty != true)) return;
+      onboardSub = onboardRef
+          .snapshots()
+          .listen(
+            (o) async {
+          if (!o.exists || (o.data()?.isNotEmpty != true)) return;
 
-        final u = await usersRef.get();
-        final d = u.data();
-        final hasCore =
-            u.exists &&
-                d != null &&
-                d['sex'] != null &&
-                d['dob'] != null &&
-                d['username'] != null;
+          final u = await usersRef.get();
+          final d = u.data();
+          final hasCore =
+              u.exists &&
+                  d != null &&
+                  d['sex'] != null &&
+                  d['dob'] != null &&
+                  d['username'] != null;
 
-        if (hasCore) {
-          await maybeRun();
-          await onboardSub?.cancel();
-          // userSub will be cancelled by maybeRun() path above when it fires from user stream,
-          // but if we fire from onboarding first, also cancel userSub here:
-          try { await userSub?.cancel(); } catch (_) {}
-        }
-      });
+          if (hasCore) {
+            await maybeRun();
+            await onboardSub?.cancel();
+            try { await userSub?.cancel(); } catch (_) {}
+          }
+        },
+        onError: (Object e, StackTrace st) async {
+          debugPrint('🟥 [HOME] onboardRef.snapshots denied: $e');
+          try { await onboardSub?.cancel(); } catch (_) {}
+        },
+      );
+
 
       // (Keep your templates watcher block below if you want live counts)
     }
@@ -540,6 +566,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   Future<void> _restoreSelectedFeed() async {
+    if (!mounted) return;
+
     try {
       final uid = UserContext.of(context, listen: false).actorUid;
       final snap = await FirebaseFirestore.instance.collection('users').doc(uid).get();
@@ -553,6 +581,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   Future<void> _persistSelectedFeed() async {
+    if (!mounted) return;
+
     try {
       final uid = UserContext.of(context, listen: false).actorUid;
       await FirebaseFirestore.instance.collection('users').doc(uid).set({
@@ -1059,6 +1089,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    if (!_ucBound) {
+      _uc = context.read<UserContext>(); // ✅ safe here
+      _ucBound = true;
+      _uc.addListener(_onUserContextChange); // ✅ (also ensures you're actually listening)
+    }
+
     _loadAthleteEmail(); // 👈 this line ensures _actingAsEmail is set
     final ModalRoute<dynamic>? route = ModalRoute.of(context);
     if (route != null) {
@@ -1080,9 +1116,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   @override
   void dispose() {
-    // Stop listening to UserContext changes
-    Provider.of<UserContext>(context, listen: false)
-        .removeListener(_onUserContextChange);
+    // Stop listening to UserContext changes (don't use context in dispose)
+    if (_ucBound) {
+      _uc.removeListener(_onUserContextChange);
+    }
+
 
     // Unsubscribe from route observer
     routeObserver.unsubscribe(this);
@@ -1097,7 +1135,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     _pointsScrollCtrl.removeListener(_onPointsScroll);
     _pointsScrollCtrl.dispose();
 
-    debugPrint('❌ [HOME] dispose() called');
+    debugPrint('🏠 [HOME] dispose() called');
     super.dispose();
   }
 
@@ -1711,9 +1749,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
 
+
   @override
   Widget build(BuildContext context) {
     final userEmail = FirebaseAuth.instance.currentUser?.email ?? '';
+    final uc = context.watch<UserContext>();
+    final dmUid = uc.currentUid ?? uc.actorUid; // ✅ never force unwrap currentUser
 
     return Scaffold(
 
@@ -2027,22 +2068,48 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
               // 📩 Direct Messages icon with unread badge
               StreamBuilder<QuerySnapshot>(
-                stream: FirebaseFirestore.instance
+                stream: (dmUid == null || dmUid.isEmpty)
+                    ? const Stream<QuerySnapshot>.empty()
+                    : FirebaseFirestore.instance
                     .collection('conversations')
-                    .where('participants.${FirebaseAuth.instance.currentUser!.uid}', isEqualTo: true)
+                    .where('participants.$dmUid', isEqualTo: true)
                     .snapshots(),
+
                 builder: (context, snapshot) {
+                  if (snapshot.hasError) {
+                    return IconButton(
+                      icon: const Icon(
+                        Icons.message_outlined,
+                        size: 26,
+                        color: Colors.cyanAccent,
+                      ),
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const DirectMessages(),
+                          ),
+                        );
+                      },
+                    );
+                  }
+
                   int unreadCount = 0;
-                  if (snapshot.hasData) {
+
+                  final me = FirebaseAuth.instance.currentUser?.uid;
+
+                  if (snapshot.hasData && me != null) {
                     for (var doc in snapshot.data!.docs) {
                       final data = doc.data() as Map<String, dynamic>;
-                      final state = data['participantState']?[FirebaseAuth.instance.currentUser!.uid];
-                      final count = (state != null && state['unreadCount'] is int)
+
+                      final state = data['participantState']?[me];
+                      final count = (state is Map && state['unreadCount'] is int)
                           ? state['unreadCount'] as int
                           : 0;
+
                       unreadCount += count;
                     }
                   }
+
 
                   return Stack(
                     alignment: Alignment.center,
@@ -2079,6 +2146,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                         ),
                     ],
                   );
+
                 },
               ),
 
@@ -2863,8 +2931,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
                                   // re_daily: check eligibility first (promoted + has badge + points > 0)
                                   return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                                    stream: FirebaseFirestore.instance.collection('posts').doc(p.id).snapshots(),
+                                    stream: FirebaseFirestore.instance.collection('posts').doc(p.id).snapshots().handleError((_) {}),
+
                                     builder: (context, snap) {
+                                      if (snap.hasError) return const SizedBox.shrink();
+
                                       if (!snap.hasData) return const SizedBox.shrink();
                                       final d = snap.data!.data() ?? const <String, dynamic>{};
                                       final promoted = (d['promoteToHome'] as bool?) == true;
