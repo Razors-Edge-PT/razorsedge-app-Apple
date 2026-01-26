@@ -674,7 +674,7 @@ class WarmupService {
         final name = (first['name'] ?? first['exercise'] ?? '').toString();
         final weight = first['weight'];
         final reps = first['reps'];
-        print('     ↳ first: name="$name" weight=$weight reps=$reps');
+
       }
       weekDocs[di] = {'id': snap.id, 'date': data['date'], 'rows': rows};
     }
@@ -972,48 +972,68 @@ class WarmupService {
           return '${dt.year}-$m-$day';
         }
 
+        void _ff(Future<dynamic> fut, String tag) {
+          unawaited(
+            fut.catchError((e, st) {
+              print('🧨 [Warmup] workout query failed ($tag): $e');
+            }),
+          );
+        }
+
         final workouts = fs.collection('users').doc(uid).collection('workouts');
         final startOfDay = DateTime(d.year, d.month, d.day);
         final nextDay = startOfDay.add(const Duration(days: 1));
         final dateOnly = _ymd(d);
         final nextDateOnly = _ymd(nextDay);
         final isoLocal = startOfDay.toIso8601String();
-        final isoUtc = DateTime.utc(
-            startOfDay.year, startOfDay.month, startOfDay.day)
+        final isoUtc = DateTime.utc(startOfDay.year, startOfDay.month, startOfDay.day)
             .toIso8601String();
 
         // New-style doc by ID
-        unawaited(workouts
-            .doc(dateOnly)
-            .get(const GetOptions(source: Source.server)));
+        _ff(
+          workouts.doc(dateOnly).get(const GetOptions(source: Source.server)),
+          'docId=$dateOnly',
+        );
 
         // Legacy string equals (3 forms)
-        unawaited(workouts
-            .where('date', isEqualTo: isoLocal)
-            .get(const GetOptions(source: Source.server)));
-        unawaited(workouts
-            .where('date', isEqualTo: isoUtc)
-            .get(const GetOptions(source: Source.server)));
-        unawaited(workouts
-            .where('date', isEqualTo: dateOnly)
-            .get(const GetOptions(source: Source.server)));
+        _ff(
+          workouts
+              .where('date', isEqualTo: isoLocal)
+              .get(const GetOptions(source: Source.server)),
+          "date == isoLocal ($isoLocal)",
+        );
+        _ff(
+          workouts
+              .where('date', isEqualTo: isoUtc)
+              .get(const GetOptions(source: Source.server)),
+          "date == isoUtc ($isoUtc)",
+        );
+        _ff(
+          workouts
+              .where('date', isEqualTo: dateOnly)
+              .get(const GetOptions(source: Source.server)),
+          "date == ymd ($dateOnly)",
+        );
 
         // Legacy string range (captures ISO strings with time-of-day)
-        unawaited(
+        _ff(
           workouts
               .where('date', isGreaterThanOrEqualTo: '${dateOnly}T00:00:00')
               .where('date', isLessThan: '${nextDateOnly}T00:00:00')
               .get(const GetOptions(source: Source.server)),
+          "date string range [$dateOnly .. $nextDateOnly)",
         );
 
         // Legacy timestamp day-range
-        unawaited(
+        _ff(
           workouts
               .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
               .where('date', isLessThan: Timestamp.fromDate(nextDay))
               .get(const GetOptions(source: Source.server)),
+          'date timestamp range [$startOfDay .. $nextDay)',
         );
       }
+
 
       if (warmAthlete) {
         String _ymd(DateTime d) {
@@ -1042,8 +1062,7 @@ class WarmupService {
               .collection('users')
               .doc(uid)
               .collection('workouts')
-              .orderBy('date', descending: true)
-              .limit(_workoutWarmLimit)
+              .limit(_workoutWarmLimit.clamp(1, 1000))
               .get(const GetOptions(source: Source.server)),
         );
 

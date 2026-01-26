@@ -2757,9 +2757,13 @@ class PeriodizationModelUtils {
         // 2) Reconcile with server in background (non-blocking)
         unawaited(() async {
           try {
-            final serverSnap = await query.get(const GetOptions(source: Source.server));
-            // You could diff; simplest is to re-apply
-            _applyTopSetsFromSnapshot(serverSnap);
+            try {
+              final serverSnap = await query.get(const GetOptions(source: Source.server));
+              _applyTopSetsFromSnapshot(serverSnap);
+            } catch (e) {
+              print('🧨 [PMU] fetchLastWorkoutTopSetReps server query failed: $e');
+            }
+
           } catch (_) {}
         }());
         return;
