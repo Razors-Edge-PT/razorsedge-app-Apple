@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Localtest222</string>
+    <string>Good Lift</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -30,6 +30,26 @@
     <string>We need access to your camera so you can take and upload photos (for example, a profile picture or training-related photo).</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>We need access to your microphone only if you record audio while capturing video.</string>
+
+	<!-- Search-bar anchor: CFBundleURLTypes -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.659564418928-tb6thrajkglrsrmbv1tiu5jbtq2nka6q</string>
+			</array>
+		</dict>
+	</array>
+
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>google</string>
+		<string>com.googleusercontent.apps</string>
+	</array>
+
 
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>

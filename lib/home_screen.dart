@@ -657,12 +657,25 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     for (int off = todayOffset; off <= maxOffset; off++) {
       if (completed[off] == true) continue;
 
-      final dayDoc = plannedByOffset[off];
+      Map<String, dynamic>? dayDoc = plannedByOffset[off];
+
+      // ✅ IMPORTANT: we only preloaded up to "today", so for future offsets
+      // we must fetch from server or we will overwrite existing plans.
+      if (!_isPlannedDay(dayDoc)) {
+        final s = await _dayRefForOffset(off)
+            .get(const GetOptions(source: Source.server));
+        dayDoc = s.data();
+      }
+
       if (_isPlannedDay(dayDoc)) {
         queue.add(Map<String, dynamic>.from(dayDoc!));
         futurePlannedOffsetsToClear.add(off);
+        debugPrint('🧪 [ROLL] queued existing future plan off=$off date=${_ymd(blockStart.add(Duration(days: off)))}');
+
+
       }
     }
+
 
     if (queue.isEmpty) {
       debugPrint('✅ [ROLL] queue empty after read (nothing to move)');

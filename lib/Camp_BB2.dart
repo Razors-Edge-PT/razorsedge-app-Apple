@@ -480,9 +480,20 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
 
 
-      await _timeStep('ensureWeekLoaded($_currentWeekPage)',
-          () => ensureWeekLoaded(_currentWeekPage, caller: 'initState'),
-      total: total);
+      await _timeStep('forceReloadWeek($_currentWeekPage)', () async {
+        // ✅ Clear any early-hydrated rows so stale Isar data can’t “win” first paint.
+        for (int d = 0; d < 7; d++) {
+          exerciseRows[_currentWeekPage][d] = <ExerciseRow>[];
+          circuitStartIndices[_currentWeekPage][d] = <int>[0];
+        }
+
+        // ✅ Force Firestore server read + re-parse for this week.
+        await loadBlockDataForWeek(_currentWeekPage, forceServer: true);
+
+        // ✅ Mark loaded so we don’t immediately re-fetch it again.
+        loadedWeekIndices.add(_currentWeekPage);
+      }, total: total);
+
 
       print("📦 Week $_currentWeekPage data loaded.");
 
@@ -841,8 +852,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
   Future<void> loadVisibleWeeksOnly() async {
     final stopwatch = Stopwatch()..start();
-    final today = DateTime.now();
-    final currentWeekIndex = today.difference(blockStartDate).inDays ~/ 7;
+    final currentWeekIndex = _currentWeekPage; // ✅ must match PageView’s initialPage
+
 
 
     // CHANGE here to load more weeks on open
@@ -904,6 +915,55 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     _inflightLoads[week] = f;
     return f;
   }
+
+  // 🔄 Force a re-fetch + re-parse of specific weeks (used after server-side mutations like roll-forward)
+  Future<void> forceReloadWeeks(
+      Set<int> weeks, {
+        bool forceServer = true,
+        String caller = 'unknown',
+      }) async {
+    if (weeks.isEmpty) return;
+
+    final sorted = weeks.toList()..sort();
+
+    // Clear any hint/progression cache so UI recomputes cleanly after reload
+    _cachedProgressedValues.clear();
+
+    for (final w in sorted) {
+      if (w < 0 || w >= totalWeeks) continue;
+
+      // If a load is already in-flight, wait for it to finish first
+      final inflight = _inflightLoads[w];
+      if (inflight != null) {
+        try {
+          await inflight;
+        } catch (_) {
+          // ignore; we’re forcing a reload anyway
+        }
+      }
+
+      debugPrint('🔄 [BB2] forceReloadWeeks → reloading week $w (forceServer=$forceServer) ← $caller');
+
+      // Invalidate the "already loaded" guards so we can rehydrate
+      loadedWeekIndices.remove(w);
+      _loadingWeeks.remove(w);
+      _inflightLoads.remove(w);
+
+      // Invalidate per-day loaded keys (mainly affects dispose-saving + consistency)
+      for (int d = 0; d < 7; d++) {
+        _loadedDays.remove('w${w}_d$d');
+      }
+
+      // Re-fetch + re-parse planned days into exerciseRows/circuitStartIndices
+      await loadBlockDataForWeek(w, forceServer: forceServer);
+
+      // Mark loaded again (loadBlockDataForWeek does state commit; this is for guards)
+      loadedWeekIndices.add(w);
+    }
+
+    if (mounted) setState(() {});
+  }
+
 
 
   // ...Cache loading technique
@@ -1739,16 +1799,44 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
   Set<String> _completedKeysFromSaved(List<Map<String, dynamic>> savedExercises) {
     final keys = <String>{};
+
+    int _toInt(dynamic v) {
+      if (v is num) return v.toInt();
+      return int.tryParse('${v ?? ''}') ?? 0;
+    }
+
+    double _toDouble(dynamic v) {
+      if (v is num) return v.toDouble();
+      return double.tryParse('${v ?? ''}') ?? 0.0;
+    }
+
+    bool _anyRealWorkDone(List<Map<String, dynamic>> sets) {
+      for (final s in sets) {
+        final reps = _toInt(s['reps']);
+        final w = _toDouble(s['weight']);
+        if (reps > 0 && w > 0.0) return true;
+      }
+      return false;
+    }
+
     for (final ex in savedExercises) {
       final name = (ex['name'] ?? '').toString().trim();
       if (name.isEmpty) continue;
+
       final circuit = ex['circuitIndex'] ?? 0;
-      final sets = List<Map<String, dynamic>>.from(ex['sets'] ?? const []);
-      if (sets.isEmpty) continue; // only treat as "completed" if at least 1 set
+      final sets = (ex['sets'] is List)
+          ? List<Map<String, dynamic>>.from(ex['sets'] as List)
+          : const <Map<String, dynamic>>[];
+
+      // ✅ Only completed if any set has reps>0 AND weight>0
+      if (!_anyRealWorkDone(sets)) continue;
+
       keys.add(_exKey(name, circuit));
     }
+
     return keys;
   }
+
 
   /// Move conflicting planned rows into `suppressedPlanned` so they don’t count,
   /// but can be restored later if completion disappears.
@@ -2280,11 +2368,12 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
       final docIdSnaps = await Future.wait(futures);
 
-      // 2) Legacy auto-ID snapshots for the whole range (CACHE)
+      // 2) Legacy auto-ID snapshots for the whole range (CACHE / actually server now)
       final legacyCacheSnap = await workoutsCol
           .where('date', isGreaterThanOrEqualTo: _isoDay(rangeStart))
           .where('date', isLessThan: _isoDay(rangeEnd))
-          .get(const GetOptions(source: Source.cache));
+          .get(const GetOptions(source: Source.server));
+
 
       // Index legacy docs by day
       final legacyByDateCache = <String, List<Map<String, dynamic>>>{};
@@ -2632,14 +2721,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
       }
 
-      // ✅ Prune planned dupes in-memory so UI shows only one per exercise that day
-      final completedKeys = _completedKeysFromSaved(savedExercises);
-      _prunePlannedRowsInMemory(
-        parsedByDayIndex: parsedByDayIndex,
-        circuitStartsByDay: circuitStartsByDay,
-        dayIndex: dayIndex,
-        completedKeys: completedKeys,
-      );
+
     }
     print('   ↳ WES cache fetch (${wesCacheDocs.length} docs) took ${wesStep.elapsedMilliseconds}ms');
 
@@ -5939,7 +6021,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
                           // 3) Authoritative reconciliation (Firestore)
                           await ensureWeekLoaded(newPage, caller: 'onPageChanged');
-
+                          loadedWeekIndices.add(newPage);
                           // 4) Prefetch + warm neighbors after this frame
                           WidgetsBinding.instance.addPostFrameCallback((_) {
                             unawaited(_prefetchNeighborWeeks(newPage));

@@ -134,17 +134,22 @@ void main() async {
   }
 
 
-  // 👇 App Check: Play Integrity in release, Debug provider in dev
-  await FirebaseAppCheck.instance.activate(
-    androidProvider: kReleaseMode
-        ? AndroidProvider.playIntegrity
-        : AndroidProvider.debug,
+  // Search-bar anchor: FirebaseAppCheck.instance.activate
+  // ✅ Production-safe: App Check should never prevent the UI from rendering.
+  try {
+    await FirebaseAppCheck.instance.activate(
+      androidProvider: kReleaseMode
+          ? AndroidProvider.playIntegrity
+          : AndroidProvider.debug,
 
-    // ✅ iOS Simulator can't use DeviceCheck → use debug provider in dev
-    appleProvider: kReleaseMode
-        ? AppleProvider.deviceCheck
-        : AppleProvider.debug,
-  );
+      appleProvider: kReleaseMode
+          ? AppleProvider.deviceCheck
+          : AppleProvider.debug,
+    );
+  } catch (e, st) {
+    debugPrint('❌ AppCheck activate failed: $e');
+    debugPrint('$st');
+  }
 
 
   runApp(const AppRoot());
