@@ -604,10 +604,19 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     // 4) Load the rest
     final tAll = Stopwatch()..start();
     await loadAllData();
+
+// ✅ FORCE rehydrate current week from server
+    await loadBlockDataForWeek(
+      _currentWeekPage,
+      forceServer: true,
+    );
+    if (mounted) setState(() {});
+
     tAll.stop();
     if (kDebugMode) {
       debugPrint('   ↳ loadAllData took ${tAll.elapsedMilliseconds}ms');
     }
+
 
     total.stop();
     if (kDebugMode) {
@@ -2084,10 +2093,12 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
   // Week specific function, calls current week on start up and triggered by page scroll
 
-  Future<void> loadBlockDataForWeek(int weekIndex) async {
+  Future<void> loadBlockDataForWeek(
+      int weekIndex, {
+        bool forceServer = false,
+      }) async {
     final total = Stopwatch()..start();
-    print('⏳ [BB2] loadBlockDataForWeek($weekIndex) start');
-
+    print('⏳ [BB2] loadBlockDataForWeek($weekIndex) start  forceServer=$forceServer');
 
     final uid = _cachedUid; // lock to the selected athlete for this BB2 State
     print('🧬 [UID CHECK] start: local=$uid field=$_cachedUid');
@@ -2101,22 +2112,30 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         .collection('planned_blocks')
         .doc(uid)
         .collection('blocks');
-    final weekDocRef = blocksCol.doc(_selectedBlockId)
+
+    final weekDocRef = blocksCol
+        .doc(_selectedBlockId)
         .collection('weeks')
         .doc('week_$weekIndex');
+
     print('🧭 [PATH] uid=${_cachedUid} block=${_selectedBlockId} week=$weekIndex');
     print('🧭 [PATH] weekDocRef=${weekDocRef.path}');
     print('🧭 [PATH] blockDoc=${blocksCol.doc(_selectedBlockId).path}');
     print('🧭 [PATH] daysCol=${weekDocRef.collection('days').path}');
 
+    // ✅ Source selection: normal path uses cache (fast), forced refresh uses server
+    final GetOptions opts = GetOptions(
+      source: forceServer ? Source.server : Source.cache,
+    );
 
-    // 1) Pull stable pieces in parallel (cache-first for fast path)
+    // 1) Pull stable pieces in parallel
     final step = Stopwatch()..start();
     final cacheFetch = Future.wait([
-      weekDocRef.get(const GetOptions(source: Source.cache)),
-      blocksCol.doc(_selectedBlockId).get(const GetOptions(source: Source.cache)),
-      weekDocRef.collection('days').get(const GetOptions(source: Source.cache)),
+      weekDocRef.get(opts),
+      blocksCol.doc(_selectedBlockId).get(opts),
+      weekDocRef.collection('days').get(opts),
     ]);
+
 
 
 
@@ -4741,8 +4760,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                 selectedTemplateIds[weekIndex][dayIndex] = selectedTemplate.id;
                                 _populateExercisesFromTemplate(
                                     weekIndex, dayIndex, selectedTemplate.id);
-                                updateFutureDaysWithEditedDay(
-                                    weekIndex, dayIndex); // ✅ Mirror into future weeks
                               });
                             }
                           },
@@ -5400,7 +5417,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                         ExerciseRow(circuitIndex: 0),
                                       );
                                     });
-                                    updateFutureDaysWithEditedDay(weekIndex, dayIndex);
+                                 //   updateFutureDaysWithEditedDay(weekIndex, dayIndex);
                                   },
                                   icon: const Icon(Icons.add),
                                   label: const Text('Add Exercise'),
@@ -5441,7 +5458,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                 }
                 circuitStartIndices[weekIndex][dayIndex] = starts.toList()..sort();
 
-                updateFutureDaysWithEditedDay(weekIndex, dayIndex);
+                //updateFutureDaysWithEditedDay(weekIndex, dayIndex);
               });
             },
 
@@ -5638,7 +5655,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                           ExerciseRow(circuitIndex: currentCircuit),
                                         );
                                       });
-                                      updateFutureDaysWithEditedDay(weekIndex, dayIndex);
+                                      //updateFutureDaysWithEditedDay(weekIndex, dayIndex);
                                     },
                                     icon: const Icon(Icons.add, size: 16),
                                     label: const Text('Add Exercise', style: TextStyle(fontSize: 12)),
