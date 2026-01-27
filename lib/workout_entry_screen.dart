@@ -11836,9 +11836,11 @@ class _WorkoutPageState extends State<WorkoutPage>
         (_lastMergedDate == _selectedDate);
     if (_hasCompletedInitialMergeForThisDate && sameAsLast) {
       print(
-          '⏭️ [WES] _mergeNewBB2ExercisesIntoDraft skipped (already completed for uid=$uidGate date=$_selectedDate)');
-      return;
+          '⏭️ [WES] merge already completed for uid=$uidGate date=$_selectedDate — skipping STRUCTURE merge, but still refreshing BB2 values');
+      // IMPORTANT: do NOT return; we still want the latest BB2 values (reps/weight/rir)
+      // to refresh hint precedence even when rows already exist in WES.
     }
+
     _isMergingBB2.value = true;
 
     try {
@@ -12344,7 +12346,8 @@ class _WorkoutPageState extends State<WorkoutPage>
 
 
         // Seed initial values for newly added rows (prefer flat; else sets[0])
-        for (final newEx in newOnes) {
+        for (final newEx in bb2Exercises) {
+
           final nameKey = (newEx['name'] ?? '').toString().trim().toLowerCase();
           if (nameKey.isEmpty || _resolvedBB2Values.containsKey(nameKey))
             continue;
