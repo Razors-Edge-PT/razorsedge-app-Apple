@@ -93,10 +93,10 @@ class WarmupService {
       final data = doc.data()!;
       final start = parseDate(data['startDate']) ?? parseDate(data['blockStart']) ?? parseDate(data['start']);
       final end   = parseDate(data['endDate'])   ?? parseDate(data['blockEnd'])   ?? parseDate(data['end']);
-      print('🧩 [Warmup:1] block meta → start=$start end=$end');
+
       return (start, end);
     } catch (e) {
-      print('🧩 [Warmup:1] block meta load failed: $e');
+
       return (null, null);
     }
   }
@@ -2225,9 +2225,7 @@ class WarmupService {
             print('🧪 [Warmup:DATE] _sel=${_ymd(_sel)} arg=${DateFormat('yyyy-MM-dd').format(selectedDate ?? _sel)}');
 
             final String dateYmd = _ymd(_sel);
-            print('🧩 [Warmup:DATECHECK] selectedDate=${selectedDate?.toIso8601String()} '
-                '→ computed dateYmd=$dateYmd '
-                '(tz=${selectedDate?.timeZoneOffset})');
+
 
             final int weekIdx = _getWeek(_sel, blockStart);
 

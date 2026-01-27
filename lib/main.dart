@@ -90,9 +90,12 @@ class AppRoot extends StatelessWidget {
         return FutureBuilder<IdTokenResult>(
           future: user.getIdTokenResult(),
           builder: (context, tokenSnap) {
-            if (!tokenSnap.hasData) {
-              return const MyApp(); // MyApp will show a loader if needed
+            if (tokenSnap.connectionState == ConnectionState.waiting || !tokenSnap.hasData) {
+              return const MaterialApp(
+                home: Scaffold(body: Center(child: CircularProgressIndicator())),
+              );
             }
+
 
             final token = tokenSnap.data!;
             const devCoachUids = {

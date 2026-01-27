@@ -1388,8 +1388,15 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     if (!_bb2WarmupScheduled) {
       _bb2WarmupScheduled = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        final userContext = Provider.of<UserContext>(context, listen: false);
-        final actingUid = userContext.actingAsUid ?? userContext.actorUid;
+        final userContext = UserContext.maybeOf(context, listen: false);
+        if (userContext == null) {
+          debugPrint('🟥 [HOME:initState] UserContext not found above HomeScreen (provider scope issue).');
+          return;
+        }
+        final actingUid = userContext.actingAsUid.isNotEmpty
+            ? userContext.actingAsUid
+            : userContext.actorUid;
+
         debugPrint('🏁 [HOME] First-show: schedule WarmupBB2 for $actingUid');
         if (actingUid != null && actingUid.isNotEmpty) {
           unawaited(WarmupBB2.runForActiveBlock(uid: actingUid));
@@ -1686,33 +1693,45 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   Future<void> _resolveFeedOwners() async {
+    // If this widget is already gone, do nothing.
+    if (!mounted) return;
+
     final uc = UserContext.of(context, listen: false);
-    final viewerUid = uc.currentUid ?? uc.actorUid;
+    final viewerUid = uc.currentUid; // currentUid is non-nullable String in your UserContext
     final owners = <String>{};
 
-    if (viewerUid != null && viewerUid.isNotEmpty) {
+    if (viewerUid.isNotEmpty) {
       owners.add(viewerUid);
     }
+
     try {
       final d = await FirebaseFirestore.instance
           .collection('buddyAssignments')
           .doc(viewerUid)
           .get();
 
-      final data = d.data() ?? const {};
+      // You might get disposed while awaiting Firestore.
+      if (!mounted) return;
+
+      final data = d.data() ?? const <String, dynamic>{};
       final athletesMap = (data['athletes'] is Map)
-          ? Map<String, dynamic>.from(data['athletes'])
+          ? Map<String, dynamic>.from(data['athletes'] as Map)
           : const <String, dynamic>{};
 
       owners.addAll(athletesMap.keys);
-
     } catch (e) {
+      // Optional: log it, but don't crash
+      debugPrint('⚠️ [HOME] _resolveFeedOwners failed: $e');
+      if (!mounted) return;
     }
+
+    if (!mounted) return;
     setState(() {
       _feedOwnerUids = owners.toList();
       _feedOwnersResolved = true;
     });
   }
+
 
 // cleaning function
   Future<void> cleanAndSyncExercisesInFirestore() async {

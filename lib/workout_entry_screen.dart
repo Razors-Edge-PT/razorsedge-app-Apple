@@ -2224,8 +2224,7 @@ class _WorkoutPageState extends State<WorkoutPage>
         if (mounted && !listEq(plannedExercises, cached)) {
           setState(() => plannedExercises = cached);
         }
-        print('📦 [WES] plannedExercises (cache) items=${cached
-            .length} in ${cacheSw.elapsedMilliseconds}ms');
+
 
         // 2) Background reconcile
         unawaited(() async {
@@ -3889,7 +3888,7 @@ class _WorkoutPageState extends State<WorkoutPage>
             final e1rms = entry.value.map((e) => e.toStringAsFixed(2)).join(
                 ', ');
             final reps = exercisePreviousTopSetReps[name]?.join(', ') ?? '—';
-            print('🔍 Top sets for $name → E1RMs: [$e1rms], Reps: [$reps]');
+
           }
         }
       });
@@ -3914,8 +3913,7 @@ class _WorkoutPageState extends State<WorkoutPage>
         .exercisePeriodizationModels[exerciseId];
     final weekIndex = getWeekIndexFromDate(_selectedDate!, _blockStartDate!);
 
-    print(
-        '🔍 [WES] Getting repTarget for $exerciseId → model: $model, weekIndex: $weekIndex');
+
 
     try {
       int? rep;
@@ -5692,20 +5690,11 @@ class _WorkoutPageState extends State<WorkoutPage>
       return (lines.isEmpty) ? '  (no sessions found)' : lines.join('\n');
     }
 
-    print('📋 [WES] rirPlan.$weekKey snapshot:\n${_dumpWeek(weekData)}');
+
 
 // 3) Final pick summary (shows rotation + week start effects indirectly)
-    print(
-        '🎯 [WES] RIR pick → weekIndex=$weekIndex (key=$weekKey) '
-            'rawSessionIndex=$sessionIndex  desiredSessionIndex=${desiredSessionIndex} '
-            '(effectiveFreq=$effectiveFreq)  sessionKey=$sessionKey  set=$setNumber '
-            'plannedRir=$plannedRir  bb2Rir=$bb2Rir  final=$finalRir'
-    );
 
-    print(
-        '🎯 getRirFromPlanOrInput → ex="$exerciseName" set=$setNumber '
-            'weekIndex=$weekIndex weekKey=$weekKey sessionKey=$sessionKey '
-            'plannedRir=$plannedRir bb2Rir=$bb2Rir → final=$finalRir');
+
 
     return finalRir;
   }
@@ -6180,8 +6169,7 @@ class _WorkoutPageState extends State<WorkoutPage>
           }
 
           await _loadAllBlocks();
-          print('📦 [WES] _loadAllBlocks complete, total blocks: ${_allBlocks
-              .length}');
+
 
 
           _selectedBlockId = _allBlocks
@@ -6311,13 +6299,11 @@ class _WorkoutPageState extends State<WorkoutPage>
                   .isNotEmpty));
 
           if (!hasUserData) {
-            print(
-                '🔁 [WES Init] No user-entered data in WES → re-merging BB2 values');
+
             _lastMergedUid = null;
             await _mergeNewBB2ExercisesIntoDraft();
           } else {
-            print(
-                '✅ [WES Init] Skipping BB2 re-merge — WES already has user-entered data');
+
           }
 
           _openingMergePhase = false;   // boot merges are done
@@ -6511,12 +6497,12 @@ class _WorkoutPageState extends State<WorkoutPage>
       return;
     }
 
-    print('🔁 [WES Init] Running full BB2 plan load');
+
 
 // ──────────────────────────────────────────────────────────────
 // SUPER-CACHE READ: disabled here to avoid double fast-paint.
 // ──────────────────────────────────────────────────────────────
-    print('⏭️ [WES Init] Skipping in-function snapshot hydrate (boot paint handles it)');
+
 
 
     // A) ORDER-DEPENDENT chain (keep sequential)
@@ -6572,9 +6558,9 @@ class _WorkoutPageState extends State<WorkoutPage>
     await Future.wait(reads);
 
     // E) Draft load (as before)
-    print('💾 [WES Init] Attempting to load draft from cache...');
+
     final draftLoaded = await _loadWorkoutDraftFromCache();
-    print('📦 [WES Init] Draft loaded: $draftLoaded');
+
 
     // F) Touch BB2 day doc from SERVER (best-effort) so merge has fresh data
     //    Keep **non-blocking**: the merge will re-run when data arrives if needed
@@ -6607,10 +6593,10 @@ class _WorkoutPageState extends State<WorkoutPage>
     final _rowsExist = _selectedExercisesWithCircuits.isNotEmpty;
 
     if (draftLoaded) {
-      print('🔁 [WES Init] Merging BB2 exercises post-draft...');
+
       await _mergeNewBB2ExercisesIntoDraft(); // Isar-first inside
     } else {
-      print('📭 [WES Init] No draft found → merging BB2...');
+
       if (_isStale(_loadEpoch) || _loadDayKey != _currentDayKey) {
         print('⛔️ [_loadInitialData] stale (epoch/dayKey) — aborting apply');
         return;
@@ -6844,8 +6830,7 @@ class _WorkoutPageState extends State<WorkoutPage>
         blockStartDate = start;
         blockEndDate = end;
         _selectedDays = days;
-        print(
-            '📦 [WES] BlockMeta (attempt $attempt) → start: $blockStartDate | end: $blockEndDate | days: $_selectedDays');
+
         return;
       } else {
         print('⏳ [WES] BlockMeta not ready (attempt $attempt) — retrying...');
@@ -6883,7 +6868,7 @@ class _WorkoutPageState extends State<WorkoutPage>
     _blockStartDate = meta.startDate;
     _blockEndDate = meta.endDate;
 
-    print('✅ [WES] Loaded block dates: $_blockStartDate → $_blockEndDate');
+
   }
 
 
@@ -6901,8 +6886,7 @@ class _WorkoutPageState extends State<WorkoutPage>
         .collection('blocks')
         .get();
 
-    print('🔍 [WES] Loaded ${snap.docs.length} blocks: ${snap.docs.map((d) => d
-        .id)}');
+
 
     final blocks = snap.docs.map((d) {
       final data = d.data();
@@ -7335,10 +7319,7 @@ class _WorkoutPageState extends State<WorkoutPage>
 
 
       if (snap != null) {
-        print('🟣 [FastPaint] Snapshot found for $ymd');
-        print('🟣 [FastPaint] plannedExercisesJson → ${snap.plannedExercisesJson}');
-        print('🟣 [FastPaint] previousWorkoutJson  → ${snap.previousWorkoutJson}');
-        print('🟣 [FastPaint] hintsJson preview    → ${snap.hintsJson.substring(0, snap.hintsJson.length.clamp(0, 300))}');
+
       } else {
         print('🟣 [FastPaint] No snapshot found for $ymd');
       }
@@ -8712,14 +8693,12 @@ class _WorkoutPageState extends State<WorkoutPage>
       }
       mapSw.stop();
 
-      print('📥 [WES] exercises.get() took ${getSw.elapsedMilliseconds}ms');
-      print('🧭 [WES] Mapping loop took ${mapSw.elapsedMilliseconds}ms (mapped $mapped)');
+
+
     } catch (e, st) {
       print(st);
     } finally {
       total.stop();
-      print('⏱️ [WES] loadExercisesFromFirestoreForWES total ${total.elapsedMilliseconds}ms (mapped $mapped)');
-      print('⤴️ [WES] loadExercisesFromFirestoreForWES END');
     }
   }
 
@@ -8753,7 +8732,7 @@ class _WorkoutPageState extends State<WorkoutPage>
       doc = await ref.get(const GetOptions(source: Source.server)); // fallback
     }
 
-    print('🧾 [RAW] Full Firestore doc snapshot data: ${doc.data()}');
+
 
 
     if (!doc.exists) {
@@ -8805,14 +8784,13 @@ class _WorkoutPageState extends State<WorkoutPage>
         mergedForPMU[exId] =
         Map<String, dynamic>.from(mergedForPMU[exId] ?? {});
         mergedForPMU[exId]!['increments'] = inc;
-        print('🩹 [WES LOAD] overriding increments for $exId → $inc');
+
       }
     });
 
 // now inject
     PeriodizationModelUtils.setExerciseSettings(mergedForPMU);
-    print('✅ [WES] Injected exerciseSettings into PMU with keys: ${mergedForPMU
-        .keys}');
+
 
 
     // Walk each exercise entry
@@ -8827,18 +8805,17 @@ class _WorkoutPageState extends State<WorkoutPage>
       final modelEnum = modelName != null
           ? PeriodizationModelUtils.stringToModel(modelName)
           : null;
-      print("🧠 [WES] modelName = $modelName → modelEnum = $modelEnum");
+
 
       if (modelEnum != null) {
         PeriodizationModelUtils.exercisePeriodizationModels[exerciseId] =
             modelEnum;
-        print('✅ [WES] Mapped model $modelName → $modelEnum for $exerciseId');
+
       }
 
       // Track progressionModel if you need it later
       final progressionModel = entry['progressionModel'] ?? 'none';
       _progressionModelsByExercise[exerciseId] = progressionModel;
-      print('🏗️ [WES] Progression model for $exerciseId: $progressionModel');
     });
 
 
@@ -8869,18 +8846,12 @@ class _WorkoutPageState extends State<WorkoutPage>
 
     final rawDetails =
     Map<String, dynamic>.from(data['plannedExerciseDetails']);
-    print(
-        '📦 [WES] [Firestore Function] Full raw Firestore data: ${jsonEncode(
-            data)}');
-    print(
-        '📦 [WES] Extracted plannedExerciseDetails: ${jsonEncode(rawDetails)}');
+
 
 
     // ✅ Inject into PMU
     PeriodizationModelUtils.setExerciseSettings(rawDetails);
-    print(
-        '✅ [WES] Injected exerciseSettings into PMU with keys: ${rawDetails
-            .keys}');
+
 
     // ✅ Build name ↔ ID maps
     final nameToIdMap = <String, String>{};
@@ -8904,7 +8875,7 @@ class _WorkoutPageState extends State<WorkoutPage>
             .isNotEmpty) {
           nameToIdMap[name.trim()] = id;
           idToNameMap[id] = name.trim();
-          print('✅ [WES] Mapped name "$name" ↔ id $id');
+
         } else {
           print('❌ [WES] Still missing name for exerciseId: $id');
         }
@@ -8915,8 +8886,7 @@ class _WorkoutPageState extends State<WorkoutPage>
     PeriodizationModelUtils.idToName.clear();
     PeriodizationModelUtils.idToName.addAll(idToNameMap);
 
-    print('✅ [WES] nameToIdMap injected with ${nameToIdMap.length} entries');
-    print('✅ [WES] idToNameMap injected with ${idToNameMap.length} entries');
+
   }
 
 
@@ -8947,16 +8917,14 @@ class _WorkoutPageState extends State<WorkoutPage>
       if (workouts.isNotEmpty) {
         PeriodizationModelUtils.savedWorkoutsList =
         List<Map<String, dynamic>>.from(workouts);
-        print('📦 [WES] (cache) Loaded ${workouts
-            .length} saved workouts into savedWorkoutsList');
+
       } else {
         // 3) Guarantee a server fallback (awaited) so behavior matches old code
         final serverSnap = await col.get(); // server
         workouts = serverSnap.docs.map((d) => d.data()).toList();
         PeriodizationModelUtils.savedWorkoutsList =
         List<Map<String, dynamic>>.from(workouts);
-        print('📦 [WES] (server) Loaded ${workouts
-            .length} saved workouts into savedWorkoutsList');
+
       }
 
       // 4) Background reconcile (non-blocking) for freshness, only if cache was used
@@ -11108,7 +11076,7 @@ class _WorkoutPageState extends State<WorkoutPage>
     final docRef = coll.doc(docId);
 
     // ⬇️ NEW: read existing doc so we can preserve previously-completed entries if user clears fields
-    print('⏳ [WES upsert] starting docRef.get()...');
+
     final _tGetStart = _upsertSw.elapsedMilliseconds;;
     final existingSnap = await docRef.get();
 
@@ -11138,8 +11106,7 @@ class _WorkoutPageState extends State<WorkoutPage>
     final List<Map<String, dynamic>> newExercises =
     List<Map<String, dynamic>>.from(
         (payload['exercises'] as List?) ?? const []);
-    print('📦 [WES upsert] Built payload: newExercises=${newExercises
-        .length} (hadExisting=$hadExisting)');
+
 
     // ── BW-only: convert display "added" → ABSOLUTE for newly edited rows ──
     for (final e in newExercises) {
@@ -11328,7 +11295,7 @@ class _WorkoutPageState extends State<WorkoutPage>
       final _tWriteEnd = _upsertSw.elapsedMilliseconds;
       print('✅ [WES upsert] Firestore write complete (+${_tWriteEnd - _tWriteStart} ms)');
 
-      print('✅ [WES upsert] Firestore write complete.');
+
 
       // 🔥 [WES upsert → Warm] Precompute WES snapshots for *today* and *tomorrow* (fire-and-forget).
 // Uses the *selected athlete* uid from this save, and the currently selected block id.
@@ -13055,7 +13022,6 @@ class _WorkoutPageState extends State<WorkoutPage>
     _openingMergePhase = false;
     _isMergingBB2.value = false;
 
-    print('✅ [WES] Date switch complete for $ymdPicked');
     sw.stop();
     print('⏱️ [WES] _selectDate total = ${sw.elapsedMilliseconds}ms');
     await debugPrintWesDayCache(
@@ -13740,11 +13706,7 @@ class _WorkoutPageState extends State<WorkoutPage>
         currentRirSessionIndex =
         desiredSessionIndex < 0 ? 0 : desiredSessionIndex;
 
-        debugPrint(
-          '🎯 [WES/RIR-Dialog] ex="$exerciseName" weekIdx=$resolvedWeekIndex '
-              'rawSession=$rawSessionIndex effectiveFreq=$effectiveFreq '
-              '→ currentRirSessionIndex=$currentRirSessionIndex',
-        );
+
       }
     } catch (e) {
       debugPrint('⚠️ [WES/RIR-Dialog] Failed to compute RIR session index: $e');
