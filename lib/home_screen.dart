@@ -34,6 +34,8 @@ import 'debug_utils.dart';
 import 'block_exercise_defaults_repository.dart';
 import 'templates.dart';
 import 'planned_blocks_screen.dart';
+import 'local_cache/block_plan_cache.dart';
+
 
  import 'dart:convert';
  import 'package:cloud_firestore/cloud_firestore.dart';
@@ -455,6 +457,24 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
     debugPrint('🧠 [ROLL] start uid=$uid block=$blockId '
         'range=0..$lastOffsetInclusive todayOffset=$todayOffset');
+    // 🔁 Keep WES super-cache (Isar) in sync with roll-forward writes
+    Future<void> _isarPutOffset(int offset, List<Map<String, dynamic>> exercises) async {
+      try {
+        final int w = offset ~/ 7;
+        final int d = offset % 7;
+        await BlockPlanCache.putDay(
+          uid: uid,
+          blockId: blockId,
+          weekIndex: w,
+          dayIndex: d,
+          exercises: exercises,
+          updatedAt: DateTime.now(),
+        );
+        debugPrint('🧊 [ROLL] ISAR put week_$w/day_$d ex=${exercises.length}');
+      } catch (e) {
+        debugPrint('⚠️ [ROLL] ISAR put failed (non-fatal) off=$offset → $e');
+      }
+    }
 
     // Firestore refs
     final blocksRoot = FirebaseFirestore.instance
@@ -600,6 +620,17 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       };
 
       await _dayRefForOffset(offset).set(out, SetOptions(merge: false));
+
+// ✅ Mirror to Isar so WES sees it immediately
+      final raw = out['exercises'];
+      final List<Map<String, dynamic>> exList =
+      (raw is List)
+          ? raw.map((e) => Map<String, dynamic>.from(e as Map)).toList()
+          : <Map<String, dynamic>>[];
+
+      await _isarPutOffset(offset, exList);
+
+
     }
 
     // Helper: clear a planned day (set exercises empty; keep other fields consistent)
@@ -616,6 +647,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         'date': Timestamp.fromDate(_d0(date)),
         'workoutName': workoutName,
       }, SetOptions(merge: false));
+      // ✅ Mirror clear to Isar
+      await _isarPutOffset(offset, const <Map<String, dynamic>>[]);
+
     }
 
     // 3) Identify missed planned days BEFORE today that are not completed
