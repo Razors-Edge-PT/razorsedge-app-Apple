@@ -4315,7 +4315,7 @@ class _WorkoutPageState extends State<WorkoutPage>
       final exName = _selectedExercisesWithCircuits[exerciseIndex]['name'];
       return cached;
     }
-// 🔹 NEW: if we have seeded hints, use them for the very first paint
+// 🔹 NEW: if we have seeded hints WITH ACTUAL VALUES, use them for the very first paint
     final seedKey = _rowKeyBy(exerciseIndex);
     final seed = _seedHintsByKey[seedKey];
     if (seed != null) {
@@ -4337,17 +4337,23 @@ class _WorkoutPageState extends State<WorkoutPage>
         )
             : addedW; // non-BW hints sometimes only provide one field
       }
-      absW ??= 20.0;
 
-      final seeded = <String, dynamic>{
-        'exerciseName': exName,
-        'exerciseId'  : exId,
-        'weight'      : absW, // ← store absolute kg for downstream math
-        'reps'        : (seed['s1_reps'] as num?)?.toDouble() ?? 10.0,
-      };
+      final double? seedReps = (seed['s1_reps'] as num?)?.toDouble();
 
-      _cachedProgressedValues[_rowCacheKey(exerciseIndex)] = seeded;
-      return seeded;
+      // 🔧 FIX: Only use seed if it has ACTUAL values; otherwise fall through to full model calc
+      // This handles the case where workout was saved with only partial data (e.g., RIR only)
+      if (absW != null && seedReps != null) {
+        final seeded = <String, dynamic>{
+          'exerciseName': exName,
+          'exerciseId'  : exId,
+          'weight'      : absW, // ← store absolute kg for downstream math
+          'reps'        : seedReps,
+        };
+
+        _cachedProgressedValues[_rowCacheKey(exerciseIndex)] = seeded;
+        return seeded;
+      }
+      // If seed has null values, fall through to full model calculation below
     }
 
 
@@ -4882,16 +4888,16 @@ class _WorkoutPageState extends State<WorkoutPage>
     // FAST-PATH: use precomputed hint if available
     final hintK = _rowKeyBy(exerciseIndex);
 
-    // ⛳ Touch-state: if user typed anything in S1 (weight/reps/RIR), bypass snapshot
-    final bool hasUserWeight = _weightControllers[exerciseIndex][0].text.trim().isNotEmpty;
-    final bool hasUserReps   = _repsControllers[exerciseIndex][0].text.trim().isNotEmpty;
-    final bool hasUserRir    = _rirControllers[exerciseIndex][0].text.trim().isNotEmpty;
+    // ⛳ Touch-state: only bypass snapshot hint if THIS field has user input
+    final bool hasUserReps = _repsControllers[exerciseIndex][0].text.trim().isNotEmpty;
 
     final num? hr = _seedHintsByKey[hintK]?['s1_reps'] as num?;
-    if (hr != null && !(hasUserWeight || hasUserReps || hasUserRir)) {
-      // print('⚡ [WES Hints] S1 reps from snapshot for $hintK = $hr');
+    if (hr != null && !hasUserReps) {
+
       return hr.toDouble();
+
     }
+    print('🔧 [REOPEN-FIX] Reps hint used: $hr (hasUserReps=$hasUserReps)');
 
 
     final exerciseName =
@@ -5718,13 +5724,12 @@ class _WorkoutPageState extends State<WorkoutPage>
     // FAST-PATH: use precomputed hint if available
     final hintK = _rowKeyBy(exerciseIndex);
 
-    // ⛳ Touch-state: if user typed anything in S1 (weight/reps/RIR), bypass snapshot
+    // ⛳ Touch-state: only bypass snapshot hint if THIS field has user input
     final bool hasUserWeight = _weightControllers[exerciseIndex][0].text.trim().isNotEmpty;
-    final bool hasUserReps   = _repsControllers[exerciseIndex][0].text.trim().isNotEmpty;
-    final bool hasUserRir    = _rirControllers[exerciseIndex][0].text.trim().isNotEmpty;
 
     final hint  = _seedHintsByKey[hintK];
-    if (hint != null && !(hasUserWeight || hasUserReps || hasUserRir)) {
+    if (hint != null && !hasUserWeight) {
+
       final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
       final exId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
       final isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: exerciseName);
@@ -5803,6 +5808,7 @@ class _WorkoutPageState extends State<WorkoutPage>
     final double baseWeight = progressed['weight']?.toDouble() ?? 20.0;
     final double baseReps = progressed['reps']?.toDouble() ?? 10.0;
     final double modelRir = getRirFromPlanOrInput(exerciseIndex, 1);
+    print('🔧 [REOPEN-DEBUG] Fallback weight=$baseWeight reps=$baseReps (hint=$hint)');
 
     // ✅ Step 5: Seed base E1RM
     final String _exId = PeriodizationModelUtils.nameToId[exerciseName] ??
@@ -10699,18 +10705,10 @@ class _WorkoutPageState extends State<WorkoutPage>
           // 👉 Normalise blanks:
           //    - reps == 0   → treat as null
           //    - weight == 0 → treat as null
-          int? repsVal =
+          final int? repsVal =
           (s.reps == null || s.reps == 0) ? null : s.reps;
-          double? weightVal =
+          final double? weightVal =
           (s.weight == null || s.weight == 0.0) ? null : s.weight;
-
-// ✅ Persist currently-resolved (hint) reps/weight when user only types something like RIR.
-// This prevents re-open from falling back to defaults like 20kg/10 reps.
-          if (repsVal == null && weightVal == null && (s.rir ?? 0.0) != 0.0) {
-            repsVal = set1SuggestedReps(i).toInt();
-            weightVal = set1SuggestedWeight(i);
-          }
-
 
           if (isBwEx) {
             // If user entered an added weight → treat normally
