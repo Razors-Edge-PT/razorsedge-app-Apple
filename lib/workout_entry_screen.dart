@@ -2094,15 +2094,6 @@ class _WorkoutPageState extends State<WorkoutPage>
     }
   }
 
-  bool _hasSetWithWeightAndReps(int exerciseIndex) {
-    if (exerciseIndex < 0 || exerciseIndex >= _workoutSets.length) return false;
-    for (final s in _workoutSets[exerciseIndex]) {
-      final reps = (s.reps ?? 0);
-      final w = (s.weight ?? 0.0);
-      if (reps > 0 && w > 0) return true;
-    }
-    return false;
-  }
 
   bool _hasTypedWeightAndRepsInAnySet(int i) {
     if (i < 0 || i >= _weightControllers.length) return false;
@@ -5777,6 +5768,9 @@ class _WorkoutPageState extends State<WorkoutPage>
 
     // ✅ Step 2: Pull user-entered text fields
     final String weightText = _weightControllers[exerciseIndex][0].text;
+    final _dbgParsed = double.tryParse(weightText.trim());
+    print("🧪 [WES parse] weightText='$weightText' parsed=$_dbgParsed (hasUserWeight=${weightText.trim().isNotEmpty})");
+
     final String repsText = _repsControllers[exerciseIndex][0].text;
     final String rirText = _rirControllers[exerciseIndex][0].text;
 
@@ -8057,6 +8051,11 @@ class _WorkoutPageState extends State<WorkoutPage>
                 };
               });
               print('🟢 [WES Hints] Seeded ${_seedHintsByKey.length} hint rows from snapshot.');
+
+              for (final e in _seedHintsByKey.entries) {
+                debugPrint('🧪 [WES SeedDump] ${e.key} → ${e.value}');
+              }
+
             }
           } catch (e) {
             print('⚠️ [WES Hints] Failed to parse/normalize hintsJson: $e');
@@ -10700,10 +10699,18 @@ class _WorkoutPageState extends State<WorkoutPage>
           // 👉 Normalise blanks:
           //    - reps == 0   → treat as null
           //    - weight == 0 → treat as null
-          final int? repsVal =
+          int? repsVal =
           (s.reps == null || s.reps == 0) ? null : s.reps;
-          final double? weightVal =
+          double? weightVal =
           (s.weight == null || s.weight == 0.0) ? null : s.weight;
+
+// ✅ Persist currently-resolved (hint) reps/weight when user only types something like RIR.
+// This prevents re-open from falling back to defaults like 20kg/10 reps.
+          if (repsVal == null && weightVal == null && (s.rir ?? 0.0) != 0.0) {
+            repsVal = set1SuggestedReps(i).toInt();
+            weightVal = set1SuggestedWeight(i);
+          }
+
 
           if (isBwEx) {
             // If user entered an added weight → treat normally
@@ -11028,6 +11035,7 @@ class _WorkoutPageState extends State<WorkoutPage>
           .doc(docId);
 
       print('💾 [INLINE SAVE] About to write exercises=${exercises.length} to Firestore for $docId');
+      print('🧾 [INLINE SAVE] payload.exercises[0]=${(exercises.isNotEmpty) ? exercises[0] : 'EMPTY'}');
 
       // Write ONLY the fields we know are safe and cheap to update frequently.
       await docRef.set(
@@ -11042,6 +11050,83 @@ class _WorkoutPageState extends State<WorkoutPage>
       );
 
       print('✅ [INLINE SAVE] Firestore write complete for row=$rowIndex set=$setIndex');
+      // 🔁 ALSO refresh local WES init snapshot hints
+      try {
+        final bid = _selectedBlockId ?? _activeBlockId;
+        if (bid != null && bid.isNotEmpty) {
+          final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+
+          // Build ONLY the hint map (cheap, synchronous)
+          final Map<String, dynamic> hints = {};
+
+          for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+            final name = (_selectedExercisesWithCircuits[i]['name'] ?? '').toString().trim();
+            if (name.isEmpty) continue;
+
+            final ci   = (_selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0) as int;
+            final key  = '${name.toLowerCase()}|$ci';
+
+            final double s1W  = set1SuggestedWeight(i);
+            final double s1R  = set1SuggestedReps(i);
+            final double s1Ri = getRirFromPlanOrInput(i, 1);
+
+            final exId = PeriodizationModelUtils.nameToId[name] ?? name;
+            final isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
+
+            final double absForE1 = isBw
+                ? PeriodizationModelUtils.toAbsoluteWeight(
+              uid: uid,
+              displayAddedKg: s1W,
+              exerciseId: exId,
+              exerciseName: name,
+              asOfDate: _selectedDate,
+            )
+                : s1W;
+
+            final double e1 = PeriodizationModelUtils.calculateE1RM(
+              absForE1,
+              s1R.toDouble(),
+              s1Ri,
+            );
+
+            hints[key] = isBw
+                ? {
+              's1_weight_added': s1W,
+              's1_reps': s1R,
+              's1_rir': s1Ri,
+              'e1rm': e1,
+            }
+                : {
+              's1_weight': s1W,
+              's1_reps': s1R,
+              's1_rir': s1Ri,
+              'e1rm': e1,
+            };
+          }
+
+          await BlockPlanCache.putInitSnapshot(
+            uid: uid,
+            blockId: bid,
+            dateYmd: ymd,
+            plannedExercises: const [],
+            wesPlannedExercises: const [],
+            previousWorkout: const [],
+            topSetHistory: const [],
+            hintsJson: jsonEncode(hints),
+            hintsInputsHash: _computeNowInputsHash(),
+            hintsReady: hints.isNotEmpty,
+            schemaVersion: kWesSnapshotSchema,
+            updatedAt: DateTime.now(),
+          );
+
+          debugPrint('💾 [INLINE SAVE] Local WES snapshot refreshed ($ymd)');
+
+
+        }
+      } catch (e) {
+        debugPrint('⚠️ [INLINE SAVE] Snapshot refresh failed: $e');
+      }
+
     } catch (e, st) {
       print('❌ [INLINE SAVE] Failed to save single row (row=$rowIndex set=$setIndex): $e');
       print(st);
@@ -11289,11 +11374,11 @@ class _WorkoutPageState extends State<WorkoutPage>
           '📝 [WES upsert] Writing doc $docId for uid=$uid (exercises=$_exCount, wesPlanned=$_wesCount)...');
 
       print('⏳ [WES upsert] starting Firestore write...');
-      await docRef.set(payload, SetOptions(merge: false));
       final _tWriteStart = _upsertSw.elapsedMilliseconds;
       await docRef.set(payload, SetOptions(merge: false));
       final _tWriteEnd = _upsertSw.elapsedMilliseconds;
       print('✅ [WES upsert] Firestore write complete (+${_tWriteEnd - _tWriteStart} ms)');
+
 
 
 
