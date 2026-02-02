@@ -4181,7 +4181,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                                               selection: TextSelection.collapsed(offset: rirValue.length),
                                             ),
                                           ),
-                                          keyboardType: TextInputType.number,
+                                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+
                                           style: const TextStyle(color: Colors.white),
                                           decoration: InputDecoration(
                                             labelText: 'Set ${setIndex + 1} RIR',
@@ -4408,7 +4409,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                                             return TextField(
                                               controller: _rirControllers[controllerKey],
-                                              keyboardType: TextInputType.number,
+                                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
                                               style: const TextStyle(color: Colors.white),
                                               decoration: InputDecoration(
                                                 labelText: 'Set ${setIndex + 1} RIR',
@@ -4676,7 +4677,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                                       Expanded(
                                         child: TextField(
                                           controller: _rirControllers[controllerKey],
-                                          keyboardType: TextInputType.number,
+                                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
                                           onChanged: (v) {
                                             // Keep cache hot locally while typing (NO Firestore writes)
                                             final txt = v.trim();
@@ -4965,7 +4966,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                                       Expanded(
                                         child: TextField(
                                           controller: _rirControllers[controllerKey],
-                                          keyboardType: TextInputType.number,
+                                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
                                           style: const TextStyle(color: Colors.white),
                                           decoration: InputDecoration(
                                             labelText: 'Set ${setIndex + 1} RIR',
@@ -5702,7 +5703,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                               Flexible(
                                 child: TextField(
                                   controller: _maxWeightController,
-                                  keyboardType: TextInputType.number,
+                                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+
                                   inputFormatters: [
                                     FilteringTextInputFormatter.digitsOnly
                                   ],

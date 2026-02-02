@@ -423,7 +423,7 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
               const SizedBox(height: 12),
               TextField(
                 controller: weightController,
-                keyboardType: TextInputType.number,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 scrollPadding: EdgeInsets.only(
                   bottom: MediaQuery.of(context).viewInsets.bottom + 80,
                 ),
@@ -606,7 +606,7 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
               const SizedBox(height: 12),
               TextField(
                 controller: weightController,
-                keyboardType: TextInputType.number,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 scrollPadding: EdgeInsets.only(
                   bottom: MediaQuery.of(context).viewInsets.bottom + 80,
                 ),
@@ -757,7 +757,7 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                     height: 48, // ✅ matches the date picker height
                     child: TextField(
                       controller: _weightController,
-                      keyboardType: TextInputType.number,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
                       decoration: const InputDecoration(
                         labelText: 'Weight (kg)',
                         border: OutlineInputBorder(),
@@ -855,7 +855,8 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                       height: 48,
                       child: TextField(
                         controller: _weightControllerPm,
-                        keyboardType: TextInputType.number,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+
                         decoration: const InputDecoration(
                           labelText: '2nd Weight (kg)',
                           border: OutlineInputBorder(),

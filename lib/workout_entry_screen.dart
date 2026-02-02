@@ -14503,6 +14503,7 @@ class _WorkoutPageState extends State<WorkoutPage>
               },
             ), */
 
+
             IconButton(
               icon: const Icon(Icons.save),
               onPressed: () async {
@@ -14526,14 +14527,17 @@ class _WorkoutPageState extends State<WorkoutPage>
             ),
           ],
         ),
-        body: SingleChildScrollView(
-          padding: const EdgeInsets.only(
-              left: 12, top: 0, right: 12, bottom: 0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              TextField(
-                controller: _workoutNameController,
+    body: GestureDetector(
+    behavior: HitTestBehavior.translucent,
+    onTap: () => FocusScope.of(context).unfocus(),
+    child: SingleChildScrollView(
+    padding: const EdgeInsets.only(
+    left: 12, top: 0, right: 12, bottom: 0),
+    child: Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+    TextField(
+    controller: _workoutNameController,
                 style: TextStyle(fontSize: 18),
                 textAlign: TextAlign.center, // 👈 Center the text,
                 decoration: InputDecoration(
@@ -15457,7 +15461,8 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                               },
                                                               child: TextField(
                                                                 controller: _weightControllers[i][j],
-                                                                keyboardType: TextInputType.number,
+                                                                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+
                                                                 decoration: InputDecoration(
                                                                   hintText: !_isInitialized
                                                                       ? ''
@@ -15528,7 +15533,8 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                   },
                                                                   child: TextField(
                                                                     controller: _weightControllers[i][j],
-                                                                    keyboardType: TextInputType.number,
+                                                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+
                                                                     decoration: InputDecoration(
                                                                       hintText: hint, // range like "50–52.5", disappears on input
                                                                       hintStyle: const TextStyle(
@@ -15754,7 +15760,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                               },
                                                               child: TextField(
                                                                 controller: _rirControllers[i][j],
-                                                                keyboardType: TextInputType.number,
+                                                                keyboardType: const TextInputType.numberWithOptions(decimal: true),
                                                                 decoration: InputDecoration(
                                                                   contentPadding: const EdgeInsets.only(left: 2),
                                                                   hintText: (j == 0)
@@ -15871,7 +15877,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                             width: 45,
                                                             child: TextField(
                                                               controller: _velocityControllers[i][j],
-                                                              keyboardType: TextInputType.number,
+                                                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
                                                               decoration: const InputDecoration(
                                                                 hintText: '',
                                                                 hintStyle: TextStyle(
@@ -16012,6 +16018,7 @@ class _WorkoutPageState extends State<WorkoutPage>
         ), // SingleChildScrollView
       ),
     ),
+        ),
           // Sparkle overlay (on top of everything; ignores touch)
           Positioned.fill(
             child: IgnorePointer(
