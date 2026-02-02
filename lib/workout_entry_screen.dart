@@ -195,10 +195,15 @@ class _WorkoutPageState extends State<WorkoutPage>
 
   // Stable key for a row: "name|circuitIndex"
   String _rowKeyBy(int i) {
-    final n = (_selectedExercisesWithCircuits[i]['name'] ?? '').toString().trim().toLowerCase();
+    final nameRaw = (_selectedExercisesWithCircuits[i]['name'] ?? '').toString().trim();
     final ci = (_selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0) as int;
-    return '$n|$ci';
+
+    // ✅ Prefer stable exerciseId; fall back to name if mapping missing.
+    final exId = (PeriodizationModelUtils.nameToId[nameRaw] ?? nameRaw).toString().trim();
+
+    return '$exId|$ci';
   }
+
 
   // 🔢 Ensure rows are ordered by circuitIndex, then by original row order
   void _sortRowsByCircuitIndex() {
@@ -4305,6 +4310,35 @@ class _WorkoutPageState extends State<WorkoutPage>
     return fallbackSets;
   }
 
+  void _debugDumpSet1Ui(int i, {String tag = ''}) {
+    if (i < 0 || i >= _selectedExercisesWithCircuits.length) return;
+
+    final exName = (_selectedExercisesWithCircuits[i]['name'] ?? '').toString().trim();
+    final rowKey = _rowKeyBy(i);
+
+    final wTxt = _weightControllers[i][0].text.trim();
+    final rTxt = _repsControllers[i][0].text.trim();
+    final rirTxt = _rirControllers[i][0].text.trim();
+
+    // What the UI would show as hint if the field is empty
+    final wHint = (_isInitialized && !_isLoadingData) ? formatWeight(set1SuggestedWeight(i)) : '';
+    final rHint = (_isInitialized && !_isLoadingData) ? (set1SuggestedReps(i).toInt().toString()) : '';
+
+    // What is actually visible in the TextField:
+    // - If controller has text, the user sees that (typed)
+    // - Else they see hintText
+    final wVisible = wTxt.isNotEmpty ? 'TYPED:$wTxt' : 'HINT:$wHint';
+    final rVisible = rTxt.isNotEmpty ? 'TYPED:$rTxt' : 'HINT:$rHint';
+    final rirVisible = rirTxt.isNotEmpty ? 'TYPED:$rirTxt' : 'HINT:(computed)';
+
+    final seed = _seedHintsByKey[rowKey];
+
+    print('🧾 [WES UI$tag] i=$i ex="$exName" rowKey="$rowKey" init=$_isInitialized loading=$_isLoadingData');
+    print('   weight: $wVisible  (seed s1_weight=${seed?['s1_weight']} s1_weight_added=${seed?['s1_weight_added']})');
+    print('   reps:   $rVisible  (seed s1_reps=${seed?['s1_reps']})');
+    print('   rir:    $rirVisible (seed rir=${seed?['rir']} s1_rir?=${seed?['s1_rir']})');
+  }
+
 
 
   Map<String, dynamic> _getProgressedValues(int exerciseIndex) {
@@ -7389,27 +7423,43 @@ class _WorkoutPageState extends State<WorkoutPage>
         final raw = Map<String, dynamic>.from(jsonDecode(snap.hintsJson));
 
         for (final e in raw.entries) {
+          if (e.value is! Map) continue;
           final v = Map<String, dynamic>.from(e.value as Map);
+
+          // Snapshot map key (may already be "exerciseId|ci" OR legacy "nameLower|ci")
+          final String rawKey = e.key.toString().trim();
+          if (rawKey.isEmpty) continue;
+
+          // Keep these because later logic relies on them
           final name = (v['name'] ?? '').toString().trim();
-          final ci   = (v['circuitIndex'] is num) ? (v['circuitIndex'] as num).toInt() : 0;
+          final ci = (v['circuitIndex'] is num) ? (v['circuitIndex'] as num).toInt() : 0;
 
-          if (name.isEmpty) continue;
+          // Legacy key (what your old code used)
+          final String keyByName = name.isEmpty ? '' : '${name.toLowerCase()}|$ci';
 
-          final rowKey = '${name.toLowerCase()}|$ci';
+          // New key (stable)
+          final String exId = (name.isEmpty)
+              ? ''
+              : (PeriodizationModelUtils.nameToId[name] ?? name).toString().trim();
+          final String keyById = exId.isEmpty ? '' : '$exId|$ci';
 
-          final s1W   = (v['s1_weight'] as num?)?.toDouble();
-          final s1WA  = (v['s1_weight_added'] as num?)?.toDouble();
-          final s1R   = (v['s1_reps'] as num?)?.toDouble();
-          final s1Ri  = (v['s1_rir'] as num?)?.toDouble();
-          final e1    = (v['e1rm'] as num?)?.toDouble();
+          // Choose a canonical rowKey for prints + RIR override
+          // Prefer name-key if we have a name, else fall back to rawKey
+          final String rowKey = keyByName.isNotEmpty ? keyByName : rawKey;
 
-// NEW: completion flags from Warmup (if present)
+          final s1W  = (v['s1_weight'] as num?)?.toDouble();
+          final s1WA = (v['s1_weight_added'] as num?)?.toDouble();
+          final s1R  = (v['s1_reps'] as num?)?.toDouble();
+          final s1Ri = (v['s1_rir'] as num?)?.toDouble();
+          final e1   = (v['e1rm'] as num?)?.toDouble();
+
+          // NEW: completion flags from Warmup (if present)
           final bool completed = (v['completed'] == true);
           final List completedSets = (v['completedSets'] is List)
               ? (v['completedSets'] as List)
               : const [];
 
-// NEW: pull planned RIRs for sets 2–8 if present
+          // NEW: pull planned RIRs for sets 2–8 if present
           final s2Ri = (v['s2_rir'] as num?)?.toDouble();
           final s3Ri = (v['s3_rir'] as num?)?.toDouble();
           final s4Ri = (v['s4_rir'] as num?)?.toDouble();
@@ -7418,8 +7468,7 @@ class _WorkoutPageState extends State<WorkoutPage>
           final s7Ri = (v['s7_rir'] as num?)?.toDouble();
           final s8Ri = (v['s8_rir'] as num?)?.toDouble();
 
-
-          hintsByKey[rowKey] = {
+          final Map<String, dynamic> normalized = {
             's1_weight'       : s1W,
             's1_weight_added' : s1WA,
             's1_reps'         : s1R,
@@ -7445,110 +7494,117 @@ class _WorkoutPageState extends State<WorkoutPage>
             'completedSets'   : completedSets,
           };
 
-// 🔁 Override RIR hints with rotated pick from today's planned occurrence (null-safe)
+          // ✅ Store under ALL reasonable keys (so later lookups succeed)
+          // 1) rawKey (whatever the snapshot actually used)
+          hintsByKey[rawKey] = normalized;
+
+          // 2) legacy nameLower|ci
+          if (keyByName.isNotEmpty) {
+            hintsByKey.putIfAbsent(keyByName, () => normalized);
+          }
+
+          // 3) new exerciseId|ci
+          if (keyById.isNotEmpty) {
+            hintsByKey.putIfAbsent(keyById, () => normalized);
+          }
+
+          // 🔁 Override RIR hints with rotated pick from today's planned occurrence (null-safe)
           try {
-            final exId = PeriodizationModelUtils.nameToId[name] ?? name;
+            if (name.isNotEmpty) {
+              final exIdForPlan = PeriodizationModelUtils.nameToId[name] ?? name;
 
-            // Resolve dates safely (respects BP week-start because your helpers do)
-            final DateTime? start = _blockStartDate ?? blockStartDate;
-            final DateTime? sel   = _selectedDate;
-            if (start == null || sel == null) {
-              print('🟨 [FastPaint RIR Override] skip: missing dates (start=$start sel=$sel)');
-              // do not throw; leave existing hints
-            } else {
-              // 1) Determine week for this exercise
-              final int? weekIndex = _getApplicableWeekIndex(exId);
-              if (weekIndex == null) {
-                print('🟨 [FastPaint RIR Override] skip: weekIndex=null for $exId');
+              // Resolve dates safely (respects BP week-start because your helpers do)
+              final DateTime? start = _blockStartDate ?? blockStartDate;
+              final DateTime? sel   = _selectedDate;
+              if (start == null || sel == null) {
+                print('🟨 [FastPaint RIR Override] skip: missing dates (start=$start sel=$sel)');
               } else {
-                final String weekKey = 'week${weekIndex + 1}';
+                // 1) Determine week for this exercise
+                final int? weekIndex = _getApplicableWeekIndex(exIdForPlan);
+                if (weekIndex == null) {
+                  print('🟨 [FastPaint RIR Override] skip: weekIndex=null for $exIdForPlan');
+                } else {
+                  final String weekKey = 'week${weekIndex + 1}';
 
-                // 2) Raw occurrence index this week (up to + incl. today)
-                final int rawSessionIndex =
-                PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
-                  exerciseName: name,
-                  savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
-                  blockStartDate: start,
-                  weekIndex: weekIndex,
-                  selectedDate: sel,
-                );
-
-                // 3) Effective frequency from repTargets (fallback 1)
-                final Map<String, dynamic>? repTargets =
-                (PeriodizationModelUtils.plannedExerciseDetails[exId]?['repTargets'] as Map?)
-                    ?.cast<String, dynamic>();
-                final Map<String, dynamic> wk1 =
-                    (repTargets?['week1'] as Map?)?.cast<String, dynamic>() ?? const {};
-                final int effectiveFreq =
-                wk1.keys.where((k) => k.toString().startsWith('instance')).length.clamp(1, 99);
-
-                // 4) Rotate raw index into session key
-                final int desiredSessionIndex = (rawSessionIndex % effectiveFreq);
-                final String sessionKey = 'session${desiredSessionIndex + 1}';
-
-                // 5) Read planned RIRs for sets 1..8
-                final Map<String, dynamic>? rirPlan =
-                (PeriodizationModelUtils.plannedExerciseDetails[exId]?['rirPlan'] as Map?)
-                    ?.cast<String, dynamic>();
-                final Map<String, dynamic> weekData =
-                    (rirPlan?[weekKey] as Map?)?.cast<String, dynamic>() ?? const {};
-                final Map<String, dynamic> sessionData =
-                    (weekData[sessionKey] as Map?)?.cast<String, dynamic>() ?? const {};
-
-                double? _rirForSet(int setNo) {
-                  final setKey = 'set$setNo';
-                  final v = (sessionData[setKey] as Map?)?['rir'];
-                  if (v == null) return null;
-                  final s = v.toString().trim();
-                  if (s.isEmpty) return null;
-                  return double.tryParse(s);
-                }
-
-                // 6) Ensure non-null hint map and write overrides
-                final Map<String, dynamic> hb = hintsByKey[rowKey] ?? <String, dynamic>{};
-                hintsByKey[rowKey] = hb; // persist back
-
-                final s1o = _rirForSet(1);
-                if (s1o != null) {
-                  hb['rir']    = s1o; // alias for set-1
-                  hb['s1_rir'] = s1o;
-                }
-                for (int setNo = 2; setNo <= 8; setNo++) {
-                  final v = _rirForSet(setNo);
-                  if (v != null) hb['s${setNo}_rir'] = v;
-                }
-
-                // 7) Debug: what we actually wrote
-                final wroteParts = <String>[];
-                for (int k = 1; k <= 4; k++) {
-                  final v = hb['s${k}_rir'];
-                  if (v != null) wroteParts.add('s$k=$v');
-                }
-                final wrote = wroteParts.join(' ');
-                if (wrote.isNotEmpty) {
-                  print(
-                      '🟪 [FastPaint RIR Override] ${name.toLowerCase()}|$ci '
-                          '→ s1=${hintsByKey[rowKey]?['s1_rir']} '
-                          's2=${hintsByKey[rowKey]?['s2_rir']} '
-                          's3=${hintsByKey[rowKey]?['s3_rir']} '
-                          '(week=$weekKey session=session${desiredSessionIndex + 1} '
-                          'raw=$rawSessionIndex freq=$effectiveFreq)'
+                  // 2) Raw occurrence index this week (up to + incl. today)
+                  final int rawSessionIndex =
+                  PeriodizationModelUtils.getInstanceCountForExerciseInWeek(
+                    exerciseName: name,
+                    savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+                    blockStartDate: start,
+                    weekIndex: weekIndex,
+                    selectedDate: sel,
                   );
 
+                  // 3) Effective frequency from repTargets (fallback 1)
+                  final Map<String, dynamic>? repTargets =
+                  (PeriodizationModelUtils.plannedExerciseDetails[exIdForPlan]?['repTargets'] as Map?)
+                      ?.cast<String, dynamic>();
+                  final Map<String, dynamic> wk1 =
+                      (repTargets?['week1'] as Map?)?.cast<String, dynamic>() ?? const {};
+                  final int effectiveFreq =
+                  wk1.keys.where((k) => k.toString().startsWith('instance')).length.clamp(1, 99);
+
+                  // 4) Rotate raw index into session key
+                  final int desiredSessionIndex = (rawSessionIndex % effectiveFreq);
+                  final String sessionKey = 'session${desiredSessionIndex + 1}';
+
+                  // 5) Read planned RIRs for sets 1..8
+                  final Map<String, dynamic>? rirPlan =
+                  (PeriodizationModelUtils.plannedExerciseDetails[exIdForPlan]?['rirPlan'] as Map?)
+                      ?.cast<String, dynamic>();
+                  final Map<String, dynamic> weekData =
+                      (rirPlan?[weekKey] as Map?)?.cast<String, dynamic>() ?? const {};
+                  final Map<String, dynamic> sessionData =
+                      (weekData[sessionKey] as Map?)?.cast<String, dynamic>() ?? const {};
+
+                  double? _rirForSet(int setNo) {
+                    final setKey = 'set$setNo';
+                    final vv = (sessionData[setKey] as Map?)?['rir'];
+                    if (vv == null) return null;
+                    final s = vv.toString().trim();
+                    if (s.isEmpty) return null;
+                    return double.tryParse(s);
+                  }
+
+                  // 6) Ensure non-null hint map and write overrides (write into canonical rowKey)
+                  final Map<String, dynamic> hb = hintsByKey[rowKey] ?? <String, dynamic>{};
+                  hintsByKey[rowKey] = hb;
+
+                  final s1o = _rirForSet(1);
+                  if (s1o != null) {
+                    hb['rir']    = s1o;
+                    hb['s1_rir'] = s1o;
+                  }
+                  for (int setNo = 2; setNo <= 8; setNo++) {
+                    final vv = _rirForSet(setNo);
+                    if (vv != null) hb['s${setNo}_rir'] = vv;
+                  }
+
+                  // 7) Debug
+                  print(
+                    '🟪 [FastPaint RIR Override] ${name.toLowerCase()}|$ci '
+                        '→ s1=${hintsByKey[rowKey]?['s1_rir']} '
+                        's2=${hintsByKey[rowKey]?['s2_rir']} '
+                        's3=${hintsByKey[rowKey]?['s3_rir']} '
+                        '(week=$weekKey session=session${desiredSessionIndex + 1} '
+                        'raw=$rawSessionIndex freq=$effectiveFreq)',
+                  );
+
+                  // 8) Merged locals (kept to match your structure)
+                  final double? s1RiMerged =
+                      (hintsByKey[rowKey]?['s1_rir'] as num?)?.toDouble() ?? s1Ri;
+                  final double? s2RiMerged =
+                      (hintsByKey[rowKey]?['s2_rir'] as num?)?.toDouble() ?? s2Ri;
+                  final double? s3RiMerged =
+                      (hintsByKey[rowKey]?['s3_rir'] as num?)?.toDouble() ?? s3Ri;
+
+                  final _rirMergedForDebug = <int, double?>{
+                    1: s1RiMerged,
+                    2: s2RiMerged,
+                    3: s3RiMerged,
+                  };
                 }
-
-                // 8) Compute merged values for the upcoming "Short debug" (no reassignment to finals)
-                final double? s1RiMerged = (hintsByKey[rowKey]?['s1_rir'] as num?)?.toDouble() ?? s1Ri;
-                final double? s2RiMerged = (hintsByKey[rowKey]?['s2_rir'] as num?)?.toDouble() ?? s2Ri;
-                final double? s3RiMerged = (hintsByKey[rowKey]?['s3_rir'] as num?)?.toDouble() ?? s3Ri;
-
-// Save them into locals you’ll reference in the debug right below
-                final _rirMergedForDebug = <int, double?>{
-                  1: s1RiMerged,
-                  2: s2RiMerged,
-                  3: s3RiMerged,
-                };
-
               }
             }
           } catch (e) {
@@ -7564,6 +7620,7 @@ class _WorkoutPageState extends State<WorkoutPage>
           print('🟣 [FastPaint→Hints] $rowKey → '
               'weight=${s1W ?? '—'} added=${s1WA ?? '—'} reps=${s1R ?? '—'} rir: $rirs');
         }
+
       }
 
       // Seed hints map now (used by other paths later)
@@ -7636,12 +7693,13 @@ class _WorkoutPageState extends State<WorkoutPage>
         final prevRirRow  = prevRirByKey[ctrlKey];
 
 
-        final key = '${name.toLowerCase()}|$ci';
-        final h   = hintsByKey[key];
-        if (h == null) continue;
-
-        final exId = PeriodizationModelUtils.nameToId[name] ?? name;
+        final exId = (PeriodizationModelUtils.nameToId[name] ?? name).toString().trim();
         final isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: name);
+
+        final String keyById = '$exId|$ci';
+        final String keyByName = '${name.toLowerCase()}|$ci';
+        final h = hintsByKey[keyById] ?? hintsByKey[keyByName];
+        if (h == null) continue;
 
         // NEW: if the row is completed, hydrate from completedSets and skip the hint path
         final bool isCompleted = (h['completed'] == true);
@@ -8032,22 +8090,64 @@ class _WorkoutPageState extends State<WorkoutPage>
 // WES expects (when seeding first-frame fields): weight, absWeight, reps, rir
           try {
             if ((snap.hintsJson ?? '').isNotEmpty) {
-              final Map<String, dynamic> rawHints = Map<String, dynamic>.from(jsonDecode(snap.hintsJson));
+              final Map<String, dynamic> rawHints =
+              Map<String, dynamic>.from(jsonDecode(snap.hintsJson));
+
               _seedHintsByKey.clear();
-              rawHints.forEach((rowKey, v) {
+
+              // Helper: normalize a legacy "name|ci" key into "exerciseId|ci" when possible.
+              String? _aliasToExerciseIdKey(String rawKey) {
+                final k = rawKey.toString().trim();
+                final parts = k.split('|');
+                if (parts.length != 2) return null;
+
+                final left = parts[0].trim(); // could be legacy name (maybe lowercased), or already an id
+                final ci = parts[1].trim();
+
+                // 1) Direct hit: left matches a nameToId entry exactly
+                final direct = PeriodizationModelUtils.nameToId[left];
+                if (direct != null && direct.toString().trim().isNotEmpty) {
+                  return '${direct.toString().trim()}|$ci';
+                }
+
+                // 2) Legacy writer often used lowercase name. Try to find a nameToId key case-insensitively.
+                try {
+                  final String leftLower = left.toLowerCase();
+                  for (final entry in PeriodizationModelUtils.nameToId.entries) {
+                    final kName = entry.key.toString();
+                    if (kName.toLowerCase() == leftLower) {
+                      final id = entry.value.toString().trim();
+                      if (id.isNotEmpty) return '$id|$ci';
+                    }
+                  }
+                } catch (_) {}
+
+                // 3) If left already *looks like* an id (you sometimes used id directly), just pass it through.
+                // (No perfect test here; safest is: if it’s not empty, allow it.)
+                if (left.isNotEmpty) {
+                  return '${left.trim()}|$ci';
+                }
+
+                return null;
+              }
+
+              rawHints.forEach((rowKeyRaw, v) {
+                final rowKey = rowKeyRaw.toString().trim();
+                if (v is! Map) return;
+
                 final m = Map<String, dynamic>.from(v as Map);
+
                 final abs = (m['s1_weight'] ?? m['absWeight']);
                 final added = (m['s1_weight_added'] ?? m['displayAdded']);
                 final reps = (m['s1_reps'] ?? m['reps']);
                 final rir  = (m['s1_rir'] ?? m['rir']);
 
-                // Store both naming schemes so all callers are happy.
-                _seedHintsByKey[rowKey] = {
+                final normalized = <String, dynamic>{
                   // WES-expected generic names:
-                  'weight'     : abs,
-                  'absWeight'  : abs,
-                  'reps'       : reps,
-                  'rir'        : rir,
+                  'weight'    : abs,
+                  'absWeight' : abs,
+                  'reps'      : reps,
+                  'rir'       : rir,
 
                   // Warmup (S1) names kept for _getProgressedValues() fast path:
                   's1_weight'        : m['s1_weight'],
@@ -8055,17 +8155,30 @@ class _WorkoutPageState extends State<WorkoutPage>
                   's1_reps'          : m['s1_reps'],
                   's1_rir'           : m['s1_rir'],
                 };
+
+                // 1) Store the raw key exactly as stored in snapshot (back-compat)
+                _seedHintsByKey[rowKey] = normalized;
+
+                // 2) Store exerciseId|ci alias key (new scheme), without overwriting if already present
+                final alias = _aliasToExerciseIdKey(rowKey);
+                if (alias != null && alias.isNotEmpty) {
+                  _seedHintsByKey.putIfAbsent(alias, () => normalized);
+                }
               });
+
               print('🟢 [WES Hints] Seeded ${_seedHintsByKey.length} hint rows from snapshot.');
 
+              // Optional: only dump a few to avoid log spam
+              int _dumped = 0;
               for (final e in _seedHintsByKey.entries) {
                 debugPrint('🧪 [WES SeedDump] ${e.key} → ${e.value}');
+                if (++_dumped >= 12) break;
               }
-
             }
           } catch (e) {
             print('⚠️ [WES Hints] Failed to parse/normalize hintsJson: $e');
           }
+
 
         }
       } catch (e) {
@@ -9407,6 +9520,11 @@ class _WorkoutPageState extends State<WorkoutPage>
   void dispose() {
     final _disposeSw = Stopwatch()..start();
 
+    // 🔎 FIRST: snapshot of what the UI is ACTUALLY showing
+    print('🧯 [WES dispose] selectedDate=$_selectedDate block=$_selectedBlockId uid=${_cachedUid ?? FirebaseAuth.instance.currentUser?.uid}');
+    if (_selectedExercisesWithCircuits.isNotEmpty) {
+      _debugDumpSet1Ui(0, tag: ' BEFORE_DISPOSE');
+    }
     print('🧹 [WES] dispose called — uid=$_cachedUid');
     _catchupShineCtl?.dispose();
     print('💾 [WES dispose] Persisting local draft...');
