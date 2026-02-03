@@ -1189,9 +1189,9 @@ class PeriodizationModelUtils {
       final hasLegacy = incRaw.containsKey('week') || incRaw.containsKey('block');
       if ((hasLegacy && secondary == 1.0) || (secondary == 1.0 && primary != 2.5)) {
         useSecondary = false;
-        print('🧰 [BB2] roundToNearest: ignoring secondary=$secondary (primary=$primary)');
+
       } else if (useSecondary) {
-        print('🧰 [BB2] roundToNearest: using secondary=$secondary with primary=$primary');
+
       }
     }
 
@@ -1243,7 +1243,7 @@ class PeriodizationModelUtils {
 
     final double primary = inc['primary']!;
     final double secondary = inc['secondary'] ?? 0.0;
-    print('🔧 [getIncrementsForExercise] primary=$primary, secondary=$secondary');
+
 
     final Set<double> weightOptions = {};
     for (int i = 0; i < 100; i++) {
@@ -2761,7 +2761,7 @@ class PeriodizationModelUtils {
               final serverSnap = await query.get(const GetOptions(source: Source.server));
               _applyTopSetsFromSnapshot(serverSnap);
             } catch (e) {
-              print('🧨 [PMU] fetchLastWorkoutTopSetReps server query failed: $e');
+
             }
 
           } catch (_) {}

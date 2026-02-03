@@ -4922,16 +4922,22 @@ class _WorkoutPageState extends State<WorkoutPage>
     // FAST-PATH: use precomputed hint if available
     final hintK = _rowKeyBy(exerciseIndex);
 
-    // ⛳ Touch-state: only bypass snapshot hint if THIS field has user input
-    final bool hasUserReps = _repsControllers[exerciseIndex][0].text.trim().isNotEmpty;
+    // ⛳ Touch-state: use seed hint only when ALL set-1 fields are still empty.
+    // If the user typed ANY value (weight, reps, or RIR), fall through to
+    // E1RM derivation so reactive coupling works the same as on fresh workouts.
+    final bool hasUserReps   = _repsControllers[exerciseIndex][0].text.trim().isNotEmpty;
+    final bool hasUserWeight = _weightControllers[exerciseIndex][0].text.trim().isNotEmpty;
+    final bool hasUserRir    = _rirControllers[exerciseIndex][0].text.trim().isNotEmpty;
 
     final num? hr = _seedHintsByKey[hintK]?['s1_reps'] as num?;
-    if (hr != null && !hasUserReps) {
+    if (hr != null && !hasUserReps && !hasUserWeight && !hasUserRir) {
 
+      print('[WES_REENTER] set1SuggestedReps: using seed hint for $hintK = $hr');
       return hr.toDouble();
 
+    } else if (hr != null) {
+      print('[WES_REENTER] set1SuggestedReps: skipping seed hint for $hintK — hasR=$hasUserReps hasW=$hasUserWeight hasRIR=$hasUserRir → using derivation');
     }
-    print('🔧 [REOPEN-FIX] Reps hint used: $hr (hasUserReps=$hasUserReps)');
 
 
     final exerciseName =
@@ -5758,11 +5764,15 @@ class _WorkoutPageState extends State<WorkoutPage>
     // FAST-PATH: use precomputed hint if available
     final hintK = _rowKeyBy(exerciseIndex);
 
-    // ⛳ Touch-state: only bypass snapshot hint if THIS field has user input
+    // ⛳ Touch-state: use seed hint only when ALL set-1 fields are still empty.
+    // If the user typed ANY value (weight, reps, or RIR), fall through to
+    // E1RM derivation so reactive coupling works the same as on fresh workouts.
     final bool hasUserWeight = _weightControllers[exerciseIndex][0].text.trim().isNotEmpty;
+    final bool hasUserReps   = _repsControllers[exerciseIndex][0].text.trim().isNotEmpty;
+    final bool hasUserRir    = _rirControllers[exerciseIndex][0].text.trim().isNotEmpty;
 
     final hint  = _seedHintsByKey[hintK];
-    if (hint != null && !hasUserWeight) {
+    if (hint != null && !hasUserWeight && !hasUserReps && !hasUserRir) {
 
       final exerciseName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
       final exId = PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
@@ -5770,9 +5780,11 @@ class _WorkoutPageState extends State<WorkoutPage>
 
       final num? v = isBw ? (hint['s1_weight_added'] as num?) : (hint['s1_weight'] as num?);
       if (v != null) {
-        // print('⚡ [WES Hints] S1 weight from snapshot for $hintK = $v');
+        print('[WES_REENTER] set1SuggestedWeight: using seed hint for $hintK = $v');
         return v.toDouble();
       }
+    } else if (hint != null) {
+      print('[WES_REENTER] set1SuggestedWeight: skipping seed hint for $hintK — hasW=$hasUserWeight hasR=$hasUserReps hasRIR=$hasUserRir → using derivation');
     }
 
 
@@ -5936,9 +5948,7 @@ class _WorkoutPageState extends State<WorkoutPage>
           double>.generate(200, (i) => i * 2.5))
           .reduce((a, b) => (a - derived).abs() < (b - derived).abs() ? a : b);
 
-// NEW: compact summary of the override calc
-      print('🧲 [WES snap] $derived → $rounded (candidates=${_candidates.take(10)
-          .toList()} …)');
+
 
       final double newE1RM = PeriodizationModelUtils.calculateE1RM(
         rounded,
@@ -6592,8 +6602,9 @@ class _WorkoutPageState extends State<WorkoutPage>
     await Future.wait(reads);
 
     // E) Draft load (as before)
-
+    print('[WES_REENTER] _loadInitialData: about to load draft from cache');
     final draftLoaded = await _loadWorkoutDraftFromCache();
+    print('[WES_REENTER] _loadInitialData: draftLoaded=$draftLoaded');
 
 
     // F) Touch BB2 day doc from SERVER (best-effort) so merge has fresh data
@@ -8751,6 +8762,7 @@ class _WorkoutPageState extends State<WorkoutPage>
   }
 
 
+
   Future<void> loadExercisesFromFirestoreForWES() async {
     print('➡️ [WES] loadExercisesFromFirestoreForWES START');
     final total = Stopwatch()..start();
@@ -9527,6 +9539,17 @@ class _WorkoutPageState extends State<WorkoutPage>
     }
     print('🧹 [WES] dispose called — uid=$_cachedUid');
     _catchupShineCtl?.dispose();
+
+    // [WES_REENTER] Sync controller values into _workoutSets BEFORE disposal
+    print('[WES_REENTER] dispose: syncing controllers to model before disposal');
+    _syncControllersToModel();
+
+    // Save via _saveWorkoutDraftToCache (uses key 'workout_draft_$dateKey'
+    // which matches _loadWorkoutDraftFromCache on re-entry)
+    print('[WES_REENTER] dispose: saving draft to cache (matching key)');
+    _saveWorkoutDraftToCache();
+
+    // Also keep _persistDraftLocally as backup (uid-keyed)
     print('💾 [WES dispose] Persisting local draft...');
     _persistDraftLocally();
     _isMergingBB2.dispose();
@@ -9656,32 +9679,69 @@ class _WorkoutPageState extends State<WorkoutPage>
 
   //Values persisting block: start
 
+  /// Synchronously copies controller text values into [_workoutSets].
+  /// MUST be called BEFORE controllers are disposed so _persistDraftLocally
+  /// (which may run after dispose awaits) already has fresh data in the model.
+  void _syncControllersToModel() {
+    print('[WES_REENTER] _syncControllersToModel START');
+    int synced = 0;
+    for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+      if (i >= _workoutSets.length) break;
+      for (int j = 0; j < _workoutSets[i].length; j++) {
+        if (i < _repsControllers.length && j < _repsControllers[i].length) {
+          _workoutSets[i][j].reps = int.tryParse(_repsControllers[i][j].text.trim());
+        }
+        if (i < _weightControllers.length && j < _weightControllers[i].length) {
+          _workoutSets[i][j].weight = double.tryParse(_weightControllers[i][j].text.trim());
+        }
+        if (i < _rirControllers.length && j < _rirControllers[i].length) {
+          _workoutSets[i][j].rir = double.tryParse(_rirControllers[i][j].text.trim());
+        }
+        if (i < _velocityControllers.length && j < _velocityControllers[i].length) {
+          _workoutSets[i][j].velocity = double.tryParse(_velocityControllers[i][j].text.trim());
+        }
+        if (i < _notesControllers.length && j < _notesControllers[i].length) {
+          _workoutSets[i][j].notes = _notesControllers[i][j].text.trim();
+        }
+        synced++;
+      }
+    }
+    print('[WES_REENTER] _syncControllersToModel END — synced $synced sets');
+  }
+
   Future<void> _persistDraftLocally() async {
-    if (!mounted) {
-      print('🚫 [WES] Skipped draft save — widget is unmounted.');
-      return;
+    final bool controllersAvailable = mounted;
+    if (!controllersAvailable) {
+      print('[WES_REENTER] _persistDraftLocally: unmounted — using pre-synced _workoutSets');
     }
 
     try {
       final prefs = await SharedPreferences.getInstance();
 
-      // Sync current TextField values into _workoutSets
-      for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
-        for (int j = 0; j < _workoutSets[i].length; j++) {
-          _workoutSets[i][j].reps =
-              int.tryParse(_repsControllers[i][j].text.trim());
-          _workoutSets[i][j].weight =
-              double.tryParse(_weightControllers[i][j].text.trim());
-          _workoutSets[i][j].rir =
-              double.tryParse(_rirControllers[i][j].text.trim());
-          _workoutSets[i][j].velocity =
-              double.tryParse(_velocityControllers[i][j].text.trim());
-          _workoutSets[i][j].notes = _notesControllers[i][j].text.trim();
+      // Sync current TextField values into _workoutSets only if controllers
+      // are still alive (i.e. widget is mounted). When called from dispose(),
+      // _syncControllersToModel() already ran synchronously before disposal.
+      if (controllersAvailable) {
+        for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+          for (int j = 0; j < _workoutSets[i].length; j++) {
+            _workoutSets[i][j].reps =
+                int.tryParse(_repsControllers[i][j].text.trim());
+            _workoutSets[i][j].weight =
+                double.tryParse(_weightControllers[i][j].text.trim());
+            _workoutSets[i][j].rir =
+                double.tryParse(_rirControllers[i][j].text.trim());
+            _workoutSets[i][j].velocity =
+                double.tryParse(_velocityControllers[i][j].text.trim());
+            _workoutSets[i][j].notes = _notesControllers[i][j].text.trim();
+          }
         }
       }
 
+      String workoutName = '';
+      try { workoutName = _workoutNameController.text; } catch (_) {}
+
       final draft = {
-        'workoutName': _workoutNameController.text,
+        'workoutName': workoutName,
         'exercises': List.generate(_selectedExercisesWithCircuits.length, (i) =>
         {
           'name': _selectedExercisesWithCircuits[i]['name'],
@@ -9692,8 +9752,7 @@ class _WorkoutPageState extends State<WorkoutPage>
 
       final key = _getDraftKey(); // 👈 use your helper
       await prefs.setString(key, jsonEncode(draft));
-      print('💾 [WES] Draft saved for ${_selectedDate
-          .toIso8601String()} under key: $key');
+      print('[WES_REENTER] _persistDraftLocally saved key: $key (controllersAvailable=$controllersAvailable)');
 
       // print('💾 Draft saved: $_draftKey');
     } catch (e) {
@@ -11894,11 +11953,13 @@ class _WorkoutPageState extends State<WorkoutPage>
     final draftKey = 'workout_draft_$dateKey';
     final timestampKey = 'draft_last_saved_$dateKey';
 
+    print('[WES_REENTER] _loadWorkoutDraftFromCache: key=$draftKey');
+
     final draftJson = prefs.getString(draftKey);
     final savedAtString = prefs.getString(timestampKey);
 
     if (draftJson == null || savedAtString == null) {
-      print('[WES] No draft found for $dateKey.');
+      print('[WES_REENTER] _loadWorkoutDraftFromCache: NOT FOUND for $dateKey');
       return false;
     }
 
