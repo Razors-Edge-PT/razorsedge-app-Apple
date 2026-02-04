@@ -7,6 +7,7 @@ import 'workout_day_cache.dart'; // <-- brings in WorkoutDayCacheSchema
 import 'autosave_queue_db.dart'; // ← ADD
 // ADD THIS IMPORT near your other local_cache imports
 import 'isar_bb2_merged_day.dart';
+import 'isar_claude_bullet_snapshot.dart';
 
 
 
@@ -38,6 +39,7 @@ class IsarDb {
         AutosaveJobSchema,
         LastSaveHashSchema,
         BB2MergedDaySchema, // ← ADD
+        ClaudeBulletSnapshotSchema,
       ],
 
       directory: dir.path,

@@ -39,6 +39,7 @@ import 'package:video_player/video_player.dart';
 import 'exercise_video_assets.dart';
 import 'exercise_video_player_screen.dart';
 import 'demographics_cache.dart';
+import 'local_cache/isar_claude_bullet_snapshot.dart';
 
 import 'package:cloud_firestore/cloud_firestore.dart' as firebase_firestore;
 
@@ -200,6 +201,18 @@ class _WorkoutPageState extends State<WorkoutPage>
   // Pre-resolved S1 hints from snapshot for instant first paint
   final Map<String, Map<String, dynamic>> _seedHintsByKey = {};
 
+  // ── Claude_bullet resume snapshot overrides ──
+  // When a valid Claude_bullet snapshot is restored, these maps hold the
+  // exact hint strings that were visible at exit time so the UI can paint
+  // them synchronously without running async hint computation.
+  //   Key: instanceKey ("exerciseId|circuitIndex")
+  //   Value: Map<int setIdx, String displayString>
+  bool _claudeBulletActiveForThisDay = false;
+  final Map<String, Map<int, String>> _claudeBulletWeightHintOverrides = {};
+  final Map<String, Map<int, String>> _claudeBulletRepsHintOverrides = {};
+  final Map<String, Map<int, String>> _claudeBulletRirHintOverrides = {};
+  Timer? _claudeBulletSaveDebounce;
+
   // Stable key for a row: "name|circuitIndex"
   String _rowKeyBy(int i) {
     final nameRaw = (_selectedExercisesWithCircuits[i]['name'] ?? '').toString().trim();
@@ -323,6 +336,11 @@ class _WorkoutPageState extends State<WorkoutPage>
   void _beginDateSession(DateTime d) {
     _epoch++;
     _dayKey = DateFormat('yyyy-MM-dd').format(DateTime(d.year, d.month, d.day));
+    // Reset Claude_bullet overrides when switching dates
+    _claudeBulletActiveForThisDay = false;
+    _claudeBulletWeightHintOverrides.clear();
+    _claudeBulletRepsHintOverrides.clear();
+    _claudeBulletRirHintOverrides.clear();
   }
 
   late Future<void> _initialLoad;
@@ -1898,6 +1916,12 @@ class _WorkoutPageState extends State<WorkoutPage>
 
   // Formatters for hint text (range or single)
   Future<String> _weightHintText(int exIdx, int setIdx) async {
+    // Claude_bullet override: return cached hint string synchronously
+    if (_claudeBulletActiveForThisDay) {
+      final ik = _rowKeyBy(exIdx);
+      final ov = _claudeBulletWeightHintOverrides[ik]?[setIdx];
+      if (ov != null) return ov;
+    }
     // current field texts
     final weightText = _weightControllers[exIdx][setIdx].text.trim();
     final repsText = _repsControllers[exIdx][setIdx].text.trim();
@@ -1967,6 +1991,12 @@ class _WorkoutPageState extends State<WorkoutPage>
   }
 
   Future<String> _repsHintText(int exIdx, int setIdx) async {
+    // Claude_bullet override: return cached hint string synchronously
+    if (_claudeBulletActiveForThisDay) {
+      final ik = _rowKeyBy(exIdx);
+      final ov = _claudeBulletRepsHintOverrides[ik]?[setIdx];
+      if (ov != null) return ov;
+    }
     // current field texts
     final weightText = _weightControllers[exIdx][setIdx].text.trim();
     final repsText = _repsControllers[exIdx][setIdx].text.trim();
@@ -4479,7 +4509,401 @@ class _WorkoutPageState extends State<WorkoutPage>
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Claude_bullet  –  Resume-like full-day UI snapshot  (Line 0)
+  // ═══════════════════════════════════════════════════════════════════════════
 
+  /// Persist the complete visible state of every exercise×set so that
+  /// re-entering WES for the same date within 2 hours restores the page
+  /// exactly (hint stays hint, typed stays typed, empty stays empty).
+  Future<void> Claude_bulletSaveFullDayUiSnapshot({required String reason}) async {
+    try {
+      if (_selectedExercisesWithCircuits.isEmpty) return;
+
+      final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      final workoutName = _workoutNameController.text;
+
+      // ── RIR-hint helper (same logic as debug dump) ──
+      String rirHintFor(int i, int j) {
+        final seedKey = _rowKeyBy(i);
+        final seed = _seedHintsByKey[seedKey];
+        if (j == 0) {
+          return formatRir((seed?['rir'] as num?)?.toDouble() ?? set1RIR(i));
+        }
+        if (j >= 1 && j <= 7) {
+          final k = 's${j + 1}_rir';
+          final seeded = (seed?[k] as num?)?.toDouble();
+          final fallback = (j == 1) ? set2RIR(i) : (j == 2) ? set3RIR(i) : 1.0;
+          return formatRir(seeded ?? fallback);
+        }
+        return '1';
+      }
+
+      final List<Map<String, dynamic>> exercisesPayload = [];
+
+      for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+        final exMap = _selectedExercisesWithCircuits[i];
+        final exName = (exMap['name'] ?? '').toString().trim();
+        final ci = (exMap['circuitIndex'] ?? 0);
+        final exId = (exMap['exerciseId'] ?? exMap['id'] ?? exMap['exerciseID'] ?? '').toString();
+        final instanceKey = '$exId|$ci';
+
+        int setCount = [
+          if (i < _weightControllers.length) _weightControllers[i].length,
+          if (i < _repsControllers.length) _repsControllers[i].length,
+          if (i < _rirControllers.length) _rirControllers[i].length,
+          if (i < _velocityControllers.length) _velocityControllers[i].length,
+          if (i < _notesControllers.length) _notesControllers[i].length,
+        ].fold<int>(0, (a, b) => a > b ? a : b);
+
+        final List<Map<String, dynamic>> setsPayload = [];
+
+        // set1 numeric seeds
+        double? s1WeightNum;
+        double? s1RepsNum;
+        double? s1RirNum;
+        bool s1WeightTyped = false;
+        bool s1RepsTyped = false;
+        bool s1RirTyped = false;
+
+        for (int j = 0; j < setCount; j++) {
+          final wTxt = (i < _weightControllers.length && j < _weightControllers[i].length)
+              ? _weightControllers[i][j].text.trim() : '';
+          final rTxt = (i < _repsControllers.length && j < _repsControllers[i].length)
+              ? _repsControllers[i][j].text.trim() : '';
+          final rirTxt = (i < _rirControllers.length && j < _rirControllers[i].length)
+              ? _rirControllers[i][j].text.trim() : '';
+          final vTxt = (i < _velocityControllers.length && j < _velocityControllers[i].length)
+              ? _velocityControllers[i][j].text.trim() : '';
+          final nTxt = (i < _notesControllers.length && j < _notesControllers[i].length)
+              ? _notesControllers[i][j].text.trim() : '';
+
+          // Weight origin + display
+          String wOrigin, wDisplay;
+          if (wTxt.isNotEmpty) {
+            wOrigin = 'typed'; wDisplay = wTxt;
+          } else if (_isInitialized && !_isLoadingData) {
+            String hintStr = '';
+            if (j == 0) {
+              hintStr = formatWeight(set1SuggestedWeight(i));
+            } else {
+              hintStr = await _weightHintText(i, j);
+            }
+            wOrigin = hintStr.isNotEmpty ? 'hint' : 'empty';
+            wDisplay = hintStr;
+          } else {
+            wOrigin = 'empty'; wDisplay = '';
+          }
+
+          // Reps origin + display
+          String rOrigin, rDisplay;
+          if (rTxt.isNotEmpty) {
+            rOrigin = 'typed'; rDisplay = rTxt;
+          } else if (_isInitialized && !_isLoadingData) {
+            String hintStr = '';
+            if (j == 0) {
+              final r = set1SuggestedReps(i);
+              hintStr = r.toInt().toString();
+            } else {
+              hintStr = await _repsHintText(i, j);
+            }
+            rOrigin = hintStr.isNotEmpty ? 'hint' : 'empty';
+            rDisplay = hintStr;
+          } else {
+            rOrigin = 'empty'; rDisplay = '';
+          }
+
+          // RIR origin + display
+          String rirOrigin, rirDisplay;
+          if (rirTxt.isNotEmpty) {
+            rirOrigin = 'typed'; rirDisplay = rirTxt;
+          } else {
+            final hintStr = rirHintFor(i, j);
+            rirOrigin = hintStr.isNotEmpty ? 'hint' : 'empty';
+            rirDisplay = hintStr;
+          }
+
+          // Velocity + notes: typed or empty only
+          final vOrigin = vTxt.isNotEmpty ? 'typed' : 'empty';
+          final nOrigin = nTxt.isNotEmpty ? 'typed' : 'empty';
+
+          setsPayload.add({
+            'setIdx': j,
+            'weight': {'origin': wOrigin, 'display': wDisplay},
+            'reps': {'origin': rOrigin, 'display': rDisplay},
+            'rir': {'origin': rirOrigin, 'display': rirDisplay},
+            'velocity': {'origin': vOrigin, 'display': vTxt},
+            'notes': {'origin': nOrigin, 'display': nTxt},
+          });
+
+          // Capture set1 numeric seeds
+          if (j == 0) {
+            s1WeightTyped = wOrigin == 'typed';
+            s1RepsTyped = rOrigin == 'typed';
+            s1RirTyped = rirOrigin == 'typed';
+            s1WeightNum = double.tryParse(wDisplay.replaceAll('–', ''));
+            s1RepsNum = double.tryParse(rDisplay.replaceAll('–', ''));
+            s1RirNum = double.tryParse(rirDisplay.replaceAll('–', ''));
+          }
+        }
+
+        exercisesPayload.add({
+          'instanceKey': instanceKey,
+          'exerciseId': exId,
+          'name': exName,
+          'circuitIndex': ci,
+          'sets': setsPayload,
+          'set1_weight_num': s1WeightNum,
+          'set1_reps_num': s1RepsNum,
+          'set1_rir_num': s1RirNum,
+          'set1_weight_typed': s1WeightTyped,
+          'set1_reps_typed': s1RepsTyped,
+          'set1_rir_typed': s1RirTyped,
+        });
+      }
+
+      final payload = jsonEncode({'exercises': exercisesPayload});
+
+      final isar = await IsarDb.instance;
+      final snap = ClaudeBulletSnapshot()
+        ..dateYmd = ymd
+        ..lastEditedAt = nowMs
+        ..workoutName = workoutName
+        ..snapshotJson = payload
+        ..cachedAt = DateTime.now();
+
+      await isar.writeTxn(() async {
+        await isar.claudeBulletSnapshots.put(snap);
+      });
+
+      // Log summary
+      final firstEx = exercisesPayload.isNotEmpty ? exercisesPayload.first : null;
+      String s1Summary = '';
+      if (firstEx != null && (firstEx['sets'] as List).isNotEmpty) {
+        final s1 = (firstEx['sets'] as List).first as Map<String, dynamic>;
+        s1Summary = ' set1: w=${s1['weight']['origin']}:${s1['weight']['display']}'
+            ' r=${s1['reps']['origin']}:${s1['reps']['display']}'
+            ' rir=${s1['rir']['origin']}:${s1['rir']['display']}';
+      }
+      print('[Claude_bullet] SAVED snapshot reason=$reason date=$ymd '
+          'lastEditedAt=$nowMs exercises=${exercisesPayload.length}$s1Summary');
+    } catch (e, st) {
+      print('[Claude_bullet] SAVE ERROR: $e');
+      print(st);
+    }
+  }
+
+  /// Attempt to restore the full-day UI snapshot from Isar.
+  /// Returns true if a valid (< 2 hours old) snapshot was found and applied.
+  /// Must be called AFTER controllers are initialized but BEFORE heavy hint boot.
+  Future<bool> Claude_bulletTryRestoreFullDayUiSnapshot() async {
+    try {
+      final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+      final isar = await IsarDb.instance;
+
+      final snap = await isar.claudeBulletSnapshots
+          .filter()
+          .dateYmdEqualTo(ymd)
+          .findFirst();
+
+      if (snap == null) {
+        print('[Claude_bullet] No snapshot found for $ymd');
+        return false;
+      }
+
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      final ageMs = nowMs - snap.lastEditedAt;
+      const twoHoursMs = 2 * 60 * 60 * 1000;
+
+      if (ageMs > twoHoursMs) {
+        print('[Claude_bullet] Snapshot for $ymd is stale '
+            '(age=${(ageMs / 60000).toStringAsFixed(1)} min) — skipping');
+        return false;
+      }
+
+      final data = jsonDecode(snap.snapshotJson) as Map<String, dynamic>;
+      final exercises = (data['exercises'] as List?) ?? [];
+
+      if (exercises.isEmpty) {
+        print('[Claude_bullet] Snapshot for $ymd has no exercises — skipping');
+        return false;
+      }
+
+      // We need exercise rows + controllers to already be initialized.
+      // If they're not, we can't restore yet.
+      if (_selectedExercisesWithCircuits.isEmpty) {
+        print('[Claude_bullet] No exercises loaded yet for $ymd — deferring');
+        return false;
+      }
+
+      // Clear overrides from any previous restore
+      _claudeBulletWeightHintOverrides.clear();
+      _claudeBulletRepsHintOverrides.clear();
+      _claudeBulletRirHintOverrides.clear();
+
+      int restoredExercises = 0;
+      String s1Summary = '';
+
+      for (final exData in exercises) {
+        final instanceKey = exData['instanceKey'] as String? ?? '';
+        final sets = (exData['sets'] as List?) ?? [];
+
+        // Find the matching row index in the current exercise list
+        int? rowIdx;
+        for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+          final exMap = _selectedExercisesWithCircuits[i];
+          final exId = (exMap['exerciseId'] ?? exMap['id'] ?? exMap['exerciseID'] ?? '').toString();
+          final ci = exMap['circuitIndex'] ?? 0;
+          final currentKey = '$exId|$ci';
+          if (currentKey == instanceKey) {
+            rowIdx = i;
+            break;
+          }
+        }
+
+        if (rowIdx == null) continue;
+        restoredExercises++;
+
+        for (final setData in sets) {
+          final j = (setData['setIdx'] as int?) ?? 0;
+          final w = setData['weight'] as Map<String, dynamic>? ?? {};
+          final r = setData['reps'] as Map<String, dynamic>? ?? {};
+          final rir = setData['rir'] as Map<String, dynamic>? ?? {};
+          final vel = setData['velocity'] as Map<String, dynamic>? ?? {};
+          final notes = setData['notes'] as Map<String, dynamic>? ?? {};
+
+          // ── Restore weight controller ──
+          if (rowIdx < _weightControllers.length && j < _weightControllers[rowIdx].length) {
+            if (w['origin'] == 'typed') {
+              _weightControllers[rowIdx][j].text = w['display'] ?? '';
+            } else {
+              _weightControllers[rowIdx][j].text = '';
+            }
+          }
+          // Weight hint override
+          if (w['origin'] == 'hint' && (w['display'] ?? '').toString().isNotEmpty) {
+            _claudeBulletWeightHintOverrides
+                .putIfAbsent(instanceKey, () => {})
+                [j] = w['display'].toString();
+          }
+
+          // ── Restore reps controller ──
+          if (rowIdx < _repsControllers.length && j < _repsControllers[rowIdx].length) {
+            if (r['origin'] == 'typed') {
+              _repsControllers[rowIdx][j].text = r['display'] ?? '';
+            } else {
+              _repsControllers[rowIdx][j].text = '';
+            }
+          }
+          // Reps hint override
+          if (r['origin'] == 'hint' && (r['display'] ?? '').toString().isNotEmpty) {
+            _claudeBulletRepsHintOverrides
+                .putIfAbsent(instanceKey, () => {})
+                [j] = r['display'].toString();
+          }
+
+          // ── Restore RIR controller ──
+          if (rowIdx < _rirControllers.length && j < _rirControllers[rowIdx].length) {
+            if (rir['origin'] == 'typed') {
+              _rirControllers[rowIdx][j].text = rir['display'] ?? '';
+            } else {
+              _rirControllers[rowIdx][j].text = '';
+            }
+          }
+          // RIR hint override
+          if (rir['origin'] == 'hint' && (rir['display'] ?? '').toString().isNotEmpty) {
+            _claudeBulletRirHintOverrides
+                .putIfAbsent(instanceKey, () => {})
+                [j] = rir['display'].toString();
+          }
+
+          // ── Restore velocity controller ──
+          if (rowIdx < _velocityControllers.length && j < _velocityControllers[rowIdx].length) {
+            if (vel['origin'] == 'typed') {
+              _velocityControllers[rowIdx][j].text = vel['display'] ?? '';
+            } else {
+              _velocityControllers[rowIdx][j].text = '';
+            }
+          }
+
+          // ── Restore notes controller ──
+          if (rowIdx < _notesControllers.length && j < _notesControllers[rowIdx].length) {
+            if (notes['origin'] == 'typed') {
+              _notesControllers[rowIdx][j].text = notes['display'] ?? '';
+            } else {
+              _notesControllers[rowIdx][j].text = '';
+            }
+          }
+
+          // Log first exercise set1
+          if (restoredExercises == 1 && j == 0) {
+            s1Summary = ' set1: w=${w['origin']}:${w['display']}'
+                ' r=${r['origin']}:${r['display']}'
+                ' rir=${rir['origin']}:${rir['display']}';
+          }
+        }
+
+        // ── Seed set1 numeric cache ──
+        final s1WNum = (exData['set1_weight_num'] as num?)?.toDouble();
+        final s1RNum = (exData['set1_reps_num'] as num?)?.toDouble();
+        final s1RirNum = (exData['set1_rir_num'] as num?)?.toDouble();
+        final s1WTyped = exData['set1_weight_typed'] == true;
+        final s1RTyped = exData['set1_reps_typed'] == true;
+        final s1RirTyped = exData['set1_rir_typed'] == true;
+
+        // Populate _seedHintsByKey for set1 so existing set1SuggestedWeight/Reps
+        // functions work instantly without running async computation.
+        // Only seed if the field was a hint (not typed) so we don't interfere
+        // with typed values.
+        final hintKey = _rowKeyBy(rowIdx);
+        final existingSeed = _seedHintsByKey[hintKey] ?? {};
+
+        if (!s1WTyped && s1WNum != null) {
+          // Check if BW exercise to use correct key
+          final exName = (exData['name'] ?? '').toString().trim();
+          final isBw = PeriodizationModelUtils.isBodyweightExercise(name: exName);
+          if (isBw) {
+            existingSeed['s1_weight_added'] = s1WNum;
+          } else {
+            existingSeed['s1_weight'] = s1WNum;
+          }
+        }
+        if (!s1RTyped && s1RNum != null) {
+          existingSeed['s1_reps'] = s1RNum;
+        }
+        if (!s1RirTyped && s1RirNum != null) {
+          existingSeed['s1_rir'] = s1RirNum;
+          existingSeed['rir'] = s1RirNum;
+        }
+
+        if (existingSeed.isNotEmpty) {
+          _seedHintsByKey[hintKey] = existingSeed;
+        }
+      }
+
+      _claudeBulletActiveForThisDay = true;
+
+      print('[Claude_bullet] RESTORED snapshot for $ymd '
+          'age=${(ageMs / 60000).toStringAsFixed(1)}min '
+          'exercises=$restoredExercises$s1Summary');
+
+      return restoredExercises > 0;
+    } catch (e, st) {
+      print('[Claude_bullet] RESTORE ERROR: $e');
+      print(st);
+      return false;
+    }
+  }
+
+  /// Schedule a debounced Claude_bullet save (400ms).
+  void Claude_bulletScheduleDebouncedSave() {
+    _claudeBulletSaveDebounce?.cancel();
+    _claudeBulletSaveDebounce = Timer(
+      const Duration(milliseconds: 400),
+      () => Claude_bulletSaveFullDayUiSnapshot(reason: 'edit_debounce'),
+    );
+  }
 
 
 
@@ -8201,6 +8625,15 @@ class _WorkoutPageState extends State<WorkoutPage>
       _debugRowSetCounts('[FastPaint end]');
       _debugLogCardsForSelectedDate('FastPaint');
 
+      // ── Claude_bullet Line 0: attempt resume-like restore ──
+      // This must happen AFTER exercises + controllers are initialized
+      // but BEFORE the first visual frame so the user sees exact state.
+      final cbRestored = await Claude_bulletTryRestoreFullDayUiSnapshot();
+      if (cbRestored) {
+        print('[Claude_bullet] Line 0 restore succeeded — skipping heavy hint boot for initial load');
+        if (mounted) setState(() {});
+      }
+
       if (!_firstRowsLogged && _selectedExercisesWithCircuits.isNotEmpty) {
         _firstRowsLogged = true;
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -9790,8 +10223,13 @@ class _WorkoutPageState extends State<WorkoutPage>
         Claude_bulletDebugDumpFullDayUi(tag: ' BEFORE_DISPOSE')
             .whenComplete(() => _claudeBulletDumpMode = prevDumpMode),
       );
+
+      // Claude_bullet: persist full UI state for resume-like restore
+      unawaited(Claude_bulletSaveFullDayUiSnapshot(reason: 'dispose'));
     }
 
+    // Cancel debounce timer
+    _claudeBulletSaveDebounce?.cancel();
 
     print('🧹 [WES] dispose called — uid=$_cachedUid');
     _catchupShineCtl?.dispose();
@@ -10193,8 +10631,13 @@ class _WorkoutPageState extends State<WorkoutPage>
           }
 
           // Only fill EMPTY controller fields / null SetDetails
+          // Claude_bullet: when resume snapshot is active, do not clobber
+          // controllers — hints must remain as empty controllers, typed values
+          // are already set.
+          final bool _cbGuard = _claudeBulletActiveForThisDay;
+
           // reps
-          if ((_repsControllers[idx][s].text.trim().isEmpty) && ds['reps'] != null) {
+          if (!_cbGuard && (_repsControllers[idx][s].text.trim().isEmpty) && ds['reps'] != null) {
             final String repText = (ds['reps'] is num)
                 ? (ds['reps'] as num).toInt().toString()
                 : (ds['reps'] is String ? (ds['reps'] as String) : '');
@@ -10209,7 +10652,7 @@ class _WorkoutPageState extends State<WorkoutPage>
           }
 
           // weight (display)
-          if ((_weightControllers[idx][s].text.trim().isEmpty) && displayWeight != null) {
+          if (!_cbGuard && (_weightControllers[idx][s].text.trim().isEmpty) && displayWeight != null) {
             _weightControllers[idx][s].text = (displayWeight != null) ? displayWeight.toString() : '';
 
             fieldsFilled++; changed = true;
@@ -10223,7 +10666,7 @@ class _WorkoutPageState extends State<WorkoutPage>
           final double? draftRir = (ds['rir'] is num)
               ? (ds['rir'] as num).toDouble()
               : (ds['rir'] is String ? double.tryParse(ds['rir']) : null);
-          if ((_rirControllers[idx][s].text.trim().isEmpty) && draftRir != null) {
+          if (!_cbGuard && (_rirControllers[idx][s].text.trim().isEmpty) && draftRir != null) {
             final String rirText = (draftRir != null) ? draftRir.toString() : '';
             _rirControllers[idx][s].text = rirText;
 
@@ -11461,6 +11904,9 @@ class _WorkoutPageState extends State<WorkoutPage>
     required int setIndex,
   }) async {
     print('💾 [INLINE SAVE] Triggered for row=$rowIndex set=$setIndex');
+
+    // Claude_bullet: debounced snapshot save on every edit
+    Claude_bulletScheduleDebouncedSave();
 
     try {
       final uid = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid;
@@ -16296,6 +16742,21 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                             onDoubleTap: () {
                                                               if (_rirControllers[i][j].text.isNotEmpty) return;
 
+                                                              // Claude_bullet override for RIR double-tap
+                                                              if (_claudeBulletActiveForThisDay) {
+                                                                final ik = _rowKeyBy(i);
+                                                                final ov = _claudeBulletRirHintOverrides[ik]?[j];
+                                                                if (ov != null && ov.isNotEmpty) {
+                                                                  setState(() {
+                                                                    _rirControllers[i][j].text = ov;
+                                                                    _rirControllers[i][j].selection = TextSelection.fromPosition(
+                                                                      TextPosition(offset: ov.length),
+                                                                    );
+                                                                  });
+                                                                  return;
+                                                                }
+                                                              }
+
                                                               final exNameKey =
                                                                   '${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i';
 
@@ -16341,23 +16802,31 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                                                                 decoration: InputDecoration(
                                                                   contentPadding: const EdgeInsets.only(left: 2),
-                                                                  hintText: (j == 0)
-                                                                      ? formatRir(
-                                                                      _seedHintsByKey[
-                                                                      '${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i']?['rir']
-                                                                          ?? set1RIR(i)
-                                                                  )
-                                                                      : (j >= 1 && j <= 7)
-                                                                      ? formatRir(
-                                                                      _seedHintsByKey[
-                                                                      '${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i']?['s${j + 1}_rir']
-                                                                          ?? (j == 1
-                                                                          ? set2RIR(i)
-                                                                          : j == 2
-                                                                          ? set3RIR(i)
-                                                                          : 1)
-                                                                  )
-                                                                      : '1',
+                                                                  hintText: (() {
+                                                                    // Claude_bullet override: use cached RIR hint
+                                                                    if (_claudeBulletActiveForThisDay) {
+                                                                      final ik = _rowKeyBy(i);
+                                                                      final ov = _claudeBulletRirHintOverrides[ik]?[j];
+                                                                      if (ov != null) return ov;
+                                                                    }
+                                                                    return (j == 0)
+                                                                        ? formatRir(
+                                                                        _seedHintsByKey[
+                                                                        '${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i']?['rir']
+                                                                            ?? set1RIR(i)
+                                                                    )
+                                                                        : (j >= 1 && j <= 7)
+                                                                        ? formatRir(
+                                                                        _seedHintsByKey[
+                                                                        '${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i']?['s${j + 1}_rir']
+                                                                            ?? (j == 1
+                                                                            ? set2RIR(i)
+                                                                            : j == 2
+                                                                            ? set3RIR(i)
+                                                                            : 1)
+                                                                    )
+                                                                        : '1';
+                                                                  })(),
                                                                   hintStyle: const TextStyle(
                                                                     color: Colors.grey,
                                                                     fontStyle: FontStyle.italic,
