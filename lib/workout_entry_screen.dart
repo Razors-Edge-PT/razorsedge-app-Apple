@@ -154,6 +154,8 @@ class _WorkoutPageState extends State<WorkoutPage>
 
   Map<String, bool> _showVelocityByExercise = {
   }; // exerciseName.toLowerCase() → true/false
+  bool _claudeBulletDumpMode = false;
+
   double _dragX = 0;
 
 
@@ -4343,6 +4345,120 @@ class _WorkoutPageState extends State<WorkoutPage>
     print('   reps:   $rVisible  (seed s1_reps=${seed?['s1_reps']})');
     print('   rir:    $rirVisible (seed rir=${seed?['rir']} s1_rir?=${seed?['s1_rir']})');
   }
+
+  // CLAUDE_BULLET: Dump the entire visible UI state for the day (all exercises, all sets)
+  Future<void> Claude_bulletDebugDumpFullDayUi({String tag = ''}) async {
+
+    try {
+      final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+      final workoutName = _workoutNameController.text;
+
+      print('🧾 [WES UI DUMP$tag] date=$ymd  workoutName="${workoutName}"  '
+          'rows=${_selectedExercisesWithCircuits.length}  init=$_isInitialized loading=$_isLoadingData');
+
+      // Helper: what the RIR TextField uses as hint (matches the UI logic you currently have)
+      String _rirHintFor(int i, int j) {
+        final nameLower = (_selectedExercisesWithCircuits[i]['name'] ?? '')
+            .toString()
+            .toLowerCase();
+
+        // NOTE: this matches your current UI key usage in the RIR hintText block
+        final seedKey = _rowKeyBy(i);
+        final seed = _seedHintsByKey[seedKey];
+
+
+        if (j == 0) {
+          return formatRir((seed?['rir'] as num?)?.toDouble() ?? set1RIR(i));
+        }
+        if (j >= 1 && j <= 7) {
+          final k = 's${j + 1}_rir';
+          final seeded = (seed?[k] as num?)?.toDouble();
+          final fallback = (j == 1)
+              ? set2RIR(i)
+              : (j == 2)
+              ? set3RIR(i)
+              : 1.0;
+          return formatRir(seeded ?? fallback);
+        }
+        return '1';
+      }
+
+      // Helper: normalize “what’s visible”
+      String _visibleOrHint(String typed, String hint) {
+        final t = typed.trim();
+        return t.isNotEmpty ? 'TYPED:$t' : 'HINT:$hint';
+      }
+
+      for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
+        final exName = (_selectedExercisesWithCircuits[i]['name'] ?? '').toString().trim();
+        final ci = (_selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0);
+        final rowKey = _rowKeyBy(i);
+
+        final setCount = [
+          if (i < _weightControllers.length) _weightControllers[i].length,
+          if (i < _repsControllers.length) _repsControllers[i].length,
+          if (i < _rirControllers.length) _rirControllers[i].length,
+          if (i < _velocityControllers.length) _velocityControllers[i].length,
+          if (i < _notesControllers.length) _notesControllers[i].length,
+        ].fold<int>(0, (a, b) => a > b ? a : b);
+
+        print('  ── row i=$i ex="$exName" circuitIndex=$ci rowKey="$rowKey" sets=$setCount');
+
+        for (int j = 0; j < setCount; j++) {
+          final wTxt = (i < _weightControllers.length && j < _weightControllers[i].length)
+              ? _weightControllers[i][j].text
+              : '';
+          final rTxt = (i < _repsControllers.length && j < _repsControllers[i].length)
+              ? _repsControllers[i][j].text
+              : '';
+          final rirTxt = (i < _rirControllers.length && j < _rirControllers[i].length)
+              ? _rirControllers[i][j].text
+              : '';
+          final vTxt = (i < _velocityControllers.length && j < _velocityControllers[i].length)
+              ? _velocityControllers[i][j].text
+              : '';
+          final nTxt = (i < _notesControllers.length && j < _notesControllers[i].length)
+              ? _notesControllers[i][j].text
+              : '';
+
+          // These match your current UI hint logic for weight & reps.
+          String wHint = '';
+          String rHint = '';
+
+          if (_isInitialized && !_isLoadingData) {
+            if (j == 0) {
+              // Set 1 uses your existing logic
+              wHint = formatWeight(set1SuggestedWeight(i));
+              rHint = set1SuggestedReps(i).toInt().toString();
+            } else {
+              // Set 2+ must use the same async hint logic as the UI (ranges, caps, etc.)
+              wHint = await _weightHintText(i, j);
+              rHint = await _repsHintText(i, j);
+            }
+          }
+
+
+          // RIR hint matches your UI logic per set index.
+          final rirHint = _rirHintFor(i, j);
+
+          final wVisible = _visibleOrHint(wTxt, wHint);
+          final rVisible = _visibleOrHint(rTxt, rHint);
+          final rirVisible = _visibleOrHint(rirTxt, rirHint);
+
+          final vVisible = vTxt.trim().isNotEmpty ? 'TYPED:${vTxt.trim()}' : 'EMPTY';
+          final nVisible = nTxt.trim().isNotEmpty ? 'TYPED:${nTxt.trim()}' : 'EMPTY';
+
+          print('     set${j + 1}: weight=$wVisible  reps=$rVisible  rir=$rirVisible  vel=$vVisible  notes=$nVisible');
+        }
+      }
+
+      print('🧾 [WES UI DUMP$tag] END');
+    } catch (e, st) {
+      print('🧾 [WES UI DUMP$tag] ERROR: $e');
+      print(st);
+    }
+  }
+
 
 
 
@@ -9616,9 +9732,18 @@ class _WorkoutPageState extends State<WorkoutPage>
 
     // 🔎 FIRST: snapshot of what the UI is ACTUALLY showing
     print('🧯 [WES dispose] selectedDate=$_selectedDate block=$_selectedBlockId uid=${_cachedUid ?? FirebaseAuth.instance.currentUser?.uid}');
+
     if (_selectedExercisesWithCircuits.isNotEmpty) {
-      _debugDumpSet1Ui(0, tag: ' BEFORE_DISPOSE');
+      final prevDumpMode = _claudeBulletDumpMode;
+      _claudeBulletDumpMode = true;
+
+      unawaited(
+        Claude_bulletDebugDumpFullDayUi(tag: ' BEFORE_DISPOSE')
+            .whenComplete(() => _claudeBulletDumpMode = prevDumpMode),
+      );
     }
+
+
     print('🧹 [WES] dispose called — uid=$_cachedUid');
     _catchupShineCtl?.dispose();
 
@@ -9666,7 +9791,7 @@ class _WorkoutPageState extends State<WorkoutPage>
 
     // ⭐ Always attempt autosave on exit; _upsert will skip/clear appropriately
     print('💾 [WES dispose] Attempting autosave to Firestore...');
-    _upsertWorkoutToFirestore(alsoPushToBB2: true, markAllSaved: false);
+    _upsertWorkoutToFirestore(alsoPushToBB2: false, markAllSaved: false);
 
     _workoutNameController.dispose();
     for (var controllers in _repsControllers) {
