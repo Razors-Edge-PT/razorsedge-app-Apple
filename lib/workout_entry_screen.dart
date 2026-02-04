@@ -4520,7 +4520,11 @@ class _WorkoutPageState extends State<WorkoutPage>
     try {
       if (_selectedExercisesWithCircuits.isEmpty) return;
 
+
       final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+      final uid = UserContext.of(context, listen: false).currentUid;
+      final uidDateKey = '$uid|$ymd';
+
       final nowMs = DateTime.now().millisecondsSinceEpoch;
       final workoutName = _workoutNameController.text;
 
@@ -4668,6 +4672,7 @@ class _WorkoutPageState extends State<WorkoutPage>
       final isar = await IsarDb.instance;
       final snap = ClaudeBulletSnapshot()
         ..dateYmd = ymd
+        ..uidDateKey = uidDateKey
         ..lastEditedAt = nowMs
         ..workoutName = workoutName
         ..snapshotJson = payload
@@ -4700,12 +4705,16 @@ class _WorkoutPageState extends State<WorkoutPage>
   Future<bool> Claude_bulletTryRestoreFullDayUiSnapshot() async {
     try {
       final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+      final uid = UserContext.of(context, listen: false).currentUid;
+      final uidDateKey = '$uid|$ymd';
+
       final isar = await IsarDb.instance;
 
       final snap = await isar.claudeBulletSnapshots
           .filter()
-          .dateYmdEqualTo(ymd)
+          .uidDateKeyEqualTo(uidDateKey)
           .findFirst();
+
 
       if (snap == null) {
         print('[Claude_bullet] No snapshot found for $ymd');
