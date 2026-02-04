@@ -132,6 +132,11 @@ class WorkoutPage extends StatefulWidget {
 class _WorkoutPageState extends State<WorkoutPage>
     with WidgetsBindingObserver, TickerProviderStateMixin {
 
+  /// In-memory draft saved synchronously on dispose(), consumed on next
+  /// _paintFromSnapshotIfAny(). Survives widget lifecycle because it's static.
+  /// This is the primary mechanism for fast re-entry value restore.
+  static Map<String, dynamic>? _exitDraft;
+
   List<String> exercises = []; // Store selected exercises from dialog
   final TextEditingController _workoutNameController = TextEditingController();
   late DateTime _selectedDate;
@@ -6605,6 +6610,9 @@ class _WorkoutPageState extends State<WorkoutPage>
     print('[WES_REENTER] _loadInitialData: about to load draft from cache');
     final draftLoaded = await _loadWorkoutDraftFromCache();
     print('[WES_REENTER] _loadInitialData: draftLoaded=$draftLoaded');
+    if (draftLoaded && mounted) {
+      setState(() {}); // rebuild UI with draft-restored controllers
+    }
 
 
     // F) Touch BB2 day doc from SERVER (best-effort) so merge has fresh data
@@ -7368,7 +7376,15 @@ class _WorkoutPageState extends State<WorkoutPage>
       } else {
         print('🟣 [FastPaint] No snapshot found for $ymd');
       }
-      if (snap == null) return;
+      if (snap == null) {
+        // No snapshot, but we may still have an in-memory draft from previous
+        // dispose. The backup _loadWorkoutDraftFromCache path will pick it up.
+        if (_exitDraft != null && _exitDraft!['dateKey'] == ymd) {
+          debugPrint('[WES_REENTER] _paintFromSnapshotIfAny: no snapshot but '
+              'in-memory draft exists — will be consumed by draft loader');
+        }
+        return;
+      }
 
       // Decode planned rows (preferred) or previous overlay
       final List planned = snap.plannedExercisesJson.isNotEmpty
@@ -7914,6 +7930,72 @@ class _WorkoutPageState extends State<WorkoutPage>
         if (_rirDbg.isNotEmpty) {
           print('🟪 [FastPaint RIR] $name|$ci → $_rirDbg');
         }
+      }
+
+      // [WES_REENTER] Overlay in-memory draft from previous dispose() if
+      // available. This restores user-entered values (e.g. RIR=2.5) instantly
+      // on fast re-entry, before the first frame is painted.
+      if (_exitDraft != null && _exitDraft!['dateKey'] == ymd) {
+        debugPrint('[WES_REENTER] _paintFromSnapshotIfAny: found in-memory draft for $ymd — overlaying');
+        try {
+          final draftExercises = (_exitDraft!['exercises'] as List?) ?? [];
+          final draftSets = (_exitDraft!['sets'] as List?) ?? [];
+
+          // Build lookup: lowercased name|ci → draft index
+          final Map<String, int> draftLookup = {};
+          for (int di = 0; di < draftExercises.length; di++) {
+            final dn = (draftExercises[di]['name'] ?? '').toString().trim().toLowerCase();
+            final dc = draftExercises[di]['circuitIndex'] ?? 0;
+            draftLookup['$dn|$dc'] = di;
+          }
+
+          int overlaid = 0;
+          for (int i = 0; i < tmpRows.length; i++) {
+            final rn = (tmpRows[i]['name'] ?? '').toString().trim().toLowerCase();
+            final rc = tmpRows[i]['circuitIndex'] ?? 0;
+            final di = draftLookup['$rn|$rc'];
+            if (di == null || di >= draftSets.length) continue;
+
+            final draftSetList = draftSets[di] as List;
+            for (int k = 0; k < draftSetList.length; k++) {
+              final ds = Map<String, dynamic>.from(draftSetList[k] as Map);
+              // Weight
+              if (k < tmpWts[i].length && ds['weight'] != null) {
+                final w = (ds['weight'] as num).toDouble();
+                tmpWts[i][k].text = w == w.truncateToDouble()
+                    ? w.toStringAsFixed(1) : w.toString();
+                if (k < tmpSets[i].length) tmpSets[i][k].weight = w;
+              }
+              // Reps
+              if (k < tmpReps[i].length && ds['reps'] != null) {
+                tmpReps[i][k].text = ds['reps'].toString();
+                if (k < tmpSets[i].length) tmpSets[i][k].reps = (ds['reps'] as num).toInt();
+              }
+              // RIR
+              if (k < tmpRir[i].length && ds['rir'] != null) {
+                final r = (ds['rir'] as num).toDouble();
+                tmpRir[i][k].text = r == r.truncateToDouble()
+                    ? r.toStringAsFixed(1) : r.toString();
+                if (k < tmpSets[i].length) tmpSets[i][k].rir = r;
+              }
+              // Velocity
+              if (k < tmpVel[i].length && ds['velocity'] != null) {
+                tmpVel[i][k].text = (ds['velocity'] as num).toDouble().toStringAsFixed(2);
+              }
+              // Notes
+              if (k < tmpNotes[i].length && ds['notes'] != null && (ds['notes'] as String).trim().isNotEmpty) {
+                tmpNotes[i][k].text = (ds['notes'] as String).trim();
+              }
+              overlaid++;
+            }
+          }
+          debugPrint('[WES_REENTER] _paintFromSnapshotIfAny: overlaid $overlaid set(s) from in-memory draft');
+        } catch (e) {
+          debugPrint('[WES_REENTER] _paintFromSnapshotIfAny: draft overlay error: $e');
+        }
+        _exitDraft = null; // consumed
+      } else if (_exitDraft != null) {
+        debugPrint('[WES_REENTER] _paintFromSnapshotIfAny: in-memory draft exists but dateKey=${_exitDraft!['dateKey']} != $ymd — skipping');
       }
 
       // ✅ One paint: assign fully hydrated state
@@ -9544,13 +9626,40 @@ class _WorkoutPageState extends State<WorkoutPage>
     print('[WES_REENTER] dispose: syncing controllers to model before disposal');
     _syncControllersToModel();
 
-    // Save via _saveWorkoutDraftToCache (uses key 'workout_draft_$dateKey'
-    // which matches _loadWorkoutDraftFromCache on re-entry)
-    print('[WES_REENTER] dispose: saving draft to cache (matching key)');
-    _saveWorkoutDraftToCache();
+    // [WES_REENTER] PRIMARY: save in-memory draft SYNCHRONOUSLY.
+    // This is the only reliable way to guarantee the draft exists before
+    // the next WES instance opens (all async saves are race-prone).
+    try {
+      final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+      _exitDraft = {
+        'dateKey': ymd,
+        'workoutName': _workoutNameController.text,
+        'exercises': _selectedExercisesWithCircuits
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList(),
+        'sets': _workoutSets
+            .map((setsForEx) => setsForEx
+                .map((s) => <String, dynamic>{
+                      'reps': s.reps,
+                      'weight': s.weight,
+                      'rir': s.rir,
+                      'velocity': s.velocity,
+                      'notes': s.notes,
+                    })
+                .toList())
+            .toList(),
+      };
+      debugPrint('[WES_REENTER] dispose: saved in-memory draft for $ymd '
+          '(${_selectedExercisesWithCircuits.length} exercises, '
+          '${_workoutSets.length} set rows)');
+    } catch (e) {
+      debugPrint('[WES_REENTER] dispose: failed to save in-memory draft: $e');
+    }
 
-    // Also keep _persistDraftLocally as backup (uid-keyed)
-    print('💾 [WES dispose] Persisting local draft...');
+    // BACKUP: async draft saves (may not complete before re-entry, but help
+    // with app-restart scenarios). _saveWorkoutDraftToCache uses model data
+    // already synced above, so it doesn't need live controllers.
+    _saveWorkoutDraftToCache();
     _persistDraftLocally();
     _isMergingBB2.dispose();
 
@@ -11914,35 +12023,47 @@ class _WorkoutPageState extends State<WorkoutPage>
   }
 
   Future<void> _saveWorkoutDraftToCache() async {
-    final prefs = await SharedPreferences.getInstance();
+    // Capture ALL state synchronously BEFORE the first await, because
+    // controllers may be disposed during the yield (called from dispose).
+    final capturedName = (() {
+      try { return _workoutNameController.text; } catch (_) { return ''; }
+    })();
+    final capturedDate = _selectedDate;
+    final capturedExercises = List<Map<String, dynamic>>.from(
+        _selectedExercisesWithCircuits.map((e) => Map<String, dynamic>.from(e)));
+    final capturedSets = _workoutSets.map((setsForExercise) {
+      return setsForExercise
+          .map((set) => <String, dynamic>{
+                'reps': set.reps,
+                'weight': set.weight,
+                'rir': set.rir,
+              })
+          .toList();
+    }).toList();
+
     final dateKey =
-        '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(
-        2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
+        '${capturedDate.year}-${capturedDate.month.toString().padLeft(
+        2, '0')}-${capturedDate.day.toString().padLeft(2, '0')}';
     final draftKey = 'workout_draft_$dateKey';
     final timestampKey = 'draft_last_saved_$dateKey';
 
-    final workoutDraft = {
-      'name': _workoutNameController.text,
-      'date': _selectedDate.toIso8601String(),
-      'exercises': _selectedExercisesWithCircuits,
-      'sets': _workoutSets.map((setsForExercise) {
-        return setsForExercise
-            .map((set) =>
-        {
-          'reps': set.reps,
-          'weight': set.weight,
-          'rir': set.rir,
-        })
-            .toList();
-      }).toList(),
-    };
+    try {
+      final prefs = await SharedPreferences.getInstance();
 
-    await prefs.setString(
-        draftKey, jsonEncode(workoutDraft)); // ✅ actually save the draft
-    await prefs.setString(
-        timestampKey, DateTime.now().toIso8601String()); // ✅ save timestamp
+      final workoutDraft = {
+        'name': capturedName,
+        'date': capturedDate.toIso8601String(),
+        'exercises': capturedExercises,
+        'sets': capturedSets,
+      };
 
-    print("[WES] Draft saved for $_selectedDate under key: $draftKey");
+      await prefs.setString(draftKey, jsonEncode(workoutDraft));
+      await prefs.setString(timestampKey, DateTime.now().toIso8601String());
+
+      debugPrint("[WES_REENTER] _saveWorkoutDraftToCache: saved key=$draftKey");
+    } catch (e) {
+      debugPrint("[WES_REENTER] _saveWorkoutDraftToCache: FAILED: $e");
+    }
   }
 
   Future<bool> _loadWorkoutDraftFromCache() async {
@@ -11959,6 +12080,12 @@ class _WorkoutPageState extends State<WorkoutPage>
     final savedAtString = prefs.getString(timestampKey);
 
     if (draftJson == null || savedAtString == null) {
+      // Fallback: try in-memory draft (saved synchronously by previous dispose)
+      if (_exitDraft != null && _exitDraft!['dateKey'] == dateKey) {
+        debugPrint('[WES_REENTER] _loadWorkoutDraftFromCache: SharedPrefs empty — '
+            'using in-memory draft for $dateKey');
+        return _hydrateFromExitDraft();
+      }
       print('[WES_REENTER] _loadWorkoutDraftFromCache: NOT FOUND for $dateKey');
       return false;
     }
@@ -12075,6 +12202,96 @@ class _WorkoutPageState extends State<WorkoutPage>
     }
   }
 
+
+  /// Hydrate WES state from the static [_exitDraft]. Used as a fallback when
+  /// SharedPreferences draft is not yet available (async race on fast re-entry).
+  bool _hydrateFromExitDraft() {
+    if (_exitDraft == null) return false;
+    try {
+      final draftExercises = List<Map<String, dynamic>>.from(
+          (_exitDraft!['exercises'] as List?) ?? []);
+      final draftSets = (_exitDraft!['sets'] as List?) ?? [];
+
+      if (draftExercises.isEmpty || draftSets.isEmpty) return false;
+
+      // Filter to exercises with real data (same logic as _loadWorkoutDraftFromCache)
+      final filteredExercises = <Map<String, dynamic>>[];
+      final filteredSets = <List<Map<String, dynamic>>>[];
+
+      for (int i = 0; i < draftExercises.length && i < draftSets.length; i++) {
+        final setList = List<Map<String, dynamic>>.from(
+            (draftSets[i] as List).map((s) => Map<String, dynamic>.from(s as Map)));
+        final hasRealData = setList.any((s) =>
+            ((s['weight'] as num?) ?? 0) > 0 ||
+            ((s['reps'] as num?) ?? 0) > 0 ||
+            ((s['rir'] as num?) ?? 0) > 0);
+        if (hasRealData) {
+          filteredExercises.add(draftExercises[i]);
+          filteredSets.add(setList);
+        }
+      }
+
+      if (filteredExercises.isEmpty) return false;
+
+      _selectedExercisesWithCircuits.clear();
+      _selectedExercisesWithCircuits.addAll(filteredExercises);
+
+      _workoutSets.clear();
+      _repsControllers.clear();
+      _weightControllers.clear();
+      _rirControllers.clear();
+
+      for (int i = 0; i < filteredExercises.length; i++) {
+        final setList = filteredSets[i];
+
+        final exName = ((filteredExercises[i]['name'] ?? '') as String).trim();
+        final exId = PeriodizationModelUtils.nameToId[exName] ?? exName;
+        final isBwEx = PeriodizationModelUtils.isBodyweightExercise(
+            id: exId, name: exName);
+        final uid = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ?? '';
+
+        _workoutSets.add(setList.map((s) {
+          final abs = (s['weight'] as num?)?.toDouble();
+          final display = isBwEx
+              ? (abs != null
+                  ? PeriodizationModelUtils.toDisplayAddedWeight(
+                      uid: uid,
+                      absoluteKg: abs,
+                      exerciseId: exId,
+                      exerciseName: exName,
+                      asOfDate: _selectedDate,
+                    )
+                  : null)
+              : abs;
+          return SetDetails(
+            reps: (s['reps'] as num?)?.toInt(),
+            weight: display,
+            rir: (s['rir'] as num?)?.toDouble(),
+          );
+        }).toList());
+
+        _repsControllers
+            .add(List.generate(setList.length, (_) => TextEditingController()));
+        _weightControllers
+            .add(List.generate(setList.length, (_) => TextEditingController()));
+        _rirControllers
+            .add(List.generate(setList.length, (_) => TextEditingController()));
+      }
+
+      _initializeControllers();
+      try {
+        _workoutNameController.text = _exitDraft!['workoutName'] ?? '';
+      } catch (_) {}
+
+      debugPrint('[WES_REENTER] _hydrateFromExitDraft: restored '
+          '${filteredExercises.length} exercises from in-memory draft');
+      _exitDraft = null; // consumed
+      return true;
+    } catch (e) {
+      debugPrint('[WES_REENTER] _hydrateFromExitDraft: FAILED: $e');
+      return false;
+    }
+  }
 
   Future<void> _mergeNewBB2ExercisesIntoDraft() async {
     final _tMergeBB2 = Stopwatch()

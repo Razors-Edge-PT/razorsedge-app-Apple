@@ -1259,9 +1259,9 @@ class PeriodizationModelUtils {
 
       if ((hasLegacy && secondary == 1.0) || isDefaultGhost) {
         useSecondary = false;
-        print('🧰 [BB2] getIncrementsForExercise: ignoring secondary=$secondary (primary=$primary)');
+
       } else if (useSecondary) {
-        print('🧰 [BB2] getIncrementsForExercise: using secondary=$secondary with primary=$primary');
+
       }
     }
 
