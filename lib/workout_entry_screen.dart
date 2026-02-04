@@ -208,6 +208,7 @@ class _WorkoutPageState extends State<WorkoutPage>
   //   Key: instanceKey ("exerciseId|circuitIndex")
   //   Value: Map<int setIdx, String displayString>
   bool _claudeBulletActiveForThisDay = false;
+  bool _claudeBulletPhase0Active = false;  // Phase 0 tripwire: prevents later init steps from overwriting
   final Map<String, Map<int, String>> _claudeBulletWeightHintOverrides = {};
   final Map<String, Map<int, String>> _claudeBulletRepsHintOverrides = {};
   final Map<String, Map<int, String>> _claudeBulletRirHintOverrides = {};
@@ -338,6 +339,7 @@ class _WorkoutPageState extends State<WorkoutPage>
     _dayKey = DateFormat('yyyy-MM-dd').format(DateTime(d.year, d.month, d.day));
     // Reset Claude_bullet overrides when switching dates
     _claudeBulletActiveForThisDay = false;
+    _claudeBulletPhase0Active = false;  // Reset Phase 0 tripwire for new date session
     _claudeBulletWeightHintOverrides.clear();
     _claudeBulletRepsHintOverrides.clear();
     _claudeBulletRirHintOverrides.clear();
@@ -4914,6 +4916,248 @@ class _WorkoutPageState extends State<WorkoutPage>
     );
   }
 
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// Claude_bullet Phase 0: Claude-first fast paint
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// Runs on WES open BEFORE _paintFromSnapshotIfAny(). Reads Claude snapshot
+  /// from Isar directly (no Warmup dependency) and paints the full UI if valid.
+  /// Returns true if it painted successfully; false otherwise (no state mutated).
+  Future<bool> Claude_bulletPhase0FastPaintIfRecent() async {
+    try {
+      final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+      final uid = _cachedUid ?? UserContext.of(context, listen: false).currentUid;
+      if (uid == null || uid.isEmpty) {
+        print('[Claude_bullet Phase0] No uid — skipping');
+        return false;
+      }
+      final uidDateKey = '$uid|$ymd';
+
+      final isar = await IsarDb.instance;
+
+      final snap = await isar.claudeBulletSnapshots
+          .filter()
+          .uidDateKeyEqualTo(uidDateKey)
+          .findFirst();
+
+      if (snap == null) {
+        print('[Claude_bullet Phase0] No snapshot for $ymd — skipping');
+        return false;
+      }
+
+      // Check age: must be < 2 hours
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      final ageMs = nowMs - snap.lastEditedAt;
+      const twoHoursMs = 2 * 60 * 60 * 1000;
+
+      if (ageMs > twoHoursMs) {
+        print('[Claude_bullet Phase0] Snapshot for $ymd is stale '
+            '(age=${(ageMs / 60000).toStringAsFixed(1)} min) — skipping');
+        return false;
+      }
+
+      final data = jsonDecode(snap.snapshotJson) as Map<String, dynamic>;
+      final exercises = (data['exercises'] as List?) ?? [];
+
+      if (exercises.isEmpty) {
+        print('[Claude_bullet Phase0] Snapshot for $ymd has no exercises — skipping');
+        return false;
+      }
+
+      // ── Build exercise rows directly from snapshot (preserve order, no de-dupe) ──
+      final List<Map<String, dynamic>> tmpRows = [];
+      for (final exData in exercises) {
+        final exId = (exData['exerciseId'] ?? '').toString();
+        final exName = (exData['name'] ?? '').toString().trim();
+        final ci = (exData['circuitIndex'] is int)
+            ? exData['circuitIndex'] as int
+            : int.tryParse('${exData['circuitIndex'] ?? 0}') ?? 0;
+
+        if (exName.isEmpty) continue;
+
+        tmpRows.add({
+          'name': exName,
+          'exerciseId': exId,
+          'circuitIndex': ci,
+          'cardId': '$ymd|phase0|${tmpRows.length}|$exId',
+        });
+      }
+
+      if (tmpRows.isEmpty) {
+        print('[Claude_bullet Phase0] Built 0 rows — skipping');
+        return false;
+      }
+
+      // ── Build controllers from snapshot set counts ──
+      final List<List<SetDetails>> tmpSets = [];
+      final List<List<TextEditingController>> tmpReps = [];
+      final List<List<TextEditingController>> tmpWts = [];
+      final List<List<TextEditingController>> tmpRir = [];
+      final List<List<TextEditingController>> tmpVel = [];
+      final List<List<TextEditingController>> tmpNotes = [];
+
+      // Clear override maps before populating
+      _claudeBulletWeightHintOverrides.clear();
+      _claudeBulletRepsHintOverrides.clear();
+      _claudeBulletRirHintOverrides.clear();
+      _seedHintsByKey.clear();
+
+      String s1Summary = '';
+      int restoredExercises = 0;
+
+      for (int i = 0; i < tmpRows.length; i++) {
+        final exData = exercises[i] as Map<String, dynamic>;
+        final sets = (exData['sets'] as List?) ?? [];
+        final setCount = sets.length > 0 ? sets.length : _defaultSets;
+
+        final exId = (exData['exerciseId'] ?? '').toString();
+        final ci = (exData['circuitIndex'] ?? 0);
+        final instanceKey = '$exId|$ci';
+        final exName = (exData['name'] ?? '').toString().trim();
+
+        // Initialize controllers for this exercise
+        tmpSets.add(List.generate(setCount, (_) => SetDetails()));
+        tmpReps.add(List.generate(setCount, (_) => TextEditingController()));
+        tmpWts.add(List.generate(setCount, (_) => TextEditingController()));
+        tmpRir.add(List.generate(setCount, (_) => TextEditingController()));
+        tmpVel.add(List.generate(setCount, (_) => TextEditingController()));
+        tmpNotes.add(List.generate(setCount, (_) => TextEditingController()));
+
+        // Restore each set from snapshot
+        for (final setData in sets) {
+          final j = (setData['setIdx'] as int?) ?? 0;
+          if (j >= setCount) continue;
+
+          final w = setData['weight'] as Map<String, dynamic>? ?? {};
+          final r = setData['reps'] as Map<String, dynamic>? ?? {};
+          final rir = setData['rir'] as Map<String, dynamic>? ?? {};
+          final vel = setData['velocity'] as Map<String, dynamic>? ?? {};
+          final notes = setData['notes'] as Map<String, dynamic>? ?? {};
+
+          // ── Restore weight ──
+          if (w['origin'] == 'typed') {
+            tmpWts[i][j].text = w['display'] ?? '';
+          } else if (w['origin'] == 'hint' && (w['display'] ?? '').toString().isNotEmpty) {
+            // Keep controller empty, store hint override
+            _claudeBulletWeightHintOverrides
+                .putIfAbsent(instanceKey, () => {})
+                [j] = w['display'].toString();
+          }
+
+          // ── Restore reps ──
+          if (r['origin'] == 'typed') {
+            tmpReps[i][j].text = r['display'] ?? '';
+          } else if (r['origin'] == 'hint' && (r['display'] ?? '').toString().isNotEmpty) {
+            _claudeBulletRepsHintOverrides
+                .putIfAbsent(instanceKey, () => {})
+                [j] = r['display'].toString();
+          }
+
+          // ── Restore RIR ──
+          if (rir['origin'] == 'typed') {
+            tmpRir[i][j].text = rir['display'] ?? '';
+          } else if (rir['origin'] == 'hint' && (rir['display'] ?? '').toString().isNotEmpty) {
+            _claudeBulletRirHintOverrides
+                .putIfAbsent(instanceKey, () => {})
+                [j] = rir['display'].toString();
+          }
+
+          // ── Restore velocity (typed only) ──
+          if (vel['origin'] == 'typed') {
+            tmpVel[i][j].text = vel['display'] ?? '';
+          }
+
+          // ── Restore notes (typed only) ──
+          if (notes['origin'] == 'typed') {
+            tmpNotes[i][j].text = notes['display'] ?? '';
+          }
+
+          // Log first exercise set1
+          if (restoredExercises == 0 && j == 0) {
+            s1Summary = ' set1: w=${w['origin']}:${w['display']}'
+                ' r=${r['origin']}:${r['display']}'
+                ' rir=${rir['origin']}:${rir['display']}';
+          }
+        }
+
+        // ── Seed set1 numeric cache for instant hint rendering ──
+        final s1WNum = (exData['set1_weight_num'] as num?)?.toDouble();
+        final s1RNum = (exData['set1_reps_num'] as num?)?.toDouble();
+        final s1RirNum = (exData['set1_rir_num'] as num?)?.toDouble();
+        final s1WTyped = exData['set1_weight_typed'] == true;
+        final s1RTyped = exData['set1_reps_typed'] == true;
+        final s1RirTyped = exData['set1_rir_typed'] == true;
+
+        final hintKey = instanceKey;
+        final Map<String, dynamic> seedEntry = {};
+
+        if (!s1WTyped && s1WNum != null) {
+          final isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: exName);
+          if (isBw) {
+            seedEntry['s1_weight_added'] = s1WNum;
+          } else {
+            seedEntry['s1_weight'] = s1WNum;
+          }
+        }
+        if (!s1RTyped && s1RNum != null) {
+          seedEntry['s1_reps'] = s1RNum;
+        }
+        if (!s1RirTyped && s1RirNum != null) {
+          seedEntry['s1_rir'] = s1RirNum;
+          seedEntry['rir'] = s1RirNum;
+        }
+
+        if (seedEntry.isNotEmpty) {
+          _seedHintsByKey[hintKey] = seedEntry;
+        }
+
+        restoredExercises++;
+      }
+
+      // ── Commit state in single setState ──
+      setState(() {
+        _selectedExercisesWithCircuits
+          ..clear()
+          ..addAll(tmpRows);
+
+        _workoutSets
+          ..clear()
+          ..addAll(tmpSets);
+        _repsControllers
+          ..clear()
+          ..addAll(tmpReps);
+        _weightControllers
+          ..clear()
+          ..addAll(tmpWts);
+        _rirControllers
+          ..clear()
+          ..addAll(tmpRir);
+        _velocityControllers
+          ..clear()
+          ..addAll(tmpVel);
+        _notesControllers
+          ..clear()
+          ..addAll(tmpNotes);
+
+        _didFastPaint = true;
+        _isInitialized = true;
+        _isLoadingData = false;
+        _claudeBulletActiveForThisDay = true;
+        _claudeBulletPhase0Active = true;  // Tripwire: Phase 0 succeeded
+        _bootPaintDone = true;  // Claim the boot paint slot
+      });
+
+      print('[Claude_bullet Phase0] SUCCESS for $ymd '
+          'age=${(ageMs / 60000).toStringAsFixed(1)}min '
+          'exercises=$restoredExercises$s1Summary');
+
+      return true;
+    } catch (e, st) {
+      print('[Claude_bullet Phase0] ERROR: $e');
+      print(st);
+      return false;
+    }
+  }
 
 
   Map<String, dynamic> _getProgressedValues(int exerciseIndex) {
@@ -6763,9 +7007,17 @@ class _WorkoutPageState extends State<WorkoutPage>
     // 🔎 Offline preflight: verify caches are present before painting (non-blocking)
     Future.microtask(() async { await _offlinePreflightDebug(); });
 
-    // Fast paint #1: uid+date fallback (works even if blockId not known yet)
+    // ══════════════════════════════════════════════════════════════════════════
+    // Phase 0: Claude-first fast paint (priority over Warmup snapshot)
+    // Runs BEFORE _paintFromSnapshotIfAny(). If Phase 0 succeeds, Tripwire 1
+    // will cause _paintFromSnapshotIfAny() to return early.
+    // ══════════════════════════════════════════════════════════════════════════
     // ignore: unawaited_futures
-    _paintFromSnapshotIfAny();
+    Claude_bulletPhase0FastPaintIfRecent().then((phase0Success) {
+      // Whether Phase 0 succeeded or not, let _paintFromSnapshotIfAny() run.
+      // Tripwire 1 will skip it if Phase 0 already painted.
+      _paintFromSnapshotIfAny();
+    });
 
     _wesOpenTotal = Stopwatch()..start();
 
@@ -7949,6 +8201,9 @@ class _WorkoutPageState extends State<WorkoutPage>
 
   // Anchor A: add inside _WorkoutPageState
   Future<void> _paintFromSnapshotIfAny() async {
+    // Tripwire 1: Phase 0 already painted — skip entirely
+    if (_claudeBulletPhase0Active) return;
+
     if (_bootPaintDone) return;
     _bootPaintDone = true;
 
@@ -12931,6 +13186,12 @@ class _WorkoutPageState extends State<WorkoutPage>
   }
 
   Future<void> _mergeNewBB2ExercisesIntoDraft() async {
+    // Tripwire 2: Phase 0 already painted — skip merge to preserve restored state
+    if (_claudeBulletPhase0Active) {
+      print('[WES] _mergeNewBB2ExercisesIntoDraft: SKIPPED — Phase 0 active');
+      return;
+    }
+
     final _tMergeBB2 = Stopwatch()
       ..start();
     print('⏱️ [WES] _mergeNewBB2ExercisesIntoDraft started');
