@@ -30,6 +30,7 @@ class UserContext extends ChangeNotifier {
     'yoVAqScwLMQLAgNHh8v9IK49fBw2', // Richard
     'wuiMe7phxYQh0MM39bfnhgv20yS2', // Campbell
     'SMTEVGPH1MXgOgbcBbJFU1HjU8G3', // Adam W
+    'ejBDKEZPFfQz2Sdzd7BZlNydxZ33' //Adam@razorsedgept
     // 'Rp6gFj16KMgsmOtC9tZGlUDCNRr1', // Courtney
   ].contains(actorUid);
 

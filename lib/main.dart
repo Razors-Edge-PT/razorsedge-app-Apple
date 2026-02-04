@@ -102,7 +102,8 @@ class AppRoot extends StatelessWidget {
               'yoVAqScwLMQLAgNHh8v9IK49fBw2',
               'wuiMe7phxYQh0MM39bfnhgv20yS2',
               'SMTEVGPH1MXgOgbcBbJFU1HjU8G3',
-              'jhIB7Yi1whYwPvBSmK27KltJGn23'
+              'jhIB7Yi1whYwPvBSmK27KltJGn23',
+              'ejBDKEZPFfQz2Sdzd7BZlNydxZ33', //Adam@razorsedgept
             };
 
             final isCoachClaim = token.claims?['isCoach'] == true;
