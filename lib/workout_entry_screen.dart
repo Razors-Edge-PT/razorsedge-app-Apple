@@ -4348,7 +4348,6 @@ class _WorkoutPageState extends State<WorkoutPage>
 
   // CLAUDE_BULLET: Dump the entire visible UI state for the day (all exercises, all sets)
   Future<void> Claude_bulletDebugDumpFullDayUi({String tag = ''}) async {
-
     try {
       final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
       final workoutName = _workoutNameController.text;
@@ -4358,14 +4357,9 @@ class _WorkoutPageState extends State<WorkoutPage>
 
       // Helper: what the RIR TextField uses as hint (matches the UI logic you currently have)
       String _rirHintFor(int i, int j) {
-        final nameLower = (_selectedExercisesWithCircuits[i]['name'] ?? '')
-            .toString()
-            .toLowerCase();
-
         // NOTE: this matches your current UI key usage in the RIR hintText block
         final seedKey = _rowKeyBy(i);
         final seed = _seedHintsByKey[seedKey];
-
 
         if (j == 0) {
           return formatRir((seed?['rir'] as num?)?.toDouble() ?? set1RIR(i));
@@ -4390,11 +4384,25 @@ class _WorkoutPageState extends State<WorkoutPage>
       }
 
       for (int i = 0; i < _selectedExercisesWithCircuits.length; i++) {
-        final exName = (_selectedExercisesWithCircuits[i]['name'] ?? '').toString().trim();
-        final ci = (_selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0);
+        final exName =
+        (_selectedExercisesWithCircuits[i]['name'] ?? '').toString().trim();
+        final ci =
+        (_selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0);
+
+        // Prefer stable identifiers for prints + future snapshot shape
+        final exId = (_selectedExercisesWithCircuits[i]['exerciseId'] ??
+            _selectedExercisesWithCircuits[i]['id'] ??
+            _selectedExercisesWithCircuits[i]['exerciseID'] ??
+            '')
+            .toString();
+
+        final instanceKey = '$exId|$ci';
+
+        // NOTE: still useful to print the internal rowKey for debugging,
+        // but the stable "instanceKey" is what you want to key snapshots by.
         final rowKey = _rowKeyBy(i);
 
-        final setCount = [
+        int setCount = [
           if (i < _weightControllers.length) _weightControllers[i].length,
           if (i < _repsControllers.length) _repsControllers[i].length,
           if (i < _rirControllers.length) _rirControllers[i].length,
@@ -4402,22 +4410,30 @@ class _WorkoutPageState extends State<WorkoutPage>
           if (i < _notesControllers.length) _notesControllers[i].length,
         ].fold<int>(0, (a, b) => a > b ? a : b);
 
-        print('  ── row i=$i ex="$exName" circuitIndex=$ci rowKey="$rowKey" sets=$setCount');
+        print(
+          '  ── exerciseInstance="$instanceKey" exId="$exId" name="$exName" '
+              'circuitIndex=$ci rowKey="$rowKey" sets=$setCount',
+        );
 
         for (int j = 0; j < setCount; j++) {
-          final wTxt = (i < _weightControllers.length && j < _weightControllers[i].length)
+          final wTxt =
+          (i < _weightControllers.length && j < _weightControllers[i].length)
               ? _weightControllers[i][j].text
               : '';
-          final rTxt = (i < _repsControllers.length && j < _repsControllers[i].length)
+          final rTxt =
+          (i < _repsControllers.length && j < _repsControllers[i].length)
               ? _repsControllers[i][j].text
               : '';
-          final rirTxt = (i < _rirControllers.length && j < _rirControllers[i].length)
+          final rirTxt =
+          (i < _rirControllers.length && j < _rirControllers[i].length)
               ? _rirControllers[i][j].text
               : '';
-          final vTxt = (i < _velocityControllers.length && j < _velocityControllers[i].length)
+          final vTxt = (i < _velocityControllers.length &&
+              j < _velocityControllers[i].length)
               ? _velocityControllers[i][j].text
               : '';
-          final nTxt = (i < _notesControllers.length && j < _notesControllers[i].length)
+          final nTxt =
+          (i < _notesControllers.length && j < _notesControllers[i].length)
               ? _notesControllers[i][j].text
               : '';
 
@@ -4437,7 +4453,6 @@ class _WorkoutPageState extends State<WorkoutPage>
             }
           }
 
-
           // RIR hint matches your UI logic per set index.
           final rirHint = _rirHintFor(i, j);
 
@@ -4445,10 +4460,15 @@ class _WorkoutPageState extends State<WorkoutPage>
           final rVisible = _visibleOrHint(rTxt, rHint);
           final rirVisible = _visibleOrHint(rirTxt, rirHint);
 
-          final vVisible = vTxt.trim().isNotEmpty ? 'TYPED:${vTxt.trim()}' : 'EMPTY';
-          final nVisible = nTxt.trim().isNotEmpty ? 'TYPED:${nTxt.trim()}' : 'EMPTY';
+          final vVisible =
+          vTxt.trim().isNotEmpty ? 'TYPED:${vTxt.trim()}' : 'EMPTY';
+          final nVisible =
+          nTxt.trim().isNotEmpty ? 'TYPED:${nTxt.trim()}' : 'EMPTY';
 
-          print('     set${j + 1}: weight=$wVisible  reps=$rVisible  rir=$rirVisible  vel=$vVisible  notes=$nVisible');
+          print(
+            '     setIdx=$j (set${j + 1}): '
+                'weight=$wVisible  reps=$rVisible  rir=$rirVisible  vel=$vVisible  notes=$nVisible',
+          );
         }
       }
 
@@ -4458,6 +4478,7 @@ class _WorkoutPageState extends State<WorkoutPage>
       print(st);
     }
   }
+
 
 
 
