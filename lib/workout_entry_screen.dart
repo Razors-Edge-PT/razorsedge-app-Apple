@@ -6915,21 +6915,39 @@ class _WorkoutPageState extends State<WorkoutPage>
             s1Ri,
           );
 
-          hints[key] = isBw
+          final String stableKey = '${exId.toString().trim()}|$ci'; // canonical
+          final Map<String, dynamic> base = {
+            // ✅ self-describing fields so snapshot can be re-keyed deterministically
+            'name': name,
+            'circuitIndex': ci,
+            'exerciseId': exId.toString().trim(),
+          };
+
+          hints[stableKey] = isBw
               ? {
-            's1_weight_added': s1W,
+            ...base,
+            's1_weight_added': s1W, // display-added kg for BW
             's1_reps': s1R,
             's1_rir': s1Ri,
             'e1rm': e1,
           }
               : {
-            's1_weight': s1W,
+            ...base,
+            's1_weight': s1W,       // absolute kg for non-BW
             's1_reps': s1R,
             's1_rir': s1Ri,
             'e1rm': e1,
           };
+
         }
         final String hintsJson = jsonEncode(hints);
+        print(
+            '🧪 [WES HINTS SNAPSHOT WRITE] '
+                '${hints.entries.take(1).map((e) => {
+              "key": e.key,
+              "value": e.value,
+            }).toList()}'
+        );
 
 
         if (plannedCount == 0 && previousCount == 0) {
