@@ -4484,24 +4484,34 @@ class _WorkoutPageState extends State<WorkoutPage>
 
 
   Map<String, dynamic> _getProgressedValues(int exerciseIndex) {
+    // ✅ New stable cache key: exerciseId|circuitIndex (keeps function signature unchanged)
+    final exName =
+    (_selectedExercisesWithCircuits[exerciseIndex]['name']?.toString() ?? '').trim();
+    final exId =
+    (PeriodizationModelUtils.nameToId[exName] ?? exName).toString().trim();
+    final ci =
+    (_selectedExercisesWithCircuits[exerciseIndex]['circuitIndex'] is num)
+        ? (_selectedExercisesWithCircuits[exerciseIndex]['circuitIndex'] as num).toInt()
+        : int.tryParse((_selectedExercisesWithCircuits[exerciseIndex]['circuitIndex'] ?? '0').toString()) ?? 0;
+
+    final String instanceKey = '$exId|$ci';
+
     // 🧠 STEP 1: If we already cached a GOOD value, return it
-    final key = _rowCacheKey(exerciseIndex);
-    final cached = _cachedProgressedValues[key];
+    final cached = _cachedProgressedValues[instanceKey];
     if (cached != null && blockStartDate != null && blockEndDate != null) {
-      final exName = _selectedExercisesWithCircuits[exerciseIndex]['name'];
       return cached;
     }
-// 🔹 NEW: if we have seeded hints WITH ACTUAL VALUES, use them for the very first paint
+
+    // 🔹 NEW: if we have seeded hints WITH ACTUAL VALUES, use them for the very first paint
+    // (Keep seed hints row-keyed for now to avoid breaking other call sites.)
     final seedKey = _rowKeyBy(exerciseIndex);
     final seed = _seedHintsByKey[seedKey];
     if (seed != null) {
-      final exName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.toString() ?? '';
-      final exId   = PeriodizationModelUtils.nameToId[exName] ?? exName;
-      final isBw   = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: exName);
+      final isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: exName);
 
       // Prefer absolute if present; otherwise, for BW convert added→absolute; else use added as-is.
       double? absW = (seed['s1_weight'] as num?)?.toDouble();
-      final  double? addedW = (seed['s1_weight_added'] as num?)?.toDouble();
+      final double? addedW = (seed['s1_weight_added'] as num?)?.toDouble();
       if (absW == null && addedW != null) {
         absW = isBw
             ? PeriodizationModelUtils.toAbsoluteWeight(
@@ -4517,19 +4527,18 @@ class _WorkoutPageState extends State<WorkoutPage>
       final double? seedReps = (seed['s1_reps'] as num?)?.toDouble();
 
       // 🔧 FIX: Only use seed if it has ACTUAL values; otherwise fall through to full model calc
-      // This handles the case where workout was saved with only partial data (e.g., RIR only)
       if (absW != null && seedReps != null) {
         final seeded = <String, dynamic>{
           'exerciseName': exName,
-          'exerciseId'  : exId,
-          'weight'      : absW, // ← store absolute kg for downstream math
-          'reps'        : seedReps,
+          'exerciseId': exId,
+          'weight': absW, // absolute kg for downstream math
+          'reps': seedReps,
         };
 
-        _cachedProgressedValues[_rowCacheKey(exerciseIndex)] = seeded;
+        // ✅ Cache using the new stable key
+        _cachedProgressedValues[instanceKey] = seeded;
         return seeded;
       }
-      // If seed has null values, fall through to full model calculation below
     }
 
 
