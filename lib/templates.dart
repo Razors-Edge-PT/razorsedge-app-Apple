@@ -672,13 +672,15 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   }
 
   Future<void> _regenerateAllTemplates() async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) {
+    // ✅ IMPORTANT: regenerate templates for the *selected athlete*, not the logged-in coach
+    final uid = UserContext.of(context, listen: false).currentUid;
+    if (uid.isEmpty) {
       rootScaffoldMessengerKey.currentState?.showSnackBar(
-        const SnackBar(content: Text('🚫 No user logged in')),
+        const SnackBar(content: Text('🚫 No athlete selected')),
       );
       return;
     }
+
 
 
     final ok = await showDialog<bool>(
@@ -686,7 +688,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       builder: (ctx) => AlertDialog(
         title: const Text('Regenerate templates?'),
         content: const Text(
-          'This will delete all current templates for this user and rebuild them from your onboarding settings.',
+          'This will delete all current templates for the selected athlete and rebuild them from onboarding settings.',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
