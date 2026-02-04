@@ -7894,6 +7894,7 @@ class _WorkoutPageState extends State<WorkoutPage>
 
         // NEW: if the row is completed, hydrate from completedSets and skip the hint path
         final bool isCompleted = (h['completed'] == true);
+
         if (isCompleted) {
           final List cs = (h['completedSets'] is List) ? (h['completedSets'] as List) : const [];
           final int maxSets = (_defaultSets < cs.length) ? _defaultSets : cs.length;
@@ -12240,6 +12241,14 @@ class _WorkoutPageState extends State<WorkoutPage>
   }
 
   Future<bool> _loadWorkoutDraftFromCache() async {
+    // 🔒 FastPaint guard: if FastPaint already hydrated rows+controllers
+    // (including _exitDraft overlay), the SharedPrefs draft is redundant
+    // and would destructively clear controllers. Skip it.
+    if (_didFastPaint) {
+      print('[WES_REENTER] _loadWorkoutDraftFromCache: SKIPPED — FastPaint already hydrated');
+      return false;
+    }
+
     final prefs = await SharedPreferences.getInstance();
     final dateKey =
         '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(
