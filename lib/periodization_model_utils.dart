@@ -2146,19 +2146,7 @@ class PeriodizationModelUtils {
 // (Optional) add an origin tag; see step 2 below
     final _origin = (const bool.hasEnvironment('pmu_origin')) ? const String.fromEnvironment('pmu_origin') : 'unknown';
 
-    print('🧪 [PMU Router/in] origin=$_origin '
-        'ex="$exerciseName" wk=$weekIndex '
-        'repTarget=$repTarget rir=$rirValue '
-        'default=${defaultWeight.toStringAsFixed(2)} '
-        'incs=${increments.length} head=${increments.take(6).toList()} '
-        'topSets=$_tsLen [$_tsHead]');
 
-
-    print('🧪 [PMU Router] model=$model repTarget=$repTarget '
-        'defaultWeight=${defaultWeight.toStringAsFixed(2)} '
-        'rirValue=$rirValue '
-        'incLen=${increments.length} incHead=${increments.take(6).toList()} '
-        'incIsSparse=${increments.length < 3}');
 
     switch (model) {
       case ProgressionModelType.linearWeightIncrease: {

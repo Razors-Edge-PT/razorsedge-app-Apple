@@ -1860,9 +1860,7 @@ class WarmupService {
           }
 
 
-          // DEVBIG: verify we have everything and results look correct
-          print('🧪 [Warmup:8] engine results → ${wesPlanned.length} rows '
-              '(wk=$weekIndex day=$dayIndex date=${_sel.toIso8601String().substring(0,10)})');
+
 
           int printed = 0;
           for (int i = 0; i < planned.length && printed < 4; i++) {
@@ -2371,10 +2369,6 @@ class WarmupService {
                   ? existing.hintsJson!.substring(0, (existing.hintsJson!.length).clamp(0, 400))
                   : '{}';
 
-              print('[Warmup:9] skipped (hash unchanged) for $dateYmd '
-                  '→ planned=$plannedLen wes=$wesLen prev=$prevLen '
-                  'hintsLen=$hintsLen hintsReady=${existing.hintsReady} ver=${existing.schemaVersion}');
-              print('[Warmup:9] existing hintsJson preview → $hintsPreview');
 
             } else {
               if (needsUpgradeToMultiSetRir) {
@@ -2422,14 +2416,7 @@ class WarmupService {
               final preview = (hintsJson.isNotEmpty)
                   ? hintsJson.substring(0, hintsJson.length.clamp(0, 400))
                   : '{}';
-              print('[Warmup:9] snapshot values → '
-                  'planned=${planned.length} '
-                  'wes=${_wesPlannedForPersist.length} '
-                  'prev=${previousWorkout.length} '
-                  'topSets=${PeriodizationModelUtils.topSetsByExercise.keys.length} '
-                  'hints=${hints.length}');
-              print('[Warmup:9] hintsJson → $preview');
-              print('[Warmup:9] snapshot saved for $dateYmd (hash: $hintsInputsHash, rows: ${planned.length})');
+
             }
 
             print('💾 [Warmup:WRITE] dateYmd=$dateYmd '

@@ -28,6 +28,7 @@ import 'warmupBB2.dart';
 import 'local_cache/isar_db.dart';
 import 'package:isar/isar.dart';
 import 'local_cache/isar_bb2_merged_day.dart';
+import 'exercise_details_screen.dart';
 
 part 'block_data_loader.dart';
 
@@ -793,6 +794,25 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     } catch (_) { return null; }
   }
 
+
+  void _navigateToExerciseDetailsBB2({
+    required String exerciseId,
+    required String exerciseName,
+  }) {
+    final id = exerciseId.trim().isNotEmpty ? exerciseId.trim() : exerciseName.trim();
+
+    print('➡️ [BB2] Push ExerciseDetailsScreen id="$id" name="$exerciseName"');
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ExerciseDetailsScreen(
+          exerciseId: id,
+          exerciseName: exerciseName,
+        ),
+      ),
+    );
+  }
 
 
 // Cache loading technique...
@@ -5107,10 +5127,10 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                             children: [
                                               // Name
                                               SizedBox(
-                                                width: 125,
+                                                width: 105,
                                                 child: Container(
                                                   alignment: Alignment.centerLeft,
-                                                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                                                  padding: const EdgeInsets.symmetric(horizontal: 1),
                                                   child: Text(
                                                     name,
                                                     overflow: TextOverflow.ellipsis,
@@ -5123,6 +5143,23 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                                   ),
                                                 ),
                                               ),
+                                              // Graphs icon (between Name and Weight)
+                                              SizedBox(
+                                                width: 20,
+                                                child: IconButton(
+                                                  padding: EdgeInsets.zero,
+                                                  constraints: const BoxConstraints(minWidth: 26, minHeight: 28),
+                                                  icon: const Icon(Icons.insights, size: 18),
+                                                  color: Colors.lightBlueAccent,
+                                                  onPressed: () {
+                                                    _navigateToExerciseDetailsBB2(
+                                                      exerciseId: exercise['exerciseId'] ?? '',
+                                                      exerciseName: name.trim(),
+                                                    );
+                                                  },
+                                                ),
+                                              ),
+
 
                                               // Weight
                                               SizedBox(

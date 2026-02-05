@@ -22,10 +22,10 @@ class WarmupBB2 {
     required String uid,
 
   }) async {
-    debugPrint('🚀 [WarmupBB2] runForActiveBlock CALLED (uid=$uid)');
+
 
     try {
-      debugPrint('🧊 [WarmupBB2:start] runForActiveBlock uid=$uid');
+
 
       final activeId = await _resolveActiveBlockId(uid);
       if (activeId == null || activeId.isEmpty) return;
