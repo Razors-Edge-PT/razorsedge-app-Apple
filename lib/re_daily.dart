@@ -154,7 +154,17 @@ class DailyReCalculator {
     _bdbg('ENTER uid=$uid day=$dayKey total=${baseResult.dailyTotal.toStringAsFixed(2)} '
         'e1rms=${dayStats.map((k,v)=>MapEntry(k,(v.maxE1rm).toStringAsFixed(1)))}');
 
-    // 4) Compute badges (non-blocking; timeout + fallback)
+    if (!write) return baseResult;
+
+    // Decide if we should publish a feed post
+    final bool noPoints =
+        baseResult.dailyTotal <= 0.0 ||
+            baseResult.pointsByLift.values.every((v) => (v <= 0.0));
+
+    // 4) Write /re_daily FIRST (without badges) so persisted data is available
+    await _writeDaily(uid: uid, dayKey: dayKey, res: baseResult);
+
+    // 5) Compute badges AFTER write (streak/best-day now read persisted docs)
     List<String> badges = const [];
     try {
       badges = await _computeBadges(
@@ -170,7 +180,11 @@ class DailyReCalculator {
       debugPrint('[RE] badges ERROR uid=$uid day=$dayKey: $e');
     }
 
-
+    // 6) Merge badges back into the re_daily doc
+    if (badges.isNotEmpty) {
+      final docRef = db.doc(RePaths.dailyDoc(uid, dayKey));
+      await docRef.set({'badges': badges}, SetOptions(merge: true));
+    }
 
     final withBadges = DailyReResult(
       dailyTotal: baseResult.dailyTotal,
@@ -182,18 +196,7 @@ class DailyReCalculator {
     );
     debugPrint('[RE] compute DECIDE uid=$uid day=$dayKey total=${withBadges.dailyTotal} bw=${withBadges.bodyweightUsedKg} badges=${withBadges.badges.length}');
 
-
-    if (!write) return withBadges;
-
-    // Decide if we should publish a feed post
-    final bool noPoints =
-        withBadges.dailyTotal <= 0.0 ||
-            withBadges.pointsByLift.values.every((v) => (v <= 0.0));
-
-    // 5) Write /re_daily (keep for calendars/streaks even if no points)
-    await _writeDaily(uid: uid, dayKey: dayKey, res: withBadges);
-
-    // 6) Upsert monthly rollup (also preserved)
+    // 7) Upsert monthly rollup (also preserved)
     await _updateMonthly(
       uid: uid,
       monthKey: monthKey,
@@ -201,7 +204,7 @@ class DailyReCalculator {
       dayTotal: withBadges.dailyTotal,
     );
 
-    // 7) Only create a feed post if points > 0
+    // 8) Only create a feed post if points > 0
     if (!noPoints) {
       await _upsertDailyPost(
         uid: uid,
@@ -1072,8 +1075,9 @@ class DailyReCalculator {
     double maxVal = 0.0;
     String? bestDay;
     final col = db.collection('users').doc(uid).collection('re_daily');
-    final qs = await col.where('dayKey', isGreaterThanOrEqualTo: '$monthKey-01')
-        .where('dayKey', isLessThanOrEqualTo: '$monthKey-31')
+    final qs = await col
+        .where(FieldPath.documentId, isGreaterThanOrEqualTo: '$monthKey-01')
+        .where(FieldPath.documentId, isLessThanOrEqualTo: '$monthKey-99')
         .get();
     for (final d in qs.docs) {
       final m = d.data();

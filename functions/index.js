@@ -146,7 +146,44 @@ exports.repointsMonthlyAggregator = onDocumentWritten(RE_DAILY_PATH, async (even
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
 
-    logger.info('✅ Monthly RE recomputed & synced', { uid, dayKey, total });
+    // 4) Write/merge /posts/{uid}_{dayKey} for the Home feed
+    const postId = `${uid}_${dayKey.replace(/-/g, '')}`;
+    const postRef = db.collection('posts').doc(postId);
+    const postSnap = await postRef.get();
+
+    const dailyTotal = num(after.totalPoints);
+    const perLift = {};
+    for (const lift of CANONICAL_LIFTS) {
+      const entry = lifts[lift];
+      if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+        perLift[lift] = { pts: num(entry.pts) };
+      }
+    }
+
+    const postData = {
+      type: 're_daily',
+      ownerUid: uid,
+      dayKey,
+      monthKey,
+      dailyTotal,
+      perLift,
+      badges: after.badges || [],
+      visibility: 'friends',
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    if (after.bodyweightUsedKg != null) {
+      postData.bodyweightUsedKg = num(after.bodyweightUsedKg);
+    }
+
+    // Preserve existing createdAt; set only on first write
+    if (!postSnap.exists) {
+      postData.createdAt = admin.firestore.FieldValue.serverTimestamp();
+    }
+
+    await postRef.set(postData, { merge: true });
+
+    logger.info('✅ Monthly RE recomputed & synced + post written', { uid, dayKey, total, postId });
   } catch (err) {
     logger.error('❌ Monthly aggregator failed', { uid, dayKey, error: err });
     throw err;
