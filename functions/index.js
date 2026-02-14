@@ -140,48 +140,61 @@ exports.repointsMonthlyAggregator = onDocumentWritten(RE_DAILY_PATH, async (even
     const monthlySnap = await monthlyRef.get();
     const total = monthlySnap.exists ? num(monthlySnap.data().totalPoints) : 0;
 
+logger.info('🟦 about to write users_public', { uid, monthKey, total });
+
     await db.collection('users_public').doc(uid).set({
       rePointsMonthlyCurrent: total,
       currentMonthKey: monthKey,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
+    logger.info('🟩 wrote users_public', { uid });
+
 
     // 4) Write/merge /posts/{uid}_{dayKey} for the Home feed
     const postId = `${uid}_${dayKey.replace(/-/g, '')}`;
     const postRef = db.collection('posts').doc(postId);
-    const postSnap = await postRef.get();
-
     const dailyTotal = num(after.totalPoints);
+
+    // Build perLift deterministically (always include all canonical lifts)
     const perLift = {};
     for (const lift of CANONICAL_LIFTS) {
       const entry = lifts[lift];
-      if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
-        perLift[lift] = { pts: num(entry.pts) };
+      const pts =
+        entry && typeof entry === 'object' && !Array.isArray(entry)
+          ? num(entry.pts)
+          : 0;
+      perLift[lift] = { pts };
+    }
+
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(postRef);
+      const existing = snap.exists ? snap.data() : null;
+      const hasCreatedAt = !!(existing && existing.createdAt);
+
+      const postData = {
+        type: 're_daily',
+        ownerUid: uid,
+        dayKey,
+        monthKey,
+        dailyTotal,
+        perLift,
+        badges: after.badges || [],
+        visibility: 'friends',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      if (after.bodyweightUsedKg != null) {
+        postData.bodyweightUsedKg = num(after.bodyweightUsedKg);
       }
-    }
 
-    const postData = {
-      type: 're_daily',
-      ownerUid: uid,
-      dayKey,
-      monthKey,
-      dailyTotal,
-      perLift,
-      badges: after.badges || [],
-      visibility: 'friends',
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    };
+      // 🔑 Critical: ensure createdAt exists for orderBy('createdAt') queries
+      if (!snap.exists || !hasCreatedAt) {
+        postData.createdAt = admin.firestore.FieldValue.serverTimestamp();
+      }
 
-    if (after.bodyweightUsedKg != null) {
-      postData.bodyweightUsedKg = num(after.bodyweightUsedKg);
-    }
+      tx.set(postRef, postData, { merge: true });
+    });
 
-    // Preserve existing createdAt; set only on first write
-    if (!postSnap.exists) {
-      postData.createdAt = admin.firestore.FieldValue.serverTimestamp();
-    }
-
-    await postRef.set(postData, { merge: true });
 
     logger.info('✅ Monthly RE recomputed & synced + post written', { uid, dayKey, total, postId });
   } catch (err) {
