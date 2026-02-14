@@ -67,6 +67,7 @@ class MembershipGate extends StatelessWidget {
     }
 
     final uid = user.uid;
+    ensureMembershipDoc(uid); // 🔧 guarantee /profile/membership exists for brand-new users
 
     // 1) Free / comped users: always allowed in.
     if (freeMembershipUids.contains(uid)) {

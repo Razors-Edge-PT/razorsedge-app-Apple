@@ -13,8 +13,9 @@ const Stripe = require('stripe');
 // ⚠️ For now, simplest: read from env, with optional fallback literals.
 // In production, you should move the literal keys into env via the new
 // Firebase runtime config / GCP env vars instead of keeping them in code.
-const stripeSecret = process.env.STRIPE_SECRET || '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'; // real deal
-const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || 'whsec_Ki7kQNYi73ipyEZPImu6BBDg08to5OF5'; // real deal
+const stripeSecret = process.env.STRIPE_SECRET; 
+const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
 
 //const stripeSecret = process.env.STRIPE_SECRET || 'sk_test_51PuTPmBoDt989R6zy9h9tkRoV9r9RjGyyJO7G5ukqv7sb8eFQdShoK4vRZ6e5satjZ0d7yzV0ixXWf9g7Ri00upN008Puqquqv'; // test key
 //const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || 'whsec_4tRDzNm2iM9BnpNXAqqkwO0yHMreBQU3'; // test key
@@ -198,7 +199,8 @@ async function resolveUidFromStripeCustomer(customerId, fallbackMeta) {
 // createCheckoutSession (website → Stripe)
 // ====================================
 exports.createCheckoutSession = onRequest(
-  { cors: true },
+ { cors: true, secrets: ['STRIPE_SECRET'] },
+
   async (req, res) => {
     if (req.method !== 'POST') {
       return res.status(405).send('Method Not Allowed');
@@ -270,7 +272,7 @@ exports.createCheckoutSession = onRequest(
 );
 
 exports.createEarlyBirdCheckoutSession = onRequest(
-  { cors: true },
+ { cors: true, secrets: ['STRIPE_SECRET'] },
   async (req, res) => {
     if (req.method !== 'POST') {
       return res.status(405).send('Method Not Allowed');
@@ -349,7 +351,7 @@ exports.createEarlyBirdCheckoutSession = onRequest(
             planType: 'earlyBird',
           },
           // KEEP YOUR TRIAL LOGIC CONSISTENT
-          trial_period_days: 30,
+          trial_period_days: 14,
         },
       });
 
@@ -367,9 +369,11 @@ exports.createEarlyBirdCheckoutSession = onRequest(
 // stripeWebhook (Stripe → Firestore)
 // ====================================
 exports.stripeWebhook = onRequest(
-  {
-    maxBodySize: '1mb',
-  },
+ {
+  maxBodySize: '1mb',
+  secrets: ['STRIPE_SECRET', 'STRIPE_WEBHOOK_SECRET'],
+},
+
   async (req, res) => {
     if (!stripe || !webhookSecret) {
       logger.error('Stripe or webhook secret not configured');
