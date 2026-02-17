@@ -8180,23 +8180,7 @@ class _WorkoutPageState extends State<WorkoutPage>
     return false;
   }
 
-  @override
-  void setState(VoidCallback fn) {
-    final before = _structureHash();
-    // Trim the stack so you see caller file:line (top 6 frames is usually perfect)
-    final raw = StackTrace.current.toString().split('\n').where((l) => l.contains('.dart')).take(6).join('\n');
-    print('🎯 [WES setState] BEFORE shape=$before\n$raw');
 
-    super.setState(() {
-      fn();
-    });
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final after = _structureHash();
-      final changed = after != before;
-      print('✅ [WES setState] AFTER  shape=$after  changed=$changed');
-    });
-  }
 
 
   // Anchor A: add inside _WorkoutPageState
@@ -12706,7 +12690,7 @@ class _WorkoutPageState extends State<WorkoutPage>
     await _persistSavedFlagsLocally();
 
     // Upsert just like autosave; this will include savedAt for this exercise
-    await _upsertWorkoutToFirestore(alsoPushToBB2: true, markAllSaved: false);
+    await _upsertWorkoutToFirestore(alsoPushToBB2: false, markAllSaved: false);
     await _persistSavedFlagsLocally();
   }
 
@@ -14175,23 +14159,7 @@ class _WorkoutPageState extends State<WorkoutPage>
     _lastMergedDate = null;                 // force merge to treat this as a new date
     _hasCompletedInitialMergeForThisDate = false;
 
-   /* // Best-effort autosave the current page in the background
-    if (mounted) {
-      // ignore: unawaited_futures
-      (() async {
-        try {
-          print('💾 [WES] Autosaving previous date in background…');
-          await _upsertWorkoutToFirestore(
-              alsoPushToBB2: true, markAllSaved: false);
-          await _persistDraftLocally();
-          await _persistSavedFlagsLocally();
-        } catch (e) {
-          print('⚠️ [WES] Background autosave failed (non-fatal): $e');
-        }
-      })();
-    }
 
-    */
 
     // Allow FastPaint to run for the new date
     _bootPaintDone = false;
@@ -15523,7 +15491,7 @@ class _WorkoutPageState extends State<WorkoutPage>
         WillPopScope(
         onWillPop: () async {
       if (_pendingChanges) {
-        await _upsertWorkoutToFirestore(alsoPushToBB2: true, markAllSaved: false);
+        await _upsertWorkoutToFirestore(alsoPushToBB2: false, markAllSaved: false);
       }
       return true;
     },
