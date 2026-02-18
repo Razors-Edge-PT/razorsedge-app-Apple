@@ -7229,7 +7229,7 @@ class _WorkoutPageState extends State<WorkoutPage>
 
 // ⚠️ Non-destructive policy: if we already have rows (fast paint or user), never hard-clear.
           if (_didFastPaint || _selectedExercisesWithCircuits.isNotEmpty) {
-            _resolvedBB2Values.clear(); // safe to clear non-row cache
+            // Do NOT clear _resolvedBB2Values here — it holds BB2 override values needed for hint display
           } else {
             // Only clear if truly nothing is on screen AND epoch is still current
             if (!_isStale(_initEpoch)) {
@@ -13816,7 +13816,7 @@ class _WorkoutPageState extends State<WorkoutPage>
       print('[WES] Found ${newOnes.length} new exercises to merge (id+ci)');
 
 
-      if (newOnes.isNotEmpty) {
+      if (newOnes.isNotEmpty || bb2Exercises.isNotEmpty) {
         // Tag every BB2 insert with the currently selected date to avoid bleed
         final String ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
 
@@ -17203,8 +17203,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                 }
                                                               }
 
-                                                              final exNameKey =
-                                                                  '${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i';
+                                                              final exNameKey = _rowKeyBy(i);
 
                                                               String rawRirHint;
 
@@ -17258,13 +17257,13 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                     return (j == 0)
                                                                         ? formatRir(
                                                                         _seedHintsByKey[
-                                                                        '${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i']?['rir']
+                                                                        _rowKeyBy(i)]?['rir']
                                                                             ?? set1RIR(i)
                                                                     )
                                                                         : (j >= 1 && j <= 7)
                                                                         ? formatRir(
                                                                         _seedHintsByKey[
-                                                                        '${_selectedExercisesWithCircuits[i]['name'].toString().toLowerCase()}|$i']?['s${j + 1}_rir']
+                                                                        _rowKeyBy(i)]?['s${j + 1}_rir']
                                                                             ?? (j == 1
                                                                             ? set2RIR(i)
                                                                             : j == 2
