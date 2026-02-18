@@ -10122,18 +10122,22 @@ class _WorkoutPageState extends State<WorkoutPage>
 
     // Build a lookup of existing rows by (exerciseId + circuitIndex) so values stay attached
     String keyForExistingRow(Map<String, dynamic> row) {
-      // Prefer parsing from cardId: wes|YYYY-MM-DD|ts|exId|circuitIndex
+      final ci = (row['circuitIndex'] ?? 0).toString();
+
+      // Prefer exerciseId/id (consistent with render key formula)
+      final rawId = (row['exerciseId'] ?? row['id'])?.toString().trim() ?? '';
+      if (rawId.isNotEmpty) return '${rawId.toLowerCase()}|$ci';
+
+      // Fallback: parse from cardId (with empty guard)
       final cardId = (row['cardId'] ?? '').toString();
       final parts = cardId.split('|');
       if (parts.length >= 5) {
-        final exId = parts[3].trim().toLowerCase();
-        final ci = parts[4].trim(); // keep as string
-        return '$exId|$ci';
+        final parsed = parts[3].trim().toLowerCase();
+        if (parsed.isNotEmpty) return '$parsed|${parts[4].trim()}';
       }
 
-      // Fallback: compute from name + circuitIndex
+      // Final fallback: name lookup
       final name = (row['name'] ?? '').toString();
-      final ci = (row['circuitIndex'] ?? 0).toString();
       final exId = (PeriodizationModelUtils.nameToId[name] ?? name).trim().toLowerCase();
       return '$exId|$ci';
     }
@@ -10142,11 +10146,18 @@ class _WorkoutPageState extends State<WorkoutPage>
     final existingExerciseIds = <String>{};
 
     String exIdFromRow(Map<String, dynamic> row) {
+      // Prefer exerciseId/id (consistent with render key formula)
+      final rawId = (row['exerciseId'] ?? row['id'])?.toString().trim() ?? '';
+      if (rawId.isNotEmpty) return rawId.toLowerCase();
+
+      // Fallback: parse from cardId (with empty guard)
       final cardId = (row['cardId'] ?? '').toString();
       final parts = cardId.split('|');
       if (parts.length >= 5) {
-        return parts[3].trim().toLowerCase(); // exId
+        final parsed = parts[3].trim().toLowerCase();
+        if (parsed.isNotEmpty) return parsed;
       }
+
       final name = (row['name'] ?? '').toString();
       return (PeriodizationModelUtils.nameToId[name] ?? name).trim().toLowerCase();
     }
@@ -10188,6 +10199,8 @@ class _WorkoutPageState extends State<WorkoutPage>
 
         _selectedExercisesWithCircuits.add({
           'name': name,
+          'exerciseId': exId,
+          'id': exId,
           'circuitIndex': circuitIndex,
           'cardId': cardId,
           'category': category,
@@ -14219,12 +14232,30 @@ class _WorkoutPageState extends State<WorkoutPage>
 
     List<Map<String, dynamic>> _snapshotRows() =>
         _selectedExercisesWithCircuits
-            .map((e) => {
-          'name': ((e['name'] ?? '') as String).trim(),
-          'ci': (e['circuitIndex'] is num)
+            .map((e) {
+          final name = ((e['name'] ?? '') as String).trim();
+          final ci = (e['circuitIndex'] is num)
               ? (e['circuitIndex'] as num).toInt()
-              : 0,
-          'cardId': (e['cardId'] ?? '').toString(),
+              : 0;
+          // Canonical identity: exerciseId/id first, then cardId parse, then name lookup
+          var exId = (e['exerciseId'] ?? e['id'])?.toString().trim() ?? '';
+          if (exId.isEmpty) {
+            final cardId = (e['cardId'] ?? '').toString();
+            final parts = cardId.split('|');
+            if (parts.length >= 5) {
+              final parsed = parts[3].trim().toLowerCase();
+              if (parsed.isNotEmpty) exId = parsed;
+            }
+          }
+          if (exId.isEmpty) {
+            exId = (PeriodizationModelUtils.nameToId[name] ?? name).trim().toLowerCase();
+          }
+          return {
+            'name': name,
+            'ci': ci,
+            'exId': exId.toLowerCase(),
+            'cardId': (e['cardId'] ?? '').toString(),
+          };
         })
             .toList();
 
@@ -14234,11 +14265,11 @@ class _WorkoutPageState extends State<WorkoutPage>
         ) {
       final beforeKeys = {
         for (final e in before)
-          '${_normNameForProv(e['name'] ?? '')}|${e['ci']}'
+          '${(e['exId'] ?? _normNameForProv(e['name'] ?? '')).toString().toLowerCase()}|${e['ci']}'
       };
       final added = <Map<String, dynamic>>[];
       for (final e in after) {
-        final k = '${_normNameForProv(e['name'] ?? '')}|${e['ci']}';
+        final k = '${(e['exId'] ?? _normNameForProv(e['name'] ?? '')).toString().toLowerCase()}|${e['ci']}';
         if (!beforeKeys.contains(k)) added.add(e);
       }
       return added;
@@ -14248,7 +14279,7 @@ class _WorkoutPageState extends State<WorkoutPage>
     final Map<String, List<String>> _provenance = {};
     void _record(String source, List<Map<String, dynamic>> added) {
       for (final e in added) {
-        final k = '${_normNameForProv((e['name'] ?? '') as String)}|${e['ci']}';
+        final k = '${(e['exId'] ?? _normNameForProv((e['name'] ?? '') as String)).toString().toLowerCase()}|${e['ci']}';
         (_provenance[k] ??= <String>[]).add(source);
       }
     }
@@ -14452,7 +14483,9 @@ class _WorkoutPageState extends State<WorkoutPage>
         final ci = (r['circuitIndex'] is num)
             ? (r['circuitIndex'] as num).toInt()
             : 0;
-        final key = '${_normNameForProv(name)}|$ci';
+        var exId = (r['exerciseId'] ?? r['id'])?.toString().trim() ?? '';
+        if (exId.isEmpty) exId = (PeriodizationModelUtils.nameToId[name] ?? name).trim().toLowerCase();
+        final key = '${exId.toLowerCase()}|$ci';
         byName[key] = {'name': name, 'ci': ci};
       }
 
