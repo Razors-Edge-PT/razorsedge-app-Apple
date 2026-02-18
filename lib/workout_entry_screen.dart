@@ -3720,7 +3720,7 @@ class _WorkoutPageState extends State<WorkoutPage>
         final hasWeight = weightVal != null && weightVal != 0.0;
         final hasRir = rirVal != null && rirVal != 0.0;
 
-        final key = name.toLowerCase();
+        final key = resolvedId.toLowerCase();
 
 // 1) Put non-zero BB2 values into hint storage ONLY
         if (hasReps || hasWeight || hasRir) {
@@ -5837,8 +5837,12 @@ class _WorkoutPageState extends State<WorkoutPage>
     final weightText = _weightControllers[exerciseIndex][0].text;
     final repsText = _repsControllers[exerciseIndex][0].text;
 
-    final normalizedKey = exerciseName.toLowerCase();
-    final bb2Entry = _resolvedBB2Values[normalizedKey];
+    final bb2LookupId = (() {
+      final row = _selectedExercisesWithCircuits[exerciseIndex];
+      final rId = (row['exerciseId'] ?? row['id'])?.toString().trim() ?? '';
+      return (rId.isNotEmpty ? rId : (PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName)).toString().toLowerCase();
+    })();
+    final bb2Entry = _resolvedBB2Values[bb2LookupId];
 
     final double? reps = double.tryParse(repsText);
     final double? weight = double.tryParse(weightText);
@@ -6483,7 +6487,12 @@ class _WorkoutPageState extends State<WorkoutPage>
 
     final exerciseName =
         _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
-    final bb2Entry = _resolvedBB2Values[exerciseName.toLowerCase()];
+    final bb2LookupIdRir = (() {
+      final row = _selectedExercisesWithCircuits[exerciseIndex];
+      final rId = (row['exerciseId'] ?? row['id'])?.toString().trim() ?? '';
+      return (rId.isNotEmpty ? rId : (PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName)).toString().toLowerCase();
+    })();
+    final bb2Entry = _resolvedBB2Values[bb2LookupIdRir];
     final rawBB2Rir = bb2Entry?['rir'];
     final bb2Rir = (rawBB2Rir != null && rawBB2Rir
         .toString()
@@ -6681,11 +6690,15 @@ class _WorkoutPageState extends State<WorkoutPage>
 
     final exerciseName =
         _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
-    final normalizedKey = exerciseName.toLowerCase();
+    final bb2LookupIdWt = (() {
+      final row = _selectedExercisesWithCircuits[exerciseIndex];
+      final rId = (row['exerciseId'] ?? row['id'])?.toString().trim() ?? '';
+      return (rId.isNotEmpty ? rId : (PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName)).toString().toLowerCase();
+    })();
     final String exerciseId =
         PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
 
-    final bb2Entry = _resolvedBB2Values[normalizedKey];
+    final bb2Entry = _resolvedBB2Values[bb2LookupIdWt];
 
 
 
@@ -6759,11 +6772,15 @@ class _WorkoutPageState extends State<WorkoutPage>
     final double? _userRir = double.tryParse(_rirTxt);
 
 // BB2-merged RIR (if any)
-    final String _normKey = exerciseName.trim().toLowerCase();
-    final dynamic _bb2RirRaw = _resolvedBB2Values[_normKey]?['rir'];
-    final double? _bb2Rir = (_bb2RirRaw is num)
-        ? _bb2RirRaw.toDouble()
-        : double.tryParse(_bb2RirRaw?.toString() ?? '');
+    final String normBB2Key = (() {
+      final row = _selectedExercisesWithCircuits[exerciseIndex];
+      final rId = (row['exerciseId'] ?? row['id'])?.toString().trim() ?? '';
+      return (rId.isNotEmpty ? rId : (PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName)).toString().toLowerCase();
+    })();
+    final dynamic bb2RirRaw = _resolvedBB2Values[normBB2Key]?['rir'];
+    final double? bb2Rir = (bb2RirRaw is num)
+        ? bb2RirRaw.toDouble()
+        : double.tryParse(bb2RirRaw?.toString() ?? '');
 
 // Planned RIR for set 1 (pure plan; no BB2 overlay)
     double _plannedRirForSet1() {
@@ -6804,7 +6821,7 @@ class _WorkoutPageState extends State<WorkoutPage>
 // - No RIR typed in WES (so the value in play is from BB2 hint)
 // - BB2 RIR exists
     final bool _rirOnlyBw = _isBwEx && _repsTxt.isEmpty && _userRir == null &&
-        _bb2Rir != null;
+        bb2Rir != null;
 
 // Use planned RIR as the seed ONLY for that one case; otherwise keep existing modelRir
     final double _seedRIR = _rirOnlyBw ? _plannedRirForSet1() : modelRir;
@@ -13735,8 +13752,10 @@ class _WorkoutPageState extends State<WorkoutPage>
       for (final ex in bb2Exercises) {
         final name = (ex['name'] ?? '').toString().trim();
         if (name.isEmpty) continue;
+        final rawId = (ex['exerciseId'] ?? ex['id'])?.toString().trim() ?? '';
+        final exId = rawId.isNotEmpty ? rawId : (PeriodizationModelUtils.nameToId[name] ?? name);
         final ci = (ex['circuitIndex'] ?? 0) as int;
-        _bb2PlannedKeysForSelectedDate.add(_wesKeyPrefId(name, ci));
+        _bb2PlannedKeysForSelectedDate.add('$exId|$ci');
       }
       print(
           '🧭 [WES] bb2PlannedKeysForSelectedDate=${_bb2PlannedKeysForSelectedDate
@@ -13766,28 +13785,52 @@ class _WorkoutPageState extends State<WorkoutPage>
         return t;
       }
 
-      final Set<String> haveNames = _selectedExercisesWithCircuits
-          .map((e) => _normName(((e['name'] ?? '') as String)))
-          .toSet();
+      // Build exerciseId|ci keys for existing rows
+      final Set<String> haveKeys = {};
+      final Set<String> haveNamesLower = {};
+      for (final e in _selectedExercisesWithCircuits) {
+        final n = ((e['name'] ?? '') as String).trim();
+        final rawId = (e['exerciseId'] ?? e['id'])?.toString().trim() ?? '';
+        final exId = rawId.isNotEmpty ? rawId : (PeriodizationModelUtils.nameToId[n] ?? n);
+        final ci = (e['circuitIndex'] ?? 0) as int;
+        haveKeys.add('${exId.toString().toLowerCase()}|$ci');
+        if (n.isNotEmpty) haveNamesLower.add(n.toLowerCase());
+      }
 
-      String _nameOf(Map<String, dynamic> ex) =>
-          _normName(((ex['name'] ?? '') as String));
+      String keyOfBB2(Map<String, dynamic> ex) {
+        final n = ((ex['name'] ?? '') as String).trim();
+        final rawId = (ex['exerciseId'] ?? ex['id'])?.toString().trim() ?? '';
+        final exId = rawId.isNotEmpty ? rawId : (PeriodizationModelUtils.nameToId[n] ?? n);
+        final ci = (ex['circuitIndex'] ?? 0) as int;
+        return '${exId.toString().toLowerCase()}|$ci';
+      }
 
       final List<Map<String, dynamic>> newOnes = bb2Exercises
-          .where((ex) => _nameOf(ex).isNotEmpty && !haveNames.contains(_nameOf(ex)))
+          .where((ex) {
+            final n = ((ex['name'] ?? '') as String).trim();
+            if (n.isEmpty) return false;
+            return !haveKeys.contains(keyOfBB2(ex)) && !haveNamesLower.contains(n.toLowerCase());
+          })
           .toList();
 
-      print('[WES] Found ${newOnes.length} new exercises to merge (name-only)');
+      print('[WES] Found ${newOnes.length} new exercises to merge (id+ci)');
 
 
       if (newOnes.isNotEmpty) {
         // Tag every BB2 insert with the currently selected date to avoid bleed
         final String ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
 
-        // Guard: don't add a BB2 card if a card with the same exercise NAME already exists
-        final Set<String> existingNamesLower = _selectedExercisesWithCircuits
-            .map((e) => ((e['name'] ?? '') as String).trim().toLowerCase())
-            .toSet();
+        // Guard: don't add a BB2 card if a card with same exerciseId|ci already exists
+        final Set<String> existingKeys = {};
+        final Set<String> existingNamesLowerGuard = {};
+        for (final e in _selectedExercisesWithCircuits) {
+          final n = ((e['name'] ?? '') as String).trim();
+          final rawId = (e['exerciseId'] ?? e['id'])?.toString().trim() ?? '';
+          final exId = rawId.isNotEmpty ? rawId : (PeriodizationModelUtils.nameToId[n] ?? n);
+          final ci = (e['circuitIndex'] ?? 0) as int;
+          existingKeys.add('${exId.toString().toLowerCase()}|$ci');
+          if (n.isNotEmpty) existingNamesLowerGuard.add(n.toLowerCase());
+        }
 
         if (_isStale(_mergeEpoch) || _mergeDayKey != _currentDayKey) {
           print('⛔️ [Merge] stale (epoch/dayKey) — aborting apply');
@@ -13800,17 +13843,22 @@ class _WorkoutPageState extends State<WorkoutPage>
             if (name.isEmpty) continue;
 
             final lower = name.toLowerCase();
-            if (existingNamesLower.contains(lower)) {
+            final rawExId = (newEx['exerciseId'] ?? newEx['id'])?.toString().trim() ?? '';
+            final exId = rawExId.isNotEmpty ? rawExId : (PeriodizationModelUtils.nameToId[name] ?? name);
+            final circuitIndex = (newEx['circuitIndex'] ?? 0) as int;
+            final dupeKey = '${exId.toString().toLowerCase()}|$circuitIndex';
+
+            if (existingKeys.contains(dupeKey) || existingNamesLowerGuard.contains(lower)) {
               continue; // avoid duplicates
             }
 
-            final circuitIndex = (newEx['circuitIndex'] ?? 0) as int;
-
             final String cardId = (newEx['cardId'] as String?) ??
-                'bb2|$ymd|${DateTime.now().microsecondsSinceEpoch}|$lower|$circuitIndex';
+                'bb2|$ymd|${DateTime.now().microsecondsSinceEpoch}|$exId|$circuitIndex';
 
             _selectedExercisesWithCircuits.add({
               'name': name,
+              'exerciseId': exId,
+              'id': exId,
               'circuitIndex': circuitIndex,
               'cardId': cardId,
             });
@@ -13826,7 +13874,8 @@ class _WorkoutPageState extends State<WorkoutPage>
             _velocityControllers.add(List.generate(setCount, (_) => TextEditingController()));
             _notesControllers.add(List.generate(setCount, (_) => TextEditingController()));
 
-            existingNamesLower.add(lower);
+            existingKeys.add(dupeKey);
+            existingNamesLowerGuard.add(lower);
           }
 
           // ✅ Keep circuits in numeric order after merging BB2 rows
@@ -13840,8 +13889,11 @@ class _WorkoutPageState extends State<WorkoutPage>
         // Seed initial values for newly added rows (prefer flat; else sets[0])
         for (final newEx in bb2Exercises) {
 
-          final nameKey = (newEx['name'] ?? '').toString().trim().toLowerCase();
-          if (nameKey.isEmpty || _resolvedBB2Values.containsKey(nameKey))
+          final bbName = (newEx['name'] ?? '').toString().trim();
+          final bbRawId = (newEx['exerciseId'] ?? newEx['id'])?.toString().trim() ?? '';
+          final bbExId = bbRawId.isNotEmpty ? bbRawId : (PeriodizationModelUtils.nameToId[bbName] ?? bbName);
+          final resolvedKey = bbExId.toString().toLowerCase();
+          if (resolvedKey.isEmpty || _resolvedBB2Values.containsKey(resolvedKey))
             continue;
 
           final flatReps = newEx['reps'];
@@ -13851,16 +13903,16 @@ class _WorkoutPageState extends State<WorkoutPage>
               ?? (newEx['weightAdded'] as num?)?.toDouble(); // legacy fallback
 
           if (flatReps != null || flatWeight != null || flatRir != null) {
-            _resolvedBB2Values[nameKey] = {
+            _resolvedBB2Values[resolvedKey] = {
               'reps': flatReps,
               'weight': flatWeight,
               'rir': flatRir,
               'addedWeight': flatAdded,
-              // ✅ preserve BB2’s addedWeight for hydration
+              // ✅ preserve BB2's addedWeight for hydration
             };
             print(
-                '🧠 [WES Merge] Injected FLAT BB2 values for $nameKey = ${_resolvedBB2Values[nameKey]}');
-            debugPrint('🧾[BB2→WES flat] name=$nameKey '
+                '🧠 [WES Merge] Injected FLAT BB2 values for $resolvedKey = ${_resolvedBB2Values[resolvedKey]}');
+            debugPrint('🧾[BB2→WES flat] name=$resolvedKey '
                 'isBw=${PeriodizationModelUtils.isBodyweightExercise(
                 name: (newEx['name'] ?? '').toString())} '
                 'reps=$flatReps weight(abs)=$flatWeight addedWeight=$flatAdded rir=$flatRir');
@@ -13875,37 +13927,41 @@ class _WorkoutPageState extends State<WorkoutPage>
             final setAdded = (firstSet['addedWeight'] as num?)?.toDouble()
                 ?? (firstSet['weightAdded'] as num?)
                     ?.toDouble(); // legacy fallback
-            _resolvedBB2Values[nameKey] = {
+            _resolvedBB2Values[resolvedKey] = {
               'reps': firstSet['reps'],
               'weight': firstSet['weight'],
               'rir': firstSet['rir'],
               'addedWeight': setAdded, // 👈 carry addedWeight
             };
             print(
-                '🧠 [WES Merge] Injected SETS[0] BB2 values for $nameKey = ${_resolvedBB2Values[nameKey]}');
-            debugPrint('🧾[BB2→WES sets0] name=$nameKey '
+                '🧠 [WES Merge] Injected SETS[0] BB2 values for $resolvedKey = ${_resolvedBB2Values[resolvedKey]}');
+            debugPrint('🧾[BB2→WES sets0] name=$resolvedKey '
                 'isBw=${PeriodizationModelUtils.isBodyweightExercise(
                 name: (newEx['name'] ?? '').toString())} '
                 'reps=${firstSet['reps']} weight(abs)=${firstSet['weight']} '
                 'addedWeight=$setAdded rir=${firstSet['rir']}');
           } else {
             // Even if there are no numbers, keep the exercise row so the user can edit it.
-            _resolvedBB2Values[nameKey] = {
+            _resolvedBB2Values[resolvedKey] = {
               'reps': null,
               'weight': null,
               'rir': null,
             };
             print(
-                'ℹ️ [WES Merge] No values found for $nameKey — seeding empty controllers');
+                'ℹ️ [WES Merge] No values found for $resolvedKey — seeding empty controllers');
           }
 
 // ⬇️ INSERT HYDRATION BLOCK HERE
-          if (_resolvedBB2Values.containsKey(nameKey)) {
-            final values = _resolvedBB2Values[nameKey]!;
-            debugPrint('➡️[WES Hydrate BEGIN] nameKey=$nameKey values=$values');
+          if (_resolvedBB2Values.containsKey(resolvedKey)) {
+            final values = _resolvedBB2Values[resolvedKey]!;
+            debugPrint('➡️[WES Hydrate BEGIN] resolvedKey=$resolvedKey values=$values');
 
-            final idx = _selectedExercisesWithCircuits.indexWhere((e) =>
-            (e['name'] as String).trim().toLowerCase() == nameKey);
+            final idx = _selectedExercisesWithCircuits.indexWhere((e) {
+              final rId = (e['exerciseId'] ?? e['id'])?.toString().trim() ?? '';
+              final n = ((e['name'] ?? '') as String).trim();
+              final eKey = (rId.isNotEmpty ? rId : (PeriodizationModelUtils.nameToId[n] ?? n)).toString().toLowerCase();
+              return eKey == resolvedKey;
+            });
 
             if (idx != -1) {
               final sets = _workoutSets[idx];

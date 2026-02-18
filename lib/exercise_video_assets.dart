@@ -55,7 +55,9 @@ const Map<String, String> kExerciseVideoAssets = {
   'vrUvHdZFMd9QVhmJXzi9': 'assets/exercise_videos/Reverse Seated Dumbbell Raise.mp4', 'Reverse Seated Dumbbell Raise': 'assets/exercise_videos/Reverse Seated Dumbbell Raise.mp4', // Reverse Seated Dumbbell Raise
 
   'ci3KpMTEacH4bw8ZumJW': 'assets/exercise_videos/Standing Calf Raise.mp4', 'Standing Calf Raise': 'assets/exercise_videos/Standing Calf Raise.mp4', // Standing Calf Raise
-
+  'QacImADmlpljltUvB0dD': 'assets/exercise_videos/Overhead Cable Triceps Extension.mp4', 'Overhead Cable Triceps Extension': 'assets/exercise_videos/Overhead Cable Triceps Extension.mp4', // Overhead Cable Triceps Extension
+  'z5gs1ilr4DpKlSZaRNG5': 'assets/exercise_videos/Overhead Cable Triceps Extension, Unilateral.mp4', 'Overhead Cable Triceps Extension, Unilateral': 'assets/exercise_videos/Overhead Cable Triceps Extension, Unilateral.mp4', // Overhead Cable Triceps Extension, Unilateral
+  '9Oovma2yszjmSm420awp': 'assets/exercise_videos/Suspended Triceps Extension.mp4', 'Suspended Triceps Extension': 'assets/exercise_videos/Suspended Triceps Extension.mp4', // Suspended Triceps Extension
 
 
 
@@ -106,7 +108,7 @@ const Map<String, String> kExerciseVideoAssets = {
 //'PXqhBA8ib7FWAcPjDlES': 'assets/exercise_videos/Suspended Leg Curl.mp4', 'Suspended Leg Curl': 'assets/exercise_videos/Suspended Leg Curl.mp4', // Suspended Leg Curl
 //'7gc2YEj9ZQe6A0kr5NcX': 'assets/exercise_videos/Suspended Leg Curl, Unilateral.mp4', 'Suspended Leg Curl, Unilateral': 'assets/exercise_videos/Suspended Leg Curl, Unilateral.mp4', // Suspended Leg Curl, Unilateral
 //'mJKwE9Fc2opMiiy7yUFt': 'assets/exercise_videos/Suspended Reverse Fly.mp4', 'Suspended Reverse Fly': 'assets/exercise_videos/Suspended Reverse Fly.mp4', // Suspended Reverse Fly
-//'9Oovma2yszjmSm420awp': 'assets/exercise_videos/Suspended Triceps Extension.mp4', 'Suspended Triceps Extension': 'assets/exercise_videos/Suspended Triceps Extension.mp4', // Suspended Triceps Extension
+
 //'jRDb5LbN9e7PyiQMQcPn': 'assets/exercise_videos/Suspended Triceps Extension, Unilateral.mp4', 'Suspended Triceps Extension, Unilateral': 'assets/exercise_videos/Suspended Triceps Extension, Unilateral.mp4', // Suspended Triceps Extension, Unilateral
 //'10pEctikt6PP8eAg9Eip': 'assets/exercise_videos/Sumo Deadlift.mp4', 'Sumo Deadlift': 'assets/exercise_videos/Sumo Deadlift.mp4', // Sumo Deadlift
 //'NkctO0XmQrUHfLCkpRXr': 'assets/exercise_videos/Sumo Deadlift, Deficit.mp4', 'Sumo Deadlift, Deficit': 'assets/exercise_videos/Sumo Deadlift, Deficit.mp4', // Sumo Deadlift, Deficit
