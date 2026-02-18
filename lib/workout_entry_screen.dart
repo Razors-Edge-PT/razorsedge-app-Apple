@@ -216,11 +216,13 @@ class _WorkoutPageState extends State<WorkoutPage>
 
   // Stable key for a row: "name|circuitIndex"
   String _rowKeyBy(int i) {
-    final nameRaw = (_selectedExercisesWithCircuits[i]['name'] ?? '').toString().trim();
-    final ci = (_selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0) as int;
+    final row = _selectedExercisesWithCircuits[i];
+    final nameRaw = (row['name'] ?? '').toString().trim();
+    final ci = (row['circuitIndex'] ?? 0) as int;
 
-    // ✅ Prefer stable exerciseId; fall back to name if mapping missing.
-    final exId = (PeriodizationModelUtils.nameToId[nameRaw] ?? nameRaw).toString().trim();
+    // ✅ Prefer row's own exerciseId/id; fall back to nameToId lookup.
+    final rawId = (row['exerciseId'] ?? row['id'])?.toString().trim() ?? '';
+    final exId = rawId.isNotEmpty ? rawId : (PeriodizationModelUtils.nameToId[nameRaw] ?? nameRaw).toString().trim();
 
     return '$exId|$ci';
   }
@@ -3682,8 +3684,12 @@ class _WorkoutPageState extends State<WorkoutPage>
       // add to UI lists
       for (final m in appended) {
         final name = (m['name'] ?? '').toString().trim();
+        final eid = (m['exerciseId'] ?? m['id'])?.toString().trim() ?? '';
+        final resolvedId = eid.isNotEmpty ? eid : (PeriodizationModelUtils.nameToId[name] ?? name).trim();
         _selectedExercisesWithCircuits.add({
           'name': name,
+          'exerciseId': resolvedId,
+          'id': resolvedId,
           'circuitIndex': newCircuitIndex,
           'rowId': UniqueKey().toString(),
           // ensure stable identity for caching/UI
@@ -8162,7 +8168,9 @@ class _WorkoutPageState extends State<WorkoutPage>
       }
 
       // Append UI row + controllers
-      _selectedExercisesWithCircuits.add({'name': name, 'circuitIndex': ci});
+      final eid = (raw['exerciseId'] ?? raw['id'])?.toString().trim() ?? '';
+      final resolvedId = eid.isNotEmpty ? eid : (PeriodizationModelUtils.nameToId[name] ?? name).trim();
+      _selectedExercisesWithCircuits.add({'name': name, 'exerciseId': resolvedId, 'id': resolvedId, 'circuitIndex': ci});
       _workoutSets.add(sets);
       _repsControllers.add(List.generate(sets.length, (_) => TextEditingController()));
       _weightControllers.add(List.generate(sets.length, (_) => TextEditingController()));
@@ -9665,10 +9673,13 @@ class _WorkoutPageState extends State<WorkoutPage>
         if (_haveNames.contains(nKey)) continue; // already have a card for this exercise
 
         final int ci = (plannedOverlay[j]['circuitIndex'] ?? 0) as int;
-        final String cardId = '$_dateKey|plan|$j|$nKey';
+        final String planExId = (PeriodizationModelUtils.nameToId[n] ?? n).trim().toLowerCase();
+        final String cardId = '$_dateKey|plan|$j|$planExId';
 
         _selectedExercisesWithCircuits.add({
           'name': n,
+          'exerciseId': planExId,
+          'id': planExId,
           'circuitIndex': ci,
           'cardId': cardId,
         });
@@ -11955,8 +11966,11 @@ class _WorkoutPageState extends State<WorkoutPage>
       final ex = <String, dynamic>{
         'name': name,
         'circuitIndex': circuitIndex,
-        // ✅ add this so BB2/WES rendering can reliably use the ID
-        'exerciseId': PeriodizationModelUtils.nameToId[name] ?? name,
+        // ✅ Prefer row's own exerciseId/id; fall back to nameToId lookup.
+        'exerciseId': () {
+          final rid = (_selectedExercisesWithCircuits[i]['exerciseId'] ?? _selectedExercisesWithCircuits[i]['id'])?.toString().trim() ?? '';
+          return rid.isNotEmpty ? rid : (PeriodizationModelUtils.nameToId[name] ?? name);
+        }(),
 
         'sets': setsWithData.map((s) {
           final exId = PeriodizationModelUtils.nameToId[name] ?? name;
