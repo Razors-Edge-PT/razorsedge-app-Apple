@@ -1093,6 +1093,36 @@ class _WorkoutPageState extends State<WorkoutPage>
       debugPrint('🟥 [DEL→ISAR] failed: $e');
     }
 
+    // ───────── 2c) ISAR: claudeBulletSnapshots for that uid+date ─────────
+    try {
+      final isar = await IsarDb.instance;
+      final uidDateKey = '$uid|$ymd';
+
+      await isar.writeTxn(() async {
+        final cbSnap = await isar.claudeBulletSnapshots
+            .filter()
+            .uidDateKeyEqualTo(uidDateKey)
+            .findFirst();
+
+        if (cbSnap != null) {
+          final data = jsonDecode(cbSnap.snapshotJson) as Map<String, dynamic>;
+          final exercises = (data['exercises'] as List?) ?? [];
+          final filtered = exercises
+              .where((e) =>
+                  !_isSameExerciseRow(e, removedExId, removedName, removedCi))
+              .toList();
+
+          if (filtered.length != exercises.length) {
+            data['exercises'] = filtered;
+            cbSnap.snapshotJson = jsonEncode(data);
+            await isar.claudeBulletSnapshots.put(cbSnap);
+            debugPrint('🗑️ [DEL→ISAR] pruned claudeBulletSnapshot for $uidDateKey');
+          }
+        }
+      });
+    } catch (e) {
+      debugPrint('🟥 [DEL→ISAR CB] failed: $e');
+    }
 
     // ───────── 3) SharedPreferences: WES draft + BB2 day JSON for that date ─────────
     try {
@@ -1141,6 +1171,33 @@ class _WorkoutPageState extends State<WorkoutPage>
       }
     } catch (e) {
       debugPrint('🟥 [DEL→Prefs] failed: $e');
+    }
+
+    // ───────── 4) In-memory _exitDraft: prune deleted exercise ─────────
+    if (_exitDraft != null &&
+        _exitDraft!['dateKey'] == ymd &&
+        _exitDraft!['uid'] == uid) {
+      try {
+        final draftEx = (_exitDraft!['exercises'] as List?) ?? [];
+        final draftSets = (_exitDraft!['sets'] as List?) ?? [];
+        final indicesToRemove = <int>[];
+
+        for (int di = 0; di < draftEx.length; di++) {
+          if (_isSameExerciseRow(draftEx[di], removedExId, removedName, removedCi)) {
+            indicesToRemove.add(di);
+          }
+        }
+
+        if (indicesToRemove.isNotEmpty) {
+          for (final idx in indicesToRemove.reversed) {
+            draftEx.removeAt(idx);
+            if (idx < draftSets.length) draftSets.removeAt(idx);
+          }
+          debugPrint('🗑️ [DEL→exitDraft] pruned ${indicesToRemove.length} exercise(s)');
+        }
+      } catch (e) {
+        debugPrint('🟥 [DEL→exitDraft] failed: $e');
+      }
     }
 
     debugPrint('✅ [DEL] finished pruning exercise for $ymd');
@@ -8772,8 +8829,8 @@ class _WorkoutPageState extends State<WorkoutPage>
       // [WES_REENTER] Overlay in-memory draft from previous dispose() if
       // available. This restores user-entered values (e.g. RIR=2.5) instantly
       // on fast re-entry, before the first frame is painted.
-      if (_exitDraft != null && _exitDraft!['dateKey'] == ymd) {
-        debugPrint('[WES_REENTER] _paintFromSnapshotIfAny: found in-memory draft for $ymd — overlaying');
+      if (_exitDraft != null && _exitDraft!['dateKey'] == ymd && _exitDraft!['uid'] == _cachedUid) {
+        debugPrint('[WES_REENTER] _paintFromSnapshotIfAny: found in-memory draft for $ymd (uid=$_cachedUid) — overlaying');
         try {
           final draftExercises = (_exitDraft!['exercises'] as List?) ?? [];
           final draftSets = (_exitDraft!['sets'] as List?) ?? [];
@@ -10493,6 +10550,7 @@ class _WorkoutPageState extends State<WorkoutPage>
       final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
       _exitDraft = {
         'dateKey': ymd,
+        'uid': _cachedUid,
         'workoutName': _workoutNameController.text,
         'exercises': _selectedExercisesWithCircuits
             .map((e) => Map<String, dynamic>.from(e))
@@ -13083,6 +13141,11 @@ class _WorkoutPageState extends State<WorkoutPage>
   /// SharedPreferences draft is not yet available (async race on fast re-entry).
   bool _hydrateFromExitDraft() {
     if (_exitDraft == null) return false;
+    if (_exitDraft!['uid'] != _cachedUid) {
+      debugPrint('[WES_REENTER] _hydrateFromExitDraft: uid mismatch '
+          '(draft=${_exitDraft!['uid']}, current=$_cachedUid) — skipping');
+      return false;
+    }
     try {
       final draftExercises = List<Map<String, dynamic>>.from(
           (_exitDraft!['exercises'] as List?) ?? []);
@@ -15985,13 +16048,9 @@ class _WorkoutPageState extends State<WorkoutPage>
 // 🔑 stable key for this row (per-card unique)
                     final name = (current['name'] ?? '').toString().trim();
                     final ci   = (current['circuitIndex'] ?? 0) as int;
-                    final exIdForCard = (current['exerciseId'] ?? current['id'])?.toString();
-
-                    final cardId = (current['cardId']
-                        ?? current['_runtimeId']
-                        ?? exIdForCard
-                        ?? '${name.toLowerCase()}|$ci|$i')
-                        .toString();
+                    final exIdRaw = (current['exerciseId'] ?? current['id'])?.toString()?.trim();
+                    final stableExId = (exIdRaw != null && exIdRaw.isNotEmpty) ? exIdRaw : name.toLowerCase();
+                    final cardId = '$stableExId|$ci';
 
 
 
@@ -16323,6 +16382,11 @@ class _WorkoutPageState extends State<WorkoutPage>
 
 
                                     children: [
+                                      StatefulBuilder(
+                                        builder: (context, rebuildCard) {
+                                          return Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
 
                                       // 👇 Your set rows and other ExpansionTile children continue here
 
@@ -16748,7 +16812,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                     borderSide: BorderSide(color: Colors.white, width: 1),
                                                                   ),
                                                                 ),
-                                                                onChanged: (value) => setState(() {}),
+                                                                onChanged: (value) => rebuildCard(() {}),
                                                                 style: TextStyle(
                                                                   color: _weightControllers[i][j].text.isEmpty
                                                                       ? Colors.grey
@@ -16815,7 +16879,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                         borderSide: BorderSide(color: Colors.white, width: 1),
                                                                       ),
                                                                     ),
-                                                                    onChanged: (value) => setState(() {}),
+                                                                    onChanged: (value) => rebuildCard(() {}),
                                                                     style: TextStyle(
                                                                       color: _weightControllers[i][j].text.isNotEmpty
                                                                           ? Colors.white
@@ -16888,7 +16952,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                     borderSide: BorderSide(color: Colors.white, width: 1),
                                                                   ),
                                                                 ),
-                                                                onChanged: (value) => setState(() {}),
+                                                                onChanged: (value) => rebuildCard(() {}),
                                                                 style: TextStyle(
                                                                   color: _repsControllers[i][j].text.isNotEmpty
                                                                       ? Colors.white
@@ -16954,7 +17018,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                         borderSide: BorderSide(color: Colors.white, width: 1),
                                                                       ),
                                                                     ),
-                                                                    onChanged: (value) => setState(() {}),
+                                                                    onChanged: (value) => rebuildCard(() {}),
                                                                     style: TextStyle(
                                                                       color: _repsControllers[i][j].text.isNotEmpty
                                                                           ? Colors.white
@@ -17071,7 +17135,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                     fontSize: 12,
                                                                   ),
                                                                 ),
-                                                                onChanged: (value) => setState(() {}),
+                                                                onChanged: (value) => rebuildCard(() {}),
                                                                 style: TextStyle(
                                                                   color: _rirControllers[i][j].text.isEmpty
                                                                       ? Colors.grey
@@ -17171,7 +17235,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                   fontSize: 11,
                                                                 ),
                                                               ),
-                                                              onChanged: (value) => setState(() {}),
+                                                              onChanged: (value) => rebuildCard(() {}),
                                                               style: TextStyle(
                                                                 color: _velocityControllers[i][j].text.isEmpty
                                                                     ? Colors.grey
@@ -17202,7 +17266,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                             ),
                                                             onChanged: (
                                                                 value) =>
-                                                                setState(() {}),
+                                                                rebuildCard(() {}),
                                                             style: TextStyle(
                                                               color: _notesControllers[i][j]
                                                                   .text.isEmpty
@@ -17261,6 +17325,10 @@ class _WorkoutPageState extends State<WorkoutPage>
                                         ),
                                       ),
 
+                                            ], // Column children (StatefulBuilder)
+                                          ); // Column (StatefulBuilder)
+                                        }, // StatefulBuilder builder
+                                      ), // StatefulBuilder
 
                                     ], //paste point
                                   ),
