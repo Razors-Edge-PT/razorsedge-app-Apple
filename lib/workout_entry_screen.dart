@@ -11567,13 +11567,32 @@ class _WorkoutPageState extends State<WorkoutPage>
     final selected = await showDialog<String>(
       context: context,
       builder: (ctx) {
+        // Build exclusion set: exercises already on this day (skip the row being replaced)
+        final Set<String> existingIds = {};
+        final Set<String> existingNames = {};
+        for (int ri = 0; ri < _selectedExercisesWithCircuits.length; ri++) {
+          if (ri == index) continue;
+          final row = _selectedExercisesWithCircuits[ri];
+          final eid = (row['exerciseId'] ?? row['id'])?.toString().trim() ?? '';
+          if (eid.isNotEmpty) existingIds.add(eid);
+          final nm = (row['name'] ?? '').toString().trim().toLowerCase();
+          if (nm.isNotEmpty) existingNames.add(nm);
+        }
+
         return StatefulBuilder(builder: (context, setLocalState) {
           List<Widget> _buildExerciseList() {
-            final filteredExercises = (showPlannedOnly && plannedModeAvailable)
+            var filteredExercises = (showPlannedOnly && plannedModeAvailable)
                 ? allExercises
                 .where((ex) => plannedExercises.contains(ex['id']))
                 .toList()
-                : allExercises;
+                : List<Map<String, String>>.from(allExercises);
+
+            // Exclude exercises already present on this day
+            filteredExercises = filteredExercises
+                .where((ex) =>
+                    !existingIds.contains(ex['id']) &&
+                    !existingNames.contains(ex['name']!.trim().toLowerCase()))
+                .toList();
 
             final searched = searchQuery.isNotEmpty
                 ? filteredExercises
@@ -11747,16 +11766,28 @@ class _WorkoutPageState extends State<WorkoutPage>
     );
 
     if (selected != null && selected.isNotEmpty) {
+      final String newExId = nameToIdMap[selected] ?? '';
+      final String newCategory = nameToCategoryMap[selected] ?? '';
+      final String ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
+
       setState(() {
-        // 1️⃣ Update the exercise name for this row
-        _selectedExercisesWithCircuits[index]['name'] = selected;
+        final row = _selectedExercisesWithCircuits[index];
+
+        // 1️⃣ Update full identity for this row (name + exerciseId + category + cardId)
+        row['name'] = selected;
+        row['exerciseId'] = newExId;
+        row['id'] = newExId;
+        row['category'] = newCategory;
+        row.remove('_runtimeId');
+        final int ci = (row['circuitIndex'] ?? 0) as int;
+        row['cardId'] = 'wes|$ymd|${DateTime.now().microsecondsSinceEpoch}|$newExId|$ci';
 
         // 2️⃣ Work out how many sets this row *should* have
         final int plannedSetCount = _plannedSetCountFor(index);
         final int desiredSets =
         (plannedSetCount <= 0) ? _defaultSets : plannedSetCount;
 
-        // 3️⃣ Grow this row’s sets/controllers up to desiredSets (never shrink)
+        // 3️⃣ Grow this row's sets/controllers up to desiredSets (never shrink)
         while (_workoutSets[index].length < desiredSets) {
           _workoutSets[index].add(SetDetails());
           _repsControllers[index].add(TextEditingController());
@@ -11769,6 +11800,16 @@ class _WorkoutPageState extends State<WorkoutPage>
         // 4️⃣ Recompute per-exercise flags (e.g. velocity)
         _populateVelocityFlags();
       });
+
+      // 5️⃣ Persist immediately (consistent with main dialog behavior)
+      () async {
+        try {
+          await _upsertWorkoutToFirestore(
+            alsoPushToBB2: false,
+            markAllSaved: false,
+          );
+        } catch (_) {}
+      }();
     }
 
   }
