@@ -2698,6 +2698,61 @@ class _WorkoutPageState extends State<WorkoutPage>
         print('⚠️ [WES Refresh] _mergeNewBB2ExercisesIntoDraft failed (continuing): $e');
       }
 
+      // ——— 2b) Server-first: prime Isar with fresh planned exercises ———
+      // Without this, _loadPlannedDay inside doWarmWES reuses the Isar cache
+      // (valid by date but potentially stale in content), so hints reflect old
+      // planned reps/RIR/weight rather than what the coach just saved in BB2.
+      if (blockStartDate != null) {
+        final int daysSinceStart = d0.difference(blockStartDate!).inDays;
+        if (daysSinceStart >= 0) {
+          final int weekIndex = daysSinceStart ~/ 7;
+          final int dayIndex  = daysSinceStart % 7;
+          try {
+            final serverSnap = await FirebaseFirestore.instance
+                .collection('planned_blocks').doc(uid)
+                .collection('blocks').doc(blockId)
+                .collection('weeks').doc('week_$weekIndex')
+                .collection('days').doc('day_$dayIndex')
+                .get(const GetOptions(source: Source.server));
+
+            if (serverSnap.exists) {
+              final raw = serverSnap.data()?['exercises'];
+              final serverExercises = (raw is List)
+                  ? raw.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList()
+                  : <Map<String, dynamic>>[];
+
+              print('🌐 [WES Refresh] SERVER planned day fetched '
+                  '(ymd=$ymd blockId=$blockId w=$weekIndex d=$dayIndex): '
+                  '${serverExercises.length} exercise(s)');
+              for (final ex in serverExercises.take(6)) {
+                print('   ⬡ ${ex['name'] ?? '?'} → '
+                    'reps=${ex['reps'] ?? '—'} '
+                    'rir=${ex['rir'] ?? '—'} '
+                    'weight=${ex['weight'] ?? '—'}');
+              }
+
+              // Overwrite Isar cache so doWarmWES._loadPlannedDay reads server truth.
+              await BlockPlanCache.putDay(
+                uid: uid,
+                blockId: blockId,
+                weekIndex: weekIndex,
+                dayIndex: dayIndex,
+                exercises: serverExercises,
+                updatedAt: DateTime.now(),
+              );
+              print('✅ [WES Refresh] Isar primed with server planned exercises '
+                  '(w=$weekIndex d=$dayIndex count=${serverExercises.length})');
+            } else {
+              print('ℹ️ [WES Refresh] Server planned day doc absent '
+                  '(w=$weekIndex d=$dayIndex) — doWarmWES will use defaults');
+            }
+          } catch (e) {
+            // Non-fatal: doWarmWES will still run with whatever Isar has.
+            print('⚠️ [WES Refresh] Server planned day prefetch failed (non-fatal): $e');
+          }
+        }
+      }
+
       // ——— 3) Force recompute now (skip cooldown): await doWarmWES ———
       print('✨ [WES Refresh] Running WarmupService.doWarmWES()…');
       await WarmupService.instance.doWarmWES(
