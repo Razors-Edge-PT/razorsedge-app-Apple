@@ -3382,7 +3382,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         'name': name,
         'weight': double.tryParse(row.weightController.text) ?? 0.0,
         'reps': int.tryParse(row.repsController.text) ?? 0,
-        'rir': double.tryParse(row.rirController.text) ?? 0.0,
+        'rir': double.tryParse(row.rirController.text),
         'velocity': row.velocityController.text.trim(), // ✅ NEW
         'notes': row.notesController.text.trim(),       // ✅ NEW
         'circuitIndex': row.circuitIndex,
@@ -5729,7 +5729,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                     'name': (r.exercise ?? '').trim(),
                     'weight': double.tryParse(r.weightController.text) ?? 0.0,
                     'reps': int.tryParse(r.repsController.text) ?? 0,
-                    'rir': double.tryParse(r.rirController.text) ?? 0.0,
+                    'rir': double.tryParse(r.rirController.text),
                     'velocity': r.velocityController.text.trim(),
                     'notes': r.notesController.text.trim(),
                     'circuitIndex': r.circuitIndex,

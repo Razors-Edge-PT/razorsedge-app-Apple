@@ -12926,7 +12926,7 @@ class _WorkoutPageState extends State<WorkoutPage>
     await _persistSavedFlagsLocally(); // keep local flags in sync
 
     // 2) Upsert → markAllSaved=true (payload will only mark eligible as saved)
-    await _upsertWorkoutToFirestore(alsoPushToBB2: true, markAllSaved: true);
+    await _upsertWorkoutToFirestore(alsoPushToBB2: false, markAllSaved: true);
 
     // 3) UI hint
     if (!mounted) return null;
@@ -13999,8 +13999,7 @@ class _WorkoutPageState extends State<WorkoutPage>
 
                 sets[0].reps = (values['reps'] as num?)?.toInt();
                 sets[0].weight = display;
-                final _bb2Rir = (values['rir'] as num?)?.toDouble();
-                sets[0].rir = (_bb2Rir != null && _bb2Rir != 0.0) ? _bb2Rir : null;
+                sets[0].rir = (values['rir'] as num?)?.toDouble();
               }
 
               debugPrint(
