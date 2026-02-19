@@ -11920,7 +11920,7 @@ class _WorkoutPageState extends State<WorkoutPage>
         _workoutSets[i][j].weight =
         weightText.isNotEmpty ? double.tryParse(weightText) : null;
         _workoutSets[i][j].rir =
-        rirText.isNotEmpty ? double.tryParse(rirText) : 0.0; // default 0
+        rirText.isNotEmpty ? double.tryParse(rirText) : null; // blank → null, not 0
         _workoutSets[i][j].velocity =
         velocityText.isNotEmpty ? double.tryParse(velocityText) : null;
         _workoutSets[i][j].notes = notesText.isNotEmpty ? notesText : null;
@@ -13999,7 +13999,8 @@ class _WorkoutPageState extends State<WorkoutPage>
 
                 sets[0].reps = (values['reps'] as num?)?.toInt();
                 sets[0].weight = display;
-                sets[0].rir = (values['rir'] as num?)?.toDouble();
+                final _bb2Rir = (values['rir'] as num?)?.toDouble();
+                sets[0].rir = (_bb2Rir != null && _bb2Rir != 0.0) ? _bb2Rir : null;
               }
 
               debugPrint(
