@@ -59,7 +59,8 @@ const Map<String, String> kExerciseVideoAssets = {
   'z5gs1ilr4DpKlSZaRNG5': 'assets/exercise_videos/Overhead Cable Triceps Extension, Unilateral.mp4', 'Overhead Cable Triceps Extension, Unilateral': 'assets/exercise_videos/Overhead Cable Triceps Extension, Unilateral.mp4', // Overhead Cable Triceps Extension, Unilateral
   '9Oovma2yszjmSm420awp': 'assets/exercise_videos/Suspended Triceps Extension.mp4', 'Suspended Triceps Extension': 'assets/exercise_videos/Suspended Triceps Extension.mp4', // Suspended Triceps Extension
 
-
+  'RFyjAjezFs8Rf7CQoaXz': 'assets/exercise_videos/Pull-Up.mp4', 'Pull-Up': 'assets/exercise_videos/Pull-Up.mp4', // Pull-Up
+  '63ryIPxgXVPX7jLtAecC': 'assets/exercise_videos/Pull-Up, Wide Arm.mp4', 'Pull-Up, Wide Arm': 'assets/exercise_videos/Pull-Up, Wide Arm.mp4', // Pull-Up, Wide Arm
 
 
   //'F76PnvlLLVF6hviuhRfH': 'assets/exercise_videos/Seated Dumbbell Biceps Curl.mp4', 'Seated Dumbbell Biceps Curl': 'assets/exercise_videos/Seated Dumbbell Biceps Curl.mp4', // Seated Dumbbell Biceps Curl
@@ -68,8 +69,7 @@ const Map<String, String> kExerciseVideoAssets = {
 //'xU7MNEvnaoSwz5jy3uHw': 'assets/exercise_videos/Plank.mp4', 'Plank': 'assets/exercise_videos/Plank.mp4', // Plank
 //'DsCrIR8sqVzjCfZut85J': 'assets/exercise_videos/Pistol Squat.mp4', 'Pistol Squat': 'assets/exercise_videos/Pistol Squat.mp4', // Pistol Squat
 //'iQJ4IrLKu3wMhh0VmsKd': 'assets/exercise_videos/Preacher Biceps Curl.mp4', 'Preacher Biceps Curl': 'assets/exercise_videos/Preacher Biceps Curl.mp4', // Preacher Biceps Curl
-//'RFyjAjezFs8Rf7CQoaXz': 'assets/exercise_videos/Pull-Up.mp4', 'Pull-Up': 'assets/exercise_videos/Pull-Up.mp4', // Pull-Up
-//'63ryIPxgXVPX7jLtAecC': 'assets/exercise_videos/Pull-Up, Wide Arm.mp4', 'Pull-Up, Wide Arm': 'assets/exercise_videos/Pull-Up, Wide Arm.mp4', // Pull-Up, Wide Arm
+
 //'pJQaGJlTAOoyZ8TyEmrY': 'assets/exercise_videos/Push Up, Banded.mp4', 'Push Up, Banded': 'assets/exercise_videos/Push Up, Banded.mp4', // Push Up, Banded
 //'0P4ECDHtfF7oKExmNhbN': 'assets/exercise_videos/Push Up, Decline.mp4', 'Push Up, Decline': 'assets/exercise_videos/Push Up, Decline.mp4', // Push Up, Decline
 //'Da2xWZqbeCsbGCwdbwbs': 'assets/exercise_videos/Push Up, Deficit.mp4', 'Push Up, Deficit': 'assets/exercise_videos/Push Up, Deficit.mp4', // Push Up, Deficit
