@@ -1587,8 +1587,7 @@ class _WorkoutPageState extends State<WorkoutPage>
   Future<double> _targetE1RMForSet(int exIdx, int setIdx) async {
     if (setIdx == 0) {
       final base = _actualE1RMForSet(exIdx, 0);
-      print('🧪 [_targetE1RMForSet] setIdx=$setIdx (Set1) '
-          '→ baseE1RM=$base (no drop applied)');
+      // [perf] print removed from hot path
       return base;
     }
     final name = (_selectedExercisesWithCircuits[exIdx]['name'] as String?)
@@ -1620,11 +1619,7 @@ class _WorkoutPageState extends State<WorkoutPage>
     final dropGated = _gatedDrop(baseDrop: dropRaw, prevSetRIR: prevRIR);
 
     final target = (baseE1RM - dropGated).clamp(1.0, 9999.0);
-    print('🧪 [_targetE1RMForSet] setIdx=$setIdx '
-        'prevAnyTyped=$prevAnyTyped baseE1RM=$baseE1RM '
-        'prevRIR=$prevRIR dropRaw=$dropRaw dropGated=$dropGated '
-        '→ target=$target');
-
+    // [perf] print removed from hot path
     return target;
   }
 
@@ -5877,12 +5872,10 @@ class _WorkoutPageState extends State<WorkoutPage>
 
     final num? hr = _seedHintsByKey[hintK]?['s1_reps'] as num?;
     if (hr != null && !hasUserReps && !hasUserWeight && !hasUserRir) {
-
-      print('[WES_REENTER] set1SuggestedReps: using seed hint for $hintK = $hr');
+      // [perf] print removed from hot path
       return hr.toDouble();
-
     } else if (hr != null) {
-      print('[WES_REENTER] set1SuggestedReps: skipping seed hint for $hintK — hasR=$hasUserReps hasW=$hasUserWeight hasRIR=$hasUserRir → using derivation');
+      // [perf] print removed from hot path
     }
 
 
@@ -6735,11 +6728,11 @@ class _WorkoutPageState extends State<WorkoutPage>
 
       final num? v = isBw ? (hint['s1_weight_added'] as num?) : (hint['s1_weight'] as num?);
       if (v != null) {
-        print('[WES_REENTER] set1SuggestedWeight: using seed hint for $hintK = $v');
+        // [perf] print removed from hot path
         return v.toDouble();
       }
     } else if (hint != null) {
-      print('[WES_REENTER] set1SuggestedWeight: skipping seed hint for $hintK — hasW=$hasUserWeight hasR=$hasUserReps hasRIR=$hasUserRir → using derivation');
+      // [perf] print removed from hot path
     }
 
 
@@ -6778,8 +6771,7 @@ class _WorkoutPageState extends State<WorkoutPage>
 
     // ✅ Step 2: Pull user-entered text fields
     final String weightText = _weightControllers[exerciseIndex][0].text;
-    final _dbgParsed = double.tryParse(weightText.trim());
-    print("🧪 [WES parse] weightText='$weightText' parsed=$_dbgParsed (hasUserWeight=${weightText.trim().isNotEmpty})");
+    // [perf] debug parse + print removed from hot path
 
     final String repsText = _repsControllers[exerciseIndex][0].text;
     final String rirText = _rirControllers[exerciseIndex][0].text;
@@ -6799,7 +6791,7 @@ class _WorkoutPageState extends State<WorkoutPage>
 
     // 🛑 Step 3: Respect user-entered weight
     if (userWeight != null) {
-      print('✍️ [WES] User-entered weight for $exerciseName = $userWeight');
+      // [perf] print removed from hot path
       if (PeriodizationModelUtils.isBodyweightExercise(
           id: exerciseId, name: exerciseName)) {
         // already entered as ADDED in the field → just return it
@@ -6813,7 +6805,7 @@ class _WorkoutPageState extends State<WorkoutPage>
     final double baseWeight = progressed['weight']?.toDouble() ?? 20.0;
     final double baseReps = progressed['reps']?.toDouble() ?? 10.0;
     final double modelRir = getRirFromPlanOrInput(exerciseIndex, 1);
-    print('🔧 [REOPEN-DEBUG] Fallback weight=$baseWeight reps=$baseReps (hint=$hint)');
+    // [perf] print removed from hot path
 
     // ✅ Step 5: Seed base E1RM
     final String _exId = PeriodizationModelUtils.nameToId[exerciseName] ??
@@ -17350,63 +17342,26 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                             width: 4),
 
 
-                                                        // E1RM
+                                                        // E1RM — display-only; Container+Text avoids per-build controller allocation
                                                         SizedBox(
                                                           width: 55,
-                                                          child: TextField(
-                                                            controller: TextEditingController(
-                                                              text: e1rmDisplayForCell(
-                                                                  i, j)
-                                                                  .toStringAsFixed(
-                                                                  1),
+                                                          child: Container(
+                                                            padding: const EdgeInsets.only(left: 4),
+                                                            decoration: const BoxDecoration(
+                                                              border: Border(
+                                                                bottom: BorderSide(color: Colors.white, width: 1),
+                                                              ),
                                                             ),
-
-                                                            enabled: false,
-                                                            readOnly: true,
-                                                            decoration: const InputDecoration(
-                                                              hintText: '',
-                                                              hintStyle: TextStyle(
-                                                                color: Colors
-                                                                    .grey,
-                                                                fontStyle: FontStyle
-                                                                    .italic,
+                                                            child: Text(
+                                                              e1rmDisplayForCell(i, j).toStringAsFixed(1),
+                                                              style: TextStyle(
                                                                 fontSize: 12,
+                                                                color: (_weightControllers[i][j].text.isNotEmpty ||
+                                                                    _repsControllers[i][j].text.isNotEmpty ||
+                                                                    _rirControllers[i][j].text.isNotEmpty)
+                                                                    ? Colors.white
+                                                                    : Colors.grey,
                                                               ),
-                                                              contentPadding: EdgeInsets
-                                                                  .only(
-                                                                  left: 4),
-                                                              enabledBorder: UnderlineInputBorder(
-                                                                borderSide: BorderSide(
-                                                                    color: Colors
-                                                                        .white,
-                                                                    width: 1),
-                                                              ),
-                                                              disabledBorder: UnderlineInputBorder(
-                                                                borderSide: BorderSide(
-                                                                    color: Colors
-                                                                        .white,
-                                                                    width: 1),
-                                                              ),
-                                                              focusedBorder: UnderlineInputBorder(
-                                                                borderSide: BorderSide(
-                                                                    color: Colors
-                                                                        .white,
-                                                                    width: 1.5),
-                                                              ),
-                                                            ),
-                                                            style: TextStyle(
-                                                              fontSize: 12,
-                                                              color: (_weightControllers[i][j]
-                                                                  .text
-                                                                  .isNotEmpty ||
-                                                                  _repsControllers[i][j]
-                                                                      .text
-                                                                      .isNotEmpty ||
-                                                                  _rirControllers[i][j]
-                                                                      .text
-                                                                      .isNotEmpty)
-                                                                  ? Colors.white
-                                                                  : Colors.grey,
                                                             ),
                                                           ),
                                                         ),
