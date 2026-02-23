@@ -198,6 +198,10 @@ class _WorkoutPageState extends State<WorkoutPage>
   Map<String, Map<String, dynamic>> _resolvedBB2Values = {};
   Map<String, String> _progressionModelsByExercise = {};
   final Map<String, Map<String, dynamic>> _cachedProgressedValues = {};
+  // Per-keystroke memoization caches for hint computation
+  // Cleared in every onChanged that touches weight/reps/rir, and in _onReorderExercises.
+  final Map<String, double> _e1rmTargetCache = {};
+  final Map<String, ({List<double> weightRangeDisplay, List<int> repsRange, double weightMidDisplay, int repsMid, double e1rmMid})> _synthHintCache = {};
   // Pre-resolved S1 hints from snapshot for instant first paint
   final Map<String, Map<String, dynamic>> _seedHintsByKey = {};
 
@@ -1585,9 +1589,22 @@ class _WorkoutPageState extends State<WorkoutPage>
 
   // Compute target E1RM for setIdx (≥2), cumulative from prior set actual/target with RIR gating
   Future<double> _targetE1RMForSet(int exIdx, int setIdx) async {
+    // ── Per-keystroke memo: stable identity key (same derivation as _mergeNewBB2ExercisesIntoDraft) ──
+    final _mRow  = _selectedExercisesWithCircuits[exIdx];
+    final _mName = ((_mRow['name'] ?? '') as String).trim();
+    final _mRawId = (_mRow['exerciseId'] ?? _mRow['id'])?.toString().trim() ?? '';
+    final _mExId  = _mRawId.isNotEmpty ? _mRawId : (PeriodizationModelUtils.nameToId[_mName] ?? _mName);
+    final _mCi    = (_mRow['circuitIndex'] is num)
+        ? (_mRow['circuitIndex'] as num).toInt()
+        : int.tryParse(_mRow['circuitIndex']?.toString() ?? '') ?? 0;
+    final _memoKey = '${_mExId.toLowerCase().trim()}|$_mCi|$setIdx';
+    final _memoHit = _e1rmTargetCache[_memoKey];
+    if (_memoHit != null) return _memoHit;
+
     if (setIdx == 0) {
       final base = _actualE1RMForSet(exIdx, 0);
       // [perf] print removed from hot path
+      _e1rmTargetCache[_memoKey] = base;
       return base;
     }
     final name = (_selectedExercisesWithCircuits[exIdx]['name'] as String?)
@@ -1620,6 +1637,7 @@ class _WorkoutPageState extends State<WorkoutPage>
 
     final target = (baseE1RM - dropGated).clamp(1.0, 9999.0);
     // [perf] print removed from hot path
+    _e1rmTargetCache[_memoKey] = target;
     return target;
   }
 
@@ -1628,6 +1646,18 @@ class _WorkoutPageState extends State<WorkoutPage>
       int> repsRange, double weightMidDisplay, int repsMid, double e1rmMid})>
   _synthesizeHintsForSet(int exIdx, int setIdx) async {
     assert(setIdx >= 1, 'Range synthesis is for set ≥ 2');
+
+    // ── Per-keystroke memo: stable identity key ──
+    final _sRow   = _selectedExercisesWithCircuits[exIdx];
+    final _sName0 = ((_sRow['name'] ?? '') as String).trim();
+    final _sRawId = (_sRow['exerciseId'] ?? _sRow['id'])?.toString().trim() ?? '';
+    final _sExId  = _sRawId.isNotEmpty ? _sRawId : (PeriodizationModelUtils.nameToId[_sName0] ?? _sName0);
+    final _sCi    = (_sRow['circuitIndex'] is num)
+        ? (_sRow['circuitIndex'] as num).toInt()
+        : int.tryParse(_sRow['circuitIndex']?.toString() ?? '') ?? 0;
+    final _synthKey = '${_sExId.toLowerCase().trim()}|$_sCi|$setIdx';
+    final _synthHit = _synthHintCache[_synthKey];
+    if (_synthHit != null) return _synthHit;
 
     final name = (_selectedExercisesWithCircuits[exIdx]['name'] as String?)
         ?.trim() ?? '';
@@ -1961,13 +1991,15 @@ class _WorkoutPageState extends State<WorkoutPage>
 
 
 // 5) Return capped values
-    return (
+    final _synthResult = (
     weightRangeDisplay: filteredWeightsDisplay,
     repsRange: filteredReps,
     weightMidDisplay: weightMidDisplayCapped,
     repsMid: repsMidFinal,
     e1rmMid: e1rmMidFinal,
     );
+    _synthHintCache[_synthKey] = _synthResult;
+    return _synthResult;
   }
 
   // Formatters for hint text (range or single)
@@ -11934,6 +11966,8 @@ class _WorkoutPageState extends State<WorkoutPage>
       movedExercise['circuitIndex'] = newCircuitIndex;
 
       _cachedProgressedValues.clear();
+      _e1rmTargetCache.clear();
+      _synthHintCache.clear();
 
       // Insert at new position
       _selectedExercisesWithCircuits.insert(newIndex, movedExercise);
@@ -17003,7 +17037,11 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                     borderSide: BorderSide(color: Colors.white, width: 1),
                                                                   ),
                                                                 ),
-                                                                onChanged: (value) => rebuildCard(() {}),
+                                                                onChanged: (value) {
+                                                                  _e1rmTargetCache.clear();
+                                                                  _synthHintCache.clear();
+                                                                  rebuildCard(() {});
+                                                                },
                                                                 style: TextStyle(
                                                                   color: _weightControllers[i][j].text.isEmpty
                                                                       ? Colors.grey
@@ -17053,7 +17091,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
 
                                                                     decoration: InputDecoration(
-                                                                      hintText: hint, // range like "50–52.5", disappears on input
+                                                                      hintText: hint, // range like "50–52.5"
                                                                       hintStyle: const TextStyle(
                                                                         color: Colors.grey,
                                                                         fontStyle: FontStyle.italic,
@@ -17070,7 +17108,11 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                         borderSide: BorderSide(color: Colors.white, width: 1),
                                                                       ),
                                                                     ),
-                                                                    onChanged: (value) => rebuildCard(() {}),
+                                                                    onChanged: (value) {
+                                                                      _e1rmTargetCache.clear();
+                                                                      _synthHintCache.clear();
+                                                                      rebuildCard(() {});
+                                                                    },
                                                                     style: TextStyle(
                                                                       color: _weightControllers[i][j].text.isNotEmpty
                                                                           ? Colors.white
@@ -17143,7 +17185,11 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                     borderSide: BorderSide(color: Colors.white, width: 1),
                                                                   ),
                                                                 ),
-                                                                onChanged: (value) => rebuildCard(() {}),
+                                                                onChanged: (value) {
+                                                                  _e1rmTargetCache.clear();
+                                                                  _synthHintCache.clear();
+                                                                  rebuildCard(() {});
+                                                                },
                                                                 style: TextStyle(
                                                                   color: _repsControllers[i][j].text.isNotEmpty
                                                                       ? Colors.white
@@ -17209,7 +17255,11 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                         borderSide: BorderSide(color: Colors.white, width: 1),
                                                                       ),
                                                                     ),
-                                                                    onChanged: (value) => rebuildCard(() {}),
+                                                                    onChanged: (value) {
+                                                                      _e1rmTargetCache.clear();
+                                                                      _synthHintCache.clear();
+                                                                      rebuildCard(() {});
+                                                                    },
                                                                     style: TextStyle(
                                                                       color: _repsControllers[i][j].text.isNotEmpty
                                                                           ? Colors.white
@@ -17325,7 +17375,11 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                     fontSize: 12,
                                                                   ),
                                                                 ),
-                                                                onChanged: (value) => rebuildCard(() {}),
+                                                                onChanged: (value) {
+                                                                  _e1rmTargetCache.clear();
+                                                                  _synthHintCache.clear();
+                                                                  rebuildCard(() {});
+                                                                },
                                                                 style: TextStyle(
                                                                   color: _rirControllers[i][j].text.isEmpty
                                                                       ? Colors.grey
@@ -17388,7 +17442,11 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                   fontSize: 11,
                                                                 ),
                                                               ),
-                                                              onChanged: (value) => rebuildCard(() {}),
+                                                              onChanged: (value) {
+                                                                _e1rmTargetCache.clear();
+                                                                _synthHintCache.clear();
+                                                                rebuildCard(() {});
+                                                              },
                                                               style: TextStyle(
                                                                 color: _velocityControllers[i][j].text.isEmpty
                                                                     ? Colors.grey
@@ -17417,9 +17475,11 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                 fontSize: 12,
                                                               ),
                                                             ),
-                                                            onChanged: (
-                                                                value) =>
-                                                                rebuildCard(() {}),
+                                                            onChanged: (value) {
+                                                              _e1rmTargetCache.clear();
+                                                              _synthHintCache.clear();
+                                                              rebuildCard(() {});
+                                                            },
                                                             style: TextStyle(
                                                               color: _notesControllers[i][j]
                                                                   .text.isEmpty
