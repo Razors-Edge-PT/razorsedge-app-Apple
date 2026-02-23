@@ -17399,22 +17399,27 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                         // E1RM — display-only; Container+Text avoids per-build controller allocation
                                                         SizedBox(
                                                           width: 55,
-                                                          child: Container(
-                                                            padding: const EdgeInsets.only(left: 4),
-                                                            decoration: const BoxDecoration(
-                                                              border: Border(
-                                                                bottom: BorderSide(color: Colors.white, width: 1),
+                                                          child: Padding(
+                                                            padding: const EdgeInsets.only(bottom: 2), // 👈 moves underline down
+                                                            child: Container(
+                                                              padding: const EdgeInsets.only(left: 2, top: 4, bottom: 2),
+                                                              decoration: const BoxDecoration(
+                                                                border: Border(
+                                                                  bottom: BorderSide(color: Colors.white, width: 1),
+                                                                ),
                                                               ),
-                                                            ),
-                                                            child: Text(
-                                                              e1rmDisplayForCell(i, j).toStringAsFixed(1),
-                                                              style: TextStyle(
-                                                                fontSize: 12,
-                                                                color: (_weightControllers[i][j].text.isNotEmpty ||
-                                                                    _repsControllers[i][j].text.isNotEmpty ||
-                                                                    _rirControllers[i][j].text.isNotEmpty)
-                                                                    ? Colors.white
-                                                                    : Colors.grey,
+                                                              alignment: Alignment.centerLeft,
+                                                              child: Text(
+                                                                e1rmDisplayForCell(i, j).toStringAsFixed(1),
+                                                                style: TextStyle(
+                                                                  fontSize: 12,
+                                                                  height: 3.5,
+                                                                  color: (_weightControllers[i][j].text.isNotEmpty ||
+                                                                      _repsControllers[i][j].text.isNotEmpty ||
+                                                                      _rirControllers[i][j].text.isNotEmpty)
+                                                                      ? Colors.white
+                                                                      : Colors.grey,
+                                                                ),
                                                               ),
                                                             ),
                                                           ),
