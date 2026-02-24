@@ -2117,33 +2117,35 @@ class _WorkoutPageState extends State<WorkoutPage>
         final group = await _resolveGroupForExercise(name);
         final tolKg = (group == 'D') ? 0.3 : 0.7;
 
-        // center candidates around the same math-based center we use in _synthesizeHintsForSet
+        // center candidates around the reps required at the *typed weight* to keep target E1RM stable
         final prevWAbs = _typedOrHintWeightAbs(
             exIdx: exIdx, setIdx: setIdx - 1);
         final rirCurrent = _typedOrHintRIR(exIdx: exIdx, setIdx: setIdx);
+
+// Solve reps needed at the user's typed weight (not at prevWAbs)
         final repsNeeded = PeriodizationModelUtils.reverseCalculateReps(
           targetE1RM: target,
-          weight: prevWAbs,
-          // anchor at previous ABS weight
-          baseWeight: prevWAbs,
+          weight: wAbs,
+          baseWeight: wAbs,
           rir: rirCurrent,
           minReps: null,
         ).clamp(1.0, 45.0);
 
         final int center = repsNeeded.round().clamp(1, 45);
-        final candidates = <int>{
-          (center - 1).clamp(1, 45),
-          center,
-          (center + 1).clamp(1, 45),
-        }.toList()
-          ..sort();
+
+// Expand candidates beyond ±1 so reps can move outside the original hint range when weight is off-plan
+        final candidates = <int>{};
+        for (int r = (center - 6); r <= (center + 6); r++) {
+          candidates.add(r.clamp(1, 45));
+        }
+        final candidatesList = candidates.toList()..sort();
 
         // collect all candidates within tolerance for the typed weight
         final withinTol = <int>[];
         double bestErr = double.infinity;
-        int bestRep = candidates.first;
+        int bestRep = candidatesList.first;
 
-        for (final r in candidates) {
+        for (final r in candidatesList) {
           final e = PeriodizationModelUtils.calculateE1RM(
               wAbs, r.toDouble(), rirCurrent);
           final err = (e - target).abs();
