@@ -79,6 +79,7 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
               doc.id: {
                 'username'    : (doc.data()['username'] ?? '') as String,
                 'displayName' : (doc.data()['displayName'] ?? '') as String,
+                'fullName'    : (doc.data()['fullName'] ?? '') as String,
                 'email'       : (doc.data()['email'] ?? '') as String,
               }
           };
@@ -107,6 +108,7 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
         athletes[athleteUid] = {
           'username'    : (data['username'] ?? '') as String,
           'displayName' : (data['displayName'] ?? '') as String,
+          'fullName'    : (data['fullName'] ?? '') as String,
           'email'       : (data['email'] ?? '') as String,
         };
       }
@@ -126,6 +128,38 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
             'displayName' : (entry.value['displayName'] ?? '') as String,
             'email'       : (entry.value['email'] ?? '') as String,
           });
+        }
+        // ✅ Hydrate missing name fields from /users/{uid} (seeded entries often only have email)
+        final missingNameUids = athletes.entries
+            .where((e) {
+          final v = (e.value as Map<String, dynamic>);
+          final u = (v['username'] ?? '').toString().trim();
+          final d = (v['displayName'] ?? '').toString().trim();
+          final f = (v['fullName'] ?? '').toString().trim();
+          return u.isEmpty && d.isEmpty && f.isEmpty;
+        })
+            .map((e) => e.key)
+            .toList();
+
+        if (missingNameUids.isNotEmpty) {
+          final snaps = await Future.wait(
+            missingNameUids.map((uid) => FirebaseFirestore.instance.collection('users').doc(uid).get()),
+          );
+
+          for (final s in snaps) {
+            if (!s.exists) continue;
+            final data = s.data() ?? {};
+            final uid = s.id;
+
+            final existing = (athletes[uid] as Map<String, dynamic>? ?? {});
+            athletes[uid] = {
+              ...existing,
+              'username'    : (data['username'] ?? existing['username'] ?? '') as String,
+              'displayName' : (data['displayName'] ?? existing['displayName'] ?? '') as String,
+              'fullName'    : (data['fullName'] ?? existing['fullName'] ?? '') as String,
+              'email'       : (data['email'] ?? existing['email'] ?? '') as String,
+            };
+          }
         }
       }
 
@@ -173,7 +207,13 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
       if (mounted) {
         setState(() {
           if (context.read<UserContext>().actorUid == coachUid) {
-            _athletes[athleteUid] = {'email': email};
+            final data = athleteDoc.data();
+            _athletes[athleteUid] = {
+              'email'       : email,
+              'username'    : (data['username'] ?? '') as String,
+              'displayName' : (data['displayName'] ?? '') as String,
+              'fullName'    : (data['fullName'] ?? '') as String,
+            };
           }
         });
         ScaffoldMessenger.of(context).showSnackBar(
@@ -292,19 +332,45 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
       );
     }
 
-    // ---------- Updated: better search across uid/email/displayName ----------
+    // ---------- Updated: search + alphabetical sort by email ----------
+    String safeLower(dynamic v) => (v ?? '').toString().trim().toLowerCase();
+
+    final q = _search.trim().toLowerCase();
+
     final filteredUids = _athletes.keys.where((uid) {
-      final email = (_athletes[uid]?['email'] ?? '') as String;
-      final name = (_athletes[uid]?['displayName'] ?? '') as String;
-      final q = _search.toLowerCase();
-      return uid.toLowerCase().contains(q) ||
-          email.toLowerCase().contains(q) ||
-          name.toLowerCase().contains(q);
+      final a = _athletes[uid] ?? {};
+      final email = safeLower(a['email']);
+      final name  = safeLower(a['displayName']);
+      final uidL  = uid.toLowerCase();
+      return uidL.contains(q) || email.contains(q) || name.contains(q);
     }).toList();
 
+// Sort by email (primary), then displayName, then uid
+    filteredUids.sort((aUid, bUid) {
+      final a = _athletes[aUid] ?? {};
+      final b = _athletes[bUid] ?? {};
+
+      final aEmail = safeLower(a['email']);
+      final bEmail = safeLower(b['email']);
+      final c1 = aEmail.compareTo(bEmail);
+      if (c1 != 0) return c1;
+
+      final aName = safeLower(a['displayName']);
+      final bName = safeLower(b['displayName']);
+      final c2 = aName.compareTo(bName);
+      if (c2 != 0) return c2;
+
+      return aUid.compareTo(bUid);
+    });
+
     return Scaffold(
+      backgroundColor: Colors.blueGrey.shade900,
       appBar: AppBar(
-        title: const Text("Coach Dashboard"),
+          title: const Text("Coach Dashboard"),
+          backgroundColor: Colors.blueGrey.shade900,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          actionsIconTheme: const IconThemeData(color: Colors.cyanAccent),
           actions: [
             // Coach path: add by email (will fail if rules block coach from writing 'athletes')
             IconButton(
@@ -486,6 +552,14 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
                                     ],
 
                                     const SizedBox(height: 8),
+                                    Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: Text(
+                                        '${filteredUids.length} athlete${filteredUids.length == 1 ? '' : 's'}',
+                                        style: const TextStyle(color: Colors.white60, fontSize: 12),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
 
                                     // Results list
                                     Flexible( // ✅ results take remaining space, scroll inside
@@ -567,20 +641,64 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.all(12.0),
-            child: TextField(
-              decoration: const InputDecoration(
-                labelText: 'Search athletes',
-                border: OutlineInputBorder(),
-              ),
-              onChanged: (value) {
-                setState(() => _search = value);
-              },
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+            child: Column(
+              children: [
+                TextField(
+                  decoration: InputDecoration(
+                    labelText: 'Search athletes',
+                    labelStyle: const TextStyle(color: Colors.white70),
+                    prefixIcon: const Icon(Icons.search, color: Colors.cyanAccent),
+                    filled: true,
+                    fillColor: Colors.blueGrey.shade800,
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(color: Colors.blueGrey.shade700),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: Colors.cyanAccent),
+                    ),
+                  ),
+                  style: const TextStyle(color: Colors.white),
+                  onChanged: (value) => setState(() => _search = value),
+                ),
+
+                const SizedBox(height: 8),
+
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        icon: const Icon(Icons.person_add, size: 24, color: Colors.cyanAccent),
+                        label: const Text("Request Access", style: TextStyle(fontSize: 14)),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blueGrey.shade700,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+                          visualDensity: VisualDensity.compact,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onPressed: () {
+                          Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                              value: context.read<UserContext>(),
+                              child: const RequestAccessScreen(),
+                            ),
+                          ));
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
           Expanded(
-            child: ListView.builder(
+            child: ListView.separated(
+              padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
               itemCount: filteredUids.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 3),
               itemBuilder: (context, index) {
                 final uid = filteredUids[index];
                 final isSelected = uid == userContext.actingAsUid;
@@ -602,48 +720,74 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
                     ? emailText
                     : null;
 
-                return ListTile(
-                  title: Text(
-                    titleText,
-                    style: TextStyle(
-                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                return Card(
+                  elevation: 0,
+                  color: isSelected ? Colors.blueGrey.shade700 : Colors.blueGrey.shade800,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  child: ListTile(
+                    dense: true,
+                    visualDensity: const VisualDensity(vertical: -4), // tighter row height
+                    minVerticalPadding: 0, // remove default extra vertical padding
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4), // tight card padding
+
+                    title: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Line 1: EMAIL (primary)
+                        Text(
+                          (emailText ?? uid),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                            height: 1.05, // tight line height
+                          ),
+                        ),
+                        // Line 2: USERNAME / DISPLAYNAME (secondary)
+                        Text(
+                          pick(a['username']) ?? pick(a['displayName']) ?? pick(a['fullName']) ?? '(no name)',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12,
+                            height: 1.05, // tight line height
+                            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                          ),
+                        ),
+                      ],
                     ),
+
+                    leading: Icon(
+                      isSelected ? Icons.check_circle : Icons.person,
+                      color: isSelected ? Colors.cyanAccent : Colors.white54,
+                      size: 22, // slightly smaller to match tighter rows
+                    ),
+
+                    trailing: IconButton(
+                      visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                      icon: const Icon(Icons.delete_outline, color: Colors.white70, size: 22),
+                      onPressed: () => _removeAthlete(uid),
+                      tooltip: 'Remove athlete',
+                    ),
+
+                    onTap: () {
+                      userContext.switchAthlete(uid);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text("Switched to athlete: ${emailText ?? uid}")),
+                      );
+                    },
                   ),
-                  subtitle: subtitleText != null ? Text(subtitleText) : null,
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (isSelected) const Icon(Icons.check, color: Colors.green),
-                      IconButton(
-                        icon: const Icon(Icons.delete_outline),
-                        onPressed: () => _removeAthlete(uid),
-                        tooltip: 'Remove athlete',
-                      ),
-                    ],
-                  ),
-                  onTap: () {
-                    userContext.switchAthlete(uid);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text("Switched to athlete: $titleText")),
-                    );
-                  },
                 );
               },
             ),
           ),
-
-          ElevatedButton.icon(
-            onPressed: () {
-              Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                  value: context.read<UserContext>(),
-                  child: const RequestAccessScreen(),
-                ),
-              ));
-            },
-            icon: const Icon(Icons.person_add),
-            label: const Text("Request Access to Athlete"),
-          ),
+          const SizedBox(height: 36),
         ],
       ),
     );
