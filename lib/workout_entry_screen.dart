@@ -17192,6 +17192,7 @@ class _WorkoutPageState extends State<WorkoutPage>
 
                                                     // 🟩 Input Row
                                                     Row(
+                                                      crossAxisAlignment: CrossAxisAlignment.end, // ✅ makes underline bottoms line up
                                                       children: [
                                                         // Weight
                                                         SizedBox(
@@ -17609,21 +17610,28 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                         // E1RM — display-only; Container+Text avoids per-build controller allocation
                                                         SizedBox(
                                                           width: 55,
-                                                          child: Padding(
-                                                            padding: const EdgeInsets.only(bottom: 2), // 👈 moves underline down
+                                                          height: 36, // ✅ fixed height to match TextField-ish height across devices
+                                                          child: Align(
+                                                            alignment: Alignment.bottomLeft,
                                                             child: Container(
-                                                              padding: const EdgeInsets.only(left: 2, top: 4, bottom: 2),
+                                                              height: 36, // ✅ ensure border sits at the same y-position everywhere
+                                                              padding: const EdgeInsets.only(left: 2, bottom: 6), // ✅ tune baseline without font-metric drift
                                                               decoration: const BoxDecoration(
                                                                 border: Border(
                                                                   bottom: BorderSide(color: Colors.white, width: 1),
                                                                 ),
                                                               ),
-                                                              alignment: Alignment.centerLeft,
+                                                              alignment: Alignment.bottomLeft,
                                                               child: Text(
                                                                 e1rmDisplayForCell(i, j).toStringAsFixed(1),
+                                                                strutStyle: const StrutStyle(
+                                                                  fontSize: 12,
+                                                                  height: 1.0,
+                                                                  forceStrutHeight: true, // ✅ locks vertical metrics across devices
+                                                                ),
                                                                 style: TextStyle(
                                                                   fontSize: 12,
-                                                                  height: 3.5,
+                                                                  height: 1.0, // ✅ don’t use 3.5 (that’s the main drift culprit)
                                                                   color: (_weightControllers[i][j].text.isNotEmpty ||
                                                                       _repsControllers[i][j].text.isNotEmpty ||
                                                                       _rirControllers[i][j].text.isNotEmpty)
