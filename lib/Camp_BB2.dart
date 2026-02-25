@@ -491,18 +491,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         // 1) Fast path: allow cache (still parses and commits into exerciseRows)
         await loadBlockDataForWeek(_currentWeekPage, forceServer: false);
 
-// 2) Correctness path: server reconcile after first frame (won’t block initial UI)
-        WidgetsBinding.instance.addPostFrameCallback((_) async {
-          if (!mounted) return;
-
-          // If week already reloaded by a swipe, skip extra work
-          if (!loadedWeekIndices.contains(_currentWeekPage)) return;
-
-          await loadBlockDataForWeek(_currentWeekPage, forceServer: true);
-          if (mounted) setState(() {});
-        });
-
-
         // ✅ Mark loaded so we don’t immediately re-fetch it again.
         loadedWeekIndices.add(_currentWeekPage);
       }, total: total);
@@ -2125,11 +2113,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
             continue;
           }
           print('📤 Proceeding to save w$week d$day...');
-          saveDayToFirestore(week, day).catchError((e, stack) {
-            print('❌ Failed to save week $week day $day during dispose: $e');
-          });
-
-
           _trimEmptyExerciseRows(week, day); // ✅ Trim only loaded days
           saveDayToFirestore(week, day).catchError((e, stack) {
             print('❌ Failed to save week $week day $day during dispose: $e');
