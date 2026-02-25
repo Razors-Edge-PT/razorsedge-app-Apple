@@ -175,7 +175,8 @@ class _WorkoutPageState extends State<WorkoutPage>
 
 
   final int _defaultSets = 3;
-  VoidCallback? _lastUndoAction;
+  List<VoidCallback> _undoStack = [];
+  bool _applyingUndo = false;
   Set<String> _selectDateHintFields = {};
 
 
@@ -11636,6 +11637,78 @@ class _WorkoutPageState extends State<WorkoutPage>
       // ✅ 4) Keep circuits ordered 0,1,2,… and preserve order within each circuit
       _sortRowsByCircuitIndex();
 
+      // Undo: delta-only, reusing already-computed old* locals (no new full snapshot)
+      if (!_applyingUndo) {
+        final Set<String> newKeySet = {};
+        for (int k = 0; k < _selectedExercisesWithCircuits.length; k++) {
+          newKeySet.add(_rowKeyBy(k));
+        }
+        final Set<String> addedKeys = newKeySet.difference(oldIndexByKey.keys.toSet());
+        final List<int>                      removedOrigIdxs = [];
+        final List<Map<String, dynamic>>     removedRows     = [];
+        final List<List<SetDetails>>         removedSets     = [];
+        final List<List<String>>             removedRepsTs   = [];
+        final List<List<String>>             removedWeightTs = [];
+        final List<List<String>>             removedRirTs    = [];
+        final List<List<String>>             removedVelTs    = [];
+        final List<List<String>>             removedNotesTs  = [];
+        for (final entry in oldIndexByKey.entries) {
+          if (!newKeySet.contains(entry.key)) {
+            final oi = entry.value;
+            removedOrigIdxs.add(oi);
+            removedRows.add(oldRows[oi]);
+            removedSets.add(oldWorkoutSets[oi]);
+            removedRepsTs.add(oldRepsControllers[oi].map((c) => c.text).toList());
+            removedWeightTs.add(oldWeightControllers[oi].map((c) => c.text).toList());
+            removedRirTs.add(oldRirControllers[oi].map((c) => c.text).toList());
+            removedVelTs.add(oldVelocityControllers[oi].map((c) => c.text).toList());
+            removedNotesTs.add(oldNotesControllers[oi].map((c) => c.text).toList());
+          }
+        }
+        _undoStack.add(() {
+          if (!mounted) return;
+          setState(() {
+            // Remove added exercises by key (reverse order keeps lower indices stable)
+            for (int k = _selectedExercisesWithCircuits.length - 1; k >= 0; k--) {
+              if (addedKeys.contains(_rowKeyBy(k))) {
+                for (final c in _repsControllers[k]) c.dispose();
+                for (final c in _weightControllers[k]) c.dispose();
+                for (final c in _rirControllers[k]) c.dispose();
+                for (final c in _velocityControllers[k]) c.dispose();
+                for (final c in _notesControllers[k]) c.dispose();
+                _selectedExercisesWithCircuits.removeAt(k);
+                _workoutSets.removeAt(k);
+                _repsControllers.removeAt(k);
+                _weightControllers.removeAt(k);
+                _rirControllers.removeAt(k);
+                _velocityControllers.removeAt(k);
+                _notesControllers.removeAt(k);
+              }
+            }
+            // Re-insert removed exercises at original positions (ascending order)
+            final sortedOrder = List.generate(removedOrigIdxs.length, (i) => i)
+              ..sort((a, b) => removedOrigIdxs[a].compareTo(removedOrigIdxs[b]));
+            for (final si in sortedOrder) {
+              final insertAt = removedOrigIdxs[si].clamp(0, _selectedExercisesWithCircuits.length);
+              _selectedExercisesWithCircuits.insert(insertAt, removedRows[si]);
+              _workoutSets.insert(insertAt, removedSets[si]);
+              _repsControllers.insert(insertAt,
+                  removedRepsTs[si].map((t) => TextEditingController(text: t)).toList());
+              _weightControllers.insert(insertAt,
+                  removedWeightTs[si].map((t) => TextEditingController(text: t)).toList());
+              _rirControllers.insert(insertAt,
+                  removedRirTs[si].map((t) => TextEditingController(text: t)).toList());
+              _velocityControllers.insert(insertAt,
+                  removedVelTs[si].map((t) => TextEditingController(text: t)).toList());
+              _notesControllers.insert(insertAt,
+                  removedNotesTs[si].map((t) => TextEditingController(text: t)).toList());
+            }
+          });
+          _attachDirtyListeners();
+          _markDirty();
+        });
+      }
+
       // 🚫 Do NOT re-initialize controllers here; we just reused them.
       _populateVelocityFlags();
       () async {
@@ -14293,6 +14366,32 @@ class _WorkoutPageState extends State<WorkoutPage>
       _velocityControllers[exerciseIndex].add(TextEditingController());
       _notesControllers[exerciseIndex].add(TextEditingController());
     });
+    if (!_applyingUndo) {
+      final cKey = _rowKeyBy(exerciseIndex);
+      _undoStack.add(() {
+        if (!mounted) return;
+        int resolvedIdx = -1;
+        for (int k = 0; k < _selectedExercisesWithCircuits.length; k++) {
+          if (_rowKeyBy(k) == cKey) { resolvedIdx = k; break; }
+        }
+        if (resolvedIdx == -1 || _workoutSets[resolvedIdx].isEmpty) return;
+        final lastIdx = _workoutSets[resolvedIdx].length - 1;
+        _repsControllers[resolvedIdx][lastIdx].dispose();
+        _weightControllers[resolvedIdx][lastIdx].dispose();
+        _rirControllers[resolvedIdx][lastIdx].dispose();
+        _velocityControllers[resolvedIdx][lastIdx].dispose();
+        _notesControllers[resolvedIdx][lastIdx].dispose();
+        setState(() {
+          _workoutSets[resolvedIdx].removeLast();
+          _repsControllers[resolvedIdx].removeLast();
+          _weightControllers[resolvedIdx].removeLast();
+          _rirControllers[resolvedIdx].removeLast();
+          _velocityControllers[resolvedIdx].removeLast();
+          _notesControllers[resolvedIdx].removeLast();
+        });
+        _markDirty();
+      });
+    }
   }
 
 
@@ -14300,6 +14399,19 @@ class _WorkoutPageState extends State<WorkoutPage>
     setState(() {
       // Check if only one set remains and confirm removal
       if (_workoutSets[exerciseIndex].length == 1) {
+        // Capture before dialog opens — outer setState runs synchronously
+        final cOrigIdx   = exerciseIndex;
+        final cExercise  = Map<String, dynamic>.from(_selectedExercisesWithCircuits[exerciseIndex]);
+        final cSets      = _workoutSets[exerciseIndex]
+            .map((s) => SetDetails(reps: s.reps, weight: s.weight, rir: s.rir,
+                                   velocity: s.velocity, notes: s.notes))
+            .toList();
+        final cRepsT     = _repsControllers[exerciseIndex].map((c) => c.text).toList();
+        final cWeightT   = _weightControllers[exerciseIndex].map((c) => c.text).toList();
+        final cRirT      = _rirControllers[exerciseIndex].map((c) => c.text).toList();
+        final cVelocityT = _velocityControllers[exerciseIndex].map((c) => c.text).toList();
+        final cNotesT    = _notesControllers[exerciseIndex].map((c) => c.text).toList();
+
         showDialog(
           context: context,
           builder: (BuildContext context) {
@@ -14314,13 +14426,43 @@ class _WorkoutPageState extends State<WorkoutPage>
                 ),
                 TextButton(
                   onPressed: () {
+                    // Dispose all controllers for this exercise
+                    for (final c in _repsControllers[cOrigIdx]) c.dispose();
+                    for (final c in _weightControllers[cOrigIdx]) c.dispose();
+                    for (final c in _rirControllers[cOrigIdx]) c.dispose();
+                    for (final c in _velocityControllers[cOrigIdx]) c.dispose();
+                    for (final c in _notesControllers[cOrigIdx]) c.dispose();
                     setState(() {
-                      _selectedExercisesWithCircuits.removeAt(exerciseIndex);
-                      _workoutSets.removeAt(exerciseIndex);
-                      _repsControllers.removeAt(exerciseIndex);
-                      _weightControllers.removeAt(exerciseIndex);
-                      _rirControllers.removeAt(exerciseIndex);
+                      _selectedExercisesWithCircuits.removeAt(cOrigIdx);
+                      _workoutSets.removeAt(cOrigIdx);
+                      _repsControllers.removeAt(cOrigIdx);
+                      _weightControllers.removeAt(cOrigIdx);
+                      _rirControllers.removeAt(cOrigIdx);
+                      _velocityControllers.removeAt(cOrigIdx);
+                      _notesControllers.removeAt(cOrigIdx);
                     });
+                    if (!_applyingUndo) {
+                      _undoStack.add(() {
+                        if (!mounted) return;
+                        final insertAt = cOrigIdx.clamp(0, _selectedExercisesWithCircuits.length);
+                        setState(() {
+                          _selectedExercisesWithCircuits.insert(insertAt, cExercise);
+                          _workoutSets.insert(insertAt, cSets);
+                          _repsControllers.insert(insertAt,
+                              cRepsT.map((t) => TextEditingController(text: t)).toList());
+                          _weightControllers.insert(insertAt,
+                              cWeightT.map((t) => TextEditingController(text: t)).toList());
+                          _rirControllers.insert(insertAt,
+                              cRirT.map((t) => TextEditingController(text: t)).toList());
+                          _velocityControllers.insert(insertAt,
+                              cVelocityT.map((t) => TextEditingController(text: t)).toList());
+                          _notesControllers.insert(insertAt,
+                              cNotesT.map((t) => TextEditingController(text: t)).toList());
+                        });
+                        _attachDirtyListeners();
+                        _markDirty();
+                      });
+                    }
                     Navigator.of(context).pop();
                   },
                   child: const Text('Yes'),
@@ -14330,11 +14472,58 @@ class _WorkoutPageState extends State<WorkoutPage>
           },
         );
       } else {
-        // Remove the specific set at setIndex
+        // Capture snapshot before removal
+        final cKey      = _rowKeyBy(exerciseIndex);
+        final cSet      = setIndex;
+        final cDetails  = SetDetails(
+          reps: _workoutSets[exerciseIndex][setIndex].reps,
+          weight: _workoutSets[exerciseIndex][setIndex].weight,
+          rir: _workoutSets[exerciseIndex][setIndex].rir,
+          velocity: _workoutSets[exerciseIndex][setIndex].velocity,
+          notes: _workoutSets[exerciseIndex][setIndex].notes,
+        );
+        final cReps     = _repsControllers[exerciseIndex][setIndex].text;
+        final cWeight   = _weightControllers[exerciseIndex][setIndex].text;
+        final cRir      = _rirControllers[exerciseIndex][setIndex].text;
+        final cVelocity = _velocityControllers[exerciseIndex][setIndex].text;
+        final cNotes    = _notesControllers[exerciseIndex][setIndex].text;
+
+        // Dispose removed controllers
+        _repsControllers[exerciseIndex][setIndex].dispose();
+        _weightControllers[exerciseIndex][setIndex].dispose();
+        _rirControllers[exerciseIndex][setIndex].dispose();
+        _velocityControllers[exerciseIndex][setIndex].dispose();
+        _notesControllers[exerciseIndex][setIndex].dispose();
+
+        // Remove from all 6 parallel arrays (fix: adds velocity + notes)
         _workoutSets[exerciseIndex].removeAt(setIndex);
         _repsControllers[exerciseIndex].removeAt(setIndex);
         _weightControllers[exerciseIndex].removeAt(setIndex);
         _rirControllers[exerciseIndex].removeAt(setIndex);
+        _velocityControllers[exerciseIndex].removeAt(setIndex);
+        _notesControllers[exerciseIndex].removeAt(setIndex);
+
+        // Push undo
+        if (!_applyingUndo) {
+          _undoStack.add(() {
+            if (!mounted) return;
+            int resolvedIdx = -1;
+            for (int k = 0; k < _selectedExercisesWithCircuits.length; k++) {
+              if (_rowKeyBy(k) == cKey) { resolvedIdx = k; break; }
+            }
+            if (resolvedIdx == -1) return;
+            setState(() {
+              _workoutSets[resolvedIdx].insert(cSet, cDetails);
+              _repsControllers[resolvedIdx].insert(cSet, TextEditingController(text: cReps));
+              _weightControllers[resolvedIdx].insert(cSet, TextEditingController(text: cWeight));
+              _rirControllers[resolvedIdx].insert(cSet, TextEditingController(text: cRir));
+              _velocityControllers[resolvedIdx].insert(cSet, TextEditingController(text: cVelocity));
+              _notesControllers[resolvedIdx].insert(cSet, TextEditingController(text: cNotes));
+            });
+            _attachDirtyListeners();
+            _markDirty();
+          });
+        }
 
         // Re-initialize controllers for consistent UI behavior
         _initializeControllers();
@@ -15843,10 +16032,12 @@ class _WorkoutPageState extends State<WorkoutPage>
 
             icon: const Icon(Icons.undo),
               tooltip: "Undo last action",
-              onPressed: _lastUndoAction != null
+              onPressed: _undoStack.isNotEmpty
                   ? () {
-                _lastUndoAction?.call();
-                _lastUndoAction = null;
+                if (_applyingUndo) return;
+                _applyingUndo = true;
+                (_undoStack.removeLast())();
+                _applyingUndo = false;
               }
                   : null,
             ),
@@ -16330,23 +16521,32 @@ class _WorkoutPageState extends State<WorkoutPage>
                                 Icons.delete, color: Colors.white),
                           ),
                           onDismissed: (_) async {
-                            final removedExercise = _selectedExercisesWithCircuits[i];
-                            final removedSets     = _workoutSets[i];
-                            final removedReps     = _repsControllers[i];
-                            final removedWeight   = _weightControllers[i];
-                            final removedRIR      = _rirControllers[i];
-                            final removedVelocity = _velocityControllers[i];
-                            final removedNotes    = _notesControllers[i];
+                            final capturedOrigIdx  = i;
+                            final capturedExercise = Map<String, dynamic>.from(_selectedExercisesWithCircuits[i]);
+                            final capturedSets     = _workoutSets[i]
+                                .map((s) => SetDetails(reps: s.reps, weight: s.weight, rir: s.rir,
+                                                       velocity: s.velocity, notes: s.notes))
+                                .toList();
+                            final capturedRepsT     = _repsControllers[i].map((c) => c.text).toList();
+                            final capturedWeightT   = _weightControllers[i].map((c) => c.text).toList();
+                            final capturedRirT      = _rirControllers[i].map((c) => c.text).toList();
+                            final capturedVelocityT = _velocityControllers[i].map((c) => c.text).toList();
+                            final capturedNotesT    = _notesControllers[i].map((c) => c.text).toList();
 
-
-                            // Extract keys for deletes
-                            final String removedName = ((removedExercise['name'] ?? '') as String).trim();
-                            final int removedCi = (removedExercise['circuitIndex'] is num)
-                                ? (removedExercise['circuitIndex'] as num).toInt()
+                            // Extract keys for cache operations
+                            final String removedName = ((capturedExercise['name'] ?? '') as String).trim();
+                            final int removedCi = (capturedExercise['circuitIndex'] is num)
+                                ? (capturedExercise['circuitIndex'] as num).toInt()
                                 : 0;
-                            final String? removedExId = (removedExercise['exerciseId'] ?? removedExercise['id'])?.toString();
+                            final String? removedExId = (capturedExercise['exerciseId'] ?? capturedExercise['id'])?.toString();
 
-                            // 1) UI remove (your existing code)
+                            // Dispose controllers before removing from lists
+                            for (final c in _repsControllers[i]) c.dispose();
+                            for (final c in _weightControllers[i]) c.dispose();
+                            for (final c in _rirControllers[i]) c.dispose();
+                            for (final c in _velocityControllers[i]) c.dispose();
+                            for (final c in _notesControllers[i]) c.dispose();
+
                             setState(() {
                               _selectedExercisesWithCircuits.removeAt(i);
                               _workoutSets.removeAt(i);
@@ -16355,10 +16555,8 @@ class _WorkoutPageState extends State<WorkoutPage>
                               _rirControllers.removeAt(i);
                               _velocityControllers.removeAt(i);
                               _notesControllers.removeAt(i);
-
                             });
 
-                            // 2) NEW: prune BB2 day cache (Isar BlockDay) for the selected date
                             await _pruneBb2DayCacheForSelectedDate(
                               name: removedName,
                               circuitIndex: removedCi,
@@ -16366,24 +16564,31 @@ class _WorkoutPageState extends State<WorkoutPage>
                             );
 
                             await _deleteExerciseEverywhereForDate(
-                              exerciseRow: removedExercise,
+                              exerciseRow: capturedExercise,
                               date: _selectedDate,
                             );
 
-
-                            // 4) Undo restores everything (UI + BB2 cache)
-                            _lastUndoAction = () async {
+                            final VoidCallback undoAction = () {
+                              if (!mounted) return;
+                              final insertAt = capturedOrigIdx.clamp(0, _selectedExercisesWithCircuits.length);
                               setState(() {
-                                _selectedExercisesWithCircuits.insert(i, removedExercise);
-                                _workoutSets.insert(i, removedSets);
-                                _repsControllers.insert(i, removedReps);
-                                _weightControllers.insert(i, removedWeight);
-                                _rirControllers.insert(i, removedRIR);
-                                _velocityControllers.insert(i, removedVelocity);
-                                _notesControllers.insert(i, removedNotes);
+                                _selectedExercisesWithCircuits.insert(insertAt, capturedExercise);
+                                _workoutSets.insert(insertAt, capturedSets);
+                                _repsControllers.insert(insertAt,
+                                    capturedRepsT.map((t) => TextEditingController(text: t)).toList());
+                                _weightControllers.insert(insertAt,
+                                    capturedWeightT.map((t) => TextEditingController(text: t)).toList());
+                                _rirControllers.insert(insertAt,
+                                    capturedRirT.map((t) => TextEditingController(text: t)).toList());
+                                _velocityControllers.insert(insertAt,
+                                    capturedVelocityT.map((t) => TextEditingController(text: t)).toList());
+                                _notesControllers.insert(insertAt,
+                                    capturedNotesT.map((t) => TextEditingController(text: t)).toList());
                               });
-                              await _restoreBb2DayCacheForSelectedDate(exerciseRow: removedExercise);
+                              unawaited(_restoreBb2DayCacheForSelectedDate(exerciseRow: capturedExercise));
+                              _attachDirtyListeners();
                             };
+                            _undoStack.add(undoAction);
 
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
@@ -16392,8 +16597,11 @@ class _WorkoutPageState extends State<WorkoutPage>
                                   label: 'Undo',
                                   textColor: Colors.blueGrey.shade700,
                                   onPressed: () {
-                                    _lastUndoAction?.call();
-                                    _lastUndoAction = null;
+                                    if (_applyingUndo) return;
+                                    _applyingUndo = true;
+                                    _undoStack.remove(undoAction);
+                                    undoAction();
+                                    _applyingUndo = false;
                                   },
                                 ),
                               ),
