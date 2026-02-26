@@ -137,7 +137,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         .doc(uid)
         .collection('templates')
         .doc(template.id)
-        .update({'name': newName});
+        .update({'name': newName, 'isKept': true}); // rename signals "keep on regen"
   }
 
 
@@ -688,7 +688,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       builder: (ctx) => AlertDialog(
         title: const Text('Regenerate templates?'),
         content: const Text(
-          'This will delete all current templates for the selected athlete and rebuild them from onboarding settings.',
+          'Auto-generated templates will be deleted and rebuilt from onboarding settings. '
+          'Templates you created manually or renamed will be kept.',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
@@ -706,15 +707,31 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       final userRef = db.collection('users').doc(uid);
       final templatesCol = userRef.collection('templates');
 
-      // 1️⃣ Delete existing templates in batches
+      // 1️⃣ Delete auto-generated templates in deterministic pages.
+      // isKept == true  → manual or renamed by user → survive regen.
+      // isKept absent/false → auto-generated → deleted.
+      // Missing field is treated as auto (Policy D).
+      DocumentSnapshot? lastDoc;
       while (true) {
-        final snap = await templatesCol.limit(300).get();
-        if (snap.docs.isEmpty) break;
-        final batch = db.batch();
-        for (final d in snap.docs) {
-          batch.delete(d.reference);
+        var query = templatesCol
+            .orderBy(FieldPath.documentId)
+            .limit(300);
+        if (lastDoc != null) query = query.startAfterDocument(lastDoc);
+
+        final snap = await query.get();
+        if (snap.docs.isEmpty) break; // no more pages
+
+        lastDoc = snap.docs.last;
+
+        final toDelete = snap.docs
+            .where((d) => d.data()['isKept'] != true)
+            .toList();
+
+        if (toDelete.isNotEmpty) {
+          final batch = db.batch();
+          for (final d in toDelete) batch.delete(d.reference);
+          await batch.commit();
         }
-        await batch.commit();
       }
 
       // 2️⃣ Clear the bootstrap flag(s) (keep both for backward compatibility)

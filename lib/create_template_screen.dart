@@ -725,6 +725,7 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
       'blockId': chosenBlockId,
       'blockAssignment': chosenBlockName,
       'createdAt': FieldValue.serverTimestamp(),
+      'isKept': true, // manual templates survive regeneration
     };
 
     try {
