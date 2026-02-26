@@ -688,7 +688,8 @@ class TemplateGenerator {
     }
 
 
-    // 8) Compact singleton circuits, then emit templates: B1 first
+    // 8) Balance day volumes, compact singleton circuits, then emit templates: B1 first
+    _balanceDayVolumes(days);
     _compactSingletons(days);
     final out = <Map<String, dynamic>>[];
     for (int i = 0; i < days.length; i++) {
@@ -746,6 +747,7 @@ class TemplateGenerator {
       weeklyPlanTemplate: weeklyPlan,
       age: age ?? 27,
     );
+    _balanceDayVolumes(daysB2);
     _compactSingletons(daysB2);
     for (int i = 0; i < daysB2.length; i++) {
       out.add({
@@ -765,6 +767,7 @@ class TemplateGenerator {
       weeklyPlanTemplate: weeklyPlan,
       age: age ?? 27,
     );
+    _balanceDayVolumes(daysB3);
     _compactSingletons(daysB3);
     for (int i = 0; i < daysB3.length; i++) {
       out.add({
@@ -2545,6 +2548,204 @@ class TemplateGenerator {
       }
     }
     return fallback;
+  }
+
+  /// Post-generation pass: redistribute exercises from the busiest day to the
+  /// quietest until max(dayCounts) − min(dayCounts) ≤ 2.
+  /// Runs BEFORE _compactSingletons.
+  ///
+  /// Design decisions:
+  /// • dayHasId() scans circuits directly — NOT _idsToday, which accumulates
+  ///   pseudo-bans from _chooseExercise and is stale post-generation.
+  /// • Pass 0 requires spacing safety; Pass 1 relaxes this as a last resort.
+  /// • adjacentRepeat() excludes the donor day from its adjacency scan —
+  ///   the donor slot will be vacated, so it must not self-block the move.
+  /// • _idsToday is intentionally left unchanged post-generation.
+  /// • Only circuits and countByCategory are mutated.
+  static void _balanceDayVolumes(List<_DayPlan> days) {
+    final N = days.length;
+    if (N < 2) return;
+
+    // ── helpers ────────────────────────────────────────────────────────────
+
+    int dayCount(_DayPlan d) {
+      int n = 0;
+      for (final c in d.circuits) n += c.length;
+      return n;
+    }
+
+    // Scans circuits directly; immune to _idsToday pseudo-ban pollution.
+    bool dayHasId(_DayPlan d, String id) {
+      for (final c in d.circuits) {
+        for (final p in c) {
+          if (p.ex.id == id) return true;
+        }
+      }
+      return false;
+    }
+
+    // Mirrors _intendedCircuit but returns -1 in the last-resort fallback.
+    // -1 = no legal circuit on receiver → reject candidate.
+    int legalReceiverCircuit(_DayPlan receiver, ExLite ex) {
+      final cat = _normCat(ex.category);
+      final bool isIso =
+          cat == 'Arm Curl'      || cat == 'Arm Extension' ||
+          cat == 'Lateral Raise' || cat == 'Calf Raise'    ||
+          cat == 'Core'          || cat == 'Hip Abduction';
+
+      // Iso-forcing: when exactly 2 circuits exist, iso opens circuit index 2.
+      if (isIso &&
+          receiver.circuits.length == 2 &&
+          receiver.circuits.length < _maxCircuitsPerDay) {
+        return 2;
+      }
+
+      int bestIdx = -1, bestScore = -0x3fffffff, bestLen = 1 << 30;
+      for (int i = 0; i < receiver.circuits.length; i++) {
+        if (_canJoin(receiver, i, ex)) {
+          final s = _pairingScoreFor(receiver, i, ex);
+          if (s > bestScore ||
+              (s == bestScore && receiver.circuits[i].length < bestLen)) {
+            bestScore = s;
+            bestLen   = receiver.circuits[i].length;
+            bestIdx   = i;
+          }
+        }
+      }
+      if (bestIdx != -1) return bestIdx;
+
+      // New circuit — only if under the age-based cap.
+      if (receiver.circuits.length < _maxCircuitsPerDay) {
+        return receiver.circuits.length;
+      }
+
+      return -1; // last-resort fallback would fire → reject
+    }
+
+    // True when exId appears on any day adjacent to rIdx (circular),
+    // EXCLUDING dIdx (the donor, which will be vacated after the move).
+    bool adjacentRepeat(int rIdx, int dIdx, String exId) {
+      for (final offset in [-1, 1]) {
+        final adj = (rIdx + offset + N) % N;
+        if (adj == dIdx) continue; // donor vacates this slot; ignore
+        if (dayHasId(days[adj], exId)) return true;
+      }
+      return false;
+    }
+
+    // ── end helpers ────────────────────────────────────────────────────────
+
+    bool changed = true;
+    while (changed) {
+      changed = false;
+
+      final counts = List<int>.generate(N, (i) => dayCount(days[i]));
+      final maxC   = counts.reduce((a, b) => a > b ? a : b);
+      final minC   = counts.reduce((a, b) => a < b ? a : b);
+      if (maxC - minC <= 2) break;
+
+      final int donorIdx    = counts.indexOf(maxC);
+      final int receiverIdx = counts.indexOf(minC);
+      final _DayPlan donor    = days[donorIdx];
+      final _DayPlan receiver = days[receiverIdx];
+
+      _Placed? bestCand;
+      int bestDonorCi   = -1;
+      int bestDonorPi   = -1;
+      int bestTargetCi  = -1;
+      int bestPairScore = -0x3fffffff - 1;
+
+      for (int pass = 0; pass <= 1; pass++) {
+        for (int ci = 0; ci < donor.circuits.length; ci++) {
+          for (int pi = 0; pi < donor.circuits[ci].length; pi++) {
+            final placed = donor.circuits[ci][pi];
+            final ex     = placed.ex;
+            final cat    = _normCat(ex.category);
+
+            // 1) No duplicate on receiver (circuit scan, not _idsToday).
+            if (dayHasId(receiver, ex.id)) continue;
+
+            // 2) General category cap: max 2 of any category per day.
+            if ((receiver.countByCategory[cat] ?? 0) >= 2) continue;
+
+            // 3) Press cap: HP + VP combined ≤ 2 per day.
+            const pressCats = {'Horizontal Press', 'Vertical Press'};
+            if (pressCats.contains(cat)) {
+              final pressesOnReceiver =
+                  (receiver.countByCategory['Horizontal Press'] ?? 0) +
+                  (receiver.countByCategory['Vertical Press'] ?? 0);
+              if (pressesOnReceiver >= 2) continue;
+            }
+
+            // 4) Iso-day cap: max 1 of each isolation category per day.
+            const isoCats = {
+              'Arm Curl', 'Arm Extension', 'Lateral Raise',
+              'Leg Curl', 'Leg Extension', 'Core',
+            };
+            if (isoCats.contains(cat) &&
+                (receiver.countByCategory[cat] ?? 0) >= 1) continue;
+
+            // 5) Squat-name uniqueness per day.
+            if (_alreadyHasSquatNamedExercise(receiver) &&
+                ex.name.toLowerCase().contains('squat')) continue;
+
+            // 6) Must have a legal destination circuit on the receiver.
+            final targetCi = legalReceiverCircuit(receiver, ex);
+            if (targetCi == -1) continue;
+
+            // Pass 0 only: require spacing safety (no circular adjacency repeat).
+            if (pass == 0 && adjacentRepeat(receiverIdx, donorIdx, ex.id)) {
+              continue;
+            }
+
+            // Score: pairing score on receiver; new circuit → 0.
+            final score = (targetCi < receiver.circuits.length)
+                ? _pairingScoreFor(receiver, targetCi, ex)
+                : 0;
+
+            if (bestCand == null ||
+                score > bestPairScore ||
+                (score == bestPairScore && ci < bestDonorCi) ||
+                (score == bestPairScore && ci == bestDonorCi && pi < bestDonorPi)) {
+              bestPairScore = score;
+              bestCand      = placed;
+              bestDonorCi   = ci;
+              bestDonorPi   = pi;
+              bestTargetCi  = targetCi;
+            }
+          }
+        }
+        if (bestCand != null) break; // pass 0 succeeded; skip pass 1
+      }
+
+      if (bestCand == null) break; // no legal move → stop
+
+      // ── Mutate ──────────────────────────────────────────────────────────
+
+      final ex  = bestCand.ex;
+      final cat = _normCat(ex.category);
+
+      // Remove from donor.
+      donor.circuits[bestDonorCi].removeAt(bestDonorPi);
+      if (donor.circuits[bestDonorCi].isEmpty) {
+        donor.circuits.removeAt(bestDonorCi);
+      }
+      final newDonorCount = (donor.countByCategory[cat] ?? 1) - 1;
+      if (newDonorCount <= 0) {
+        donor.countByCategory.remove(cat);
+      } else {
+        donor.countByCategory[cat] = newDonorCount;
+      }
+
+      // Insert into receiver (opening a new circuit if necessary).
+      if (bestTargetCi >= receiver.circuits.length) {
+        receiver.circuits.add(<_Placed>[]);
+      }
+      receiver.circuits[bestTargetCi].add(bestCand);
+      receiver.countByCategory[cat] = (receiver.countByCategory[cat] ?? 0) + 1;
+
+      changed = true;
+    }
   }
 
   /// Post-generation pass: merge singleton circuits (length == 1) into the best

@@ -798,11 +798,16 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                           Icon(Icons.calendar_today,
                               size: 18, color: Theme.of(context).colorScheme.primary),
                           const SizedBox(width: 4),
-                          Text(
-                            _fmtDate(_selectedDate),
-                            style: TextStyle(
-                              fontSize: 16,
-                              color: Theme.of(context).colorScheme.primary,
+                          Expanded(
+                            child: Text(
+                              _fmtDate(_selectedDate),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              softWrap: false,
+                              style: TextStyle(
+                                fontSize: 16,
+                                color: Theme.of(context).colorScheme.primary,
+                              ),
                             ),
                           ),
                         ],
