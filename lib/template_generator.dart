@@ -2562,7 +2562,7 @@ class TemplateGenerator {
           final placed = day.circuits[si][0];
           final ex = placed.ex;
 
-          // Find the best compatible target circuit (not the singleton itself).
+          // --- Option A: find the best circuit to merge the singleton INTO ---
           int bestTarget = -1;
           int bestScore = -0x3fffffff;
           int bestLen = 1 << 30;
@@ -2577,13 +2577,76 @@ class TemplateGenerator {
             }
           }
 
-          if (bestTarget != -1) {
-            day.circuits[si].removeAt(0);        // clear singleton
-            day.circuits[bestTarget].add(placed); // append to target
-            day.circuits.removeAt(si);            // remove now-empty slot
-            changed = true;
-            break; // restart — indices have shifted
+          // --- Option B: find an exercise in a fat circuit (≥4) to move INTO singleton ---
+          // Score: _pairingScoreFor of candidate joining si; tie-break by longer source
+          // circuit (drains the most unbalanced circuit first); then stable scan order.
+          int bestBSource = -1;
+          int bestBCandIdx = -1;
+          _Placed? bestBCand;
+          int bestBPairScore = -0x3fffffff;
+          for (int fi = 0; fi < day.circuits.length; fi++) {
+            if (fi == si) continue;
+            if (day.circuits[fi].length < 4) continue;
+            for (int ci = 0; ci < day.circuits[fi].length; ci++) {
+              final cand = day.circuits[fi][ci];
+              if (!_canJoin(day, si, cand.ex)) continue;
+              final s = _pairingScoreFor(day, si, cand.ex);
+              if (bestBCand == null ||
+                  s > bestBPairScore ||
+                  (s == bestBPairScore &&
+                      day.circuits[fi].length > day.circuits[bestBSource].length)) {
+                bestBPairScore = s;
+                bestBSource = fi;
+                bestBCandIdx = ci;
+                bestBCand = cand;
+              }
+            }
           }
+
+          // --- Decide between Option A, Option B, or neither ---
+          final bool haveA = bestTarget != -1;
+          final bool haveB = bestBCand != null;
+          if (!haveA && !haveB) continue; // singleton cannot be moved
+
+          bool doA = true;
+          if (haveA && haveB) {
+            // Simulate post-action max circuit length for each option.
+            // Post-A: si disappears; bestTarget grows by 1.
+            int postAMax = 0;
+            for (int k = 0; k < day.circuits.length; k++) {
+              if (k == si) continue;
+              final len = day.circuits[k].length + (k == bestTarget ? 1 : 0);
+              if (len > postAMax) postAMax = len;
+            }
+            // Post-B: si grows by 1; bestBSource shrinks by 1; circuit count unchanged.
+            int postBMax = 0;
+            for (int k = 0; k < day.circuits.length; k++) {
+              int len = day.circuits[k].length;
+              if (k == si) {
+                len += 1;
+              } else if (k == bestBSource) {
+                len -= 1;
+              }
+              if (len > postBMax) postBMax = len;
+            }
+            doA = postAMax <= postBMax; // tie → prefer A (also reduces circuit count)
+          } else if (!haveA) {
+            doA = false; // only Option B is available
+          }
+
+          if (doA) {
+            // Option A: merge singleton into bestTarget, remove the empty slot.
+            day.circuits[si].removeAt(0);
+            day.circuits[bestTarget].add(placed);
+            day.circuits.removeAt(si);
+          } else if (bestBCand != null) {
+            // Option B: move one exercise from the fat circuit into the singleton.
+            // day.circuits length does not change; no index shift occurs.
+            day.circuits[bestBSource].removeAt(bestBCandIdx);
+            day.circuits[si].add(bestBCand);
+          }
+          changed = true;
+          break; // restart — indices may have shifted (Option A) or state changed (Option B)
         }
       }
     }
