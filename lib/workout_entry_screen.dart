@@ -14341,6 +14341,7 @@ class _WorkoutPageState extends State<WorkoutPage>
 
 
   void addSet(int exerciseIndex) {
+
     setState(() {
       // 0) Make sure the outer row exists for every parallel structure
       while (_workoutSets.length <= exerciseIndex) _workoutSets.add(

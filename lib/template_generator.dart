@@ -688,7 +688,8 @@ class TemplateGenerator {
     }
 
 
-    // 8) Emit templates: B1 first
+    // 8) Compact singleton circuits, then emit templates: B1 first
+    _compactSingletons(days);
     final out = <Map<String, dynamic>>[];
     for (int i = 0; i < days.length; i++) {
       out.add({
@@ -745,6 +746,7 @@ class TemplateGenerator {
       weeklyPlanTemplate: weeklyPlan,
       age: age ?? 27,
     );
+    _compactSingletons(daysB2);
     for (int i = 0; i < daysB2.length; i++) {
       out.add({
         'name': 'B2 Day ${i + 1}',
@@ -763,6 +765,7 @@ class TemplateGenerator {
       weeklyPlanTemplate: weeklyPlan,
       age: age ?? 27,
     );
+    _compactSingletons(daysB3);
     for (int i = 0; i < daysB3.length; i++) {
       out.add({
         'name': 'B3 Day ${i + 1}',
@@ -2542,6 +2545,48 @@ class TemplateGenerator {
       }
     }
     return fallback;
+  }
+
+  /// Post-generation pass: merge singleton circuits (length == 1) into the best
+  /// compatible existing circuit on the same day, then remove the empty slot.
+  /// Runs until stable (no more legal merges exist). Does not change exercise
+  /// selection — only rearranges circuits. countByCategory and _idsToday are
+  /// unaffected because the exercise stays on the same day.
+  static void _compactSingletons(List<_DayPlan> days) {
+    for (final day in days) {
+      bool changed = true;
+      while (changed) {
+        changed = false;
+        for (int si = 0; si < day.circuits.length; si++) {
+          if (day.circuits[si].length != 1) continue;
+          final placed = day.circuits[si][0];
+          final ex = placed.ex;
+
+          // Find the best compatible target circuit (not the singleton itself).
+          int bestTarget = -1;
+          int bestScore = -0x3fffffff;
+          int bestLen = 1 << 30;
+          for (int ti = 0; ti < day.circuits.length; ti++) {
+            if (ti == si) continue;
+            if (!_canJoin(day, ti, ex)) continue;
+            final s = _pairingScoreFor(day, ti, ex);
+            if (s > bestScore || (s == bestScore && day.circuits[ti].length < bestLen)) {
+              bestScore = s;
+              bestLen = day.circuits[ti].length;
+              bestTarget = ti;
+            }
+          }
+
+          if (bestTarget != -1) {
+            day.circuits[si].removeAt(0);        // clear singleton
+            day.circuits[bestTarget].add(placed); // append to target
+            day.circuits.removeAt(si);            // remove now-empty slot
+            changed = true;
+            break; // restart — indices have shifted
+          }
+        }
+      }
+    }
   }
 
   /// Decide circuit index (0..N) for a chosen exercise to minimize overlap.
