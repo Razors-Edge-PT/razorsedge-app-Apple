@@ -771,6 +771,7 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
 // Sex (required)
                                 DropdownButtonFormField<String>(
                                   value: _selectedSex,
+                                  style: const TextStyle(color: Colors.black87),
                                   decoration: InputDecoration(
                                     labelText: 'Sex',
                                     labelStyle: const TextStyle(color: Colors.blueAccent),
@@ -792,9 +793,18 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                     ),
                                   ),
                                   items: const [
-                                    DropdownMenuItem(value: 'M', child: Text('Male')),
-                                    DropdownMenuItem(value: 'F', child: Text('Female')),
-                                    DropdownMenuItem(value: 'N', child: Text('Human, probably')),
+                                    DropdownMenuItem(
+                                      value: 'M',
+                                      child: Text('Male', style: TextStyle(color: Colors.black87)),
+                                    ),
+                                    DropdownMenuItem(
+                                      value: 'F',
+                                      child: Text('Female', style: TextStyle(color: Colors.black87)),
+                                    ),
+                                    DropdownMenuItem(
+                                      value: 'N',
+                                      child: Text('Human, probably', style: TextStyle(color: Colors.black87)),
+                                    ),
                                   ],
                                   onChanged: (v) => setState(() => _selectedSex = v),
                                   validator: (v) => (v == null || v.isEmpty) ? 'Please select your sex' : null,

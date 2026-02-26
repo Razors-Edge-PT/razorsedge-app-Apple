@@ -90,6 +90,9 @@ class MuscleVolumeTarget {
 }
 
 
+/// Bench-press selection tier derived from user's ranked onboarding goals.
+enum _BenchTier { tierA, tierB, tierC }
+
 class TemplateGenerator {
   /// Where we expect you to place the bundled library you exported earlier.
   /// You can rename the file; just update this path and pubspec assets.
@@ -101,6 +104,13 @@ class TemplateGenerator {
   static const int _maxExercisesPerCircuit = 3; // typical antagonist circuit size
 
   static int _maxCircuitsPerDay = _defaultMaxCircuitsPerDay;
+
+  // ── Bench-tier state (set once per generateFromOnboarding call) ──────────
+  // tierA = full emphasis (no cap, no spacing, prefer first HP)
+  // tierB = partial (prefer first HP, weekly cap of 2 or 3)
+  // tierC = default (no preference, normal cap + spacing like any exercise)
+  static _BenchTier _benchTier = _BenchTier.tierA;
+  static int _benchWeeklyCap = 999; // only meaningful for Tier B
 
 
   /// Generate a set of starter templates (e.g., B1 Day1.., B2 Day1..)
@@ -210,6 +220,53 @@ class TemplateGenerator {
         .map((e) => e.toString())
         .take(2)
         .toList();
+
+    // ── Bench-tier computation ───────────────────────────────────────────────
+    {
+      final List<String> goalsRanked = (goalsRankedRaw ?? const [])
+          .map((e) => e.toString())
+          .toList();
+
+      final int rankPL       = goalsRanked.indexOf('Powerlifting');
+      final int rankBPS      = goalsRanked.indexOf('Bench Press Specialist');
+      final int rankStrength = goalsRanked.indexOf('Strength');
+      final int rankSize     = goalsRanked.indexOf('Build more muscle');
+
+      // Tier A: PL or BPS in top 2, AND at least one ranks above 'Build more muscle'
+      final bool plOrBpsInTop2 =
+          (rankPL  >= 0 && rankPL  < 2) || (rankBPS >= 0 && rankBPS < 2);
+      final bool plAboveSize  = rankPL  >= 0 && (rankSize < 0 || rankPL  < rankSize);
+      final bool bpsAboveSize = rankBPS >= 0 && (rankSize < 0 || rankBPS < rankSize);
+      final bool isTierA = plOrBpsInTop2 && (plAboveSize || bpsAboveSize);
+
+      // Tier B — B1: PL or BPS in top 3, but 'Build more muscle' outranks both
+      final bool plOrBpsInTop3 =
+          (rankPL  >= 0 && rankPL  < 3) || (rankBPS >= 0 && rankBPS < 3);
+      final bool sizeAbovePL  = rankSize >= 0 && (rankPL  < 0 || rankSize < rankPL);
+      final bool sizeAboveBPS = rankSize >= 0 && (rankBPS < 0 || rankSize < rankBPS);
+      final bool b1 = plOrBpsInTop3 && sizeAbovePL && sizeAboveBPS;
+
+      // Tier B — B2: 'Strength' in top 3 and ranked above 'Build more muscle'
+      final bool strengthInTop3    = rankStrength >= 0 && rankStrength < 3;
+      final bool strengthAboveSize = rankSize < 0 || rankStrength < rankSize;
+      final bool b2 = strengthInTop3 && strengthAboveSize;
+
+      final bool isTierB = !isTierA && (b1 || b2);
+
+      if (isTierA) {
+        _benchTier      = _BenchTier.tierA;
+        _benchWeeklyCap = 999;
+      } else if (isTierB) {
+        _benchTier      = _BenchTier.tierB;
+        _benchWeeklyCap = weeklyFrequency >= 4 ? 3 : 2;
+      } else {
+        _benchTier      = _BenchTier.tierC;
+        _benchWeeklyCap = 999;
+      }
+      debugPrint('🏋️ [GEN] benchTier=$_benchTier cap=$_benchWeeklyCap '
+          '(PL=$rankPL BPS=$rankBPS STR=$rankStrength SIZE=$rankSize)');
+    }
+    // ────────────────────────────────────────────────────────────────────────
 
     const Set<String> _hypertrophyGoalSet = {
       'Build more muscle',
@@ -2076,8 +2133,28 @@ class TemplateGenerator {
 //   PLUS: avoid using the same exercise on two consecutive days,
 //   except Back Squat, Barbell when weeklyFrequency > 2.
     for (final ex in pool.toList()) {
-      // Bench: no weekly cap or spacing rule
-      if (_isBarbellBenchPress(ex)) continue; // skip bench entirely for this rule
+      // Bench: tier-dependent cap/spacing exemption
+      if (_isBarbellBenchPress(ex)) {
+        if (_benchTier == _BenchTier.tierA) {
+          continue; // Tier A: full exemption — no cap, no spacing rule
+        }
+        if (_benchTier == _BenchTier.tierB) {
+          // Tier B: enforce weekly cap only; bench stays exempt from spacing rule
+          int priorBenchUses = 0;
+          for (final pastDay in allDays.take(day.index)) {
+            for (final circ in pastDay.circuits) {
+              for (final placed in circ) {
+                if (_isBarbellBenchPress(placed.ex)) priorBenchUses++;
+              }
+            }
+          }
+          if (priorBenchUses >= _benchWeeklyCap) {
+            day._idsToday.add(ex.id);
+          }
+          continue; // still exempt from spacing check
+        }
+        // Tier C: fall through — bench gets generic cap (2/week) + spacing like any exercise
+      }
 
       // Category-specific caps
       final bool isCalfRaise = _normCat(ex.category) == 'Calf Raise';
@@ -2130,7 +2207,9 @@ class TemplateGenerator {
 
     // ✅ Bench-first preference SECOND:
     // If this is the FIRST Horizontal Press of the day, prefer Barbell Bench Press.
-    if (category == 'Horizontal Press' && (day.countByCategory['Horizontal Press'] ?? 0) == 0) {
+    // Tier C: bench gets no special preference — skip this block entirely.
+    if (_benchTier != _BenchTier.tierC &&
+        category == 'Horizontal Press' && (day.countByCategory['Horizontal Press'] ?? 0) == 0) {
       for (final ex in pool) {
         // 🚫 Allow only one "squat" exercise by name per day
         if (_alreadyHasSquatNamedExercise(day) &&
