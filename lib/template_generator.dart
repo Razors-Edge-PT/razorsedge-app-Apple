@@ -540,6 +540,7 @@ class TemplateGenerator {
             allDays: days,
             idTargetsRemaining: _idTargetsRemaining,
             isMale: !isFemale,
+            isFemale: isFemale,
           );
 
           if (chosen == null) continue;
@@ -666,6 +667,7 @@ class TemplateGenerator {
           allDays: days,
           idTargetsRemaining: _idTargetsRemaining,
           isMale: !isFemale,
+          isFemale: isFemale,
         );
 
         if (chosen == null) continue;
@@ -1791,6 +1793,7 @@ class TemplateGenerator {
     required List<_DayPlan> allDays,
     Map<String,int>? idTargetsRemaining,  // 🆕
     bool isMale = false,
+    bool isFemale = false,
   }) {
     for (final cat in choices) {
       final pool = byCat[cat];
@@ -1803,6 +1806,7 @@ class TemplateGenerator {
         allDays: allDays,
         idTargetsRemaining: idTargetsRemaining, // 🆕
         isMale: isMale,
+        isFemale: isFemale,
       );
 
       if (picked == null) continue;
@@ -1859,6 +1863,9 @@ class TemplateGenerator {
         : requiredHPullPrimaryDays)
         : 0;
 
+    // ♀ Female: number of days that still need both SP + LC seeded into circuit 0.
+    int remainingFemaleC0Days = isFemale ? (weeklyFrequency >= 4 ? 3 : 2) : 0;
+
     for (final d in days) {
       // 🧩 Special seeding for hypertrophy-focused males:
       // Try to pre-build:
@@ -1891,6 +1898,7 @@ class TemplateGenerator {
             allDays: allDays,
             idTargetsRemaining: idTargetsRemaining,
             isMale: !isFemale,
+            isFemale: isFemale,
           );
 
           if (hp != null) {
@@ -1907,6 +1915,7 @@ class TemplateGenerator {
                 allDays: allDays,
                 idTargetsRemaining: idTargetsRemaining,
                 isMale: !isFemale,
+                isFemale: isFemale,
               );
 
               if (hPull != null) {
@@ -1941,6 +1950,7 @@ class TemplateGenerator {
               allDays: allDays,
               idTargetsRemaining: idTargetsRemaining,
               isMale: !isFemale,
+              isFemale: isFemale,
             );
 
             if (vp != null) {
@@ -1961,6 +1971,7 @@ class TemplateGenerator {
               allDays: allDays,
               idTargetsRemaining: idTargetsRemaining,
               isMale: !isFemale,
+              isFemale: isFemale,
             );
             if (lr != null) {
               firstC1 = lr;
@@ -1989,6 +2000,7 @@ class TemplateGenerator {
                 allDays: allDays,
                 idTargetsRemaining: idTargetsRemaining,
                 isMale: !isFemale,
+                isFemale: isFemale,
               );
 
               if (vPull != null) {
@@ -2008,6 +2020,52 @@ class TemplateGenerator {
 
         // We successfully attempted a "primary hypertrophy day" pattern on this day
         remainingHPullPrimaryDays--;
+      }
+
+      // ♀ Female lower-body C0 seeding: Squat Pattern + Leg Curl in circuit 0.
+      // Mirrors the male-hypertrophy seeding pattern.  Uses _intendedCircuit as a
+      // non-mutating pre-check before any _placeIntoCircuit call.
+      if (isFemale && remainingFemaleC0Days > 0) {
+        final sqPool = byCat['Squat Pattern'];
+        final lcPool = byCat['Leg Curl'];
+        if (sqPool != null && sqPool.isNotEmpty &&
+            lcPool != null && lcPool.isNotEmpty &&
+            _canSeedCategory('Squat Pattern') &&
+            _canSeedCategory('Leg Curl')) {
+
+          // Step 1: choose a Squat Pattern exercise destined for C0
+          final sp = _chooseExercise(
+            pool: sqPool,
+            day: d,
+            category: 'Squat Pattern',
+            allDays: allDays,
+            idTargetsRemaining: idTargetsRemaining,
+            isFemale: true,
+          );
+
+          if (sp != null && _intendedCircuit(d, sp) == 0) {
+            final spIdx = _placeIntoCircuit(d, sp);
+            d.addExercise(sp, 'Squat Pattern', spIdx);
+            _recordSeed('Squat Pattern');
+
+            // Step 2: choose a Leg Curl exercise, also destined for C0
+            final lc = _chooseExercise(
+              pool: lcPool,
+              day: d,
+              category: 'Leg Curl',
+              allDays: allDays,
+              idTargetsRemaining: idTargetsRemaining,
+              isFemale: true,
+            );
+
+            if (lc != null && _intendedCircuit(d, lc) == 0) {
+              final lcIdx = _placeIntoCircuit(d, lc);
+              d.addExercise(lc, 'Leg Curl', lcIdx);
+              _recordSeed('Leg Curl');
+              remainingFemaleC0Days--;
+            }
+          }
+        }
       }
 
       // 🔁 Then apply the normal daily preference sets,
@@ -2046,6 +2104,7 @@ class TemplateGenerator {
           allDays: allDays,
           idTargetsRemaining: idTargetsRemaining,
           isMale: !isFemale,
+          isFemale: isFemale,
         );
 
         // Detect which category actually got seeded and bump its counter
@@ -2086,7 +2145,8 @@ class TemplateGenerator {
     required String category,
     required List<_DayPlan> allDays,
     Map<String, int>? idTargetsRemaining, // 🆕
-    bool isMale = false, // male circuit-0 compound gate
+    bool isMale = false,   // male circuit-0 compound gate
+    bool isFemale = false, // female circuit-0 lower-body requirement gate
   }) {
 
     // 🚧 Male circuit-0 compound gate (applied at every return ex; below).
@@ -2138,6 +2198,75 @@ class TemplateGenerator {
       return minDist;
     }
 
+    // ♀ Female circuit-0 lower-body requirement gate.
+    // On required days, C0 must contain a Squat Pattern + Leg Curl pair.
+    // On satisfied/fallback days, applies the same compound-only rule as males.
+    // SUBORDINATE to spacingScore: this closure filters categories, not exercise IDs;
+    // spacingScore still determines which allowed exercise is chosen.
+    bool _femaleFailsGate(ExLite ex) {
+      if (!isFemale) return false;
+      if (_intendedCircuit(day, ex) != 0) return false; // not targeting C0
+
+      final int N = allDays.length;
+      final int requiredDays = N >= 4 ? 3 : 2;
+
+      // Inline fallback: same compound+arm-muscle rule used for males.
+      bool maleC0Check(ExLite e) {
+        final c = _normCat(e.category);
+        if (!_isUpperBodyCategory(c)) return false;
+        const allowedC0 = {
+          'Horizontal Press', 'Horizontal Pull', 'Vertical Press', 'Vertical Pull',
+        };
+        if (!allowedC0.contains(c)) return true;
+        final isPress = c == 'Horizontal Press' || c == 'Vertical Press';
+        return isPress ? !_hasMuscleName(e, 'triceps') : !_hasMuscleName(e, 'biceps');
+      }
+
+      // Count satisfied days and determine quota.
+      int satisfiedSoFar = 0;
+      for (final d in allDays) {
+        if (_dayHasC0Category(d, 'Squat Pattern') && _dayHasC0Category(d, 'Leg Curl')) {
+          satisfiedSoFar++;
+        }
+      }
+      final int stillNeeded = (requiredDays - satisfiedSoFar).clamp(0, requiredDays);
+
+      final bool hasSP = _dayHasC0Category(day, 'Squat Pattern');
+      final bool hasLC = _dayHasC0Category(day, 'Leg Curl');
+
+      // Case A: this day is already fully satisfied → fallback (male-style gate)
+      if (hasSP && hasLC) return maleC0Check(ex);
+
+      // Case B: quota already met → fallback
+      if (stillNeeded == 0) return maleC0Check(ex);
+
+      // Case C: day is partially committed — has one, needs the other
+      if (hasSP && !hasLC) {
+        // Need LC in C0 — block everything except Leg Curl
+        return _normCat(ex.category) != 'Leg Curl';
+      }
+      if (!hasSP && hasLC) {
+        // Need SP in C0 — block everything except Squat Pattern
+        return _normCat(ex.category) != 'Squat Pattern';
+      }
+
+      // Case D: day has neither — determine if it MUST become a required day
+      int potentialDays = 0;
+      for (final d in allDays) {
+        if (!(_dayHasC0Category(d, 'Squat Pattern') && _dayHasC0Category(d, 'Leg Curl'))) {
+          potentialDays++;
+        }
+      }
+      if (potentialDays <= stillNeeded) {
+        // Every unsatisfied day must become required — only SP or LC allowed in C0
+        final cat = _normCat(ex.category);
+        return cat != 'Squat Pattern' && cat != 'Leg Curl';
+      }
+
+      // Headroom remains → this day is a fallback day
+      return maleC0Check(ex);
+    }
+
     // 🚫 Day-level cap: only one of each isolation category per day
     const Set<String> isoCats = {
       'Arm Curl', 'Arm Extension', 'Lateral Raise',
@@ -2175,7 +2304,7 @@ class TemplateGenerator {
         if (_isBarbellBenchPress(ex)) continue;  // hard: not bench on Day 3 first HP
         if (day.hasExercise(ex.id)) continue;
         if (day.isBanned(ex, category)) continue;
-        if (_failsGate(ex)) continue;
+        if (_failsGate(ex) || _femaleFailsGate(ex)) continue;
         final s = spacingScore(ex);
         final isAcc = _isPreferredAccessoryHorizontalPress(ex);
         if (bestV == null ||
@@ -2284,7 +2413,7 @@ class TemplateGenerator {
         if (!_isBarbellBenchPress(ex)) continue;
         if (day.hasExercise(ex.id)) continue;      // not already used today
         if (day.isBanned(ex, category)) continue;  // respect day-level bans
-        if (_failsGate(ex)) continue;
+        if (_failsGate(ex) || _femaleFailsGate(ex)) continue;
         return ex;                                 // prefer this exact pick
       }
       // If no barbell bench is available/allowed, we fall through to normal logic.
@@ -2321,7 +2450,7 @@ class TemplateGenerator {
         }
         if (!canJoinAny && day.circuits.length >= _maxCircuitsPerDay) continue;
 
-        if (_failsGate(ex)) continue;
+        if (_failsGate(ex) || _femaleFailsGate(ex)) continue;
         final s = spacingScore(ex);
         if (bestT == null || s > bestTScore) { bestTScore = s; bestT = ex; }
       }
@@ -2360,7 +2489,7 @@ class TemplateGenerator {
       }
       if (!canJoinAny && day.circuits.length >= _maxCircuitsPerDay) continue;
 
-      if (_failsGate(ex)) continue;
+      if (_failsGate(ex) || _femaleFailsGate(ex)) continue;
       final s = spacingScore(ex);
       if (best == null || s > bestScore) { bestScore = s; best = ex; }
     }
@@ -2706,6 +2835,16 @@ class TemplateGenerator {
     return s.contains('back') && s.contains('squat') && s.contains('barbell');
   }
 
+
+  /// Returns true if [d]'s circuit 0 already contains at least one exercise
+  /// whose normalised category equals [cat].  Pure — does not mutate [d].
+  static bool _dayHasC0Category(_DayPlan d, String cat) {
+    if (d.circuits.isEmpty) return false;
+    for (final placed in d.circuits[0]) {
+      if (_normCat(placed.category) == cat) return true;
+    }
+    return false;
+  }
 
   // Use exact exercise id for "Wide Arm Lat Pulldown" OK-to-pair case.
   static const String _wideArmLatPulldownId = 'Url65Q2RxZa00dkDpUdl';

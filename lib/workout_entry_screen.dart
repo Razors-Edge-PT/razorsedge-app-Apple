@@ -6597,7 +6597,9 @@ class _WorkoutPageState extends State<WorkoutPage>
     final weekIndex = _getApplicableWeekIndex(exerciseId);
     if (weekIndex == null) return setNumber == 1 ? 1 : 1.5;
 
-
+    if (blockStartDate == null && _blockStartDate != null) {
+      print('🟥 [WES] blockStartDate NULL but _blockStartDate=$_blockStartDate (set$setNumber fallback)');
+    }
     if (blockStartDate == null) {
       return 2; // fallback RIR value
     }
@@ -9988,7 +9990,8 @@ class _WorkoutPageState extends State<WorkoutPage>
     _blockEndDate = DateTime.tryParse(blockMeta['blockEndDate'] ?? '');
     print(
         '📅 [WES] Loaded blockStartDate=$_blockStartDate, blockEndDate=$_blockEndDate');
-
+    blockStartDate = _blockStartDate;
+    blockEndDate   = _blockEndDate;
     // ✅ 5. Reset PMU maps BEFORE setting anything
     PeriodizationModelUtils.plannedExerciseDetails.clear();
     PeriodizationModelUtils.exercisePeriodizationModels.clear();
