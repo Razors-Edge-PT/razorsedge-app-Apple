@@ -539,6 +539,7 @@ class TemplateGenerator {
             category: cat,
             allDays: days,
             idTargetsRemaining: _idTargetsRemaining,
+            isMale: !isFemale,
           );
 
           if (chosen == null) continue;
@@ -664,6 +665,7 @@ class TemplateGenerator {
           category: cat,
           allDays: days,
           idTargetsRemaining: _idTargetsRemaining,
+          isMale: !isFemale,
         );
 
         if (chosen == null) continue;
@@ -1788,6 +1790,7 @@ class TemplateGenerator {
     required Map<String, List<ExLite>> byCat,
     required List<_DayPlan> allDays,
     Map<String,int>? idTargetsRemaining,  // 🆕
+    bool isMale = false,
   }) {
     for (final cat in choices) {
       final pool = byCat[cat];
@@ -1799,6 +1802,7 @@ class TemplateGenerator {
         category: cat,
         allDays: allDays,
         idTargetsRemaining: idTargetsRemaining, // 🆕
+        isMale: isMale,
       );
 
       if (picked == null) continue;
@@ -1886,6 +1890,7 @@ class TemplateGenerator {
             category: 'Horizontal Press',
             allDays: allDays,
             idTargetsRemaining: idTargetsRemaining,
+            isMale: !isFemale,
           );
 
           if (hp != null) {
@@ -1901,6 +1906,7 @@ class TemplateGenerator {
                 category: 'Horizontal Pull',
                 allDays: allDays,
                 idTargetsRemaining: idTargetsRemaining,
+                isMale: !isFemale,
               );
 
               if (hPull != null) {
@@ -1934,6 +1940,7 @@ class TemplateGenerator {
               category: 'Vertical Press',
               allDays: allDays,
               idTargetsRemaining: idTargetsRemaining,
+              isMale: !isFemale,
             );
 
             if (vp != null) {
@@ -1953,6 +1960,7 @@ class TemplateGenerator {
               category: 'Lateral Raise',
               allDays: allDays,
               idTargetsRemaining: idTargetsRemaining,
+              isMale: !isFemale,
             );
             if (lr != null) {
               firstC1 = lr;
@@ -1980,6 +1988,7 @@ class TemplateGenerator {
                 category: 'Vertical Pull',
                 allDays: allDays,
                 idTargetsRemaining: idTargetsRemaining,
+                isMale: !isFemale,
               );
 
               if (vPull != null) {
@@ -2036,6 +2045,7 @@ class TemplateGenerator {
           byCat: byCat,
           allDays: allDays,
           idTargetsRemaining: idTargetsRemaining,
+          isMale: !isFemale,
         );
 
         // Detect which category actually got seeded and bump its counter
@@ -2076,11 +2086,64 @@ class TemplateGenerator {
     required String category,
     required List<_DayPlan> allDays,
     Map<String, int>? idTargetsRemaining, // 🆕
+    bool isMale = false, // male circuit-0 compound gate
   }) {
 
-    // 🚫 Day-level cap: only one Arm Curl and one Arm Extension per day
-    if ((category == 'Arm Curl' || category == 'Arm Extension') &&
-        (day.countByCategory[category] ?? 0) >= 1) {
+    // 🚧 Male circuit-0 compound gate (applied at every return ex; below).
+    // When isMale is true and the intended circuit for the candidate is 0,
+    // upper-body exercises must come from compound press/pull categories and
+    // include the correct arm muscle (triceps for presses, biceps for pulls).
+    bool _failsGate(ExLite ex) {
+      if (!isMale) return false;
+      final cat = _normCat(ex.category);
+      if (!_isUpperBodyCategory(cat)) return false; // lower body is always exempt
+      if (_intendedCircuit(day, ex) != 0) return false; // not targeting circuit 0
+      const allowedC0 = {
+        'Horizontal Press', 'Horizontal Pull', 'Vertical Press', 'Vertical Pull',
+      };
+      if (!allowedC0.contains(cat)) {
+        if (kDebugMode) {
+          debugPrint('🚧 [C0 gate] blocked isolation "$cat" (male circuit-0 rule)');
+        }
+        return true;
+      }
+      final bool isPress = cat == 'Horizontal Press' || cat == 'Vertical Press';
+      final bool armOk =
+          isPress ? _hasMuscleName(ex, 'triceps') : _hasMuscleName(ex, 'biceps');
+      if (!armOk && kDebugMode) {
+        debugPrint('🚧 [C0 gate] blocked "${ex.name}" ($cat): '
+            'missing ${isPress ? "triceps" : "biceps"}');
+      }
+      return !armOk;
+    }
+
+    // Compute minimum circular distance from ex to any existing use in allDays.
+    // Returns allDays.length when ex has never been placed (best possible score).
+    int spacingScore(ExLite ex) {
+      final N = allDays.length;
+      if (N <= 1) return 1;
+      int minDist = N;
+      for (int i = 0; i < N; i++) {
+        if (i == day.index) continue;
+        for (final circ in allDays[i].circuits) {
+          for (final p in circ) {
+            if (p.ex.id == ex.id) {
+              final raw = (day.index - i).abs();
+              final dist = raw < N - raw ? raw : N - raw;
+              if (dist < minDist) minDist = dist;
+            }
+          }
+        }
+      }
+      return minDist;
+    }
+
+    // 🚫 Day-level cap: only one of each isolation category per day
+    const Set<String> isoCats = {
+      'Arm Curl', 'Arm Extension', 'Lateral Raise',
+      'Leg Curl', 'Leg Extension', 'Core',
+    };
+    if (isoCats.contains(category) && (day.countByCategory[category] ?? 0) >= 1) {
       return null;
     }
     // Avoid pairing agonists / overlapping prime movers within same circuit/day:
@@ -2097,33 +2160,34 @@ class TemplateGenerator {
         (day.countByCategory['Horizontal Press'] ?? 0) == 0 &&
         day.totalDays > 2 &&
         day.index == 2) {
-      // Prefer specific accessories
+      // Single-pass over the full pool: bench excluded (hard), spacing primary,
+      // preferred-accessory secondary tiebreaker.  This ensures a non-adjacent
+      // non-accessory always beats an adjacent accessory.
+      ExLite? bestV;
+      int bestVScore = -1;
+      bool bestVIsAcc = false;
       for (final ex in pool) {
         // 🚫 Allow only one "squat" exercise by name per day
         if (_alreadyHasSquatNamedExercise(day) &&
             ex.name.toLowerCase().contains('squat')) {
           continue;
         }
-
-        if (!_isPreferredAccessoryHorizontalPress(ex)) continue;
+        if (_isBarbellBenchPress(ex)) continue;  // hard: not bench on Day 3 first HP
         if (day.hasExercise(ex.id)) continue;
         if (day.isBanned(ex, category)) continue;
-        return ex; // choose preferred accessory
-      }
-      // Otherwise, still enforce "not bench" for this first slot
-      for (final ex in pool) {
-        // 🚫 Allow only one "squat" exercise by name per day
-        if (_alreadyHasSquatNamedExercise(day) &&
-            ex.name.toLowerCase().contains('squat')) {
-          continue;
+        if (_failsGate(ex)) continue;
+        final s = spacingScore(ex);
+        final isAcc = _isPreferredAccessoryHorizontalPress(ex);
+        if (bestV == null ||
+            s > bestVScore ||
+            (s == bestVScore && isAcc && !bestVIsAcc)) {
+          bestVScore = s;
+          bestV = ex;
+          bestVIsAcc = isAcc;
         }
-
-        if (_isBarbellBenchPress(ex)) continue;   // skip bench here
-        if (day.hasExercise(ex.id)) continue;
-        if (day.isBanned(ex, category)) continue;
-        return ex; // choose any non-bench option
       }
-      // If nothing else is allowed/available, fall through to normal logic.
+      if (bestV != null) return bestV;
+      // If nothing valid found, fall through to normal logic.
     }
 
     // 🧠 Global week-level limit — per-exercise caps + no back-to-back days
@@ -2170,10 +2234,10 @@ class TemplateGenerator {
         }
       }
 
-      // 🚫 No two consecutive days (spacing rule)
+      // 🚫 No two consecutive days (spacing rule) — circular: day 0 is adjacent to day N-1
       bool usedYesterday = false;
-      if (day.index > 0) {
-        final prevDay = allDays[day.index - 1];
+      {
+        final prevDay = allDays[(day.index - 1 + allDays.length) % allDays.length];
         for (final circ in prevDay.circuits) {
           for (final placed in circ) {
             if (placed.ex.id == ex.id) {
@@ -2220,6 +2284,7 @@ class TemplateGenerator {
         if (!_isBarbellBenchPress(ex)) continue;
         if (day.hasExercise(ex.id)) continue;      // not already used today
         if (day.isBanned(ex, category)) continue;  // respect day-level bans
+        if (_failsGate(ex)) continue;
         return ex;                                 // prefer this exact pick
       }
       // If no barbell bench is available/allowed, we fall through to normal logic.
@@ -2227,6 +2292,8 @@ class TemplateGenerator {
 
     // 🥇 Try to satisfy any remaining exercise-ID targets first (preferred picks)
     if (idTargetsRemaining != null && idTargetsRemaining.isNotEmpty) {
+      ExLite? bestT;
+      int bestTScore = -1;
       for (final ex in pool) {
         // 🚫 Allow only one "squat" exercise by name per day
         if (_alreadyHasSquatNamedExercise(day) &&
@@ -2247,19 +2314,26 @@ class TemplateGenerator {
           if (used >= maxPerWeek) continue;
         }
 
-        // Must be able to join some circuit (or open a new one if under 5)
+        // Must be able to join some circuit (or open a new one if under cap)
         bool canJoinAny = false;
         for (int ci = 0; ci < day.circuits.length; ci++) {
           if (_canJoin(day, ci, ex)) { canJoinAny = true; break; }
         }
         if (!canJoinAny && day.circuits.length >= _maxCircuitsPerDay) continue;
 
-        _decrementTarget(idTargetsRemaining, ex.id);
-        return ex;
+        if (_failsGate(ex)) continue;
+        final s = spacingScore(ex);
+        if (bestT == null || s > bestTScore) { bestTScore = s; bestT = ex; }
+      }
+      if (bestT != null) {
+        _decrementTarget(idTargetsRemaining, bestT.id);
+        return bestT;
       }
     }
 
-    // Default chooser (only pick if it can legally join some circuit)
+    // Default chooser — collect all valid candidates, return the best-spaced one
+    ExLite? best;
+    int bestScore = -1;
     for (final ex in pool) {
       // 🚫 Allow only one "squat" exercise by name per day
       if (_alreadyHasSquatNamedExercise(day) &&
@@ -2275,24 +2349,71 @@ class TemplateGenerator {
         final maxPerWeek = _perExerciseWeeklyMaxById[ex.id];
         if (maxPerWeek != null) {
           final used = _weeklyCountForExercise(ex.id, allDays);
-          if (used >= maxPerWeek) continue; // skip, already at cap
+          if (used >= maxPerWeek) continue;
         }
       }
 
-      // 🧠 pre-check: must be able to join at least one current circuit, or we start a new one if under cap
+      // 🧠 pre-check: must be able to join at least one current circuit, or start a new one if under cap
       bool canJoinAny = false;
       for (int ci = 0; ci < day.circuits.length; ci++) {
         if (_canJoin(day, ci, ex)) { canJoinAny = true; break; }
       }
-      if (!canJoinAny && day.circuits.length >= _maxCircuitsPerDay) continue; // skip if no spot and we've hit circuit cap
+      if (!canJoinAny && day.circuits.length >= _maxCircuitsPerDay) continue;
 
-      return ex;
+      if (_failsGate(ex)) continue;
+      final s = spacingScore(ex);
+      if (best == null || s > bestScore) { bestScore = s; best = ex; }
     }
-
-    return null;
+    return best;
   }
 
 
+
+  /// Pure (non-mutating) mirror of [_placeIntoCircuit] used by the circuit-0 gate.
+  /// Returns the circuit index that _placeIntoCircuit *would* assign without
+  /// touching day.circuits. Keeps the same iso-category set, score tie-break,
+  /// and last-resort fallback as the real placer.
+  static int _intendedCircuit(_DayPlan day, ExLite ex) {
+    final cat = _normCat(ex.category);
+    final bool isIso =
+        cat == 'Arm Curl'      || cat == 'Arm Extension' ||
+        cat == 'Lateral Raise' || cat == 'Calf Raise'    ||
+        cat == 'Core'          || cat == 'Hip Abduction';
+
+    // Mirror: isolation forced to a fresh circuit when exactly 2 exist.
+    if (isIso && day.circuits.length == 2 && day.circuits.length < _maxCircuitsPerDay) {
+      return 2; // index the new circuit would receive
+    }
+
+    // Find best joinable circuit — same score + tie-break as _placeIntoCircuit.
+    int bestIdx = -1, bestScore = -0x3fffffff, bestLen = 1 << 30;
+    for (int i = 0; i < day.circuits.length; i++) {
+      if (_canJoin(day, i, ex)) {
+        final s = _pairingScoreFor(day, i, ex);
+        if (s > bestScore || (s == bestScore && day.circuits[i].length < bestLen)) {
+          bestScore = s;
+          bestLen   = day.circuits[i].length;
+          bestIdx   = i;
+        }
+      }
+    }
+    if (bestIdx != -1) return bestIdx;
+
+    // No joinable circuit → would open a new one (non-mutating).
+    if (day.circuits.length < _maxCircuitsPerDay) {
+      return day.circuits.length; // index of the circuit that would be added
+    }
+
+    // Last resort: smallest-load circuit — same fallback as _placeIntoCircuit.
+    int fallback = 0, minLen = 1 << 30;
+    for (int i = 0; i < day.circuits.length; i++) {
+      if (day.circuits[i].length < minLen) {
+        minLen   = day.circuits[i].length;
+        fallback = i;
+      }
+    }
+    return fallback;
+  }
 
   /// Decide circuit index (0..N) for a chosen exercise to minimize overlap.
   static int _placeIntoCircuit(_DayPlan day, ExLite ex) {
@@ -2553,6 +2674,28 @@ class TemplateGenerator {
     final s = ex.name.toLowerCase();
     // robust to naming like "Bench Press, Barbell" / "Barbell Bench Press"
     return (s.contains('bench') && s.contains('press') && s.contains('barbell'));
+  }
+
+  /// Returns true if [cat] is an upper-body movement category.
+  /// Used by the male circuit-0 gate to decide whether to apply restrictions.
+  static bool _isUpperBodyCategory(String cat) {
+    switch (cat) {
+      case 'Horizontal Press': case 'Horizontal Pull':
+      case 'Vertical Press':   case 'Vertical Pull':
+      case 'Arm Curl':         case 'Arm Extension':
+      case 'Lateral Raise':    return true;
+      default:                 return false;
+    }
+  }
+
+  /// Returns true if [ex].primary or [ex].secondary contains [muscle]
+  /// (case-insensitive substring match). Used by the circuit-0 arm-muscle check.
+  static bool _hasMuscleName(ExLite ex, String muscle) {
+    final m = muscle.toLowerCase();
+    for (final s in [...ex.primary, ...ex.secondary]) {
+      if (s.toLowerCase().contains(m)) return true;
+    }
+    return false;
   }
 
   // Place under: static bool _isBarbellBenchPress(ExLite ex) { ... }

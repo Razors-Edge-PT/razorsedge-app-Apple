@@ -17626,7 +17626,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                 e1rmDisplayForCell(i, j).toStringAsFixed(1),
                                                                 strutStyle: const StrutStyle(
                                                                   fontSize: 12,
-                                                                  height: 1.0,
+                                                                  height: 2.5,
                                                                   forceStrutHeight: true, // ✅ locks vertical metrics across devices
                                                                 ),
                                                                 style: TextStyle(
