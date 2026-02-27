@@ -13518,7 +13518,10 @@ class _WorkoutPageState extends State<WorkoutPage>
       final uid = UserContext
           .of(context, listen: false)
           .currentUid;
-      if (_selectedBlockId == null || _selectedDate == null) return;
+      if (_selectedBlockId == null || _selectedDate == null) {
+        print('⛔️ [WES Merge] early return: blockId=$_selectedBlockId selectedDate=$_selectedDate blockStartDate=$blockStartDate _blockStartDate=$_blockStartDate');
+        return;
+      }
 
       print('👤 [BB2 Merge] Using uid=$uid for athlete merge');
 
@@ -13573,10 +13576,43 @@ class _WorkoutPageState extends State<WorkoutPage>
       _attachDirtyListeners(); // keep controllers wired
 
       final blockId = _selectedBlockId!;
-      final daysSinceStart = _selectedDate
-          .difference(blockStartDate!)
-          .inDays;
+
+// ✅ Ensure blockStartDate is available before computing week/day
+      if (blockStartDate == null && _blockStartDate == null) {
+        try {
+          print('🧭 [WES Merge] blockStartDate missing — loading blockMeta for blockId=$blockId');
+
+          // ✅ Let Dart infer the correct BlockMeta type (avoids cross-repo type clash)
+          final meta = await _repo.loadBlockMeta(
+            userId: uid,
+            blockId: blockId,
+          );
+
+          _blockStartDate = meta.startDate;
+          _blockEndDate   = meta.endDate;
+
+          // Keep legacy vars in sync (some paths still use non-underscore)
+          blockStartDate = _blockStartDate;
+          blockEndDate   = _blockEndDate;
+
+          print('📅 [WES Merge] Loaded meta start=$_blockStartDate end=$_blockEndDate');
+        } catch (e, st) {
+          print('⛔️ [WES Merge] failed to load block meta (cannot merge): $e');
+          debugPrintStack(stackTrace: st);
+          return;
+        }
+      }
+
+// ✅ Use resolved start date consistently
+      final DateTime? start = blockStartDate ?? _blockStartDate;
+      if (start == null) {
+        print('⛔️ [WES Merge] missing block start date after meta load — abort');
+        return;
+      }
+
+      final daysSinceStart = _selectedDate.difference(start).inDays;
       if (daysSinceStart < 0) return;
+
       print('[WES Merge] daysSinceStart = $daysSinceStart');
 
 // 👇 ADD THIS BLOCK

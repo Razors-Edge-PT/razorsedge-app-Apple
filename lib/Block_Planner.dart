@@ -52,6 +52,7 @@ class _BlockPlannerState extends State<Block_Planner> {
   List<String> selectedDays = []; // e.g., ['Mon', 'Wed', 'Fri']
   List<Map<String, dynamic>> weekPlans = [];
   String? blockIdToUse;
+  Set<String> _templateExerciseIds = {};
   final GlobalKey<ScaffoldMessengerState> _bpMessengerKey = GlobalKey<ScaffoldMessengerState>();
 
   bool _isSavedBlock = false;
@@ -203,6 +204,33 @@ class _BlockPlannerState extends State<Block_Planner> {
 
       _initialBlockIsActive = data['isActive'] ?? false;
     });
+    _loadTemplateExerciseIds();
+  }
+
+  Future<void> _loadTemplateExerciseIds() async {
+    final uid = userId;
+    if (uid == null || blockIdToUse == null) return;
+    final snapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('templates')
+        .get();
+    final ids = <String>{};
+    int matchedTemplates = 0;
+    for (final doc in snapshot.docs) {
+      final data = doc.data();
+      if (data['blockId'] == blockIdToUse) {
+        matchedTemplates++;
+        final exList = data['exercises'] as List? ?? [];
+        for (final ex in exList) {
+          if (ex is Map && ex['exerciseId'] != null) {
+            ids.add(ex['exerciseId'].toString());
+          }
+        }
+      }
+    }
+    debugPrint('BP templates: $matchedTemplates templates, ${ids.length} exerciseIds (for blockId=$blockIdToUse, uid=$uid)');
+    if (mounted) setState(() => _templateExerciseIds = ids);
   }
 
   String _repsText = '';
@@ -404,7 +432,7 @@ class _BlockPlannerState extends State<Block_Planner> {
 
         final defaultName = "$username ${fmt(start)} - ${fmt(end)}";
 
-// Only auto-fill if user hasn’t typed a name already
+// Only auto-fill if user hasn't typed a name already
         if (_blockNameController.text.trim().isEmpty) {
           _blockNameController.text = defaultName;
         }
@@ -534,7 +562,7 @@ class _BlockPlannerState extends State<Block_Planner> {
         );
 
         if (override != true) {
-          // user backed out—don’t save as active
+          // user backed out—don't save as active
           return;
         }
 
@@ -678,7 +706,7 @@ class _BlockPlannerState extends State<Block_Planner> {
 
     for (final id in ids) {
       final name = _exerciseIdToName[id]; // you already maintain this
-      // If we don’t have enough to resolve defaults, fetch the doc.
+      // If we don't have enough to resolve defaults, fetch the doc.
       if (name == null || name.isEmpty) {
         idsNeedingFetch.add(id);
       } else {
@@ -737,7 +765,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       }
     }
 
-    // ---- 2) Mirror the dialog’s seeding into in-memory settings ----
+    // ---- 2) Mirror the dialog's seeding into in-memory settings ----
     bool changed = false;
     for (final id in ids) {
       final meta = metaById[id] ?? const {};
@@ -842,7 +870,7 @@ class _BlockPlannerState extends State<Block_Planner> {
 
       _exerciseIdToName[id] = name;
       PeriodizationModelUtils.nameToId[name.trim()] =
-          id; // ✅ this is what you’re missing
+          id; // ✅ this is what you're missing
 
       return {
         'id': id, // 👈 Add id here too if needed later
@@ -1929,22 +1957,42 @@ class _BlockPlannerState extends State<Block_Planner> {
                 }
                 print('✅ exercises unique count=${seen.length} total=${exercises.length}');
 
+                int cmp(String a, String b) =>
+                    (_exerciseIdToName[a] ?? '').toLowerCase()
+                        .compareTo((_exerciseIdToName[b] ?? '').toLowerCase());
+                final inTemplates = exercises
+                    .where((id) => _templateExerciseIds.contains(id))
+                    .toList()
+                  ..sort(cmp);
+                final notInTemplates = exercises
+                    .where((id) => !_templateExerciseIds.contains(id))
+                    .toList()
+                  ..sort(cmp);
+                final showDivider =
+                    inTemplates.isNotEmpty && notInTemplates.isNotEmpty;
+                final items = <String?>[
+                  ...inTemplates,
+                  if (showDivider) null,
+                  ...notInTemplates,
+                ];
+
                 return SizedBox(
                   height: math.max(exercises.length * 380, 550).toDouble(),
                   // 👈 Tweak if your cards are taller/shorter
-                  child: ReorderableListView.builder(
+                  child: ListView.builder(
                     shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(), // Prevent internal scrolling
-                    onReorder: (oldIndex, newIndex) {
-                      setState(() {
-                        if (newIndex > oldIndex) newIndex -= 1;
-                        final item = exercises.removeAt(oldIndex);
-                        exercises.insert(newIndex, item);
-                      });
-                    },
-                    itemCount: exercises.length,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: items.length,
                     itemBuilder: (context, index) {
-                      final exercise = exercises[index];
+                      final exercise = items[index];
+
+                      if (exercise == null) {
+                        return const Divider(
+                          height: 4,
+                          thickness: 1,
+                          color: Colors.white,
+                        );
+                      }
 
                       final u = exercises.toSet().length;
                       if (u != exercises.length) {
@@ -1956,17 +2004,15 @@ class _BlockPlannerState extends State<Block_Planner> {
                       final datesLoaded = _blockStartDate != null && _blockEndDate != null;
 
                       return Dismissible(
-                        key: ValueKey('bp_${blockIdToUse}_${exercise}_$index'),
+                        key: ValueKey('bp_${blockIdToUse}_$exercise'),
 
                         direction: DismissDirection.endToStart,
                         onDismissed: (_) {
-                          final removedExercise = exercises[index];
-
-                          final messenger = ScaffoldMessenger.of(context); // capture BEFORE list mutation
+                          final removedExercise = exercise;
 
                           setState(() {
-                            exercises.removeAt(index);
-                            // 🧼 Also drop its settings locally so save won’t re-add details
+                            exercises.remove(removedExercise);
+                            // 🧼 Also drop its settings locally so save won't re-add details
                             exerciseSettings.remove(removedExercise);
                           });
 
@@ -1987,7 +2033,9 @@ class _BlockPlannerState extends State<Block_Planner> {
                                     onPressed: () {
                                       if (!mounted) return;
                                       setState(() {
-                                        exercises.insert(index, removedExercise);
+                                        if (!exercises.contains(removedExercise)) {
+                                          exercises.add(removedExercise);
+                                        }
                                       });
                                       Future.microtask(() => _savePlannedExercises(suppressSnack: true));
                                     },
