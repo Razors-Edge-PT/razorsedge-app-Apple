@@ -17615,7 +17615,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                             alignment: Alignment.bottomLeft,
                                                             child: Container(
                                                               height: 36, // ✅ ensure border sits at the same y-position everywhere
-                                                              padding: const EdgeInsets.only(left: 2, bottom: 6), // ✅ tune baseline without font-metric drift
+                                                              padding: const EdgeInsets.only(left: 2, bottom: 8), // ✅ tune baseline without font-metric drift
                                                               decoration: const BoxDecoration(
                                                                 border: Border(
                                                                   bottom: BorderSide(color: Colors.white, width: 1),
@@ -17626,7 +17626,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                 e1rmDisplayForCell(i, j).toStringAsFixed(1),
                                                                 strutStyle: const StrutStyle(
                                                                   fontSize: 12,
-                                                                  height: 1.0,
+                                                                  height: 2.5,
                                                                   forceStrutHeight: true, // ✅ locks vertical metrics across devices
                                                                 ),
                                                                 style: TextStyle(
