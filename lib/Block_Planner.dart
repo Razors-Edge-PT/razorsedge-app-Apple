@@ -1979,25 +1979,14 @@ class _BlockPlannerState extends State<Block_Planner> {
                 return SizedBox(
                   height: math.max(exercises.length * 380, 550).toDouble(),
                   // 👈 Tweak if your cards are taller/shorter
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: items.length,
-                    itemBuilder: (context, index) {
-                      final exercise = items[index];
-
+                  child: Column(
+                    children: items.map((exercise) {
                       if (exercise == null) {
                         return const Divider(
                           height: 4,
                           thickness: 1,
                           color: Colors.white,
                         );
-                      }
-
-                      final u = exercises.toSet().length;
-                      if (u != exercises.length) {
-                        print('❌ [BP.UI] DUP PRESENT: len=${exercises.length} unique=$u exercises=$exercises');
-                        print(StackTrace.current);
                       }
 
                       final settingsExist = exerciseSettings.containsKey(exercise);
@@ -2070,7 +2059,7 @@ class _BlockPlannerState extends State<Block_Planner> {
                           onUpdateSetting: _onUpdateSetting, // ✅ Calls the real one that updates Firestore
                         ),
                       );
-                    },
+                    }).toList(),
                   ),
                 );
               },
