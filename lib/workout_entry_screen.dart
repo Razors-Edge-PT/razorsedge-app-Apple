@@ -6585,7 +6585,7 @@ class _WorkoutPageState extends State<WorkoutPage>
         : null;
 
     // ✅ Set 1: Use BB2 if available
-    if (setNumber == 1 && bb2Rir != null && bb2Rir != 0.0) {
+    if (setNumber == 1 && bb2Rir != null) {
       print(
           '🔁 [WES] Using BB2-entered RIR for "$exerciseName" Set 1: $bb2Rir');
       return bb2Rir;
@@ -14244,9 +14244,6 @@ class _WorkoutPageState extends State<WorkoutPage>
                   print(
                       '🪙 [WES HydrateWeight] ex=$exName isBW=$isBwEx abs=$abs added=$added display=$display '
                           '→ wrote text="${_weightControllers[idx][0].text}"');
-                }
-                if (_rirControllers[idx][0].text.trim().isEmpty) {
-                  _rirControllers[idx][0].text = values['rir']?.toString() ?? '';
                 }
               }
 

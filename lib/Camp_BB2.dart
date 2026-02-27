@@ -23,6 +23,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'dart:convert'; // (top of file if not already)
 import 'local_cache/block_plan_cache.dart';
+import 'local_cache/isar_claude_bullet_snapshot.dart';
 import 'warmup_service.dart';
 import 'warmupBB2.dart';
 import 'local_cache/isar_db.dart';
@@ -3240,6 +3241,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
 // Build the exercise map; include only intentional fields
       final exMap = <String, dynamic>{
+        'exerciseId': exId,
         'name': name,
         // reps: save only if user entered > 0
         if (hasRepsInput && reps > 0) 'reps': reps,
@@ -3309,6 +3311,24 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       'date': Timestamp.fromDate(date),
       'workoutName': workoutName,
     });
+
+    // Invalidate Claude_bullet snapshot so next WES open re-paints fresh from BB2
+    unawaited(() async {
+      try {
+        final ymd = DateFormat('yyyy-MM-dd').format(date);
+        final uidDateKey = '$uid|$ymd';
+        final isar = await IsarDb.instance;
+        await isar.writeTxn(() async {
+          await isar.claudeBulletSnapshots
+              .filter()
+              .uidDateKeyEqualTo(uidDateKey)
+              .deleteFirst();
+        });
+        print('[BB2] Invalidated snapshot for $uidDateKey');
+      } catch (e) {
+        print('[BB2] Snapshot invalidation failed (non-fatal): $e');
+      }
+    }());
 
     // 🔥 [BB2 → Warm] Precompute WES snapshots for this day and tomorrow (non-blocking).
     try {
