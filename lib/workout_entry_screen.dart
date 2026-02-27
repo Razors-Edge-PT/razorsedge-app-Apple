@@ -6585,7 +6585,7 @@ class _WorkoutPageState extends State<WorkoutPage>
         : null;
 
     // ✅ Set 1: Use BB2 if available
-    if (setNumber == 1 && bb2Rir != null) {
+    if (setNumber == 1 && bb2Rir != null && bb2Rir != 0.0) {
       print(
           '🔁 [WES] Using BB2-entered RIR for "$exerciseName" Set 1: $bb2Rir');
       return bb2Rir;
@@ -6597,9 +6597,7 @@ class _WorkoutPageState extends State<WorkoutPage>
     final weekIndex = _getApplicableWeekIndex(exerciseId);
     if (weekIndex == null) return setNumber == 1 ? 1 : 1.5;
 
-    if (blockStartDate == null && _blockStartDate != null) {
-      print('🟥 [WES] blockStartDate NULL but _blockStartDate=$_blockStartDate (set$setNumber fallback)');
-    }
+
     if (blockStartDate == null) {
       return 2; // fallback RIR value
     }
@@ -9990,8 +9988,7 @@ class _WorkoutPageState extends State<WorkoutPage>
     _blockEndDate = DateTime.tryParse(blockMeta['blockEndDate'] ?? '');
     print(
         '📅 [WES] Loaded blockStartDate=$_blockStartDate, blockEndDate=$_blockEndDate');
-    blockStartDate = _blockStartDate;
-    blockEndDate   = _blockEndDate;
+
     // ✅ 5. Reset PMU maps BEFORE setting anything
     PeriodizationModelUtils.plannedExerciseDetails.clear();
     PeriodizationModelUtils.exercisePeriodizationModels.clear();
@@ -13518,10 +13515,7 @@ class _WorkoutPageState extends State<WorkoutPage>
       final uid = UserContext
           .of(context, listen: false)
           .currentUid;
-      if (_selectedBlockId == null || _selectedDate == null) {
-        print('⛔️ [WES Merge] early return: blockId=$_selectedBlockId selectedDate=$_selectedDate blockStartDate=$blockStartDate _blockStartDate=$_blockStartDate');
-        return;
-      }
+      if (_selectedBlockId == null || _selectedDate == null) return;
 
       print('👤 [BB2 Merge] Using uid=$uid for athlete merge');
 
@@ -13576,43 +13570,10 @@ class _WorkoutPageState extends State<WorkoutPage>
       _attachDirtyListeners(); // keep controllers wired
 
       final blockId = _selectedBlockId!;
-
-// ✅ Ensure blockStartDate is available before computing week/day
-      if (blockStartDate == null && _blockStartDate == null) {
-        try {
-          print('🧭 [WES Merge] blockStartDate missing — loading blockMeta for blockId=$blockId');
-
-          // ✅ Let Dart infer the correct BlockMeta type (avoids cross-repo type clash)
-          final meta = await _repo.loadBlockMeta(
-            userId: uid,
-            blockId: blockId,
-          );
-
-          _blockStartDate = meta.startDate;
-          _blockEndDate   = meta.endDate;
-
-          // Keep legacy vars in sync (some paths still use non-underscore)
-          blockStartDate = _blockStartDate;
-          blockEndDate   = _blockEndDate;
-
-          print('📅 [WES Merge] Loaded meta start=$_blockStartDate end=$_blockEndDate');
-        } catch (e, st) {
-          print('⛔️ [WES Merge] failed to load block meta (cannot merge): $e');
-          debugPrintStack(stackTrace: st);
-          return;
-        }
-      }
-
-// ✅ Use resolved start date consistently
-      final DateTime? start = blockStartDate ?? _blockStartDate;
-      if (start == null) {
-        print('⛔️ [WES Merge] missing block start date after meta load — abort');
-        return;
-      }
-
-      final daysSinceStart = _selectedDate.difference(start).inDays;
+      final daysSinceStart = _selectedDate
+          .difference(blockStartDate!)
+          .inDays;
       if (daysSinceStart < 0) return;
-
       print('[WES Merge] daysSinceStart = $daysSinceStart');
 
 // 👇 ADD THIS BLOCK
@@ -14245,6 +14206,9 @@ class _WorkoutPageState extends State<WorkoutPage>
                       '🪙 [WES HydrateWeight] ex=$exName isBW=$isBwEx abs=$abs added=$added display=$display '
                           '→ wrote text="${_weightControllers[idx][0].text}"');
                 }
+                if (_rirControllers[idx][0].text.trim().isEmpty) {
+                  _rirControllers[idx][0].text = values['rir']?.toString() ?? '';
+                }
               }
 
             }
@@ -14374,7 +14338,6 @@ class _WorkoutPageState extends State<WorkoutPage>
 
 
   void addSet(int exerciseIndex) {
-
     setState(() {
       // 0) Make sure the outer row exists for every parallel structure
       while (_workoutSets.length <= exerciseIndex) _workoutSets.add(
@@ -17663,7 +17626,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                                 e1rmDisplayForCell(i, j).toStringAsFixed(1),
                                                                 strutStyle: const StrutStyle(
                                                                   fontSize: 12,
-                                                                  height: 2.5,
+                                                                  height: 1.0,
                                                                   forceStrutHeight: true, // ✅ locks vertical metrics across devices
                                                                 ),
                                                                 style: TextStyle(
