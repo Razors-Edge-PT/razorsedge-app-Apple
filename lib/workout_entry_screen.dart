@@ -4680,6 +4680,11 @@ class _WorkoutPageState extends State<WorkoutPage>
 
       // ── RIR-hint helper (same logic as debug dump) ──
       String rirHintFor(int i, int j) {
+        // Check Claude_bullet override first (matches UI hintText logic)
+        if (_claudeBulletActiveForThisDay) {
+          final ov = _claudeBulletRirHintOverrides[_rowKeyBy(i)]?[j];
+          if (ov != null) return ov;
+        }
         final seedKey = _rowKeyBy(i);
         final seed = _seedHintsByKey[seedKey];
         if (j == 0) {
@@ -9210,7 +9215,7 @@ class _WorkoutPageState extends State<WorkoutPage>
               final Map<String, dynamic> rawHints =
               Map<String, dynamic>.from(jsonDecode(snap.hintsJson));
 
-              _seedHintsByKey.clear();
+              if (!_claudeBulletPhase0Active) _seedHintsByKey.clear();
 
               // Helper: normalize a legacy "name|ci" key into "exerciseId|ci" when possible.
               String? _aliasToExerciseIdKey(String rawKey) {
