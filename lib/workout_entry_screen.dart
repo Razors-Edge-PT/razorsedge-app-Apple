@@ -9215,7 +9215,7 @@ class _WorkoutPageState extends State<WorkoutPage>
               final Map<String, dynamic> rawHints =
               Map<String, dynamic>.from(jsonDecode(snap.hintsJson));
 
-              if (!_claudeBulletPhase0Active) _seedHintsByKey.clear();
+              if (!_claudeBulletPhase0Active && !_didFastPaint) _seedHintsByKey.clear();
 
               // Helper: normalize a legacy "name|ci" key into "exerciseId|ci" when possible.
               String? _aliasToExerciseIdKey(String rawKey) {
@@ -9279,7 +9279,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                 };
 
                 // 1) Store the raw key exactly as stored in snapshot (back-compat)
-                _seedHintsByKey[rowKey] = normalized;
+                _seedHintsByKey.putIfAbsent(rowKey, () => normalized);
 
                 // 2) Store exerciseId|ci alias key (new scheme), without overwriting if already present
                 final alias = _aliasToExerciseIdKey(rowKey);
