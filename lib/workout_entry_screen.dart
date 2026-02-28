@@ -4802,6 +4802,12 @@ class _WorkoutPageState extends State<WorkoutPage>
           }
         }
 
+        // Flag: RIR hint provably originated from BB2 (verified while _resolvedBB2Values is still live)
+        final bool s1RirFromBb2 = !s1RirTyped
+            && s1RirNum != null
+            && exId.isNotEmpty
+            && (_resolvedBB2Values[exId.toLowerCase()]?['rir'] as num?)?.toDouble() == s1RirNum;
+
         exercisesPayload.add({
           'instanceKey': instanceKey,
           'exerciseId': exId,
@@ -4814,6 +4820,7 @@ class _WorkoutPageState extends State<WorkoutPage>
           'set1_weight_typed': s1WeightTyped,
           'set1_reps_typed': s1RepsTyped,
           'set1_rir_typed': s1RirTyped,
+          'set1_rir_from_bb2': s1RirFromBb2,
         });
       }
 
@@ -5257,6 +5264,13 @@ class _WorkoutPageState extends State<WorkoutPage>
 
         if (seedEntry.isNotEmpty) {
           _seedHintsByKey[hintKey] = seedEntry;
+        }
+
+        // Restore BB2-verified RIR so set1SuggestedWeight slow-path uses correct RIR
+        // (merge is skipped in Phase 0; this is the only way to repopulate _resolvedBB2Values)
+        final bool s1RirFromBb2 = exData['set1_rir_from_bb2'] == true;
+        if (s1RirFromBb2 && s1RirNum != null) {
+          (_resolvedBB2Values[exId.toLowerCase()] ??= {})['rir'] = s1RirNum;
         }
 
         restoredExercises++;
@@ -10896,7 +10910,15 @@ class _WorkoutPageState extends State<WorkoutPage>
         {
           'name': _selectedExercisesWithCircuits[i]['name'],
           'circuitIndex': _selectedExercisesWithCircuits[i]['circuitIndex'],
-          'sets': _workoutSets[i].map((set) => set.toMap()).toList(),
+          'sets': List.generate(_workoutSets[i].length, (s) {
+            final set = _workoutSets[i][s];
+            final m = Map<String, dynamic>.from(set.toMap());
+
+            // 🔒 Preserve “user left blank” as null (NOT 0)
+            if (set.rir == null) m['rir'] = null;
+
+            return m;
+          }),
         }),
       };
 
@@ -14155,7 +14177,8 @@ class _WorkoutPageState extends State<WorkoutPage>
 
                 sets[0].reps = (values['reps'] as num?)?.toInt();
                 sets[0].weight = display;
-                sets[0].rir = (values['rir'] as num?)?.toDouble();
+                final double? rirNum = (values['rir'] as num?)?.toDouble();
+                sets[0].rir = (rirNum != null && rirNum != 0.0) ? rirNum : null;
               }
 
               debugPrint(
@@ -14205,9 +14228,6 @@ class _WorkoutPageState extends State<WorkoutPage>
                   print(
                       '🪙 [WES HydrateWeight] ex=$exName isBW=$isBwEx abs=$abs added=$added display=$display '
                           '→ wrote text="${_weightControllers[idx][0].text}"');
-                }
-                if (_rirControllers[idx][0].text.trim().isEmpty) {
-                  _rirControllers[idx][0].text = values['rir']?.toString() ?? '';
                 }
               }
 
