@@ -2840,6 +2840,39 @@ class _WorkoutPageState extends State<WorkoutPage>
         for (final d in diffs) print('   • $d');
       }
 
+      // ——— 5b) Re-hydrate _resolvedBB2Values from the fresh snapshot's planned exercises.
+      //         _mergeNewBB2ExercisesIntoDraft() ran before the server prime so its read
+      //         was stale. The snapshot's plannedExercisesJson was written by doWarmWES
+      //         from the Isar cache that step 2b just primed with server truth — so these
+      //         exercises carry the BB2-entered weight/reps/rir fields.
+      try {
+        final freshPlanned =
+            jsonDecode(after!.plannedExercisesJson) as List;
+        for (final ex in freshPlanned.whereType<Map>()) {
+          final name  = (ex['name'] ?? ex['exercise'] ?? '').toString().trim();
+          final rawId = (ex['exerciseId'] ?? ex['id'])?.toString().trim() ?? '';
+          final exId  = rawId.isNotEmpty
+              ? rawId
+              : (PeriodizationModelUtils.nameToId[name] ?? name);
+          final resolvedKey = exId.toString().toLowerCase();
+          if (resolvedKey.isEmpty) continue;
+
+          final w     = ex['weight'];
+          final r     = ex['reps'];
+          final rir   = ex['rir'];
+          final added = ex['addedWeight'];
+          if (w != null || r != null || rir != null || added != null) {
+            _resolvedBB2Values[resolvedKey] = {
+              'weight': w, 'reps': r, 'rir': rir, 'addedWeight': added,
+            };
+          }
+        }
+        print('🔄 [WES Refresh] _resolvedBB2Values re-hydrated '
+            'from snapshot plannedExercises (${_resolvedBB2Values.length} entries)');
+      } catch (e) {
+        print('⚠️ [WES Refresh] _resolvedBB2Values re-hydration failed: $e');
+      }
+
       // ——— 6) Full repaint from snapshot (rock-solid) ———
       print('🎨 [WES Refresh] Repainting from snapshot…');
       _bootPaintDone = false;          // allow fast-paint to run again
@@ -8618,7 +8651,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                   hintsByKey[rowKey] = hb;
 
                   final s1o = _rirForSet(1);
-                  if (s1o != null) {
+                  if (s1o != null && hb['s1_rir'] == null) {
                     hb['rir']    = s1o;
                     hb['s1_rir'] = s1o;
                   }
