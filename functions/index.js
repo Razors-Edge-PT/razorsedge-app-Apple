@@ -151,12 +151,82 @@ exports.repointsMonthlyAggregator = onDocumentWritten(RE_DAILY_PATH, async (even
       perLiftMonthly[lift] = liftTotal;
     }
 
+    // ── All-time per-lift bests (Fix 2: scan-only-when-needed) ──────────────
+    // A) Read current all-time state + provenance (1 read)
+    const publicRef = db.collection('users_public').doc(uid);
+    const publicSnap = await publicRef.get();
+    const publicData = publicSnap.exists ? publicSnap.data() : {};
+    const currentBests = publicData.rePointsByLift || {};
+    const provenance = publicData.rePointsByLiftSource || {};
+
+    // B) This day's updated per-lift pts are already in savedDays (in memory)
+    const dayPts = savedDays[dayKey] || {};
+
+    // C) Decide per lift: update directly or flag for scan
+    const newBests = { ...currentBests };
+    const newProvenance = { ...provenance };
+    const liftsToScan = [];
+
+    for (const lift of CANONICAL_LIFTS) {
+      const todayPts = num(dayPts[lift]);
+      const currentBest = num(currentBests[lift]);
+
+      if (todayPts >= currentBest) {
+        // New PR or tie — update directly, no scan needed
+        newBests[lift] = todayPts;
+        newProvenance[lift] = { dayKey, monthKey };
+      } else {
+        // Score went down — only scan if this day was (or may have been) the source
+        const src = provenance[lift];
+        if (!src || src.dayKey === dayKey) {
+          liftsToScan.push(lift);
+        }
+        // else: another day holds the best → current value still valid, skip
+      }
+    }
+
+    // D) Scan re_monthly only for lifts that need invalidation (0 reads in common case)
+    if (liftsToScan.length > 0) {
+      const allMonthlySnaps = await db
+        .collection('users').doc(uid).collection('re_monthly').get();
+
+      for (const lift of liftsToScan) {
+        let best = 0;
+        let bestDayKey = null;
+        let bestMonthKey = null;
+
+        for (const mSnap of allMonthlySnaps.docs) {
+          const mDays = mSnap.data().days || {};
+          for (const [dk, dPts] of Object.entries(mDays)) {
+            const pts = num(dPts[lift]);
+            if (pts > best) {
+              best = pts;
+              bestDayKey = dk;
+              bestMonthKey = mSnap.id;
+            }
+          }
+        }
+
+        newBests[lift] = best;
+        if (bestDayKey) newProvenance[lift] = { dayKey: bestDayKey, monthKey: bestMonthKey };
+        else delete newProvenance[lift];
+      }
+    }
+
+    // E) Sum rePoints across all 5 canonical lifts
+    let rePoints = 0;
+    for (const lift of CANONICAL_LIFTS) rePoints += num(newBests[lift]);
+    // ── End Fix 2 ────────────────────────────────────────────────────────────
+
 logger.info('🟦 about to write users_public', { uid, monthKey, total });
 
     await db.collection('users_public').doc(uid).set({
       rePointsMonthlyCurrent: total,
       rePointsMonthlyByLiftCurrent: perLiftMonthly,
       currentMonthKey: monthKey,
+      rePointsByLift: newBests,
+      rePoints: rePoints,
+      rePointsByLiftSource: newProvenance,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
     logger.info('🟩 wrote users_public', { uid });
