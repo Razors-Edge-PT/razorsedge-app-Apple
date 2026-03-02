@@ -11593,6 +11593,8 @@ class _WorkoutPageState extends State<WorkoutPage>
             'category': nameToCategoryMap[name] ?? '',
             'circuitIndex': circuitIndex,
             'cardId': cardId,
+            'exerciseId': nameToIdMap[name] ?? '',   // ← preserve so snapshot saves correct instanceKey
+
           };
         }),
       );
@@ -12237,7 +12239,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                 'weight': abs,
                 'weightAdded': added,
                 'addedWeight': added,
-                'rir': s.rir ?? 0.0,                    // 👈 ONLY RIR defaults to 0
+                if (s.rir != null) 'rir': s.rir!,
                 if (s.velocity != null) 'velocity': s.velocity,
                 if ((s.notes ?? '').trim().isNotEmpty) 'notes': s.notes,
               };
@@ -12246,7 +12248,7 @@ class _WorkoutPageState extends State<WorkoutPage>
             // If NO added weight was typed → reps/RIR-only BW set
             return {
               if (repsVal != null) 'reps': repsVal,
-              'rir': s.rir ?? 0.0,
+              if (s.rir != null) 'rir': s.rir!,
               if (s.velocity != null) 'velocity': s.velocity,
               if ((s.notes ?? '').trim().isNotEmpty) 'notes': s.notes,
             };
@@ -12256,7 +12258,7 @@ class _WorkoutPageState extends State<WorkoutPage>
           return {
             if (repsVal != null) 'reps': repsVal,        // 👈 0 treated as blank
             if (weightVal != null) 'weight': weightVal,  // 👈 0 treated as blank
-            'rir': s.rir ?? 0.0,                         // 👈 still 0 by default
+            if (s.rir != null) 'rir': s.rir!,
             if (s.velocity != null) 'velocity': s.velocity,
             if ((s.notes ?? '').trim().isNotEmpty) 'notes': s.notes,
           };
