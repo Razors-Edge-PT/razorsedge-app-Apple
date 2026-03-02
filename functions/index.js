@@ -140,10 +140,22 @@ exports.repointsMonthlyAggregator = onDocumentWritten(RE_DAILY_PATH, async (even
     const monthlySnap = await monthlyRef.get();
     const total = monthlySnap.exists ? num(monthlySnap.data().totalPoints) : 0;
 
+    // Derive per-lift monthly totals for medal display on the leaderboard
+    const savedDays = monthlySnap.exists ? (monthlySnap.data().days || {}) : {};
+    const perLiftMonthly = {};
+    for (const lift of CANONICAL_LIFTS) {
+      let liftTotal = 0;
+      for (const d of Object.values(savedDays)) {
+        liftTotal += num(d[lift]);
+      }
+      perLiftMonthly[lift] = liftTotal;
+    }
+
 logger.info('🟦 about to write users_public', { uid, monthKey, total });
 
     await db.collection('users_public').doc(uid).set({
       rePointsMonthlyCurrent: total,
+      rePointsMonthlyByLiftCurrent: perLiftMonthly,
       currentMonthKey: monthKey,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
