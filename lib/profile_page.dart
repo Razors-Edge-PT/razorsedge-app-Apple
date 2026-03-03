@@ -697,6 +697,9 @@ class Post {
   final int commentCount;
   final Timestamp createdAt;
   final String? localThumbPath; // for instant preview before upload completes
+  final bool promoteToHome;     // RE daily: shared to Home feed
+  final List<String> badges;    // RE daily: earned badges list
+  final double dailyTotal;      // RE daily: total RE points scored
 
 
   Post({
@@ -712,7 +715,10 @@ class Post {
     required this.goodLiftCount,
     required this.commentCount,
     required this.createdAt,
-    this.localThumbPath, // 👈 add here
+    this.localThumbPath,
+    this.promoteToHome = false,
+    this.badges = const [],
+    this.dailyTotal = 0.0,
   });
 
   static Post fromSnap(DocumentSnapshot<Map<String, dynamic>> s) {
@@ -730,6 +736,9 @@ class Post {
       goodLiftCount: (d['goodLiftCount'] as num?)?.toInt() ?? 0,
       commentCount: (d['commentCount'] as num?)?.toInt() ?? 0,
       createdAt: (d['createdAt'] as Timestamp?) ?? Timestamp.now(),
+      promoteToHome: (d['promoteToHome'] as bool?) == true,
+      badges: ((d['badges'] as List?)?.map((e) => e.toString()).toList()) ?? const [],
+      dailyTotal: (d['dailyTotal'] as num?)?.toDouble() ?? 0.0,
     );
   }
 
@@ -764,6 +773,9 @@ class Post {
       commentCount: commentCount ?? this.commentCount,
       createdAt: createdAt ?? this.createdAt,
       localThumbPath: clearLocalThumbPath ? null : (localThumbPath ?? this.localThumbPath),
+      promoteToHome: this.promoteToHome,
+      badges: this.badges,
+      dailyTotal: this.dailyTotal,
     );
   }
 

@@ -2085,7 +2085,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                   SizedBox(
                     width: 95, // max width
                     child: Text(
-                      _actingAsEmail ?? 'loading...',
+                      _actingAsEmail ?? '...',
                       style: const TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.bold,
@@ -3232,35 +3232,19 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                     );
                                   }
 
-                                  // re_daily: check eligibility first (promoted + has badge + points > 0)
-                                  return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                                    stream: FirebaseFirestore.instance.collection('posts').doc(p.id).snapshots().handleError((_) {}),
-
-                                    builder: (context, snap) {
-                                      if (snap.hasError) return const SizedBox.shrink();
-
-                                      if (!snap.hasData) return const SizedBox.shrink();
-                                      final d = snap.data!.data() ?? const <String, dynamic>{};
-                                      final promoted = (d['promoteToHome'] as bool?) == true;
-                                      final badges = (d['badges'] as List?) ?? const [];
-                                      final hasBadge = badges.isNotEmpty;
-                                      final total = (d['dailyTotal'] as num?)?.toDouble() ?? 0.0;
-
-                                      if (!promoted || !hasBadge || total <= 0.0) {
-                                        return const SizedBox.shrink(); // 🚫 don’t render a card at all
-                                      }
-
-                                      return FeedPostCard(
-                                        post: p,
-                                        isHomeContext: true,
-                                        onOpenDetail: () async {
-                                          await Navigator.of(context).push(
-                                            MaterialPageRoute(builder: (_) => ReDailyDetailPage(postId: p.id)),
-                                          );
-                                          if (!context.mounted) return;
-                                          _loadInitialHomeFeed();
-                                        },
+                                  // re_daily: eligibility captured in Post model at load time — no stream needed
+                                  if (!p.promoteToHome || p.badges.isEmpty || p.dailyTotal <= 0.0) {
+                                    return const SizedBox.shrink();
+                                  }
+                                  return FeedPostCard(
+                                    post: p,
+                                    isHomeContext: true,
+                                    onOpenDetail: () async {
+                                      await Navigator.of(context).push(
+                                        MaterialPageRoute(builder: (_) => ReDailyDetailPage(postId: p.id)),
                                       );
+                                      if (!context.mounted) return;
+                                      _loadInitialHomeFeed();
                                     },
                                   );
                                 }),

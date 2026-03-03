@@ -1,6 +1,35 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+class _UserPublicData {
+  final String display;
+  final String? photoURL;
+  const _UserPublicData({required this.display, this.photoURL});
+}
+
+/// Session-scoped cache: uid → Future<_UserPublicData>.
+/// putIfAbsent ensures exactly one Firestore read per uid per process lifetime.
+/// Safe for coach mode: keyed by uid so different athletes never collide.
+class _UserPublicCache {
+  static final Map<String, Future<_UserPublicData>> _futures = {};
+
+  static Future<_UserPublicData> fetch(String uid) =>
+      _futures.putIfAbsent(uid, () => _load(uid));
+
+  static Future<_UserPublicData> _load(String uid) async {
+    final snap = await FirebaseFirestore.instance
+        .collection('users_public')
+        .doc(uid)
+        .get();
+    final m = snap.data() ?? {};
+    final u = (m['username'] ?? '').toString().trim();
+    final dn = (m['displayName'] ?? '').toString().trim();
+    final display = u.isNotEmpty ? u : (dn.isNotEmpty ? dn : '?');
+    final p = (m['photoURL'] ?? '').toString().trim();
+    return _UserPublicData(display: display, photoURL: p.isEmpty ? null : p);
+  }
+}
+
 class PostHeader extends StatelessWidget {
   final String ownerUid;
   final DateTime createdAt;
@@ -19,19 +48,11 @@ class PostHeader extends StatelessWidget {
     final now = DateTime.now();
     final ago = _timeAgo(now.difference(createdAt));
 
-    return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      future: FirebaseFirestore.instance.collection('users_public').doc(ownerUid).get(),
+    return FutureBuilder<_UserPublicData>(
+      future: _UserPublicCache.fetch(ownerUid),
       builder: (ctx, snap) {
-        String? photoURL;
-        String display = ownerUid;
-        if (snap.hasData && snap.data!.data() != null) {
-          final m = snap.data!.data()!;
-          final u = (m['username'] ?? '').toString().trim();
-          final dn = (m['displayName'] ?? '').toString().trim();
-          if (u.isNotEmpty) display = u; else if (dn.isNotEmpty) display = dn;
-          final p = (m['photoURL'] ?? '').toString().trim();
-          if (p.isNotEmpty) photoURL = p;
-        }
+        final String display = snap.data?.display ?? '...';
+        final String? photoURL = snap.data?.photoURL;
 
         return Row(
           children: [
