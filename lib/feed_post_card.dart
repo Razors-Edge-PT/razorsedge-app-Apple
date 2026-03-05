@@ -6,6 +6,8 @@ import 'profile_page.dart';
 import 'post_service.dart';
 import 'post_header.dart';
 import 're_daily.dart'; // for ReDailyPostCard
+import 'package:video_player/video_player.dart';
+import 'package:visibility_detector/visibility_detector.dart';
 
 
 class FeedPostCard extends StatelessWidget {
@@ -23,8 +25,6 @@ class FeedPostCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isVideo = post.mediaType == 'video';
-    final mediaUrl = isVideo ? post.thumbUrl : post.smallUrl;
     final isReDaily = (post.type == 're_daily');
 
     return SizedBox(
@@ -47,28 +47,7 @@ class FeedPostCard extends StatelessWidget {
 
               // Media / Content (tap to open detail)
               if (!isReDaily)
-                GestureDetector(
-                  onTap: onOpenDetail,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: AspectRatio(
-                      aspectRatio: 4 / 5, // keep image/video feed height
-                      child: FutureBuilder<File>(
-                        future: DefaultCacheManager().getSingleFile(mediaUrl),
-                        builder: (ctx, snap) {
-                          if (snap.connectionState == ConnectionState.done && snap.hasData) {
-                            return Image.file(
-                              snap.data!,
-                              fit: BoxFit.cover,
-                              width: double.infinity,
-                            );
-                          }
-                          return const ColoredBox(color: Color(0x11000000));
-                        },
-                      ),
-                    ),
-                  ),
-                )
+                _FeedMediaSection(key: ValueKey(post.id), post: post, onTap: onOpenDetail)
               else
               // Render the RE Daily card in place of media
                 GestureDetector(
@@ -263,6 +242,156 @@ class _LastTwoComments extends StatelessWidget {
   }
 }
 
+
+// ─── Feed media section ──────────────────────────────────────────────────────
+
+const double _kAutoplayThreshold = 0.6;
+
+class _FeedMediaSection extends StatefulWidget {
+  final Post post;
+  final VoidCallback onTap;
+  const _FeedMediaSection({super.key, required this.post, required this.onTap});
+
+  @override
+  State<_FeedMediaSection> createState() => _FeedMediaSectionState();
+}
+
+class _FeedMediaSectionState extends State<_FeedMediaSection> {
+  Future<File>? _imageFuture;
+  Future<File>? _thumbFuture;
+  VideoPlayerController? _ctrl;
+  bool _videoReady = false;
+  bool _shouldPlay = false;
+  bool _isInitializing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.post.mediaType == 'video') {
+      final t = widget.post.thumbUrl;
+      if (t.isNotEmpty) _thumbFuture = DefaultCacheManager().getSingleFile(t);
+      // _initVideo() NOT called here — lazy on visibility
+    } else {
+      _imageFuture = DefaultCacheManager().getSingleFile(widget.post.smallUrl);
+    }
+  }
+
+  void _initVideo() {
+    if (_ctrl != null || _isInitializing) return;
+    final videoUrl = widget.post.smallUrl;
+    if (videoUrl.isEmpty) return;
+    _isInitializing = true;
+    _ctrl = VideoPlayerController.networkUrl(Uri.parse(videoUrl));
+    _ctrl!.initialize().then((_) {
+      if (!mounted) return;
+      _ctrl!.setLooping(true);
+      _ctrl!.setVolume(0);
+      setState(() => _videoReady = true);
+      if (_shouldPlay) _ctrl!.play();
+    }).catchError((_) {
+      _isInitializing = false;
+    });
+  }
+
+  void _onVisibilityChanged(VisibilityInfo info) {
+    final wantsPlay = info.visibleFraction >= _kAutoplayThreshold;
+    if (wantsPlay == _shouldPlay) return;
+    setState(() => _shouldPlay = wantsPlay);
+    if (wantsPlay) {
+      if (_ctrl == null && !_isInitializing) _initVideo();
+      if (_videoReady) _ctrl?.play();
+    } else {
+      if (_videoReady) _ctrl?.pause();
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: widget.onTap,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: AspectRatio(
+          aspectRatio: 4 / 5,
+          child: widget.post.mediaType == 'video' ? _buildVideo() : _buildImage(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildImage() {
+    return FutureBuilder<File>(
+      future: _imageFuture,
+      builder: (ctx, snap) {
+        if (snap.connectionState == ConnectionState.done && snap.hasData) {
+          return Image.file(snap.data!, fit: BoxFit.cover, width: double.infinity);
+        }
+        return const ColoredBox(color: Color(0x11000000));
+      },
+    );
+  }
+
+  Widget _buildVideo() {
+    return VisibilityDetector(
+      key: Key('feed-vid-${widget.post.id}'),
+      onVisibilityChanged: _onVisibilityChanged,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          _buildThumb(),
+          if (_videoReady && _ctrl != null)
+            SizedBox.expand(
+              child: FittedBox(
+                fit: BoxFit.cover,
+                child: SizedBox(
+                  width: _ctrl!.value.size.width,
+                  height: _ctrl!.value.size.height,
+                  child: VideoPlayer(_ctrl!),
+                ),
+              ),
+            ),
+          const Align(
+            alignment: Alignment.topRight,
+            child: Padding(
+              padding: EdgeInsets.all(8),
+              child: Icon(Icons.play_circle_outline, color: Colors.white70, size: 28),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildThumb() {
+    final localPath = widget.post.localThumbPath;
+    if (localPath != null && localPath.isNotEmpty) {
+      final f = File(localPath);
+      if (f.existsSync()) {
+        return Image.file(f, fit: BoxFit.cover, width: double.infinity);
+      }
+    }
+    if (_thumbFuture != null) {
+      return FutureBuilder<File>(
+        future: _thumbFuture,
+        builder: (ctx, snap) {
+          if (snap.connectionState == ConnectionState.done && snap.hasData) {
+            return Image.file(snap.data!, fit: BoxFit.cover, width: double.infinity);
+          }
+          return const ColoredBox(color: Color(0x11000000));
+        },
+      );
+    }
+    return const ColoredBox(color: Color(0x11000000));
+  }
+}
+
+// ─── RE Daily detail page ─────────────────────────────────────────────────────
 
 class ReDailyDetailPage extends StatelessWidget {
   final String postId;
