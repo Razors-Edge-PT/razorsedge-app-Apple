@@ -2230,10 +2230,19 @@ class _WorkoutPageState extends State<WorkoutPage>
 
   bool _hasTypedWeightAndRepsInAnySet(int i) {
     if (i < 0 || i >= _weightControllers.length) return false;
+
     for (int j = 0; j < _weightControllers[i].length; j++) {
-      final w = double.tryParse(_weightControllers[i][j].text.trim()) ?? 0.0;
-      final r = int.tryParse(_repsControllers[i][j].text.trim()) ?? 0;
-      if (w > 0 && r > 0) return true;
+      final wText = _weightControllers[i][j].text.trim();
+      final rText = _repsControllers[i][j].text.trim();
+
+      // Must be user-entered (not null/empty). This allows "0" explicitly.
+      if (wText.isEmpty || rText.isEmpty) continue;
+
+      final w = double.tryParse(wText);
+      final r = int.tryParse(rText);
+
+      // Reps must be > 0; weight can be 0+ as long as it was typed.
+      if (w != null && r != null && w >= 0 && r > 0) return true;
     }
     return false;
   }
