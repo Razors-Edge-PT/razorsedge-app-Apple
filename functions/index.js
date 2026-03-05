@@ -117,7 +117,13 @@ exports.repointsMonthlyAggregator = onDocumentWritten(RE_DAILY_PATH, async (even
       }
     }
 
-    // 2) Transaction: update this day in month doc + recompute totals
+    // 2) Transaction: update this day in month doc + recompute totals.
+    // Also atomically write monthly totals to users_public to prevent race conditions
+    // where two concurrent invocations overwrite each other with stale partial sums.
+    const publicRef = db.collection('users_public').doc(uid);
+    let monthTotal = 0;
+    let savedDays = {};
+
     await db.runTransaction(async (tx) => {
       const snap = await tx.get(monthlyRef);
       const data = snap.exists ? snap.data() : {};
@@ -126,7 +132,18 @@ exports.repointsMonthlyAggregator = onDocumentWritten(RE_DAILY_PATH, async (even
 
       let total = 0;
       for (const d of Object.values(days)) {
-        for (const lift of CANONICAL_LIFTS) total += num(d[lift]);
+        if (typeof d === 'number') {
+          total += num(d); // legacy scalar written by old client-side _updateMonthly()
+        } else {
+          for (const lift of CANONICAL_LIFTS) total += num(d[lift]);
+        }
+      }
+
+      const perLiftMonthly = {};
+      for (const lift of CANONICAL_LIFTS) {
+        let liftTotal = 0;
+        for (const d of Object.values(days)) liftTotal += num(d[lift]);
+        perLiftMonthly[lift] = liftTotal;
       }
 
       tx.set(monthlyRef, {
@@ -134,26 +151,22 @@ exports.repointsMonthlyAggregator = onDocumentWritten(RE_DAILY_PATH, async (even
         totalPoints: total,
         recomputedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
+
+      tx.set(publicRef, {
+        rePointsMonthlyCurrent: total,
+        rePointsMonthlyByLiftCurrent: perLiftMonthly,
+        currentMonthKey: monthKey,
+      }, { merge: true });
+
+      monthTotal = total;
+      savedDays = { ...days };
     });
 
-    // 3) Read back the saved total and sync to users_public for the client
-    const monthlySnap = await monthlyRef.get();
-    const total = monthlySnap.exists ? num(monthlySnap.data().totalPoints) : 0;
-
-    // Derive per-lift monthly totals for medal display on the leaderboard
-    const savedDays = monthlySnap.exists ? (monthlySnap.data().days || {}) : {};
-    const perLiftMonthly = {};
-    for (const lift of CANONICAL_LIFTS) {
-      let liftTotal = 0;
-      for (const d of Object.values(savedDays)) {
-        liftTotal += num(d[lift]);
-      }
-      perLiftMonthly[lift] = liftTotal;
-    }
+    // 3) Values captured from transaction — no separate Firestore read needed
+    const total = monthTotal;
 
     // ── All-time per-lift bests (Fix 2: scan-only-when-needed) ──────────────
     // A) Read current all-time state + provenance (1 read)
-    const publicRef = db.collection('users_public').doc(uid);
     const publicSnap = await publicRef.get();
     const publicData = publicSnap.exists ? publicSnap.data() : {};
     const currentBests = publicData.rePointsByLift || {};
@@ -220,10 +233,7 @@ exports.repointsMonthlyAggregator = onDocumentWritten(RE_DAILY_PATH, async (even
 
 logger.info('🟦 about to write users_public', { uid, monthKey, total });
 
-    await db.collection('users_public').doc(uid).set({
-      rePointsMonthlyCurrent: total,
-      rePointsMonthlyByLiftCurrent: perLiftMonthly,
-      currentMonthKey: monthKey,
+    await publicRef.set({
       rePointsByLift: newBests,
       rePoints: rePoints,
       rePointsByLiftSource: newProvenance,

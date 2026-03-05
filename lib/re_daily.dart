@@ -196,13 +196,10 @@ class DailyReCalculator {
     );
     debugPrint('[RE] compute DECIDE uid=$uid day=$dayKey total=${withBadges.dailyTotal} bw=${withBadges.bodyweightUsedKg} badges=${withBadges.badges.length}');
 
-    // 7) Upsert monthly rollup (also preserved)
-    await _updateMonthly(
-      uid: uid,
-      monthKey: monthKey,
-      dayKey: dayKey,
-      dayTotal: withBadges.dailyTotal,
-    );
+    // 7) Monthly rollup is owned by the Cloud Function (repointsMonthlyAggregator).
+    // Do NOT call _updateMonthly() here — it wrote scalar day totals into
+    // re_monthly.days which broke the CF's per-lift map summation, causing
+    // users_public.rePointsMonthlyCurrent to show a single day's value.
 
     // 8) Only create a feed post if points > 0
     if (!noPoints) {
