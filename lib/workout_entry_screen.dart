@@ -9200,6 +9200,7 @@ class _WorkoutPageState extends State<WorkoutPage>
       List exList = const [];
       List<Map<String, dynamic>> wesPlannedList = const [];
 
+
       bool _usedFastPath = false;
       // ⚡ FAST PATH: WESInitSnapshot → immediate overlay of previous sets if present
       try {
@@ -9889,6 +9890,118 @@ class _WorkoutPageState extends State<WorkoutPage>
 
       // 🔒 SAFETY NET: keep final order as circuit 0,1,2,... (within circuit: stable)
       _sortRowsByCircuitIndex();
+
+      // [HYDRATE FROM SERVER] Restore performed set values into empty controllers.
+      // Runs on another device / stale day when no local Isar snapshot exists,
+      // so _paintFromSnapshotIfAny() returned early without hydrating controllers.
+      // Runs AFTER sort so all parallel arrays (exercises, sets, controllers) are
+      // in final order and rowIdx is safe to use across all of them.
+      //
+      // Source: overlayRows exclusively (= Firestore exercises[] field).
+      // _buildWorkoutPayload syncs controllers→SetDetails before saving, so
+      // hint-seeded SetDetails values are overwritten to null when the controller
+      // is empty; those sets fail the setsWithData filter and are never persisted.
+      // Therefore exercises[] contains only user-entered values — restoring them
+      // to controllers is always correct and never promotes BB2/hint values.
+      //
+      // wesPlannedList is never read here → BB2 hints/overrides never promoted.
+      // Guard: controller.text.isEmpty → never stomps fast-paint or user-typed values.
+      if (!_claudeBulletPhase0Active) {
+        for (final row in overlayRows) {
+          final String rowName = (row['name'] ?? '').toString().trim();
+          if (rowName.isEmpty) continue;
+          final int rowCi = (row['circuitIndex'] is int)
+              ? row['circuitIndex'] as int
+              : int.tryParse('${row['circuitIndex'] ?? 0}') ?? 0;
+          final List rawSets = (row['sets'] as List?) ?? const [];
+          if (rawSets.isEmpty) continue; // not performed; leave empty so hints show
+
+          // Build stable key matching _rowKeyBy: exerciseId|ci (primary),
+          // name-based fallback only when Firestore row genuinely lacks exerciseId.
+          final String rowRawId = (row['exerciseId'] ?? row['id'])?.toString().trim() ?? '';
+          final String rowExId = rowRawId.isNotEmpty
+              ? rowRawId
+              : (PeriodizationModelUtils.nameToId[rowName] ?? rowName).toString().trim();
+          final String rowKey = '$rowExId|$rowCi';
+
+          // Find matching row in sorted parallel arrays by exerciseId|ci.
+          // _rowKeyBy uses the same primary-id-then-name-fallback logic.
+          int rowIdx = -1;
+          for (int j = 0; j < _selectedExercisesWithCircuits.length; j++) {
+            if (_rowKeyBy(j) == rowKey) { rowIdx = j; break; }
+          }
+          if (rowIdx < 0 || rowIdx >= _weightControllers.length) {
+            print('⬜ [LoadExisting Hydrate] $rowName|$rowCi (key=$rowKey) → no matching UI row');
+            continue;
+          }
+
+          final bool isBw = PeriodizationModelUtils.isBodyweightExercise(id: rowExId, name: rowName);
+          int hydratedCount = 0;
+
+          for (int k = 0; k < rawSets.length; k++) {
+            if (k >= _weightControllers[rowIdx].length) break;
+            final m = Map<String, dynamic>.from(rawSets[k] as Map);
+            final double? absW  = (m['weight'] as num?)?.toDouble();
+            // Both 'addedWeight' and 'weightAdded' are written by _upsertWorkoutToFirestore
+            final double? addW  = (m['addedWeight'] as num?)?.toDouble()
+                               ?? (m['weightAdded'] as num?)?.toDouble();
+            final int?    reps  = (m['reps'] as num?)?.toInt();
+            final double? rir   = (m['rir'] as num?)?.toDouble();
+            final double? vel   = (m['velocity'] as num?)?.toDouble();
+            final String? notes = m['notes'] as String?;
+
+            double? displayWeight;
+            if (isBw) {
+              if (addW != null) {
+                displayWeight = addW;
+              } else if (absW != null) {
+                displayWeight = PeriodizationModelUtils.toDisplayAddedWeight(
+                  uid: uid,
+                  absoluteKg: absW,
+                  exerciseId: rowExId,
+                  exerciseName: rowName,
+                  asOfDate: _selectedDate,
+                );
+              }
+            } else {
+              displayWeight = absW;
+            }
+
+            // Only fill empty controllers — never stomp fast-paint or user-typed values.
+            if (_weightControllers[rowIdx][k].text.isEmpty && displayWeight != null) {
+              _weightControllers[rowIdx][k].text = displayWeight.toString();
+              if (k < _workoutSets[rowIdx].length) _workoutSets[rowIdx][k].weight = displayWeight;
+            }
+            if (_repsControllers[rowIdx][k].text.isEmpty && reps != null) {
+              _repsControllers[rowIdx][k].text = reps.toString();
+              if (k < _workoutSets[rowIdx].length) _workoutSets[rowIdx][k].reps = reps;
+            }
+            if (_rirControllers[rowIdx][k].text.isEmpty && rir != null) {
+              _rirControllers[rowIdx][k].text = rir.toString();
+              if (k < _workoutSets[rowIdx].length) _workoutSets[rowIdx][k].rir = rir;
+            }
+            if (vel != null && k < _velocityControllers[rowIdx].length &&
+                _velocityControllers[rowIdx][k].text.isEmpty) {
+              _velocityControllers[rowIdx][k].text = vel.toString();
+            }
+            if (notes != null && notes.trim().isNotEmpty &&
+                k < _notesControllers[rowIdx].length &&
+                _notesControllers[rowIdx][k].text.isEmpty) {
+              _notesControllers[rowIdx][k].text = notes.trim();
+            }
+            if (displayWeight != null || reps != null || rir != null) hydratedCount++;
+          }
+
+          if (hydratedCount > 0) {
+            print('🔵 [LoadExisting Hydrate] $rowName|$rowCi (key=$rowKey) → '
+                'hydrated $hydratedCount set(s) from Firestore exercises[] (performed data, not hints/BB2)');
+          } else {
+            print('⬜ [LoadExisting Hydrate] $rowName|$rowCi → exercises[] present but all values null (skipped)');
+          }
+        }
+      } else {
+        print('⬜ [LoadExisting Hydrate] skipped — _claudeBulletPhase0Active=true');
+      }
 
       // 7) Ensure listeners on any new controllers
       _attachDirtyListeners();
