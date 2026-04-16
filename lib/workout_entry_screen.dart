@@ -14572,11 +14572,10 @@ class _WorkoutPageState extends State<WorkoutPage>
                   return;
                 }
 
-                // reps/weight intentionally NOT written to SetDetails — BB2 values
+                // reps/weight/rir intentionally NOT written to SetDetails — BB2 values
                 // must remain hint-only (in _resolvedBB2Values) and must never
-                // appear as user-entered model data.
-                final double? rirNum = (values['rir'] as num?)?.toDouble();
-                sets[0].rir = (rirNum != null && rirNum != 0.0) ? rirNum : null;
+                // appear as user-entered model data. RIR is available via
+                // getRirFromPlanOrInput() → _resolvedBB2Values for hint computation.
               }
 
               debugPrint(
