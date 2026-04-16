@@ -10395,69 +10395,35 @@ class _WorkoutPageState extends State<WorkoutPage>
 
 
   Future<void> _loadTemplate(Template template) async {
-
-    // Match the cardId format used in _showExercisePickerDialog
     final String ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
     int _ts() => DateTime.now().microsecondsSinceEpoch;
 
-    // ✅ Persist current textfield values into _workoutSets BEFORE we rearrange anything
-    await _persistDraftLocally();
+    // ── 1) Snapshot current state synchronously (before any await) for undo ──
+    final snapExercises = List<Map<String,dynamic>>.from(
+        _selectedExercisesWithCircuits.map((e) => Map<String,dynamic>.from(e)));
+    final snapSets = _workoutSets
+        .map((r) => r.map((s) => SetDetails(
+              reps: s.reps, weight: s.weight, rir: s.rir,
+              velocity: s.velocity, notes: s.notes)).toList())
+        .toList();
+    final snapRepsT   = _repsControllers.map((r) => r.map((c) => c.text).toList()).toList();
+    final snapWeightT = _weightControllers.map((r) => r.map((c) => c.text).toList()).toList();
+    final snapRirT    = _rirControllers.map((r) => r.map((c) => c.text).toList()).toList();
+    final snapVelT    = _velocityControllers.map((r) => r.map((c) => c.text).toList()).toList();
+    final snapNotesT  = _notesControllers.map((r) => r.map((c) => c.text).toList()).toList();
+    final snapName    = _workoutNameController.text;
 
+    // ── 2) Clear all persistence layers + in-memory state ──
+    final snapBb2 = await _clearDayForTemplateLoad();
 
-    // Build a lookup of existing rows by (exerciseId + circuitIndex) so values stay attached
-    String keyForExistingRow(Map<String, dynamic> row) {
-      final ci = (row['circuitIndex'] ?? 0).toString();
-
-      // Prefer exerciseId/id (consistent with render key formula)
-      final rawId = (row['exerciseId'] ?? row['id'])?.toString().trim() ?? '';
-      if (rawId.isNotEmpty) return '${rawId.toLowerCase()}|$ci';
-
-      // Fallback: parse from cardId (with empty guard)
-      final cardId = (row['cardId'] ?? '').toString();
-      final parts = cardId.split('|');
-      if (parts.length >= 5) {
-        final parsed = parts[3].trim().toLowerCase();
-        if (parsed.isNotEmpty) return '$parsed|${parts[4].trim()}';
-      }
-
-      // Final fallback: name lookup
-      final name = (row['name'] ?? '').toString();
-      final exId = (PeriodizationModelUtils.nameToId[name] ?? name).trim().toLowerCase();
-      return '$exId|$ci';
-    }
-
-    // Snapshot existing rows + their attached data so we can rebuild without mixing anything
+    // ── 3) Load template exercises onto the now-empty day ──
+    // existingExerciseIds: intra-template dedup only (day is already cleared)
     final existingExerciseIds = <String>{};
 
-    String exIdFromRow(Map<String, dynamic> row) {
-      // Prefer exerciseId/id (consistent with render key formula)
-      final rawId = (row['exerciseId'] ?? row['id'])?.toString().trim() ?? '';
-      if (rawId.isNotEmpty) return rawId.toLowerCase();
-
-      // Fallback: parse from cardId (with empty guard)
-      final cardId = (row['cardId'] ?? '').toString();
-      final parts = cardId.split('|');
-      if (parts.length >= 5) {
-        final parsed = parts[3].trim().toLowerCase();
-        if (parsed.isNotEmpty) return parsed;
-      }
-
-      final name = (row['name'] ?? '').toString();
-      return (PeriodizationModelUtils.nameToId[name] ?? name).trim().toLowerCase();
-    }
-
-    for (final row in _selectedExercisesWithCircuits) {
-      existingExerciseIds.add(exIdFromRow(row));
-    }
-
-
     setState(() {
-      // If you want template name ONLY when workout name is empty:
-      if (_workoutNameController.text.trim().isEmpty) {
-        _workoutNameController.text = template.name;
-      }
+      final abbrevDate = DateFormat('MMM d').format(_selectedDate); // e.g. "Apr 16"
+      _workoutNameController.text = '${template.name} • $abbrevDate';
 
-      // Add missing template exercises (do NOT wipe existing ones)
       for (final entry in template.exercises.asMap().entries) {
         final int idx = entry.key;
         final dynamic e = entry.value;
@@ -10465,19 +10431,15 @@ class _WorkoutPageState extends State<WorkoutPage>
         final String name = (e is String) ? e : (e['name'] ?? 'Unnamed');
 
         final int circuitIndex =
-        (e is Map && e.containsKey('circuitIndex')) ? (e['circuitIndex'] as int) : 0;
+            (e is Map && e.containsKey('circuitIndex')) ? (e['circuitIndex'] as int) : 0;
 
         final String exId =
-        (PeriodizationModelUtils.nameToId[name] ?? name).trim().toLowerCase();
+            (PeriodizationModelUtils.nameToId[name] ?? name).trim().toLowerCase();
 
         final String category =
-        (e is Map && e.containsKey('category')) ? (e['category'] ?? '') as String : '';
+            (e is Map && e.containsKey('category')) ? (e['category'] ?? '') as String : '';
 
-        if (existingExerciseIds.contains(exId)) {
-          // ✅ Do not add duplicates via Load Template (one instance per exercise per day)
-          continue;
-        }
-
+        if (existingExerciseIds.contains(exId)) continue; // intra-template dedup only
 
         final String cardId = 'wes|$ymd|${_ts() + idx}|$exId|$circuitIndex';
 
@@ -10491,15 +10453,13 @@ class _WorkoutPageState extends State<WorkoutPage>
         });
         existingExerciseIds.add(exId);
 
-
-        // Create sets + controllers for the new row, using planned set-count if available
         final int newRowIndex = _selectedExercisesWithCircuits.length - 1;
         final int plannedSetCount = _plannedSetCountFor(newRowIndex);
         final int desiredSets = (plannedSetCount <= 0) ? _defaultSets : plannedSetCount;
 
         _workoutSets.add(List.generate(
           desiredSets,
-              (_) => SetDetails(reps: null, weight: null, rir: null),
+          (_) => SetDetails(reps: null, weight: null, rir: null),
         ));
 
         _repsControllers.add(List.generate(desiredSets, (_) => TextEditingController()));
@@ -10509,13 +10469,102 @@ class _WorkoutPageState extends State<WorkoutPage>
         _notesControllers.add(List.generate(desiredSets, (_) => TextEditingController()));
       }
 
-      // ✅ Keep everything aligned and ordered
       _sortRowsByCircuitIndex();
-
-      // ✅ Top-up any missing controller/sets + re-overlay values
       _initializeControllers();
     });
 
+    // ── 4) Persist the new template state immediately ──
+    _lastSavedHash = null; // clear dedup guard so the write goes through
+    unawaited(_upsertWorkoutToFirestore(alsoPushToBB2: false, markAllSaved: false));
+
+    // ── 5) Build undo callback: restores full prior state including persistence ──
+    // Capture BB2 location now so undo can restore exactly what was deleted.
+    final undoBlockId = _selectedBlockId ?? _activeBlockId ?? '';
+    final _undoBs = blockStartDate;
+    final int _undoWeekIndex;
+    final int _undoDayIndex;
+    if (_undoBs != null && _selectedDate.difference(_undoBs).inDays >= 0) {
+      final d = _selectedDate.difference(_undoBs).inDays;
+      _undoWeekIndex = d ~/ 7;
+      _undoDayIndex  = d % 7;
+    } else {
+      _undoWeekIndex = -1;
+      _undoDayIndex  = -1;
+    }
+
+    final VoidCallback undoAction = () {
+      if (!mounted) return;
+      final uid      = _cachedUid ?? '';
+      final undoYmd  = DateFormat('yyyy-MM-dd').format(_selectedDate);
+
+      setState(() {
+        _selectedExercisesWithCircuits
+          ..clear()
+          ..addAll(snapExercises);
+        _workoutSets
+          ..clear()
+          ..addAll(snapSets);
+        _repsControllers
+          ..clear()
+          ..addAll(snapRepsT.map((r) =>
+              r.map((t) => TextEditingController(text: t)).toList()).toList());
+        _weightControllers
+          ..clear()
+          ..addAll(snapWeightT.map((r) =>
+              r.map((t) => TextEditingController(text: t)).toList()).toList());
+        _rirControllers
+          ..clear()
+          ..addAll(snapRirT.map((r) =>
+              r.map((t) => TextEditingController(text: t)).toList()).toList());
+        _velocityControllers
+          ..clear()
+          ..addAll(snapVelT.map((r) =>
+              r.map((t) => TextEditingController(text: t)).toList()).toList());
+        _notesControllers
+          ..clear()
+          ..addAll(snapNotesT.map((r) =>
+              r.map((t) => TextEditingController(text: t)).toList()).toList());
+        _workoutNameController.text = snapName;
+      });
+      _attachDirtyListeners();
+      // Restore BB2 planned data that was deleted during template load
+      if (_undoWeekIndex >= 0 && undoBlockId.isNotEmpty && uid.isNotEmpty) {
+        unawaited(BlockPlanCache.putDay(
+          uid: uid, blockId: undoBlockId,
+          weekIndex: _undoWeekIndex, dayIndex: _undoDayIndex,
+          exercises: snapBb2,
+        ).catchError((e) => print('⚠️ [TemplateUndo] Isar BB2 restore failed: $e')));
+        unawaited(FirebaseFirestore.instance
+            .collection('planned_blocks').doc(uid)
+            .collection('blocks').doc(undoBlockId)
+            .collection('weeks').doc('week_$_undoWeekIndex')
+            .collection('days').doc('day_$_undoDayIndex')
+            .set({'exercises': snapBb2}, SetOptions(merge: true))
+            .catchError((e) => print('⚠️ [TemplateUndo] Firestore BB2 restore failed: $e')));
+      }
+      _lastSavedHash = null;
+      unawaited(_upsertWorkoutToFirestore(alsoPushToBB2: false, markAllSaved: false));
+      unawaited(_persistDraftLocally());
+    };
+
+    if (!_applyingUndo) _undoStack.add(undoAction);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Loaded "${template.name}" — previous exercises replaced'),
+        action: SnackBarAction(
+          label: 'Undo',
+          textColor: Colors.blueGrey.shade700,
+          onPressed: () {
+            if (_applyingUndo) return;
+            _applyingUndo = true;
+            _undoStack.remove(undoAction);
+            undoAction();
+            _applyingUndo = false;
+          },
+        ),
+      ));
+    }
   }
 
   String _blockHeaderTitle(String blockId, List<Template> templates) {
@@ -10728,6 +10777,38 @@ class _WorkoutPageState extends State<WorkoutPage>
     );
 
     if (selectedTemplate != null) {
+      // Show confirmation only when the day already has real entered/saved data.
+      if (_selectedDayHasRealData()) {
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: Colors.blueGrey.shade900,
+            title: const Text(
+              'Swap the whole day?',
+              style: TextStyle(color: Colors.white),
+            ),
+            content: const Text(
+              "Loading a new template will clear all the exercises currently "
+              "showing here and bring in the new crew. You sure?",
+              style: TextStyle(color: Colors.white70),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text(
+                  'Yes, clear it',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+        );
+        if (confirmed != true) return;
+      }
       await _loadTemplate(selectedTemplate);
     }
 
@@ -11031,6 +11112,137 @@ class _WorkoutPageState extends State<WorkoutPage>
       }
     }
     print('[WES_REENTER] _syncControllersToModel END — synced $synced sets');
+  }
+
+  /// Clears all WES and BB2 persistence layers for the selected day before
+  /// loading a template. Returns the BB2 planned exercises that were present
+  /// before deletion — the caller uses this list to restore BB2 data on undo.
+  ///
+  /// BB2 planned data is deleted (not suppressed) so that the merge runs
+  /// normally afterwards and finds nothing. If the user later creates a new
+  /// BB2 plan for this date, [_mergeNewBB2ExercisesIntoDraft] will pick it up
+  /// without any special flags.
+  Future<List<Map<String, dynamic>>> _clearDayForTemplateLoad() async {
+    if (!mounted) return const [];
+    final uid     = _cachedUid ?? '';
+    final blockId = _selectedBlockId ?? _activeBlockId ?? '';
+    final ymd     = DateFormat('yyyy-MM-dd').format(_selectedDate);
+
+    // ── 1) In-memory clear ──
+    _exitDraft = null;
+    setState(() {
+      _selectedExercisesWithCircuits.clear();
+      _workoutSets.clear();
+      _repsControllers.clear();
+      _weightControllers.clear();
+      _rirControllers.clear();
+      _velocityControllers.clear();
+      _notesControllers.clear();
+      _workoutNameController.clear();
+    });
+
+    // ── 2) Isar (WESInitSnapshot + WorkoutDayCache) + SharedPrefs draft A +
+    //    BB2 dayData key. blockStartDate:null skips the WES-BlockDay path in
+    //    nukeLocalWorkoutsForDay (we handle BB2 data ourselves below). ──
+    await nukeLocalWorkoutsForDay(
+      uid: uid,
+      blockId: blockId,
+      date: _selectedDate,
+      blockStartDate: null,
+      getWesDraftKeyForDate: (_) => _getDraftKey(),
+    );
+
+    // ── 3) SharedPrefs draft B (not covered by nukeLocalWorkoutsForDay) ──
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('workout_draft_$ymd');
+      await prefs.remove('draft_last_saved_$ymd');
+    } catch (e) {
+      print('⚠️ [TemplateLoad] Failed to clear draft B for $ymd: $e');
+    }
+
+    // ── 4) Firestore field-scoped WES workout clear ──
+    // Uses merge:true so only exercises/wesPlannedExercises are zeroed;
+    // name, date, userId, lastEditedAt are left untouched.
+    if (uid.isNotEmpty) {
+      try {
+        final docRef = FirebaseFirestore.instance
+            .collection('users')
+            .doc(uid)
+            .collection('workouts')
+            .doc(_workoutDocIdForDate(_selectedDate));
+        await docRef.set(
+          {'exercises': [], 'wesPlannedExercises': []},
+          SetOptions(merge: true),
+        );
+        print('🗑️ [TemplateLoad] Firestore WES doc cleared for $ymd');
+      } catch (e) {
+        print('⚠️ [TemplateLoad] Firestore WES clear failed for $ymd: $e');
+      }
+    }
+
+    // ── 5) Delete BB2 planned data for this date ──
+    // Derive week/day indices the same way _mergeNewBB2ExercisesIntoDraft does.
+    List<Map<String, dynamic>> snapBb2 = const [];
+    final bs = blockStartDate;
+    if (uid.isNotEmpty && blockId.isNotEmpty && bs != null) {
+      final daysSinceStart = _selectedDate.difference(bs).inDays;
+      if (daysSinceStart >= 0) {
+        final weekIndex = daysSinceStart ~/ 7;
+        final dayIndex  = daysSinceStart % 7;
+
+        // 5a) Capture current BB2 exercises from Isar for undo restoration
+        try {
+          snapBb2 = await BlockPlanCache.getDay(
+                uid: uid, blockId: blockId,
+                weekIndex: weekIndex, dayIndex: dayIndex) ?? const [];
+          print('📸 [TemplateLoad] Captured ${snapBb2.length} BB2 exercise(s) for undo');
+        } catch (e) {
+          print('⚠️ [TemplateLoad] BB2 snapshot failed: $e');
+        }
+
+        // 5b) Clear Isar BlockPlanCache for this day
+        try {
+          await BlockPlanCache.putDay(
+            uid: uid, blockId: blockId,
+            weekIndex: weekIndex, dayIndex: dayIndex,
+            exercises: [],
+          );
+          print('🗑️ [TemplateLoad] Isar BB2 BlockPlanCache cleared for $ymd');
+        } catch (e) {
+          print('⚠️ [TemplateLoad] Isar BB2 clear failed: $e');
+        }
+
+        // 5c) Clear Firestore primary planned-blocks day doc (field-scoped)
+        try {
+          await FirebaseFirestore.instance
+              .collection('planned_blocks').doc(uid)
+              .collection('blocks').doc(blockId)
+              .collection('weeks').doc('week_$weekIndex')
+              .collection('days').doc('day_$dayIndex')
+              .set({'exercises': []}, SetOptions(merge: true));
+          print('🗑️ [TemplateLoad] Firestore BB2 day doc cleared for week_$weekIndex/day_$dayIndex');
+        } catch (e) {
+          print('⚠️ [TemplateLoad] Firestore BB2 day doc clear failed: $e');
+        }
+
+        // 5d) Clear Firestore block_data fallback doc (field-scoped)
+        try {
+          await FirebaseFirestore.instance
+              .collection('planned_blocks').doc(uid)
+              .collection('blocks').doc(blockId)
+              .collection('block_data').doc(ymd)
+              .set({'rows': []}, SetOptions(merge: true));
+          print('🗑️ [TemplateLoad] Firestore BB2 block_data cleared for $ymd');
+        } catch (e) {
+          print('⚠️ [TemplateLoad] Firestore BB2 block_data clear failed: $e');
+        }
+      }
+    } else {
+      print('ℹ️ [TemplateLoad] BB2 deletion skipped (blockStartDate or uid/blockId missing)');
+    }
+
+    return snapBb2;
   }
 
   Future<void> _persistDraftLocally() async {
@@ -13133,6 +13345,29 @@ class _WorkoutPageState extends State<WorkoutPage>
 
 
 
+  /// Returns true if the currently selected day contains any real entered or
+  /// saved data — i.e. at least one weight or reps field is non-empty, or at
+  /// least one exercise has already been formally saved for this date.
+  ///
+  /// Intentionally does NOT trigger on blank shell rows, hints, or planned
+  /// structure that has no actual entered values.
+  bool _selectedDayHasRealData() {
+    // 1) Any exercise already saved (savedAt set by _loadExistingWorkoutIfAny)
+    if (_savedExerciseKeysForDate.isNotEmpty) return true;
+    // 2) Any reps or weight controller has live typed text
+    for (int i = 0; i < _repsControllers.length; i++) {
+      for (int j = 0; j < _repsControllers[i].length; j++) {
+        if (_repsControllers[i][j].text.trim().isNotEmpty) return true;
+      }
+    }
+    for (int i = 0; i < _weightControllers.length; i++) {
+      for (int j = 0; j < _weightControllers[i].length; j++) {
+        if (_weightControllers[i][j].text.trim().isNotEmpty) return true;
+      }
+    }
+    return false;
+  }
+
   bool _isExerciseSaved(int index) {
     if (index < 0 || index >= _selectedExercisesWithCircuits.length)
       return false;
@@ -14337,8 +14572,9 @@ class _WorkoutPageState extends State<WorkoutPage>
                   return;
                 }
 
-                sets[0].reps = (values['reps'] as num?)?.toInt();
-                sets[0].weight = display;
+                // reps/weight intentionally NOT written to SetDetails — BB2 values
+                // must remain hint-only (in _resolvedBB2Values) and must never
+                // appear as user-entered model data.
                 final double? rirNum = (values['rir'] as num?)?.toDouble();
                 sets[0].rir = (rirNum != null && rirNum != 0.0) ? rirNum : null;
               }
@@ -14353,45 +14589,9 @@ class _WorkoutPageState extends State<WorkoutPage>
                 return;
               }
 
-              if (_repsControllers.length > idx &&
-                  _repsControllers[idx].isNotEmpty) {
-                final exName = (_selectedExercisesWithCircuits[idx]['name'] as String)
-                    .trim();
-                final exId = PeriodizationModelUtils.nameToId[exName] ?? exName;
-                final isBwEx = PeriodizationModelUtils.isBodyweightExercise(
-                    id: exId, name: exName);
-                final uid = _cachedUid ??
-                    FirebaseAuth.instance.currentUser?.uid ?? '';
-                final DateTime? asOf = _selectedDate;
-
-                final abs = (values['weight'] as num?)?.toDouble();
-                final added = (values['addedWeight'] as num?)?.toDouble()
-                    ?? (values['weightAdded'] as num?)?.toDouble();
-
-                final display = isBwEx
-                    ? (added ??
-                    (abs != null
-                        ? PeriodizationModelUtils.toDisplayAddedWeight(
-                      uid: uid,
-                      absoluteKg: abs,
-                      exerciseId: exId,
-                      exerciseName: exName,
-                      asOfDate: asOf,
-                    )
-                        : null))
-                    : abs;
-
-                // 🚫 Don’t overwrite if the user has already typed
-                if (_repsControllers[idx][0].text.trim().isEmpty) {
-                  _repsControllers[idx][0].text = values['reps']?.toString() ?? '';
-                }
-                if (_weightControllers[idx][0].text.trim().isEmpty) {
-                  _weightControllers[idx][0].text = display?.toString() ?? '';
-                  print(
-                      '🪙 [WES HydrateWeight] ex=$exName isBW=$isBwEx abs=$abs added=$added display=$display '
-                          '→ wrote text="${_weightControllers[idx][0].text}"');
-                }
-              }
+              // BB2 reps/weight values are intentionally NOT written to
+              // controller text. They remain in _resolvedBB2Values and are
+              // surfaced only via _weightHintText / _repsHintText as hints.
 
             }
           }

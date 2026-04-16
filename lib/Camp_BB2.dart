@@ -466,13 +466,10 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         debugPrint('🔥 [BB2] Warmup queued for week=$_currentWeekPage block=$_selectedBlockId');
       }
 
-// ⚡ Early hydrate UI from Isar (controller-ready rows & circuits)
-// NOTE: this sets _earlyHydrated=true and setState() if anything found
-      await _hydrateFromMergedCache(
-        uid: _cachedUid,
-        blockId: _selectedBlockId!,
-        weekIndex: _currentWeekPage,
-      );
+// ⚡ Early hydrate from Isar already ran inside _fetchActiveBlockThenMeta (line ~610).
+// Calling it again here would overwrite the correctly-loaded Firestore state with
+// stale Isar data (WarmupBB2 at L459 hasn't finished yet), re-introducing ghost
+// planned rows. Removed — _fetchActiveBlockThenMeta's call is sufficient.
 
 // ⬇️ Continue your normal path (authoritative reconciliation)
       print("📊 Rep targets loaded.");
@@ -607,6 +604,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
     if (kDebugMode) {
       debugPrint('   ↳ compute/init took ${tCompute.elapsedMilliseconds}ms');
     }
+    debugPrint('💾 [BB2 hydrateIsar] week=$_currentWeekPage block=${_activeBlockId ?? _selectedBlockId} BEFORE Firestore load (_fetchActiveBlockThenMeta)');
     await _hydrateFromMergedCache(
       uid: _cachedUid ?? '',
       blockId: _activeBlockId ?? _selectedBlockId ?? '',
@@ -2740,6 +2738,28 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
     }
     print('   ↳ WES cache fetch (${wesCacheDocs.length} docs) took ${wesStep.elapsedMilliseconds}ms');
+
+// 6c) Pre-commit prune: remove planned rows for exercises that are already
+// completed so that section 8's setState() never renders both simultaneously.
+// Uses only data already in memory (completedWesRows + parsedByDayIndex).
+    {
+      for (int _pi = 0; _pi < 7; _pi++) {
+        final _pDate   = blockStartDate.add(Duration(days: weekIndex * 7 + _pi));
+        final _pdk     = _ymd(_pDate);
+        final _pSaved  = completedWesRows[_pdk];
+        if (_pSaved == null || _pSaved.isEmpty) continue;
+        final _pck = _completedKeysFromSaved(_pSaved);
+        // [DEBUG] log keys used for pre-commit prune
+        print('🔪 [BB2 PreCommitPrune] w$weekIndex d$_pi date=$_pdk completedKeys=$_pck');
+        if (_pck.isEmpty) continue;
+        _prunePlannedRowsInMemory(
+          parsedByDayIndex: parsedByDayIndex,
+          circuitStartsByDay: circuitStartsByDay,
+          dayIndex: _pi,
+          completedKeys: _pck,
+        );
+      }
+    }
 
 // 6b) Server reconcile in background
     unawaited(Future.wait(wesServerFetches).then((wesServerDocs) async {
@@ -6064,6 +6084,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
                           // 2) Early paint from Isar if available (fast UI)
                           if ((_cachedUid).isNotEmpty && _selectedBlockId != null) {
+                            debugPrint('💾 [BB2 hydrateIsar] week=$newPage block=$_selectedBlockId BEFORE Firestore load (onPageChanged)');
                             await _hydrateFromMergedCache(
                               uid: _cachedUid,
                               blockId: _selectedBlockId!,

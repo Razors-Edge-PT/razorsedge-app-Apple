@@ -493,7 +493,7 @@ exports.createEarlyBirdCheckoutSession = onRequest(
             planType: 'earlyBird',
           },
           // KEEP YOUR TRIAL LOGIC CONSISTENT
-          trial_period_days: 14,
+          trial_period_days: 7,
         },
       });
 
@@ -513,7 +513,7 @@ exports.createEarlyBirdCheckoutSession = onRequest(
 exports.stripeWebhook = onRequest(
  {
   maxBodySize: '1mb',
-  secrets: ['STRIPE_SECRET', 'STRIPE_WEBHOOK_SECRET'],
+  secrets: ['STRIPE_SECRET', 'STRIPE_WEBHOOK_SECRET', 'META_DATASET_ID', 'META_ACCESS_TOKEN', 'META_TEST_EVENT_CODE'],
 },
 
   async (req, res) => {
@@ -573,6 +573,67 @@ exports.stripeWebhook = onRequest(
 // ====================================
 // Stripe event handlers
 // ====================================
+// Meta Conversions API — server-side Purchase event
+// ====================================
+async function sendMetaPurchaseEvent(sessionId, email, uid, eventTime) {
+  const datasetId = process.env.META_DATASET_ID;
+  const accessToken = process.env.META_ACCESS_TOKEN;
+  const testEventCode = process.env.META_TEST_EVENT_CODE;
+
+  if (!datasetId || !accessToken) {
+    logger.warn('⚠️ Meta CAPI skipped: META_DATASET_ID or META_ACCESS_TOKEN not set');
+    return;
+  }
+
+  try {
+    const crypto = require('crypto');
+    function sha256(value) {
+      return crypto.createHash('sha256').update(value).digest('hex');
+    }
+
+    const userData = {};
+    if (email) {
+      userData.em = sha256(email.toLowerCase().trim());
+    }
+    if (uid) {
+      userData.external_id = sha256(uid);
+    }
+
+    const eventPayload = {
+      event_name: 'Purchase',
+      action_source: 'website',
+      event_source_url: 'https://www.razorsedgept.com/goodlift-thank-you',
+      event_id: sessionId,
+      event_time: eventTime,
+      custom_data: { currency: 'NZD', value: 1.00 },
+      user_data: userData,
+    };
+
+    const body = { data: [eventPayload] };
+    if (testEventCode) {
+      body.test_event_code = testEventCode;
+    }
+
+    const url = `https://graph.facebook.com/v19.0/${datasetId}/events?access_token=${accessToken}`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (response.ok) {
+      logger.info('✅ Meta CAPI Purchase sent', { sessionId, status: response.status });
+    } else {
+      const responseText = await response.text();
+      logger.error('❌ Meta CAPI non-2xx response', { status: response.status, body: responseText });
+    }
+  } catch (err) {
+    logger.error('❌ Meta CAPI fetch failed', err);
+  }
+}
+
+// ====================================
 async function handleCheckoutSessionCompleted(event) {
   const session = event.data.object;
 
@@ -615,6 +676,18 @@ async function handleCheckoutSessionCompleted(event) {
   }
 
   await updateMembershipForUid(uid, membershipUpdate);
+
+  // --- Meta CAPI server-side Purchase (non-fatal, deduplicated via session.id) ---
+  const email =
+    session.customer_details?.email ||
+    session.customer_email ||
+    null;
+
+  try {
+    await sendMetaPurchaseEvent(session.id, email, uid, event.created);
+  } catch (capiErr) {
+    logger.error('❌ Meta CAPI wrapper error (non-fatal)', capiErr);
+  }
 }
 
 async function handleSubscriptionUpdated(event) {
