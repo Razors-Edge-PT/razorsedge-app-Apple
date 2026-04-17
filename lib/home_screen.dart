@@ -1718,7 +1718,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           ? Map<String, dynamic>.from(data['athletes'] as Map)
           : const <String, dynamic>{};
 
-      owners.addAll(athletesMap.keys);
+      // Only include confirmed (accepted) friends in the home feed.
+      // Pending requests must not surface social content before acceptance.
+      athletesMap.forEach((uid, val) {
+        if (val is Map && (val as Map)['status'] == 'accepted') {
+          owners.add(uid);
+        }
+      });
     } catch (e) {
       // Optional: log it, but don't crash
       debugPrint('⚠️ [HOME] _resolveFeedOwners failed: $e');

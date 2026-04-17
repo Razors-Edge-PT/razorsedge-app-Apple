@@ -47,7 +47,13 @@ class BuddyPickerPage extends StatelessWidget {
           }
 
           final data = snap.data!.data() as Map<String, dynamic>? ?? {};
-          final buddies = Map<String, dynamic>.from(data['athletes'] ?? {});
+          final allBuddies = Map<String, dynamic>.from(data['athletes'] ?? {});
+          // Only confirmed (accepted) friends may be messaged.
+          final buddies = Map<String, dynamic>.fromEntries(
+            allBuddies.entries.where(
+              (e) => e.value is Map && (e.value as Map)['status'] == 'accepted',
+            ),
+          );
           if (buddies.isEmpty) {
             return const Center(child: Text("No gym buddies yet"));
           }
@@ -78,6 +84,7 @@ class BuddyPickerPage extends StatelessWidget {
                       // If missing, create with the same initial shape you had before
                       await convRef.set({
                         'participants': {uid: true, buddyUid: true},
+                        'participantList': ([uid, buddyUid]..sort()),
                         'createdAt': now,
                         'updatedAt': now,
                         'lastMessage': null,
@@ -1080,6 +1087,7 @@ class _MessageComposerState extends State<_MessageComposer> {
         // Bootstrap if convo missing (e.g., deep link)
         await convRef.set({
           'participants': {uid: true, otherUid: true},  // immutable per rules
+          'participantList': ([uid, otherUid]..sort()),
           'createdAt': now,
           'updatedAt': now,
           'lastMessage': {'text': text, 'senderId': uid, 'sentAt': now},

@@ -103,8 +103,9 @@ class AppRoot extends StatelessWidget {
               'wuiMe7phxYQh0MM39bfnhgv20yS2',
               'SMTEVGPH1MXgOgbcBbJFU1HjU8G3',
               'jhIB7Yi1whYwPvBSmK27KltJGn23',
-              'ejBDKEZPFfQz2Sdzd7BZlNydxZ33', //Adam@razorsedgept
-              'L7YjSMnm7tXD3BwyskmmrgVhKsS2' // Ruby cakes
+              'ejBDKEZPFfQz2Sdzd7BZlNydxZ33', // Adam@razorsedgept
+              'L7YjSMnm7tXD3BwyskmmrgVhKsS2', // Ruby cakes
+              'ykx0RvDMc5OIuZ2R4kqWMhGbrGV2', // Google Play reviewer
             };
 
             final isCoachClaim = token.claims?['isCoach'] == true;
