@@ -1005,18 +1005,33 @@ Future<void> acceptBuddyInvite({
   final db = FirebaseFirestore.instance;
   final batch = db.batch();
 
-  final assignmentRef = db.collection('buddyAssignments').doc(ownerUid);
-  final inviteRef = db
-      .collection('users')
-      .doc(buddyUid)
-      .collection('buddyInvites')
-      .doc(ownerUid);
+  // ownerUid = A (the sender), buddyUid = B (the acceptor).
 
+  // 1) A's existing entry for B → mark accepted (A's doc already exists from send).
+  final assignmentRef = db.collection('buddyAssignments').doc(ownerUid);
   batch.update(assignmentRef, {
     'athletes.$buddyUid.status': 'accepted',
     'athletes.$buddyUid.acceptedAt': FieldValue.serverTimestamp(),
   });
 
+  // 2) Reciprocal: create/merge B's entry for A so both sides are accepted.
+  //    set+merge because B's buddyAssignments doc may not exist yet.
+  final reciprocalRef = db.collection('buddyAssignments').doc(buddyUid);
+  batch.set(reciprocalRef, {
+    'athletes': {
+      ownerUid: {
+        'status': 'accepted',
+        'acceptedAt': FieldValue.serverTimestamp(),
+      },
+    },
+  }, SetOptions(merge: true));
+
+  // 3) Mark the invite doc as accepted.
+  final inviteRef = db
+      .collection('users')
+      .doc(buddyUid)
+      .collection('buddyInvites')
+      .doc(ownerUid);
   batch.update(inviteRef, {
     'status': 'accepted',
     'respondedAt': FieldValue.serverTimestamp(),
