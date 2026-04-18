@@ -1200,7 +1200,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               'date': Timestamp.fromDate(currentDate),
               'circuitStartIndices': [0],
               'exercises': [],
-              "workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}",
+              'workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}',
               'exists': true,
             }, SetOptions(merge: true));
           }
@@ -1254,7 +1254,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               'date': Timestamp.fromDate(currentDate),
               'circuitStartIndices': [0],
               'exercises': [],
-              "workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}",
+              'workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}',
               'exists': true,
             }, SetOptions(merge: true));
           }
@@ -1322,7 +1322,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               'date': Timestamp.fromDate(currentDate),
               'circuitStartIndices': [0],
               'exercises': [],
-              "workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}",
+              'workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}',
               'exists': true,
             }, SetOptions(merge: true));
           }
@@ -1772,8 +1772,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       if (name != null && !existingNames.contains(name)) {
         await exercisesRef.add({
           'name': core['name'],
-          "category': core['category'] ?? '",
-          "bodyPart': core['bodyPart'] ?? '",
+          'category': core['category'] ?? '',
+          'bodyPart': core['bodyPart'] ?? '',
         });
 
       }
