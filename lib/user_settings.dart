@@ -6,7 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'demographics_cache.dart';
 import 'package:localtest222/user_context.dart'; // <-- your UserContext
-// import 'package:localtest222/theme.dart'; // if you have shared theme things
+import 'themes_screen.dart';
 
 class UserSettingsScreen extends StatefulWidget {
   const UserSettingsScreen({super.key});
@@ -576,7 +576,6 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('User Settings'),
-        backgroundColor: Colors.blueGrey, // match Home
       ),
       body: SafeArea(
         child: SingleChildScrollView(
@@ -584,8 +583,6 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
           padding: const EdgeInsets.all(16),
           child: Card(
             elevation: 8,
-            color: Colors.blueGrey.shade800,
-
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -751,6 +748,33 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                             SizedBox(width: 12),
                             Text(
                               'Change password',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            Spacer(),
+                            Icon(Icons.chevron_right, color: Colors.white38, size: 20),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    InkWell(
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const ThemesScreen()),
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Row(
+                          children: const [
+                            Icon(Icons.palette, color: Colors.white70, size: 20),
+                            SizedBox(width: 12),
+                            Text(
+                              'Themes',
                               style: TextStyle(
                                 color: Colors.white,
                                 fontSize: 15,

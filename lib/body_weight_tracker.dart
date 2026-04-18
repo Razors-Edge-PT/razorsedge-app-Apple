@@ -1064,7 +1064,7 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                                       (i) => FlSpot(i.toDouble(), (am[i]['weight'] as double)),
                                 ),
                                 barWidth: 2,
-                                color: Colors.lightBlueAccent, // AM
+                                color: Theme.of(context).colorScheme.primary, // AM
                                 dotData: FlDotData(show: true),
                               ),
                             if (showPm)
@@ -1167,14 +1167,16 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
             const SizedBox(height: 12),
 
             if (averageLast7 != null && averagePrev7 != null)
-              Card(
-                color: Colors.blueGrey.withOpacity(0.1),
-                elevation: 3,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                child: ListTile(
-                  leading: const Icon(Icons.compare, color: Colors.cyan),
-                  title: const Text('Weekly Comparison'),
-                  subtitle: Text('This week: ${averageLast7.toStringAsFixed(1)} kg\nLast week: ${averagePrev7.toStringAsFixed(1)} kg'),
+              Builder(
+                builder: (context) => Card(
+                  color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                  elevation: 3,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  child: ListTile(
+                    leading: const Icon(Icons.compare, color: Colors.cyan),
+                    title: const Text('Weekly Comparison'),
+                    subtitle: Text('This week: ${averageLast7!.toStringAsFixed(1)} kg\nLast week: ${averagePrev7!.toStringAsFixed(1)} kg'),
+                  ),
                 ),
               ),
 
@@ -1230,10 +1232,10 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                               child: Text(
                                 'AM',
                                 textAlign: TextAlign.center,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600,
-                                  color: Colors.lightBlueAccent, // ✅ match AM color
+                                  color: Theme.of(context).colorScheme.primary, // ✅ match AM color
                                 ),
                               ),
                             ),
@@ -1301,7 +1303,7 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                                         child: Text(
                                           am != null ? '${am['weight']} ${am['unit']}' : '＋',
                                           textAlign: TextAlign.center,
-                                          style: const TextStyle(fontSize: 13, color: Colors.lightBlueAccent,),
+                                          style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.primary),
                                         ),
                                       ),
                                     ),

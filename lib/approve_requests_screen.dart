@@ -69,7 +69,7 @@ class ApproveRequestsScreen extends StatelessWidget {
     }
   }
 
-  Widget _avatarFromPublic(Map<String, dynamic> public) {
+  Widget _avatarFromPublic(BuildContext context, Map<String, dynamic> public) {
     // Handle possible key variations just in case
     final String url = (public['photoURL'] ?? public['photoUrl'] ?? public['photo'] ?? '')
         .toString()
@@ -80,7 +80,7 @@ class ApproveRequestsScreen extends StatelessWidget {
       backgroundColor: Colors.white10,  // subtle ring; tweak if you like
       foregroundImage: url.isNotEmpty ? NetworkImage(url) : null,
       // If the image fails or doesn't exist, this child shows
-      child: const Icon(Icons.person_outline, size: 16, color: Colors.cyanAccent),
+      child: Icon(Icons.person_outline, size: 16, color: Theme.of(context).colorScheme.secondary),
     );
   }
 
@@ -447,7 +447,7 @@ class ApproveRequestsScreen extends StatelessWidget {
                                   radius: 12,
                                   backgroundImage: NetworkImage(u.photoURL!),
                                 )
-                                    : const Icon(Icons.person_outline, size: 18, color: Colors.cyanAccent),
+                                    : Icon(Icons.person_outline, size: 18, color: Theme.of(context).colorScheme.secondary),
 
 
                                 title: Text(
@@ -581,11 +581,11 @@ class ApproveRequestsScreen extends StatelessWidget {
                   padding: const EdgeInsets.only(bottom: 4),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
-                    children: const [
+                    children: [
                       Icon(Icons.people_alt_outlined,
-                          color: Colors.cyanAccent, size: 20),
-                      SizedBox(width: 6),
-                      Text(
+                          color: Theme.of(context).colorScheme.secondary, size: 20),
+                      const SizedBox(width: 6),
+                      const Text(
                         'Your Gym Buddies',
                         textAlign: TextAlign.center,
                         style:
@@ -595,14 +595,14 @@ class ApproveRequestsScreen extends StatelessWidget {
                   ),
                 ),
                 if (entries.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(12, 0, 12, 6),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
                     child: Align(
                       alignment: Alignment.centerLeft,
                       child: Row(
                         children: [
                           Icon(Icons.info_outline,
-                              size: 16, color: Colors.cyanAccent),
+                              size: 16, color: Theme.of(context).colorScheme.secondary),
                           SizedBox(width: 4),
                           Text(
                             'You haven’t added any gym buddies yet.',
@@ -680,7 +680,7 @@ class ApproveRequestsScreen extends StatelessWidget {
                             visualDensity: const VisualDensity(horizontal: 0, vertical: -3),
                             minVerticalPadding: 0,
                             contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
-                            leading: _avatarFromPublic(public),
+                            leading: _avatarFromPublic(context, public),
                             minLeadingWidth: 28, // a touch wider so the circle doesn’t feel cramped
 
 
@@ -830,10 +830,10 @@ class ApproveRequestsScreen extends StatelessWidget {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center, // ⬅ centers horizontally
                     children: [
-                      const Icon(
+                      Icon(
                         Icons.supervisor_account,
                         size: 24,
-                        color: Colors.cyanAccent,
+                        color: Theme.of(context).colorScheme.secondary,
                       ),
                       const SizedBox(width: 8),
                       Text(
@@ -907,9 +907,9 @@ class ApproveRequestsScreen extends StatelessWidget {
                           minVerticalPadding: 0,
                           contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
 
-                          leading: const Icon(
+                          leading: Icon(
                             Icons.mail_outline,
-                            color: Colors.cyanAccent,
+                            color: Theme.of(context).colorScheme.secondary,
                           ),
 
                           title: Text(

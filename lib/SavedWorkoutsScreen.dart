@@ -110,12 +110,11 @@ class _SavedWorkoutsScreenState extends State<SavedWorkoutsScreen> {
           final workoutsForDay = groupedWorkouts[date]!;
 
           return Card(
-            color: Colors.blueGrey.shade700,
             margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             child: ListTile(
               title: Text(
                 '${DateFormat('EEE d MMM').format(date)} - Week ${_getWeekNumber(date)}',
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                style: const TextStyle(fontWeight: FontWeight.bold),
               ),
 
               subtitle: Text(

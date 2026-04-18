@@ -168,7 +168,7 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
                       Switch(
                         value: showPlannedOnly,
                         onChanged: (value) => setLocalState(() => showPlannedOnly = value),
-                        activeColor: Colors.lightBlueAccent,
+                        activeColor: Theme.of(context).colorScheme.primary,
                       ),
                     ],
                   )

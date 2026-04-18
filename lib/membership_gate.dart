@@ -303,8 +303,6 @@ class MembershipInactiveScreen extends StatelessWidget {
                   icon: const Icon(Icons.logout, color: Colors.white),
                   label: const Text('Log out'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blueGrey.shade700,
-                    foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 12,
                       vertical: 10,

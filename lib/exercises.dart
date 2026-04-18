@@ -207,22 +207,22 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
 
     InputDecoration _dec(String label, {Widget? icon}) => InputDecoration(
       labelText: label,
-      labelStyle: const TextStyle(color: Colors.white70),
+      labelStyle: TextStyle(color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7)),
       filled: true,
-      fillColor: Colors.blueGrey.shade800,
+      fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
-        borderSide: BorderSide(color: Colors.blueGrey.shade700),
+        borderSide: BorderSide(color: Theme.of(context).colorScheme.outline),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: Colors.cyanAccent, width: 1.6),
+        borderSide: BorderSide(color: Theme.of(context).colorScheme.secondary, width: 1.6),
       ),
       prefixIcon: icon == null
           ? null
           : IconTheme(
-        data: const IconThemeData(color: Colors.cyanAccent),
+        data: IconThemeData(color: Theme.of(context).colorScheme.secondary),
         child: icon,
       ),
     );
@@ -246,18 +246,18 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
             margin: const EdgeInsets.only(right: 4, bottom: 4),
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(
-              color: Colors.blueGrey.shade700,
+              color: Theme.of(ctx).cardTheme.color ?? Theme.of(ctx).colorScheme.surface,
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: Colors.blueGrey.shade600),
+              border: Border.all(color: Theme.of(ctx).colorScheme.outline),
             ),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Text(text, style: const TextStyle(color: Colors.white)),
+              Text(text, style: TextStyle(color: Theme.of(ctx).colorScheme.onSurface)),
               const SizedBox(width: 6),
               Row(mainAxisSize: MainAxisSize.min, children: [
                 IconButton(
                   constraints: const BoxConstraints.tightFor(width: 22, height: 22),
                   padding: EdgeInsets.zero,
-                  icon: const Icon(Icons.arrow_upward, size: 16, color: Colors.cyanAccent),
+                  icon: Icon(Icons.arrow_upward, size: 16, color: Theme.of(ctx).colorScheme.secondary),
                   onPressed: i == 0
                       ? null
                       : () {
@@ -270,7 +270,7 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
                 IconButton(
                   constraints: const BoxConstraints.tightFor(width: 28, height: 28),
                   padding: EdgeInsets.zero,
-                  icon: const Icon(Icons.arrow_downward, size: 18, color: Colors.cyanAccent),
+                  icon: Icon(Icons.arrow_downward, size: 18, color: Theme.of(ctx).colorScheme.secondary),
                   onPressed: i == pickedBodyParts.length - 1
                       ? null
                       : () {
@@ -283,7 +283,7 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
                 IconButton(
                   constraints: const BoxConstraints.tightFor(width: 28, height: 28),
                   padding: EdgeInsets.zero,
-                  icon: const Icon(Icons.close, size: 18, color: Colors.cyanAccent),
+                  icon: Icon(Icons.close, size: 18, color: Theme.of(ctx).colorScheme.secondary),
                   onPressed: () {
                     pickedBodyParts.removeAt(i);
                     (ctx as Element).markNeedsBuild();
@@ -295,16 +295,15 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
         }
 
         return AlertDialog(
-          backgroundColor: Colors.blueGrey.shade900,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           insetPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
           titlePadding: const EdgeInsets.fromLTRB(20, 16, 16, 0),
           contentPadding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
           title: Row(
-            children: const [
-              Icon(Icons.fitness_center, color: Colors.cyanAccent),
-              SizedBox(width: 10),
-              Text('Add Exercise', style: TextStyle(color: Colors.white)),
+            children: [
+              Icon(Icons.fitness_center, color: Theme.of(context).colorScheme.secondary),
+              const SizedBox(width: 10),
+              const Text('Add Exercise'),
             ],
           ),
           content: Form(
@@ -316,7 +315,6 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
                   // Name
                   TextFormField(
                     controller: nameCtrl,
-                    style: const TextStyle(color: Colors.white),
                     decoration: _dec('Name', icon: const Icon(Icons.text_fields)),
                     validator: (v) => (v == null || v.trim().isEmpty) ? 'Please enter a name' : null,
                   ),
@@ -336,7 +334,6 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
                       return TextFormField(
                         controller: controller,
                         focusNode: focusNode,
-                        style: const TextStyle(color: Colors.white),
                         decoration: _dec('Category', icon: const Icon(Icons.category)),
                         validator: (_) {
                           final entered = controller.text.trim();
@@ -361,7 +358,7 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
                     },
                     optionsViewBuilder: (context, onSelected, options) {
                       return Material(
-                        color: Colors.blueGrey.shade800,
+                        color: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                         elevation: 6,
                         borderRadius: BorderRadius.circular(8),
                         child: ListView(
@@ -370,8 +367,8 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
                           children: options
                               .map((o) => ListTile(
                             dense: true,
-                            title: Text(o, style: const TextStyle(color: Colors.white)),
-                            trailing: const Icon(Icons.check, color: Colors.cyanAccent, size: 18),
+                            title: Text(o),
+                            trailing: Icon(Icons.check, color: Theme.of(context).colorScheme.secondary, size: 18),
                             onTap: () => onSelected(o),
                           ))
                               .toList(),
@@ -399,22 +396,21 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
                     onChanged: (value) {
                       pickedType = value;
                     },
-                    dropdownColor: Colors.blueGrey.shade800,
-                    style: const TextStyle(color: Colors.white),
+                    dropdownColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                   ),
                   const SizedBox(height: 14),
 
                   // Body parts title + tooltip
                   Row(
-                    children: const [
+                    children: [
                       Text('Body Parts (primary first)',
-                          style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600)),
-                      SizedBox(width: 6),
+                          style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7), fontWeight: FontWeight.w600)),
+                      const SizedBox(width: 6),
                       Tooltip(
                         message:
                         'Put primary muscle(s) first, then others in descending order of involvement.\n'
                             'E.g., Bench Press: Chest, Anterior Delts, Triceps.',
-                        child: Icon(Icons.info_outline, color: Colors.cyanAccent, size: 18),
+                        child: Icon(Icons.info_outline, color: Theme.of(context).colorScheme.secondary, size: 18),
                       ),
                     ],
                   ),
@@ -436,13 +432,12 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
                       return TextFormField(
                         controller: controller,
                         focusNode: focusNode,
-                        style: const TextStyle(color: Colors.white),
                         decoration: _dec('Add body part', icon: const Icon(Icons.search)),
                       );
                     },
                     optionsViewBuilder: (context, onSelected, options) {
                       return Material(
-                        color: Colors.blueGrey.shade800,
+                        color: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                         elevation: 6,
                         borderRadius: BorderRadius.circular(8),
                         child: ListView(
@@ -451,8 +446,8 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
                           children: options
                               .map((o) => ListTile(
                             dense: true,
-                            title: Text(o, style: const TextStyle(color: Colors.white)),
-                            trailing: const Icon(Icons.add, color: Colors.cyanAccent, size: 18),
+                            title: Text(o),
+                            trailing: Icon(Icons.add, color: Theme.of(context).colorScheme.secondary, size: 18),
                             onTap: () => onSelected(o),
                           ))
                               .toList(),
@@ -483,12 +478,12 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Cancel', style: TextStyle(color: Colors.white70)),
+              child: const Text('Cancel'),
             ),
             ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.cyanAccent,
-                foregroundColor: Colors.black87,
+                backgroundColor: Theme.of(context).colorScheme.secondary,
+                foregroundColor: Theme.of(context).colorScheme.onSecondary,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 elevation: 0,
@@ -581,12 +576,9 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
     ];
 
     return Scaffold(
-      backgroundColor: Colors.blueGrey.shade900,
       appBar: AppBar(
         title: const Text('Exercises'),
-        backgroundColor: Colors.blueGrey.shade800,
         centerTitle: true,
-
       ),
 
       body: SingleChildScrollView(
@@ -612,7 +604,6 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
 
       ),
       floatingActionButton: FloatingActionButton(
-        backgroundColor: Colors.blueGrey.shade700,
         onPressed: _showAddExerciseDialog,
         child: const Icon(Icons.add),
       ),
@@ -625,14 +616,13 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
 // ➡️ Helper method to build a category card
   Widget _buildCategoryTile(String category, List<Map<String, dynamic>> exercises) {
     return Card(
-      color: Colors.blueGrey.shade800,
       margin: const EdgeInsets.symmetric(vertical: 6),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
       ),
-      child: ExpansionTile(
-        backgroundColor: Colors.blueGrey.shade800, // ✅ Keep category background
-        collapsedBackgroundColor: Colors.blueGrey.shade800, // ✅ Collapsed too
+      child: Builder(builder: (context) => ExpansionTile(
+        backgroundColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
+        collapsedBackgroundColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
         title: Text(
           category,
           style: const TextStyle(
@@ -643,7 +633,7 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
         ),
         children: [
           Container(
-            color: Colors.blueGrey.shade700, // ✅ Lighter background inside!
+            color: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
             child: Column(
               children: exercises.map((exercise) {
                 return Padding(
@@ -653,8 +643,8 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
                     children: [
                       Text(
                         exercise['name'] ?? 'Unnamed Exercise',
-                        style: const TextStyle(
-                          color: Colors.white,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurface,
                           fontWeight: FontWeight.bold,
                           fontSize: 14,
                         ),
@@ -679,7 +669,7 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
             ),
           ),
         ],
-      ),
+      )),
     );
   }
 }

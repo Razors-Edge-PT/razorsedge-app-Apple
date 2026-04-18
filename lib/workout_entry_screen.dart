@@ -10602,7 +10602,6 @@ class _WorkoutPageState extends State<WorkoutPage>
         context: context,
         builder: (context) {
           return AlertDialog(
-            backgroundColor: Colors.blueGrey.shade900,
             title: const Text(
               'Select Template',
               style: TextStyle(color: Colors.white),
@@ -10663,7 +10662,6 @@ class _WorkoutPageState extends State<WorkoutPage>
         return StatefulBuilder(
           builder: (ctx, setStateDialog) {
             return AlertDialog(
-              backgroundColor: Colors.blueGrey.shade900,
               insetPadding:
               const EdgeInsets.symmetric(horizontal: 24, vertical: 2),
               contentPadding:
@@ -10688,7 +10686,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               ListTile(
-                                tileColor: Colors.blueGrey.shade800,
+                                
                                 title: Text(
                                   _blockHeaderTitle(blockId, entry.value),
                                   style: const TextStyle(
@@ -10734,7 +10732,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                     // "Other templates" group at the bottom
                     if (otherTemplates.isNotEmpty) ...[
                       ListTile(
-                        tileColor: Colors.blueGrey.shade800,
+                        
                         title: const Text(
                           'Other templates',
                           style: TextStyle(
@@ -10782,7 +10780,6 @@ class _WorkoutPageState extends State<WorkoutPage>
         final confirmed = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
-            backgroundColor: Colors.blueGrey.shade900,
             title: const Text(
               'Swap the whole day?',
               style: TextStyle(color: Colors.white),
@@ -11600,7 +11597,7 @@ class _WorkoutPageState extends State<WorkoutPage>
               Switch(
                 value: showPlannedOnly,
                 onChanged: (v) => setLocalState(() => showPlannedOnly = v),
-                activeColor: Colors.lightBlueAccent,
+                activeColor: Theme.of(context).colorScheme.primary,
               ),
             ],
           );
@@ -11681,7 +11678,6 @@ class _WorkoutPageState extends State<WorkoutPage>
           }
 
           return AlertDialog(
-            backgroundColor: Colors.blueGrey.shade900,
             insetPadding: const EdgeInsets.symmetric(
                 horizontal: 24, vertical: 2),
             // 🔧 reduce horizontal margin
@@ -11705,7 +11701,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                         value: showPlannedOnly,
                         onChanged: (value) =>
                             setLocalState(() => showPlannedOnly = value),
-                        activeColor: Colors.lightBlueAccent,
+                        activeColor: Theme.of(context).colorScheme.primary,
                       ),
                     ],
                   )
@@ -11728,7 +11724,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                         hintText: "Search exercises...",
                         hintStyle: const TextStyle(color: Colors.white54),
                         filled: true,
-                        fillColor: Colors.blueGrey.shade800,
+                        fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                         border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8.0)),
                         prefixIcon:
@@ -11760,7 +11756,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                           ),
                           controlAffinity:
                           ListTileControlAffinity.leading,
-                          activeColor: Colors.lightBlueAccent,
+                          activeColor: Theme.of(context).colorScheme.primary,
                           checkColor: Colors.black,
 
                           onChanged: (checked) {
@@ -11787,7 +11783,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                           CrossAxisAlignment.start,
                           children: [
                             ListTile(
-                              tileColor: Colors.blueGrey.shade800,
+                              
                               title: Text(category,
                                   style: const TextStyle(
                                       color: Colors.white,
@@ -11816,7 +11812,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                           color: Colors.white)),
                                   controlAffinity:
                                   ListTileControlAffinity.leading,
-                                  activeColor: Colors.lightBlueAccent,
+                                  activeColor: Theme.of(context).colorScheme.primary,
                                   checkColor: Colors.black,
                                   onChanged: (checked) {
                                     setLocalState(() {
@@ -12259,7 +12255,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   ListTile(
-                    tileColor: Colors.blueGrey.shade800,
+                    
                     title: Text(category,
                         style: const TextStyle(
                             color: Colors.white, fontWeight: FontWeight.bold)),
@@ -12288,7 +12284,6 @@ class _WorkoutPageState extends State<WorkoutPage>
           }
 
           return AlertDialog(
-            backgroundColor: Colors.blueGrey.shade900,
             insetPadding: const EdgeInsets.symmetric(
                 horizontal: 24, vertical: 2),
             // 🔧 reduce horizontal margin
@@ -12312,7 +12307,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                         value: showPlannedOnly,
                         onChanged: (value) =>
                             setLocalState(() => showPlannedOnly = value),
-                        activeColor: Colors.lightBlueAccent,
+                        activeColor: Theme.of(context).colorScheme.primary,
                       ),
                     ],
                   )
@@ -12333,7 +12328,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                         hintText: 'Search exercises...',
                         hintStyle: const TextStyle(color: Colors.white54),
                         filled: true,
-                        fillColor: Colors.blueGrey.shade800,
+                        fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                         border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8.0)),
                         contentPadding: const EdgeInsets.symmetric(
@@ -15926,7 +15921,6 @@ class _WorkoutPageState extends State<WorkoutPage>
     context: context,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: Colors.blueGrey.shade900,
           title: Text(
             'Exercise settings',
             style: const TextStyle(color: Colors.white),
@@ -15962,7 +15956,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                       labelStyle: const TextStyle(color: Colors.white),
                       hintStyle: const TextStyle(color: Colors.white38),
                       filled: true,
-                      fillColor: Colors.blueGrey.shade700,
+                      fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(6),
                       ),
@@ -16010,7 +16004,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                   color: Colors.white38,
                                 ),
                                 filled: true,
-                                fillColor: Colors.blueGrey.shade700,
+                                fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(6),
                                 ),
@@ -16118,14 +16112,14 @@ class _WorkoutPageState extends State<WorkoutPage>
                                             labelText: labelText,
                                             labelStyle: const TextStyle(color: Colors.white70),
                                             filled: true,
-                                            fillColor: Colors.blueGrey.shade700,
+                                            fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
 
                                             // ⭐⭐⭐ NEW: cyan border when RIR session matches
                                             border: OutlineInputBorder(
                                               borderRadius: BorderRadius.circular(6),
                                               borderSide: BorderSide(
                                                 color: isCurrentRirSession
-                                                    ? Colors.cyanAccent
+                                                    ? Theme.of(context).colorScheme.secondary
                                                     : Colors.grey,
                                                 width: isCurrentRirSession ? 2 : 1,
                                               ),
@@ -16134,7 +16128,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                               borderRadius: BorderRadius.circular(6),
                                               borderSide: BorderSide(
                                                 color: isCurrentRirSession
-                                                    ? Colors.cyanAccent
+                                                    ? Theme.of(context).colorScheme.secondary
                                                     : Colors.grey,
                                                 width: isCurrentRirSession ? 2 : 1,
                                               ),
@@ -16143,8 +16137,8 @@ class _WorkoutPageState extends State<WorkoutPage>
                                               borderRadius: BorderRadius.circular(6),
                                               borderSide: BorderSide(
                                                 color: isCurrentRirSession
-                                                    ? Colors.cyanAccent
-                                                    : Colors.lightBlueAccent,
+                                                    ? Theme.of(context).colorScheme.secondary
+                                                    : Theme.of(context).colorScheme.primary,
                                                 width: isCurrentRirSession ? 2 : 1.5,
                                               ),
                                             ),
@@ -16356,9 +16350,7 @@ class _WorkoutPageState extends State<WorkoutPage>
       return true;
     },
     child: Scaffold(
-    backgroundColor: Colors.blueGrey.shade900,
     appBar: AppBar(
-    backgroundColor: Colors.blueGrey.shade800,
     title: Builder(
             builder: (context) {
               final actingAsUid = Provider.of<UserContext>(context, listen: true).actingAsUid;
@@ -16483,7 +16475,6 @@ class _WorkoutPageState extends State<WorkoutPage>
                   context: context,
                   builder: (BuildContext dialogCtx) {
                     return AlertDialog(
-                      backgroundColor: Colors.blueGrey.shade900,
                       title: const Text(
                         'Clear Workout',
                         style: TextStyle(fontFamily: 'Verdana', color: Colors.white),
@@ -16580,7 +16571,6 @@ class _WorkoutPageState extends State<WorkoutPage>
                   context: context,
                   builder: (BuildContext context) {
                     return AlertDialog(
-                      backgroundColor: Colors.blueGrey.shade900,
                       title: const Text(
                         'NUKE Local Cache',
                         style: TextStyle(fontFamily: 'Verdana', color: Colors.white),
@@ -16668,7 +16658,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                   // ✅ remove `const`
                   labelStyle: const TextStyle(color: Colors.white),
                   filled: true,
-                  fillColor: Colors.blueGrey.shade900,
+                  fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                   // ✅ works now
                   border: OutlineInputBorder(borderSide: BorderSide.none),
                   contentPadding: const EdgeInsets.symmetric(
@@ -16745,10 +16735,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                               ),
                             ),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: merging
-                                  ? Colors.blueGrey.shade700.withOpacity(0.55)
-                                  : Colors.blueGrey.shade700,
-                              foregroundColor: merging ? Colors.grey.shade400 : Colors.white,
+                              foregroundColor: merging ? Colors.grey.shade400 : null,
                               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 8),
                             ),
                             onPressed: merging ? null : _showExercisePickerDialog,
@@ -16762,7 +16749,6 @@ class _WorkoutPageState extends State<WorkoutPage>
                       flex: 3,
                       child: ElevatedButton(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blueGrey.shade700,
                           padding: const EdgeInsets.symmetric(
                               horizontal: 2, vertical: 8),
                         ),
@@ -16770,8 +16756,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                         child: const Text('Load Template',
                             style: TextStyle(
                                 fontSize: 13,
-                                fontFamily: 'Verdana',
-                                color: Colors.white)),
+                                fontFamily: 'Verdana')),
                       ),
                     ),
                     const SizedBox(width: 6),
@@ -16779,14 +16764,12 @@ class _WorkoutPageState extends State<WorkoutPage>
                       flex: 3,
                       child: ElevatedButton(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blueGrey.shade700,
                           padding: const EdgeInsets.symmetric(
                               horizontal: 5, vertical: 8),
                         ),
                         onPressed: () => _selectDate(context),
                         child: const Text('Select Date',
-                            style: TextStyle(
-                                fontFamily: 'Verdana', color: Colors.white)),
+                            style: TextStyle(fontFamily: 'Verdana')),
                       ),
                     ),
                   ],
@@ -16868,8 +16851,8 @@ class _WorkoutPageState extends State<WorkoutPage>
                               children: [
                                 Text(
                                   'Circuit ${current['circuitIndex'] + 1}',
-                                  style: const TextStyle(
-                                    color: Colors.lightBlueAccent,
+                                  style: TextStyle(
+                                    color: Theme.of(context).colorScheme.primary,
                                     fontWeight: FontWeight.bold,
                                     fontSize: 12,
                                   ),
@@ -17018,7 +17001,6 @@ class _WorkoutPageState extends State<WorkoutPage>
                                   key: ValueKey('card_$cardId'),
 
                                   // 👈 Unique per exercise
-                                  color: Colors.blueGrey.shade700,
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(3),
                                   ),
@@ -17163,7 +17145,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                             // Existing graph button
                                             IconButton(
                                               icon: const Icon(Icons.insights),
-                                              color: Colors.lightBlueAccent,
+                                              color: Theme.of(context).colorScheme.primary,
                                               onPressed: () {
                                                 _navigateToExerciseDetails(
                                                   _selectedExercisesWithCircuits[i]['name'] ?? '',
@@ -17175,9 +17157,7 @@ class _WorkoutPageState extends State<WorkoutPage>
 
                                             // Existing History button
                                             ElevatedButton(
-                                              style: ElevatedButton.styleFrom(
-                                                backgroundColor: Colors.blueGrey[700],
-                                              ),
+                                              style: ElevatedButton.styleFrom(),
                                               onPressed: () {
                                                 _navigateToTopSets(
                                                   _selectedExercisesWithCircuits[i]['name'] ?? '',
@@ -18173,10 +18153,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                       onPressed: _addNewCircuitExercise,
                       icon: const Icon(Icons.add),
                       label: const Text("Add Circuit"),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.blueGrey,
-                        foregroundColor: Colors.white,
-                      ),
+                      style: ElevatedButton.styleFrom(),
                     ),
                   ],
                 ),

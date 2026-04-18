@@ -31,7 +31,6 @@ class BuddyPickerPage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text("New Message"),
-        backgroundColor: Colors.blueGrey.shade900,
       ),
       body: StreamBuilder<DocumentSnapshot>(
         stream: FirebaseFirestore.instance
@@ -125,10 +124,9 @@ class DirectMessages extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text("Messages"),
-        backgroundColor: Colors.blueGrey.shade900,
         actions: [
           IconButton(
-            icon: const Icon(Icons.edit, color: Colors.cyanAccent),
+            icon: Icon(Icons.edit, color: Theme.of(context).colorScheme.secondary),
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const BuddyPickerPage()),
@@ -526,7 +524,6 @@ class _ConversationPageState extends State<ConversationPage> {
   Future<void> _pickReactionForDoc(DocumentReference<Map<String, dynamic>> docRef) async {
     final chosen = await showModalBottomSheet<String?>(
       context: context,
-      backgroundColor: Colors.blueGrey.shade900,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       builder: (_) => SafeArea(
         child: Padding(
@@ -540,7 +537,7 @@ class _ConversationPageState extends State<ConversationPage> {
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                     decoration: BoxDecoration(
-                      color: Colors.blueGrey.shade700,
+                      color: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(e, style: const TextStyle(fontSize: 22)),
@@ -629,7 +626,6 @@ class _ConversationPageState extends State<ConversationPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text("Chat"),
-        backgroundColor: Colors.blueGrey.shade900,
       ),
         body: Column(
           children: [
@@ -795,7 +791,9 @@ class _ConversationPageState extends State<ConversationPage> {
                             margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
                             padding: const EdgeInsets.all(10),
                             decoration: BoxDecoration(
-                              color: fromSelf ? Colors.cyanAccent.shade700 : Colors.blueGrey.shade700,
+                              color: fromSelf
+                                  ? Theme.of(context).colorScheme.secondary
+                                  : Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Column(
@@ -815,7 +813,11 @@ class _ConversationPageState extends State<ConversationPage> {
                                 else
                                   Text(
                                     (data['text'] ?? '').toString(),
-                                    style: const TextStyle(color: Colors.white),
+                                    style: TextStyle(
+                                      color: fromSelf
+                                          ? Theme.of(context).colorScheme.onSecondary
+                                          : Colors.white,
+                                    ),
                                   ),
 
 
@@ -1152,15 +1154,15 @@ class _MessageComposerState extends State<_MessageComposer> {
 
         const SizedBox(width: 6),
         IconButton(
-          icon: const Icon(Icons.send, color: Colors.cyanAccent),
+          icon: Icon(Icons.send, color: Theme.of(context).colorScheme.secondary),
           onPressed: _sendMessage,
         ),
         IconButton(
-          icon: const Icon(Icons.photo, color: Colors.cyanAccent),
+          icon: Icon(Icons.photo, color: Theme.of(context).colorScheme.secondary),
           onPressed: _pickAndSendImage,
         ),
         IconButton(
-          icon: const Icon(Icons.videocam, color: Colors.cyanAccent),
+          icon: Icon(Icons.videocam, color: Theme.of(context).colorScheme.secondary),
           onPressed: _pickAndSendVideo,
         ),
 

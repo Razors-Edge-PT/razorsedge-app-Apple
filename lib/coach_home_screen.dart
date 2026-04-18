@@ -364,13 +364,11 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
     });
 
     return Scaffold(
-      backgroundColor: Colors.blueGrey.shade900,
       appBar: AppBar(
           title: const Text("Coach Dashboard"),
-          backgroundColor: Colors.blueGrey.shade900,
           foregroundColor: Colors.white,
           elevation: 0,
-          actionsIconTheme: const IconThemeData(color: Colors.cyanAccent),
+          actionsIconTheme: IconThemeData(color: Theme.of(context).colorScheme.secondary),
           actions: [
             // Coach path: add by email (will fail if rules block coach from writing 'athletes')
             IconButton(
@@ -648,16 +646,16 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
                   decoration: InputDecoration(
                     labelText: 'Search athletes',
                     labelStyle: const TextStyle(color: Colors.white70),
-                    prefixIcon: const Icon(Icons.search, color: Colors.cyanAccent),
+                    prefixIcon: Icon(Icons.search, color: Theme.of(context).colorScheme.secondary),
                     filled: true,
-                    fillColor: Colors.blueGrey.shade800,
+                    fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(color: Colors.blueGrey.shade700),
+                      borderSide: BorderSide(color: Theme.of(context).colorScheme.outline),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(10),
-                      borderSide: const BorderSide(color: Colors.cyanAccent),
+                      borderSide: BorderSide(color: Theme.of(context).colorScheme.secondary),
                     ),
                   ),
                   style: const TextStyle(color: Colors.white),
@@ -670,11 +668,10 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
                   children: [
                     Expanded(
                       child: ElevatedButton.icon(
-                        icon: const Icon(Icons.person_add, size: 24, color: Colors.cyanAccent),
+                        icon: Icon(Icons.person_add, size: 24, color: Theme.of(context).colorScheme.secondary),
                         label: const Text("Request Access", style: TextStyle(fontSize: 14)),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blueGrey.shade700,
-                          foregroundColor: Colors.white,
+                            foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
                           visualDensity: VisualDensity.compact,
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -722,7 +719,9 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
 
                 return Card(
                   elevation: 0,
-                  color: isSelected ? Colors.blueGrey.shade700 : Colors.blueGrey.shade800,
+                  color: isSelected
+                      ? Theme.of(context).colorScheme.primary.withOpacity(0.22)
+                      : Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   child: ListTile(
                     dense: true,
@@ -763,7 +762,7 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
 
                     leading: Icon(
                       isSelected ? Icons.check_circle : Icons.person,
-                      color: isSelected ? Colors.cyanAccent : Colors.white54,
+                      color: isSelected ? Theme.of(context).colorScheme.secondary : Colors.white54,
                       size: 22, // slightly smaller to match tighter rows
                     ),
 

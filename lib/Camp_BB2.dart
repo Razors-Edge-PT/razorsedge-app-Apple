@@ -3630,7 +3630,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         };
 
         return AlertDialog(
-          backgroundColor: Colors.blueGrey.shade900,
           insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 2),
           contentPadding:
           const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -3638,29 +3637,27 @@ class _BlockBuilder2State extends State<Camp_BB2> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text('Select Exercise',
-                  style: TextStyle(fontSize: 13, color: Colors.white)),
+                  style: TextStyle(fontSize: 13)),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
                     showPlannedOnly ? 'Planned Only' : 'All Exercises',
-                    style: const TextStyle(fontSize: 12, color: Colors.white70),
+                    style: const TextStyle(fontSize: 12),
                   ),
                   Switch(
                     value: showPlannedOnly,
                     onChanged: (v) => setState(() => showPlannedOnly = v),
-                    activeColor: Colors.lightBlueAccent,
+                    activeColor: Theme.of(context).colorScheme.primary,
                   ),
                 ],
               ),
               const SizedBox(height: 8),
               TextField(
-                style: const TextStyle(color: Colors.white),
                 decoration: InputDecoration(
                   hintText: 'Search exercises...',
-                  hintStyle: const TextStyle(color: Colors.white54),
                   filled: true,
-                  fillColor: Colors.blueGrey.shade800,
+                  fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                   border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8.0)),
                   contentPadding:
@@ -3683,18 +3680,18 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                   return ExpansionTile(
                     initiallyExpanded: isExpanded,
                     tilePadding: const EdgeInsets.symmetric(horizontal: 10),
-                    collapsedBackgroundColor: Colors.blueGrey.shade800,
-                    backgroundColor: Colors.blueGrey.shade700,
+                    collapsedBackgroundColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
+                    backgroundColor: Theme.of(context).colorScheme.surface,
                     title: Text(
                       e.key,
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                      style: TextStyle(color: Theme.of(context).colorScheme.onSurface, fontWeight: FontWeight.bold),
                     ),
                     onExpansionChanged: (expanded) {
                       setState(() => expandedGroups[e.key] = expanded);
                     },
                     children: e.value.map((name) {
                       return ListTile(
-                        title: Text(name, style: const TextStyle(color: Colors.white70)),
+                        title: Text(name),
                         onTap: () {
                           Navigator.pop(context);
                           onSelected(name);
@@ -4454,7 +4451,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
       margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
-        color: Colors.blueGrey.shade800,
+        color: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
         borderRadius: BorderRadius.circular(6),
       ),
       child: Row(
@@ -4462,8 +4459,8 @@ class _BlockBuilder2State extends State<Camp_BB2> {
         children: [
           Text(
             '$dayAbbrev • $label',
-            style: const TextStyle(
-              color: Colors.white,
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onSurface,
               fontSize: 12,
               fontWeight: FontWeight.bold,
             ),
@@ -4576,7 +4573,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
           return Card(
             margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 3),
-            color: Colors.blueGrey.shade900,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
@@ -4750,14 +4746,13 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                 return StatefulBuilder(
                                   builder: (ctx, setStateDialog) {
                                     return AlertDialog(
-                                      backgroundColor: Colors.blueGrey.shade900,
                                       insetPadding:
                                       const EdgeInsets.symmetric(horizontal: 24, vertical: 2),
                                       contentPadding:
                                       const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                                       title: const Text(
                                         'Select Template',
-                                        style: TextStyle(fontSize: 13, color: Colors.white),
+                                        style: TextStyle(fontSize: 13),
                                       ),
                                       content: SizedBox(
                                         width: double.maxFinite,
@@ -4793,11 +4788,9 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                                     crossAxisAlignment: CrossAxisAlignment.start,
                                                     children: [
                                                       ListTile(
-                                                        tileColor: Colors.blueGrey.shade800,
                                                         title: Text(
                                                           headerText,
                                                           style: const TextStyle(
-                                                            color: Colors.white,
                                                             fontWeight: FontWeight.bold,
                                                           ),
                                                         ),
@@ -4805,7 +4798,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                                           isExpanded
                                                               ? Icons.expand_less
                                                               : Icons.expand_more,
-                                                          color: Colors.white70,
                                                         ),
                                                         onTap: () {
                                                           setStateDialog(() {
@@ -4818,11 +4810,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                                         ...groupTemplates.map((template) {
                                                           return ListTile(
                                                             dense: true,
-                                                            title: Text(
-                                                              template.name,
-                                                              style: const TextStyle(
-                                                                  color: Colors.white),
-                                                            ),
+                                                            title: Text(template.name),
                                                             onTap: () => Navigator.of(dialogCtx)
                                                                 .pop(template),
                                                           );
@@ -4840,11 +4828,9 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                             // "Other templates" group at the bottom
                                             if (otherTemplates.isNotEmpty) ...[
                                               ListTile(
-                                                tileColor: Colors.blueGrey.shade800,
                                                 title: const Text(
                                                   'Other templates',
                                                   style: TextStyle(
-                                                    color: Colors.white,
                                                     fontWeight: FontWeight.bold,
                                                   ),
                                                 ),
@@ -4852,7 +4838,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                                   otherExpanded
                                                       ? Icons.expand_less
                                                       : Icons.expand_more,
-                                                  color: Colors.white70,
                                                 ),
                                                 onTap: () {
                                                   setStateDialog(() {
@@ -4864,11 +4849,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                                 ...otherTemplates.map((template) {
                                                   return ListTile(
                                                     dense: true,
-                                                    title: Text(
-                                                      template.name,
-                                                      style:
-                                                      const TextStyle(color: Colors.white),
-                                                    ),
+                                                    title: Text(template.name),
                                                     onTap: () =>
                                                         Navigator.of(dialogCtx).pop(template),
                                                   );
@@ -4880,10 +4861,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                       actions: [
                                         TextButton(
                                           onPressed: () => Navigator.of(dialogCtx).pop(),
-                                          child: const Text(
-                                            "Cancel",
-                                            style: TextStyle(color: Colors.white70),
-                                          ),
+                                          child: const Text("Cancel"),
                                         ),
                                       ],
                                     );
@@ -4985,77 +4963,61 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                   SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     controller: _fieldScrollController, // ✅ Use same controller!
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-                      color: Colors.blueGrey.shade800,
-                      child: Row(
-                        children: const [
-                          // Exercise
-                          SizedBox(
-                            width: 126,
-                            child: Text("Exercise",
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white)),
-                          ),
-                          SizedBox(width: 2),
-                          // Weight
-                          SizedBox(
-                            width: 54,
-                            child: Text("Weight",
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white)),
-                          ),
+                    child: Builder(
+                      builder: (context) => Container(
+                        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+                        color: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
+                        child: Row(
+                          children: [
+                            // Exercise
+                            SizedBox(
+                              width: 126,
+                              child: Text("Exercise",
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurface)),
+                            ),
+                            const SizedBox(width: 2),
+                            // Weight
+                            SizedBox(
+                              width: 54,
+                              child: Text("Weight",
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurface)),
+                            ),
 
-                          // Reps
-                          SizedBox(
-                            width: 30,
-                            child: Text("Reps",
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white)),
-                          ),
-                          SizedBox(width: 3),
-                          // RIR
-                          SizedBox(
-                            width: 33,
-                            child: Text("RIR",
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white)),
-                          ),
-                          SizedBox(width: 2),
-                          // E1RM
-                          SizedBox(
-                            width: 42,
-                            child: Text("E1RM",
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white)),
-                          ),
-                          SizedBox(width: 10),
-                          // Notes
-                          SizedBox(
-                            width: 100,
-                            child: Text("Notes",
-                                textAlign: TextAlign.left,
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white)),
-                          ),
-                        ],
+                            // Reps
+                            SizedBox(
+                              width: 30,
+                              child: Text("Reps",
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurface)),
+                            ),
+                            const SizedBox(width: 3),
+                            // RIR
+                            SizedBox(
+                              width: 33,
+                              child: Text("RIR",
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurface)),
+                            ),
+                            const SizedBox(width: 2),
+                            // E1RM
+                            SizedBox(
+                              width: 42,
+                              child: Text("E1RM",
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurface)),
+                            ),
+                            const SizedBox(width: 10),
+                            // Notes
+                            SizedBox(
+                              width: 100,
+                              child: Text("Notes",
+                                  textAlign: TextAlign.left,
+                                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurface)),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -5136,7 +5098,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                       child: ExpansionTile(
                                         tilePadding: EdgeInsets.zero,
                                         collapsedIconColor: Colors.grey.shade400,
-                                        iconColor: Colors.lightBlueAccent,
+                                        iconColor: Theme.of(context).colorScheme.primary,
                                         trailing: const SizedBox.shrink(),
                                         childrenPadding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
                                         initiallyExpanded: wesExpansionStates[name] ?? false, // ✅ restore expansion state
@@ -5173,7 +5135,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                                   padding: EdgeInsets.zero,
                                                   constraints: const BoxConstraints(minWidth: 26, minHeight: 28),
                                                   icon: const Icon(Icons.insights, size: 18),
-                                                  color: Colors.lightBlueAccent,
+                                                  color: Theme.of(context).colorScheme.primary,
                                                   onPressed: () {
                                                     _navigateToExerciseDetailsBB2(
                                                       exerciseId: exercise['exerciseId'] ?? '',
@@ -5576,7 +5538,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                   icon: const Icon(Icons.add),
                                   label: const Text('Add Exercise'),
                                   style: TextButton.styleFrom(
-                                    foregroundColor: Colors.lightBlueAccent,
+                                    foregroundColor: Theme.of(context).colorScheme.primary,
                                     textStyle: const TextStyle(fontSize: 13),
                                     padding: const EdgeInsets.symmetric(horizontal: 8),
                                     minimumSize: Size.zero,
@@ -5641,10 +5603,10 @@ class _BlockBuilder2State extends State<Camp_BB2> {
           padding: const EdgeInsets.only(left: 2, bottom: 1),
           child: Text(
           '  Circuit ${row.circuitIndex + 1}',
-          style: const TextStyle(
+          style: TextStyle(
           fontSize: 12,
           fontWeight: FontWeight.bold,
-          color: Colors.lightBlueAccent,
+          color: Theme.of(context).colorScheme.primary,
           ),
           ),
           ),
@@ -5814,7 +5776,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                     icon: const Icon(Icons.add, size: 16),
                                     label: const Text('Add Exercise', style: TextStyle(fontSize: 12)),
                                     style: TextButton.styleFrom(
-                                      foregroundColor: Colors.lightBlueAccent,
+                                      foregroundColor: Theme.of(context).colorScheme.primary,
                                       padding: const EdgeInsets.symmetric(horizontal: 8),
                                       minimumSize: Size.zero,
                                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -5863,12 +5825,12 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                   icon: const Icon(Icons.add, size: 16, color: Colors.white70),
                   label: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: const [
+                    children: [
                       Text(
                         "Add New Circuit",
-                        style: TextStyle(color: Colors.lightBlueAccent, fontSize: 11),
+                        style: TextStyle(color: Theme.of(context).colorScheme.primary, fontSize: 11),
                       ),
-                      Text(
+                      const Text(
                         "Scroll to next week →",
                         style: TextStyle(color: Colors.white70, fontSize: 11, fontStyle: FontStyle.italic),
                       ),
@@ -5942,9 +5904,7 @@ class _BlockBuilder2State extends State<Camp_BB2> {
 
                             // 2️⃣ current selection
                             value: _selectedBlockId,
-                            style: const TextStyle(color: Colors.white),
-                            iconEnabledColor: Colors.white,
-                            dropdownColor: Colors.blueGrey.shade900,
+                            dropdownColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
 
                             // 3️⃣ build each menu item, with a check icon on the active one
                             items: _allBlocks.map((b) {
@@ -5962,7 +5922,6 @@ class _BlockBuilder2State extends State<Camp_BB2> {
                                     Expanded(
                                       child: Text(
                                         b.name,
-                                        style: const TextStyle(color: Colors.white),
                                         overflow: TextOverflow.ellipsis,
                                         softWrap: false,
                                       ),

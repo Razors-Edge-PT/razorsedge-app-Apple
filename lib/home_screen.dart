@@ -56,22 +56,22 @@ const List<String> _kPointsTaglines = [
   'Do you even metrics? 📏📐',
   'Literally your street cred 🏙️✅',
   'Woah take those points the bank, so you earn interest 🏦💰📈',
-  'Today’s gains: properly weighted. ⚖️💪',
+  "Today's gains: properly weighted. ⚖️💪",
   'Scored and adored ❤️🧮',
   'That e1RM? Extremely my type 😏📊',
   'Swipe right on those metrics 👉❤️📈',
   'PRs + Pts = good chemistry 🧪❤️‍🔥',
   'Points that slap 👋✨',
-  'You’re not just strong—you’re quantifiably tempting 📊😮‍💨',
+  "You're not just strong—you're quantifiably tempting 📊😮‍💨",
   'Big sets, big energy, big data 📦⚡💾',
   'Quantifiable Clout',
 ];
 
 const List<String> _kHomeTaglines = [
-  'Go on, scroll. We won’t tell 🤫💪📱',
+  "Go on, scroll. We won't tell 🤫💪📱",
   'For the love of iron pls do not scroll instagram.',
-  'Don’t ghost the feed—post the set 👻📤',
-  'If it’s not posted, was it even a set? 📸❓',
+  "Don't ghost the feed—post the set 👻📤",
+  "If it's not posted, was it even a set? 📸❓",
   'Scroll your home feed, you love it 👇 ❤️📲',
   'Humblebrag optional 🙃📤✅',
   'Your spotter can film. No excuses 🎥🤝🙅‍♂️',
@@ -236,7 +236,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       }
     }());
 
-// Pass block + date so Warmup can precompute the exact WES snapshot you’ll need.
+// Pass block + date so Warmup can precompute the exact WES snapshot you'll need.
     final _warmDateSrc = _selectedDay ?? _focusedDay; // use picked day, else the visible day
     final _warmDate = DateTime(_warmDateSrc.year, _warmDateSrc.month, _warmDateSrc.day);
 
@@ -361,7 +361,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         },
         onError: (Object e, StackTrace st) async {
           debugPrint('🟥 [HOME] usersRef.snapshots denied: $e');
-          // Optional: cancel so it doesn’t spam logs
+          // Optional: cancel so it doesn't spam logs
           try { await userSub?.cancel(); } catch (_) {}
         },
       );
@@ -585,7 +585,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       }
     }
 
-    // Helper: ensure week doc exists (so day writes don’t fail)
+    // Helper: ensure week doc exists (so day writes don't fail)
     Future<void> _ensureWeekExistsForOffset(int offset) async {
       final weekRef = _weekRefForOffset(offset);
       final s = await weekRef.get(const GetOptions(source: Source.server));
@@ -736,7 +736,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         bool isDone = completed[dest] == true;
 
         if (!isDone) {
-          // If this offset wasn’t preloaded, check server directly
+          // If this offset wasn't preloaded, check server directly
           final date = blockStart.add(Duration(days: dest));
           final key = _ymd(date);
           final snap = await workoutsCol
@@ -898,7 +898,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
       if (!hasCore) {
         debugPrint('🛑 [Home] Block gate: /users/$uid incomplete → retry in 800ms');
-        // tiny, non-blocking retry; won’t slow first paint
+        // tiny, non-blocking retry; won't slow first paint
         unawaited(Future.delayed(const Duration(milliseconds: 800), () async {
           await _ensureAtLeastOneBlockExists();
         }));
@@ -1200,7 +1200,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               'date': Timestamp.fromDate(currentDate),
               'circuitStartIndices': [0],
               'exercises': [],
-              'workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}',
+              "workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}",
               'exists': true,
             }, SetOptions(merge: true));
           }
@@ -1254,7 +1254,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               'date': Timestamp.fromDate(currentDate),
               'circuitStartIndices': [0],
               'exercises': [],
-              'workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}',
+              "workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}",
               'exists': true,
             }, SetOptions(merge: true));
           }
@@ -1322,7 +1322,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               'date': Timestamp.fromDate(currentDate),
               'circuitStartIndices': [0],
               'exercises': [],
-              'workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}',
+              "workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}",
               'exists': true,
             }, SetOptions(merge: true));
           }
@@ -1542,7 +1542,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         _feedHasMore = docs.length >= _kFeedPageSize;
         _feedLoading = false;
       });
-      // if nothing new, restore scroll offset so the view doesn’t “jump”
+      // if nothing new, restore scroll offset so the view doesn't “jump”
       if (hadClients && docs.isEmpty) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (_homeScrollCtrl.hasClients) {
@@ -1772,8 +1772,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       if (name != null && !existingNames.contains(name)) {
         await exercisesRef.add({
           'name': core['name'],
-          'category': core['category'] ?? '',
-          'bodyPart': core['bodyPart'] ?? '',
+          "category': core['category'] ?? '",
+          "bodyPart': core['bodyPart'] ?? '",
         });
 
       }
@@ -2009,7 +2009,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             children: [
               Align(
                 alignment: Alignment.topLeft,
-                child: Icon(icon, size: 45, color: Colors.cyanAccent),
+                child: Icon(icon, size: 45, color: Theme.of(context).colorScheme.secondary),
               ),
               Align(
                 alignment: Alignment.bottomRight,
@@ -2070,7 +2070,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       key: _scaffoldKey,
       appBar: AppBar(
         title: null,
-        backgroundColor: Colors.blueGrey,
         automaticallyImplyLeading: false,
         actions: [
       Flexible(
@@ -2233,8 +2232,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                 // If we somehow have no uid yet, show plain icon with simple message.
                 if (invitesUid == null) {
                   return IconButton(
-                    icon: const Icon(Icons.person_add_alt_1,
-                        size: 24, color: Colors.cyanAccent),
+                    icon: Icon(Icons.person_add_alt_1,
+                        size: 24, color: Theme.of(context).colorScheme.secondary),
                     onPressed: () {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
@@ -2260,8 +2259,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                       alignment: Alignment.center,
                       children: [
                         IconButton(
-                          icon: const Icon(Icons.person_add_alt_1,
-                              size: 24, color: Colors.cyanAccent),
+                          icon: Icon(Icons.person_add_alt_1,
+                              size: 24, color: Theme.of(context).colorScheme.secondary),
                           onPressed: () {
                             if (!snapshot.hasData ||
                                 snapshot.data!.docs.isEmpty) {
@@ -2387,10 +2386,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                 builder: (context, snapshot) {
                   if (snapshot.hasError) {
                     return IconButton(
-                      icon: const Icon(
+                      icon: Icon(
                         Icons.message_outlined,
                         size: 26,
-                        color: Colors.cyanAccent,
+                        color: Theme.of(context).colorScheme.secondary,
                       ),
                       onPressed: () {
                         Navigator.of(context).push(
@@ -2424,7 +2423,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     alignment: Alignment.center,
                     children: [
                       IconButton(
-                        icon: const Icon(Icons.message_outlined, size: 26, color: Colors.cyanAccent),
+                        icon: Icon(Icons.message_outlined, size: 26, color: Theme.of(context).colorScheme.secondary),
                         onPressed: () {
                           Navigator.of(context).push(
                             MaterialPageRoute(
@@ -2530,7 +2529,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
                                   child: Card(
                                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    color: Colors.blueGrey.shade800,
                                     child: Padding(
                                       padding: const EdgeInsets.all(12),
                                       child: Stack(
@@ -2554,7 +2552,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                               'Coach\nDashboard',
                                               textAlign: TextAlign.center,
                                               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                                color: Colors.white,
                                                 height: 1.3,
                                                 fontWeight: FontWeight.bold,
                                               ),
@@ -2587,18 +2584,17 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                   },
                                   child: Card(
                                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    color: Colors.blueGrey.shade800,
                                     child: Padding(
                                       padding: const EdgeInsets.all(12),
                                       child: Stack(
                                         children: [
-                                          const Positioned(
+                                          Positioned(
                                             top: 0,
                                             left: 0,
                                             child: Icon(
                                               Icons.fitness_center,
                                               size: 48,
-                                              color: Colors.cyanAccent,
+                                              color: Theme.of(context).colorScheme.secondary,
                                             ),
                                           ),
                                           Positioned(
@@ -2609,7 +2605,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                               'Enter\nWorkout',
                                               textAlign: TextAlign.center,
                                               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                                color: Colors.white,
                                                 height: 1.3,
                                                 fontWeight: FontWeight.bold,
                                               ),
@@ -2631,7 +2626,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                   onTap: () => Navigator.pushNamed(context, '/body_weight'),
                                   child: Card(
                                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    color: Colors.blueGrey.shade800,
                                     child: Padding(
                                       padding: const EdgeInsets.all(12),
                                       child: Stack(
@@ -2643,20 +2637,18 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                             child: Icon(
                                               Icons.monitor_weight,
                                               size: 48,
-                                              color: Colors.cyanAccent,
-
+                                              color: Theme.of(context).colorScheme.secondary,
                                             ),
                                           ),
                                           // ✅ Bottom-right text
                                           Positioned(
                                             bottom: 0,
                                             right: 0,
-                                            left: 50, // ⬅️ slight left constraint so text doesn’t run under the icon
+                                            left: 50, // ⬅️ slight left constraint so text doesn't run under the icon
                                             child: Text(
                                               'Body\nWeight\nTracker',
                                               textAlign: TextAlign.center,
                                               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                                color: Colors.white,
                                                 height: 1.3,
                                                 fontWeight: FontWeight.bold, // ✅ Make it bold
                                               ),
@@ -2691,18 +2683,17 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                   },
                                   child: Card(
                                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    color: Colors.blueGrey.shade800,
                                     child: Padding(
                                       padding: const EdgeInsets.all(12),
                                       child: Stack(
                                         children: [
-                                          const Positioned(
+                                          Positioned(
                                             top: 0,
                                             left: 0,
                                             child: Icon(
                                               Icons.view_list,
                                               size: 48,
-                                              color: Colors.cyanAccent,
+                                              color: Theme.of(context).colorScheme.secondary,
                                             ),
                                           ),
                                           Positioned(
@@ -2713,7 +2704,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                               'Workout\nPlanner',
                                               textAlign: TextAlign.center,
                                               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                                color: Colors.white,
                                                 height: 1.3,
                                                 fontWeight: FontWeight.bold,
                                               ),
@@ -2745,18 +2735,17 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                   },
                                   child: Card(
                                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    color: Colors.blueGrey.shade800,
                                     child: Padding(
                                       padding: const EdgeInsets.all(12),
                                       child: Stack(
                                         children: [
-                                          const Positioned(
+                                          Positioned(
                                             top: 0,
                                             left: 0,
                                             child: Icon(
                                               Icons.track_changes, // 🎯 Planned Blocks
                                               size: 48,
-                                              color: Colors.cyanAccent,
+                                              color: Theme.of(context).colorScheme.secondary,
                                             ),
                                           ),
                                           Positioned(
@@ -2767,7 +2756,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                               'Planned\nBlocks',
                                               textAlign: TextAlign.center,
                                               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                                color: Colors.white,
                                                 height: 1.3,
                                                 fontWeight: FontWeight.bold,
                                               ),
@@ -2800,19 +2788,18 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                   },
                                   child: Card(
                                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    color: Colors.blueGrey.shade800,
                                     child: Padding(
                                       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
 
                                       child: Stack(
                                         children: [
-                                          const Positioned(
+                                          Positioned(
                                             top: 2,
                                             left: 0,
                                             child: Icon(
                                               Icons.diversity_3,
                                               size: 48,
-                                              color: Colors.cyanAccent,
+                                              color: Theme.of(context).colorScheme.secondary,
                                             ),
                                           ),
                                           Positioned(
@@ -2823,7 +2810,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                               'Your\nConnections',
                                               textAlign: TextAlign.center,
                                               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                                color: Colors.white,
                                                 height: 1.3,
                                                 fontWeight: FontWeight.bold,
                                               ),
@@ -2858,18 +2844,17 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                   },
                                   child: Card(
                                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    color: Colors.blueGrey.shade800,
                                     child: Padding(
                                       padding: const EdgeInsets.all(12),
                                       child: Stack(
                                         children: [
-                                          const Positioned(
+                                          Positioned(
                                             top: 0,
                                             left: 0,
                                             child: Icon(
                                               Icons.calendar_month,
                                               size: 48,
-                                              color: Colors.cyanAccent,
+                                              color: Theme.of(context).colorScheme.secondary,
                                             ),
                                           ),
                                           Positioned(
@@ -2880,7 +2865,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                               'Week\nPlanner',
                                               textAlign: TextAlign.center,
                                               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                                color: Colors.white,
                                                 height: 1.3,
                                                 fontWeight: FontWeight.bold,
                                               ),
@@ -2929,7 +2913,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                 border: Border(
                                   bottom: BorderSide(
                                     color: isSelected
-                                        ? Colors.cyanAccent
+                                        ? Theme.of(context).colorScheme.secondary
                                         : Colors.transparent,
                                     width: 2,
                                   ),
@@ -3039,9 +3023,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                 margin: const EdgeInsets.all(6),
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
-                                  color: Colors.lightBlueAccent,
+                                  color: Theme.of(context).colorScheme.primary,
                                   border: Border.all(
-                                      color: Colors.cyanAccent, width: 2),
+                                      color: Theme.of(context).colorScheme.secondary, width: 2),
                                 ),
                                 alignment: Alignment.center,
                                 child: Text(

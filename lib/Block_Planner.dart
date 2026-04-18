@@ -1258,11 +1258,7 @@ class _BlockPlannerState extends State<Block_Planner> {
 
             return StatefulBuilder(builder: (context, setLocalState) {
               return AlertDialog(
-                backgroundColor: Colors.blueGrey.shade900,
-                title: const Text(
-                  "Select Exercises",
-                  style: TextStyle(color: Colors.white),
-                ),
+                title: const Text("Select Exercises"),
                 content: SizedBox(
                   width: double.maxFinite,
                   child: ListView(
@@ -1275,18 +1271,14 @@ class _BlockPlannerState extends State<Block_Planner> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           ListTile(
-                            tileColor: Colors.blueGrey.shade800,
                             title: Text(
                               category,
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold),
+                              style: const TextStyle(fontWeight: FontWeight.bold),
                             ),
                             trailing: Icon(
                               isExpanded
                                   ? Icons.expand_less
                                   : Icons.expand_more,
-                              color: Colors.white70,
                             ),
                             onTap: () {
                               setLocalState(() {
@@ -1301,12 +1293,10 @@ class _BlockPlannerState extends State<Block_Planner> {
                               final isChecked = tempSelected.contains(id);
                               return CheckboxListTile(
                                 value: isChecked,
-                                title: Text(name,
-                                    style:
-                                        const TextStyle(color: Colors.white)),
+                                title: Text(name),
                                 controlAffinity:
                                     ListTileControlAffinity.leading,
-                                activeColor: Colors.lightBlueAccent,
+                                activeColor: Theme.of(context).colorScheme.primary,
                                 checkColor: Colors.black,
                                 onChanged: (checked) {
                                   setLocalState(() {
@@ -1779,10 +1769,8 @@ class _BlockPlannerState extends State<Block_Planner> {
         behavior: HitTestBehavior.translucent,
         onTap: () => FocusScope.of(context).unfocus(),
     child: Scaffold(
-      backgroundColor: Colors.blueGrey.shade900,
       appBar: AppBar(
         title: const Text("Block Planner"),
-        backgroundColor: Colors.blueGrey.shade800,
         centerTitle: true,
         actions: [
           IconButton(
@@ -1896,13 +1884,8 @@ class _BlockPlannerState extends State<Block_Planner> {
               children: [
                 ElevatedButton.icon(
                   icon: const Icon(Icons.add, size: 16),
-                  label: const Text(
-                    "Add Exercises",
-                    style: TextStyle(color: Colors.white),
-                  ),
+                  label: const Text("Add Exercises"),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blueGrey.shade700,
-                    foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   ),
                   onPressed: _showExercisePickerDialog,
@@ -1912,8 +1895,6 @@ class _BlockPlannerState extends State<Block_Planner> {
                     icon: const Icon(Icons.clear),
                     label: const Text("Clear Exercises"),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blueGrey.shade700,
-                      foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     ),
                     onPressed: () async {
@@ -1985,8 +1966,7 @@ class _BlockPlannerState extends State<Block_Planner> {
                         return const Divider(
                           height: 4,
                           thickness: 1,
-                          color: Colors.white,
-                        );
+                                    );
                       }
 
                       final settingsExist = exerciseSettings.containsKey(exercise);
@@ -2144,16 +2124,16 @@ class _BlockPlannerState extends State<Block_Planner> {
                   height: 56,
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   decoration: BoxDecoration(
-                    color: Colors.blueGrey.shade800,
+                    color: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                     borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: Colors.white30),
+                    border: Border.all(color: Theme.of(context).colorScheme.outline),
                   ),
                   alignment: Alignment.centerLeft,
                   child: Text(
                     _blockStartDate != null && _blockEndDate != null
                         ? 'Block: ${DateFormat('d MMM').format(_blockStartDate!)} – ${DateFormat('d MMM y').format(_blockEndDate!)}'
                         : 'Select Block Dates',
-                    style: const TextStyle(color: Colors.white70, fontSize: 13),
+                    style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7), fontSize: 13),
                   ),
                 ),
               ),
@@ -2257,12 +2237,10 @@ class _BlockPlannerState extends State<Block_Planner> {
           controller: TextEditingController(text: initialText ?? ''),
           readOnly: readOnly,
           maxLines: multiline ? 3 : 1,
-          style: const TextStyle(color: Colors.white, fontSize: 13),
           decoration: InputDecoration(
             labelText: label,
-            labelStyle: const TextStyle(color: Colors.white70, fontSize: 12),
             filled: true,
-            fillColor: Colors.blueGrey.shade800,
+            fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
             contentPadding:
                 const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
@@ -3300,16 +3278,13 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: Colors.blueGrey.shade900,
-          title: const Text("Linear Classic Rep Targets",
-              style: TextStyle(color: Colors.white)),
+          title: const Text("Linear Classic Rep Targets"),
           content: SingleChildScrollView(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text("Week 1",
-                    style: TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.bold)),
+                    style: TextStyle(fontWeight: FontWeight.bold)),
                 const SizedBox(height: 4),
                 for (int i = 0; i < frequency; i++) ...[
                   Column(
@@ -3322,11 +3297,10 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                             child: TextField(
                               controller: week1Reps[i],
                               keyboardType: TextInputType.number,
-                              style: const TextStyle(color: Colors.white),
                               decoration: InputDecoration(
                                 labelText: "Day ${i + 1} Reps",
                                 filled: true,
-                                fillColor: Colors.blueGrey.shade800,
+                                fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                                 border: const OutlineInputBorder(),
                                 contentPadding: const EdgeInsets.symmetric(
                                     horizontal: 8, vertical: 4),
@@ -3334,19 +3308,16 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                             ),
                           ),
                           const SizedBox(width: 6),
-                          const Text("x",
-                              style:
-                                  TextStyle(color: Colors.white, fontSize: 14)),
+                          const Text("x"),
                           const SizedBox(width: 6),
                           Expanded(
                             child: TextField(
                               controller: week1Sets[i],
                               keyboardType: TextInputType.number,
-                              style: const TextStyle(color: Colors.white),
                               decoration: InputDecoration(
                                 labelText: "Sets",
                                 filled: true,
-                                fillColor: Colors.blueGrey.shade800,
+                                fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                                 border: const OutlineInputBorder(),
                                 contentPadding: const EdgeInsets.symmetric(
                                     horizontal: 8, vertical: 4),
@@ -3361,8 +3332,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                 ],
                 const SizedBox(height: 12),
                 const Text("Final Week",
-                    style: TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.bold)),
+                    style: TextStyle(fontWeight: FontWeight.bold)),
                 const SizedBox(height: 6),
                 for (int i = 0; i < frequency; i++) ...[
                   Column(
@@ -3375,11 +3345,10 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                             child: TextField(
                               controller: finalReps[i],
                               keyboardType: TextInputType.number,
-                              style: const TextStyle(color: Colors.white),
                               decoration: InputDecoration(
                                 labelText: "Day ${i + 1} Reps",
                                 filled: true,
-                                fillColor: Colors.blueGrey.shade800,
+                                fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                                 border: const OutlineInputBorder(),
                                 contentPadding: const EdgeInsets.symmetric(
                                     horizontal: 8, vertical: 4),
@@ -3387,19 +3356,16 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                             ),
                           ),
                           const SizedBox(width: 6),
-                          const Text("x",
-                              style:
-                                  TextStyle(color: Colors.white, fontSize: 14)),
+                          const Text("x"),
                           const SizedBox(width: 6),
                           Expanded(
                             child: TextField(
                               controller: finalSets[i],
                               keyboardType: TextInputType.number,
-                              style: const TextStyle(color: Colors.white),
                               decoration: InputDecoration(
                                 labelText: "Sets",
                                 filled: true,
-                                fillColor: Colors.blueGrey.shade800,
+                                fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                                 border: const OutlineInputBorder(),
                                 contentPadding: const EdgeInsets.symmetric(
                                     horizontal: 8, vertical: 8),
@@ -3419,7 +3385,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             TextButton(
               onPressed: () => Navigator.pop(ctx),
               child:
-                  const Text("Cancel", style: TextStyle(color: Colors.white)),
+                  const Text("Cancel"),
             ),
             TextButton(
               onPressed: () {
@@ -3455,7 +3421,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                 Navigator.pop(ctx);
               },
-              child: const Text("Save", style: TextStyle(color: Colors.white)),
+              child: const Text("Save"),
             ),
           ],
         );
@@ -3513,11 +3479,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: Colors.blueGrey.shade900,
-          title: const Text(
-            "Daily Undulating Reps (1 Week Pattern)",
-            style: TextStyle(color: Colors.white),
-          ),
+          title: const Text("Daily Undulating Reps (1 Week Pattern)"),
           content: SizedBox(
             width: double.maxFinite,
             child: ListView.builder(
@@ -3532,12 +3494,10 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         child: TextField(
                           controller: repsControllers[i],
                           keyboardType: TextInputType.number,
-                          style: const TextStyle(color: Colors.white),
                           decoration: InputDecoration(
                             labelText: "Day ${i + 1} Reps",
-                            labelStyle: const TextStyle(color: Colors.white70),
-                            filled: true,
-                            fillColor: Colors.blueGrey.shade800,
+                                                        filled: true,
+                            fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                             border: const OutlineInputBorder(),
                             contentPadding: const EdgeInsets.symmetric(
                                 horizontal: 10, vertical: 10),
@@ -3549,12 +3509,10 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         child: TextField(
                           controller: setsControllers[i],
                           keyboardType: TextInputType.number,
-                          style: const TextStyle(color: Colors.white),
                           decoration: InputDecoration(
                             labelText: "Sets",
-                            labelStyle: const TextStyle(color: Colors.white70),
-                            filled: true,
-                            fillColor: Colors.blueGrey.shade800,
+                                                        filled: true,
+                            fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                             border: const OutlineInputBorder(),
                             contentPadding: const EdgeInsets.symmetric(
                                 horizontal: 10, vertical: 10),
@@ -3571,7 +3529,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             TextButton(
               onPressed: () => Navigator.pop(ctx),
               child:
-                  const Text("Cancel", style: TextStyle(color: Colors.white)),
+                  const Text("Cancel"),
             ),
             TextButton(
               onPressed: () {
@@ -3606,7 +3564,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                 Navigator.pop(ctx);
               }              ,
-              child: const Text("Save", style: TextStyle(color: Colors.white)),
+              child: const Text("Save"),
             ),
           ],
         );
@@ -3647,25 +3605,21 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              backgroundColor: Colors.blueGrey.shade900,
-              title: Text("Set Rep Range for $exerciseName",
-                  style: const TextStyle(color: Colors.white)),
+              title: Text("Set Rep Range for $exerciseName"),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Row(
                     children: [
-                      const Text("Min Reps:",
-                          style: TextStyle(color: Colors.white)),
+                      const Text("Min Reps:"),
                       const SizedBox(width: 10),
                       DropdownButton<int>(
                         value: tempMin,
-                        dropdownColor: Colors.blueGrey.shade800,
+                        dropdownColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                         items: List.generate(12, (i) => i + 1).map((rep) {
                           return DropdownMenuItem(
                             value: rep,
-                            child: Text("$rep",
-                                style: const TextStyle(color: Colors.white)),
+                            child: Text("$rep"),
                           );
                         }).toList(),
                         onChanged: (val) {
@@ -3680,17 +3634,15 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   ),
                   Row(
                     children: [
-                      const Text("Max Reps:",
-                          style: TextStyle(color: Colors.white)),
+                      const Text("Max Reps:"),
                       const SizedBox(width: 10),
                       DropdownButton<int>(
                         value: tempMax,
-                        dropdownColor: Colors.blueGrey.shade800,
+                        dropdownColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                         items: List.generate(20, (i) => i + 1).map((rep) {
                           return DropdownMenuItem(
                             value: rep,
-                            child: Text("$rep",
-                                style: const TextStyle(color: Colors.white)),
+                            child: Text("$rep"),
                           );
                         }).toList(),
                         onChanged: (val) {
@@ -3811,9 +3763,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: Colors.blueGrey.shade900,
-          title: const Text("Rep Targets by Exposure",
-              style: TextStyle(color: Colors.white)),
+          title: const Text("Rep Targets by Exposure"),
           content: SizedBox(
             width: double.maxFinite,
             child: ListView.builder(
@@ -3844,13 +3794,12 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                           Expanded(
                             child: TextField(
                               controller: controllers[index1],
-                              style: const TextStyle(color: Colors.white),
                               decoration: InputDecoration(
                                 hintText: "e.g. 10 x 3",
                                 hintStyle:
                                     const TextStyle(color: Colors.white38),
                                 filled: true,
-                                fillColor: Colors.blueGrey.shade800,
+                                fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                                 border: const OutlineInputBorder(),
                                 contentPadding: const EdgeInsets.symmetric(
                                     horizontal: 8, vertical: 10),
@@ -3862,13 +3811,12 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                             Expanded(
                               child: TextField(
                                 controller: controllers[index2],
-                                style: const TextStyle(color: Colors.white),
-                                decoration: InputDecoration(
+                                                decoration: InputDecoration(
                                   hintText: "e.g. 8 x 4",
                                   hintStyle:
                                       const TextStyle(color: Colors.white38),
                                   filled: true,
-                                  fillColor: Colors.blueGrey.shade800,
+                                  fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                                   border: const OutlineInputBorder(),
                                   contentPadding: const EdgeInsets.symmetric(
                                       horizontal: 8, vertical: 10),
@@ -3887,7 +3835,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             TextButton(
               onPressed: () => Navigator.pop(ctx),
               child:
-                  const Text("Cancel", style: TextStyle(color: Colors.white)),
+                  const Text("Cancel"),
             ),
             TextButton(
               onPressed: () {
@@ -3917,7 +3865,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                 Navigator.pop(ctx);
               },
-              child: const Text("Save", style: TextStyle(color: Colors.white)),
+              child: const Text("Save"),
             ),
           ],
         );
@@ -3987,9 +3935,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: Colors.blueGrey.shade900,
-          title: const Text("Rep Targets (1 Week)",
-              style: TextStyle(color: Colors.white)),
+          title: const Text("Rep Targets (1 Week)"),
           content: SizedBox(
             width: double.maxFinite,
             child: ListView.builder(
@@ -4004,12 +3950,10 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         child: TextField(
                           controller: repsControllers[i],
                           keyboardType: TextInputType.number,
-                          style: const TextStyle(color: Colors.white),
                           decoration: InputDecoration(
                             labelText: "Day ${i + 1} Reps",
-                            labelStyle: const TextStyle(color: Colors.white70),
-                            filled: true,
-                            fillColor: Colors.blueGrey.shade800,
+                                                        filled: true,
+                            fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                             border: const OutlineInputBorder(),
                             contentPadding: const EdgeInsets.symmetric(
                                 horizontal: 10, vertical: 10),
@@ -4021,12 +3965,10 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         child: TextField(
                           controller: setsControllers[i],
                           keyboardType: TextInputType.number,
-                          style: const TextStyle(color: Colors.white),
                           decoration: InputDecoration(
                             labelText: "Sets",
-                            labelStyle: const TextStyle(color: Colors.white70),
-                            filled: true,
-                            fillColor: Colors.blueGrey.shade800,
+                                                        filled: true,
+                            fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                             border: const OutlineInputBorder(),
                             contentPadding: const EdgeInsets.symmetric(
                                 horizontal: 10, vertical: 10),
@@ -4043,7 +3985,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             TextButton(
               onPressed: () => Navigator.pop(ctx),
               child:
-                  const Text("Cancel", style: TextStyle(color: Colors.white)),
+                  const Text("Cancel"),
             ),
             TextButton(
               onPressed: () {
@@ -4064,7 +4006,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
                 Navigator.pop(ctx);
               },
-              child: const Text("Save", style: TextStyle(color: Colors.white)),
+              child: const Text("Save"),
             ),
           ],
         );
@@ -4198,9 +4140,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                                           ),
                                           decoration: InputDecoration(
                                             labelText: 'Set ${setIndex + 1} Reps',
-                                            labelStyle: const TextStyle(color: Colors.white70),
-                                            filled: true,
-                                            fillColor: Colors.blueGrey.shade800,
+                                                                                        filled: true,
+                                            fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                                             border: const OutlineInputBorder(),
                                             contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                                           ),
@@ -4220,12 +4161,10 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                                           ),
                                           keyboardType: const TextInputType.numberWithOptions(decimal: true),
 
-                                          style: const TextStyle(color: Colors.white),
                                           decoration: InputDecoration(
                                             labelText: 'Set ${setIndex + 1} RIR',
-                                            labelStyle: const TextStyle(color: Colors.white70),
-                                            filled: true,
-                                            fillColor: Colors.blueGrey.shade800,
+                                                                                        filled: true,
+                                            fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                                             border: const OutlineInputBorder(),
                                             contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                                           ),
@@ -4425,9 +4364,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                                               ),
                                               decoration: InputDecoration(
                                                 labelText: 'Set ${setIndex + 1} Reps',
-                                                labelStyle: const TextStyle(color: Colors.white70),
-                                                filled: true,
-                                                fillColor: Colors.blueGrey.shade800,
+                                                                                                filled: true,
+                                                fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                                                 border: const OutlineInputBorder(),
                                                 contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                                               ),
@@ -4447,12 +4385,10 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                                             return TextField(
                                               controller: _rirControllers[controllerKey],
                                               keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                              style: const TextStyle(color: Colors.white),
                                               decoration: InputDecoration(
                                                 labelText: 'Set ${setIndex + 1} RIR',
-                                                labelStyle: const TextStyle(color: Colors.white70),
-                                                filled: true,
-                                                fillColor: Colors.blueGrey.shade800,
+                                                                                                filled: true,
+                                                fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                                                 border: const OutlineInputBorder(),
                                                 contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                                               ),
@@ -4482,7 +4418,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         onPressed: () {
                           Navigator.pop(context); // ❌ Discard changes
                         },
-                        child: const Text("Cancel", style: TextStyle(color: Colors.white)),
+                        child: const Text("Cancel"),
                       ),
                       const SizedBox(width: 8),
                       TextButton(
@@ -4537,7 +4473,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                           print("💾 [RIR Dialog] Saved RIR plan for $exerciseName → $_cachedRirPlan");
                           Navigator.pop(context); // ✅ Close
                         },
-                        child: const Text("Save", style: TextStyle(color: Colors.white)),
+                        child: const Text("Save"),
                       ),
                     ],
                   ),
@@ -4702,9 +4638,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                                           style: TextStyle(color: setIndex == 0 ? Colors.white54 : Colors.white),
                                           decoration: InputDecoration(
                                             labelText: 'Set ${setIndex + 1} Reps',
-                                            labelStyle: const TextStyle(color: Colors.white70),
-                                            filled: true,
-                                            fillColor: Colors.blueGrey.shade800,
+                                                                                        filled: true,
+                                            fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                                             border: const OutlineInputBorder(),
                                             contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                                           ),
@@ -4743,12 +4678,10 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
 
 
-                                          style: const TextStyle(color: Colors.white),
                                           decoration: InputDecoration(
                                             labelText: 'Set ${setIndex + 1} RIR',
-                                            labelStyle: const TextStyle(color: Colors.white70),
-                                            filled: true,
-                                            fillColor: Colors.blueGrey.shade800,
+                                                                                        filled: true,
+                                            fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                                             border: const OutlineInputBorder(),
                                             contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                                           ),
@@ -4774,7 +4707,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                     children: [
                       TextButton(
                         onPressed: () => Navigator.pop(context),
-                        child: const Text("Cancel", style: TextStyle(color: Colors.white)),
+                        child: const Text("Cancel"),
                       ),
                       const SizedBox(width: 8),
                       TextButton(
@@ -4826,7 +4759,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                           print("💾 [Static RIR] Saved RIR plan for $exerciseName → $_cachedRirPlan");
                           Navigator.pop(context);
                         },
-                        child: const Text("Save", style: TextStyle(color: Colors.white)),
+                        child: const Text("Save"),
                       ),
                     ],
                   ),
@@ -4990,9 +4923,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                                           style: TextStyle(color: setIndex == 0 ? Colors.white54 : Colors.white),
                                           decoration: InputDecoration(
                                             labelText: 'Set ${setIndex + 1} Reps',
-                                            labelStyle: const TextStyle(color: Colors.white70),
-                                            filled: true,
-                                            fillColor: Colors.blueGrey.shade800,
+                                                                                        filled: true,
+                                            fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                                             border: const OutlineInputBorder(),
                                             contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                                           ),
@@ -5004,12 +4936,10 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                                         child: TextField(
                                           controller: _rirControllers[controllerKey],
                                           keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                          style: const TextStyle(color: Colors.white),
                                           decoration: InputDecoration(
                                             labelText: 'Set ${setIndex + 1} RIR',
-                                            labelStyle: const TextStyle(color: Colors.white70),
-                                            filled: true,
-                                            fillColor: Colors.blueGrey.shade800,
+                                                                                        filled: true,
+                                            fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                                             border: const OutlineInputBorder(),
                                             contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                                           ),
@@ -5034,7 +4964,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                     children: [
                       TextButton(
                         onPressed: () => Navigator.pop(context),
-                        child: const Text("Cancel", style: TextStyle(color: Colors.white)),
+                        child: const Text("Cancel"),
                       ),
                       const SizedBox(width: 8),
                       TextButton(
@@ -5084,7 +5014,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                           print("💾 [Session RIR] Saved RIR plan for $exerciseName → $_cachedRirPlan");
                           Navigator.pop(context);
                         },
-                        child: const Text("Save", style: TextStyle(color: Colors.white)),
+                        child: const Text("Save"),
                       ),
                     ],
                   ),
@@ -5111,12 +5041,12 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                 children: [
                   TextSpan(
                     text: isExpanded ? "▼  " : "➤  ",
-                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                    style: TextStyle(color: Theme.of(context).colorScheme.onSurface, fontSize: 12),
                   ),
                   TextSpan(
                     text: widget.exerciseName,
-                    style: const TextStyle(
-                      color: Colors.white,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurface,
                       fontSize: 13,
                       fontWeight: FontWeight.bold,
                     ),
@@ -5132,7 +5062,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
             final display = (w != null && r != null)
                 ? "Avg E1RM: ${PeriodizationModelUtils.calculateE1RM(w, r, 0.5).toStringAsFixed(1)}kg"
                 : "Avg E1RM: –";
-            return Text(display, style: const TextStyle(color: Colors.white70, fontSize: 11));
+            return Text(display, style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7), fontSize: 11));
           }),
         ],
       ),
@@ -5146,9 +5076,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       padding:
           const EdgeInsets.fromLTRB(6, 10, 6, 10), // reduced horizontal padding
       decoration: BoxDecoration(
-        color: Colors.blueGrey.shade800,
+        color: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.blueGrey.shade700),
+        border: Border.all(color: Theme.of(context).colorScheme.outline),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -5179,15 +5109,15 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                     inputFormatters: [
                       FilteringTextInputFormatter.allow(RegExp(r'[0-9., ]')),
                     ],
-                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    
                     decoration: InputDecoration(
                       labelText: 'Increments (kg)',
                       hintText: '2.5, 1, 0.5',
-                      labelStyle: const TextStyle(color: Colors.white),
+                      
                       hintStyle: const TextStyle(color: Colors.white38),
                       floatingLabelBehavior: FloatingLabelBehavior.always,
                       filled: true,
-                      fillColor: Colors.blueGrey.shade700,
+                      fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
                       isDense: true,
                       contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
@@ -5395,12 +5325,12 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                       _repTargetsDisplayController.text = values.join(' | ');
                     },
 
-                    dropdownColor: Colors.blueGrey.shade800,
+                    dropdownColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                     decoration: InputDecoration(
                       labelText: "Periodization Model",
-                      labelStyle: const TextStyle(color: Colors.white),
+                      
                       filled: true,
-                      fillColor: Colors.blueGrey.shade700,
+                      fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                       border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(6)),
                       contentPadding: const EdgeInsets.symmetric(
@@ -5456,13 +5386,13 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                       child: TextFormField(
                         controller: _repTargetsDisplayController,
                         readOnly: true,
-                        style: const TextStyle(color: Colors.white, fontSize: 13),
+                        
                         decoration: InputDecoration(
                           labelText: 'Rep Targets X sets',
-                          labelStyle: const TextStyle(color: Colors.white),
+                          
                           floatingLabelBehavior: FloatingLabelBehavior.always,
                           filled: true,
-                          fillColor: Colors.blueGrey.shade700,
+                          fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                           border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
                           isDense: true,
                           contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
@@ -5480,7 +5410,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   width: 158,
                   child: Theme(
                     data: Theme.of(context).copyWith(
-                      canvasColor: Colors.blueGrey.shade700,
+                      canvasColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                     ),
                     child: DropdownButtonFormField<String>(
                       value: _selectedRirModel[widget.exerciseId], // ✅ FIXED
@@ -5516,7 +5446,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                               overflow: TextOverflow.ellipsis,
                               maxLines: 1,
                               softWrap: false,
-                              style: const TextStyle(color: Colors.white, fontSize: 12),
+                              
                             ),
                           );
                         }).toList();
@@ -5532,13 +5462,13 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                           widget.onUpdateSetting(widget.exerciseId, 'rirModel', value);
                         });
                       },
-                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                      
                       decoration: InputDecoration(
                         labelText: 'RIR Periodization Model',
-                        labelStyle: const TextStyle(color: Colors.white),
+                        
                         floatingLabelBehavior: FloatingLabelBehavior.always,
                         filled: true,
-                        fillColor: Colors.blueGrey.shade700,
+                        fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
                         isDense: true,
                         contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
@@ -5592,13 +5522,13 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         controller: _rirDisplayController, // ✅ ADD THIS LINE
                         focusNode: _rirFocusNode, // ✅ ADD THIS LINE
                         readOnly: true,
-                        style: const TextStyle(color: Colors.white, fontSize: 13),
+                        
                         decoration: InputDecoration(
                           labelText: 'RIR Targets',
-                          labelStyle: const TextStyle(color: Colors.white),
+                          
                           floatingLabelBehavior: FloatingLabelBehavior.always,
                           filled: true,
-                          fillColor: Colors.blueGrey.shade700,
+                          fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                           border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
                           isDense: true,
                           contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
@@ -5618,7 +5548,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   height: 48,
                   child: Theme(
                     data: Theme.of(context).copyWith(
-                      canvasColor: Colors.blueGrey.shade700,
+                      canvasColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                     ),
                     child: DropdownButtonFormField<String>(
                       // ✅ Safe assignment for value
@@ -5685,7 +5615,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                               overflow: TextOverflow.ellipsis,
                               maxLines: 1,
                               softWrap: false,
-                              style: const TextStyle(color: Colors.white, fontSize: 12),
+                              
                             ),
                           );
                         }).toList();
@@ -5699,13 +5629,13 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                           });
                         }
                       },
-                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                      
                       decoration: InputDecoration(
                         labelText: 'Progression Model',
-                        labelStyle: const TextStyle(color: Colors.white),
+                        
                         floatingLabelBehavior: FloatingLabelBehavior.always,
                         filled: true,
-                        fillColor: Colors.blueGrey.shade700,
+                        fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
                         isDense: true,
                         contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
@@ -5730,9 +5660,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 10, vertical: 2),
                           decoration: BoxDecoration(
-                            color: Colors.blueGrey.shade700,
+                            color: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                             borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: Colors.white38),
+                            border: Border.all(color: Theme.of(context).colorScheme.outline),
                           ),
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -5788,8 +5718,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         top: -4,
                         child: Text(
                           'Best Weight × Reps',
-                          style: TextStyle(fontSize: 12, color: Colors.white, backgroundColor: Colors.blueGrey.shade700
-                          ),
+                          style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurface, backgroundColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface),
                         ),
                       ),
                     ],
@@ -5805,12 +5734,12 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                     controller: _notesController,
                     maxLines: null,
                     minLines: 1,
-                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                    
                     decoration: InputDecoration(
                       labelText: 'Notes',
-                      labelStyle: const TextStyle(color: Colors.white),
+                      
                       filled: true,
-                      fillColor: Colors.blueGrey.shade700,
+                      fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
                       border: const OutlineInputBorder(),
                       contentPadding: const EdgeInsets.symmetric(
                           horizontal: 8, vertical: 10),
@@ -5848,9 +5777,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         style: const TextStyle(fontSize: 12, color: Colors.white),
         decoration: InputDecoration(
           labelText: label,
-          labelStyle: const TextStyle(color: Colors.white),
+          
           filled: true,
-          fillColor: Colors.blueGrey.shade700,
+          fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
           isDense: true,
           contentPadding:

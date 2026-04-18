@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(flutter analyze:*)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(grep -n \"lightBlueAccent\\\\|cyanAccent\\\\|Colors.blueGrey$\\\\b\" C:/Projects/RE-test/lib/home_screen.dart)",
+      "Bash(flutter pub *)",
+      "Bash(python3 *)",
+      "Bash(grep -v \"old\\\\\\\\\")"
     ]
   }
 }

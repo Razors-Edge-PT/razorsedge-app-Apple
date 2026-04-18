@@ -28,6 +28,8 @@ import 'coach_home_screen.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'membership_gate.dart';
+import 'theme_controller.dart';
+import 'app_theme.dart';
 
 
 
@@ -71,8 +73,31 @@ void showAppSnack(String message) {
 
 
 
-class AppRoot extends StatelessWidget {
+class AppRoot extends StatefulWidget {
   const AppRoot({super.key});
+
+  @override
+  State<AppRoot> createState() => _AppRootState();
+}
+
+/// Memoizes UserContext and the token future so that widget-tree rebuilds caused
+/// by theme changes (ThemeController notifying) do NOT recreate UserContext or
+/// retrigger WarmupService / Isar side effects.
+class _AppRootState extends State<AppRoot> {
+  static const _devCoachUids = {
+    'yoVAqScwLMQLAgNHh8v9IK49fBw2', // Richard Razorsedge
+    'wuiMe7phxYQh0MM39bfnhgv20yS2',
+    'SMTEVGPH1MXgOgbcBbJFU1HjU8G3',
+    'jhIB7Yi1whYwPvBSmK27KltJGn23',
+    'ejBDKEZPFfQz2Sdzd7BZlNydxZ33', // Adam@razorsedgept
+    'L7YjSMnm7tXD3BwyskmmrgVhKsS2', // Ruby cakes
+    'ykx0RvDMc5OIuZ2R4kqWMhGbrGV2', // Google Play reviewer
+  };
+
+  // Memoized per authenticated uid — reset on sign-out or uid change.
+  String? _memoUid;
+  Future<IdTokenResult>? _tokenFuture;
+  UserContext? _userContext;
 
   @override
   Widget build(BuildContext context) {
@@ -81,14 +106,24 @@ class AppRoot extends StatelessWidget {
       builder: (context, snap) {
         final user = snap.data;
 
-        // Not logged in yet → no provider needed.
+        // Not logged in → clear memo and show unauthenticated app shell.
         if (user == null) {
+          _memoUid = null;
+          _tokenFuture = null;
+          _userContext = null;
           return const MyApp();
         }
 
-        // Logged in → build UserContext once and wrap app.
+        // Only fetch token once per uid — prevents spurious WarmupService calls
+        // on widget-tree rebuilds triggered by theme/provider changes.
+        if (user.uid != _memoUid) {
+          _memoUid = user.uid;
+          _tokenFuture = user.getIdTokenResult();
+          _userContext = null; // will be created after token resolves
+        }
+
         return FutureBuilder<IdTokenResult>(
-          future: user.getIdTokenResult(),
+          future: _tokenFuture,
           builder: (context, tokenSnap) {
             if (tokenSnap.connectionState == ConnectionState.waiting || !tokenSnap.hasData) {
               return const MaterialApp(
@@ -96,36 +131,28 @@ class AppRoot extends StatelessWidget {
               );
             }
 
+            // Create UserContext exactly once per uid.
+            if (_userContext == null) {
+              final token = tokenSnap.data!;
+              final isCoach =
+                  (token.claims?['isCoach'] == true) ||
+                  _devCoachUids.contains(user.uid);
 
-            final token = tokenSnap.data!;
-            const devCoachUids = {
-              'yoVAqScwLMQLAgNHh8v9IK49fBw2', // Richard Razorsedge
-              'wuiMe7phxYQh0MM39bfnhgv20yS2',
-              'SMTEVGPH1MXgOgbcBbJFU1HjU8G3',
-              'jhIB7Yi1whYwPvBSmK27KltJGn23',
-              'ejBDKEZPFfQz2Sdzd7BZlNydxZ33', // Adam@razorsedgept
-              'L7YjSMnm7tXD3BwyskmmrgVhKsS2', // Ruby cakes
-              'ykx0RvDMc5OIuZ2R4kqWMhGbrGV2', // Google Play reviewer
-            };
+              ensureMembershipDoc(user.uid);
+              upsertUserLookup();
 
-            final isCoachClaim = token.claims?['isCoach'] == true;
-            final isCoach = isCoachClaim || devCoachUids.contains(user.uid);
-
-            ensureMembershipDoc(user.uid);
-            upsertUserLookup();
-
-            final userContext = UserContext(actorUid: user.uid, isCoach: isCoach);
-            userContext.bootstrapBlockMeta(uid: user.uid);
+              _userContext = UserContext(actorUid: user.uid, isCoach: isCoach);
+              _userContext!.bootstrapBlockMeta(uid: user.uid);
+            }
 
             return ChangeNotifierProvider<UserContext>.value(
-              value: userContext,
+              value: _userContext!,
               child: const MyApp(),
             );
           },
         );
       },
     );
-
   }
 }
 
@@ -158,7 +185,15 @@ void main() async {
   }
 
 
-  runApp(const AppRoot());
+  final themeController = ThemeController();
+  await themeController.load();
+
+  runApp(
+    ChangeNotifierProvider<ThemeController>.value(
+      value: themeController,
+      child: const AppRoot(),
+    ),
+  );
 }
 
 
@@ -223,6 +258,7 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tc = context.watch<ThemeController>();
     return MaterialApp(
       scaffoldMessengerKey: rootScaffoldMessengerKey, // ✅ ROOT-SNACKBAR-KEY wired
       title: 'Re App',
@@ -239,49 +275,9 @@ class MyApp extends StatelessWidget {
         // add any others you need…
       ],
 
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: Colors.blueGrey.shade900,
-        primaryColor: Colors.lightBlueAccent,
-        colorScheme: ColorScheme.dark(
-          primary: Colors.lightBlueAccent,
-          onPrimary: Colors.white,
-          surface: Colors.blueGrey.shade800,
-          onSurface: Colors.white,
-        ),
-        appBarTheme: AppBarTheme(
-          backgroundColor: Colors.blueGrey.shade900,
-          foregroundColor: Colors.white, // affects title/icon colors
-          titleTextStyle: GoogleFonts.monda(
-            color: Colors.white,
-            fontSize: 20,
-            fontWeight: FontWeight.w600,
-          ).copyWith(
-            fontFamilyFallback: const ['Roboto', 'Helvetica', 'Arial'],
-          ),
-          toolbarTextStyle: GoogleFonts.monda(
-            color: Colors.white,
-            fontSize: 16,
-          ).copyWith(
-            fontFamilyFallback: const ['Roboto', 'Helvetica', 'Arial'],
-          ),
-        ),
-        elevatedButtonTheme: ElevatedButtonThemeData(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.blueGrey.shade700,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-            ),
-          ),
-        ),
-        iconTheme: const IconThemeData(color: Colors.white70),
-        textTheme: const TextTheme(
-          bodyMedium: TextStyle(color: Colors.white),
-          labelLarge: TextStyle(color: Colors.white),
-        ),
-      ),
+      theme: AppTheme.light(primary: tc.primaryColor, secondary: tc.secondaryColor, tertiary: tc.tertiaryColor),
+      darkTheme: AppTheme.dark(primary: tc.primaryColor, secondary: tc.secondaryColor, tertiary: tc.tertiaryColor),
+      themeMode: tc.themeMode,
       navigatorObservers: [routeObserver],
 
       // ✅ Home is now gated by membership

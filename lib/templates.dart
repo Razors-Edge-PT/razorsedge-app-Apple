@@ -275,11 +275,10 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   ListTile(
-                    tileColor: Colors.blueGrey.shade800,
                     title: Text(
                       category,
-                      style: const TextStyle(
-                          color: Colors.white, fontWeight: FontWeight.bold),
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurface, fontWeight: FontWeight.bold),
                     ),
                     trailing: Icon(
                       isExpanded ? Icons.expand_less : Icons.expand_more,
@@ -306,7 +305,6 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
           }
 
           return AlertDialog(
-            backgroundColor: Colors.blueGrey.shade900,
             insetPadding:
             const EdgeInsets.symmetric(horizontal: 24, vertical: 2),
             contentPadding:
@@ -315,18 +313,17 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 const Text("Select Exercise",
-                    style: TextStyle(fontSize: 13, color: Colors.white)),
+                    style: TextStyle(fontSize: 13)),
                 if (plannedModeAvailable)
                   Row(
                     children: [
                       Text(
                         showPlannedOnly ? "Planned Only" : "All Exercises",
-                        style: const TextStyle(
-                            fontSize: 12, color: Colors.white70),
+                        style: const TextStyle(fontSize: 12),
                       ),
                       Switch(
                         value: showPlannedOnly,
-                        activeColor: Colors.lightBlueAccent,
+                        activeColor: Theme.of(context).colorScheme.primary,
                         onChanged: (value) => setLocalState(
                                 () => showPlannedOnly = value),
                       ),
@@ -343,20 +340,20 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                 children: [
                   Padding(
                     padding: const EdgeInsets.only(bottom: 10.0),
-                    child: TextField(
-                      style: const TextStyle(color: Colors.white),
-                      decoration: InputDecoration(
-                        hintText: 'Search exercises...',
-                        hintStyle: const TextStyle(color: Colors.white54),
-                        filled: true,
-                        fillColor: Colors.blueGrey.shade800,
-                        border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8.0)),
-                        contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 10.0, vertical: 10.0),
+                    child: Builder(
+                      builder: (context) => TextField(
+                        decoration: InputDecoration(
+                          hintText: 'Search exercises...',
+                          filled: true,
+                          fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8.0)),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 10.0, vertical: 10.0),
+                        ),
+                        onChanged: (val) => setLocalState(
+                                () => searchQuery = val.toLowerCase()),
                       ),
-                      onChanged: (val) => setLocalState(
-                              () => searchQuery = val.toLowerCase()),
                     ),
                   ),
                   Expanded(
@@ -536,11 +533,10 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   ListTile(
-                    tileColor: Colors.blueGrey.shade800,
                     title: Text(
                       category,
-                      style: const TextStyle(
-                          color: Colors.white, fontWeight: FontWeight.bold),
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurface, fontWeight: FontWeight.bold),
                     ),
                     trailing: Icon(
                       isExpanded ? Icons.expand_less : Icons.expand_more,
@@ -567,7 +563,6 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
           }
 
           return AlertDialog(
-            backgroundColor: Colors.blueGrey.shade900,
             insetPadding:
             const EdgeInsets.symmetric(horizontal: 24, vertical: 2),
             contentPadding:
@@ -576,18 +571,17 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 const Text("Select Exercise",
-                    style: TextStyle(fontSize: 13, color: Colors.white)),
+                    style: TextStyle(fontSize: 13)),
                 if (plannedModeAvailable)
                   Row(
                     children: [
                       Text(
                         showPlannedOnly ? "Planned Only" : "All Exercises",
-                        style: const TextStyle(
-                            fontSize: 12, color: Colors.white70),
+                        style: const TextStyle(fontSize: 12),
                       ),
                       Switch(
                         value: showPlannedOnly,
-                        activeColor: Colors.lightBlueAccent,
+                        activeColor: Theme.of(context).colorScheme.primary,
                         onChanged: (value) => setLocalState(
                                 () => showPlannedOnly = value),
                       ),
@@ -604,20 +598,20 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                 children: [
                   Padding(
                     padding: const EdgeInsets.only(bottom: 10.0),
-                    child: TextField(
-                      style: const TextStyle(color: Colors.white),
-                      decoration: InputDecoration(
-                        hintText: 'Search exercises...',
-                        hintStyle: const TextStyle(color: Colors.white54),
-                        filled: true,
-                        fillColor: Colors.blueGrey.shade800,
-                        border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8.0)),
-                        contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 10.0, vertical: 10.0),
+                    child: Builder(
+                      builder: (context) => TextField(
+                        decoration: InputDecoration(
+                          hintText: 'Search exercises...',
+                          filled: true,
+                          fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8.0)),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 10.0, vertical: 10.0),
+                        ),
+                        onChanged: (val) => setLocalState(
+                                () => searchQuery = val.toLowerCase()),
                       ),
-                      onChanged: (val) => setLocalState(
-                              () => searchQuery = val.toLowerCase()),
                     ),
                   ),
                   Expanded(
@@ -1248,7 +1242,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                   : Colors.blueGrey.shade900.withOpacity(0.15),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(
-                color: isDrop ? Colors.cyanAccent.withOpacity(0.5) : Colors.white10,
+                color: isDrop ? Theme.of(context).colorScheme.secondary.withOpacity(0.5) : Colors.white10,
                 width: 0.6,
               ),
             ),
@@ -1257,7 +1251,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                 Icon(
                   _showActiveBlock ? Icons.expand_less : Icons.expand_more,
                   size: 16,
-                  color: Colors.cyanAccent.shade100,
+                  color: Theme.of(context).colorScheme.secondary,
                 ),
                 const SizedBox(width: 4),
 
@@ -1474,7 +1468,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         child: Container(
           margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
           decoration: BoxDecoration(
-            color: Colors.blueGrey.shade700,
+            color: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
             borderRadius: BorderRadius.circular(8),
             border: _draggingOverTemplateId == template.id
                 ? Border.all(color: Colors.white60, width: 1)
@@ -2462,18 +2456,16 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
 // 🔁 Regenerate Templates
               ElevatedButton.icon(
-                icon: const Icon(
+                icon: Icon(
                   Icons.refresh,
                   size: 32,
-                  color: Colors.cyanAccent, // 👈 cyan icon
+                  color: Theme.of(context).colorScheme.secondary, // 👈 cyan icon
                 ),
                 label: const Text(
                   "Regen",
                   style: TextStyle(fontSize: 13.5),
                 ),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blueGrey.shade700,
-                  foregroundColor: Colors.white, // text stays white
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   minimumSize: const Size(0, 28),
                   visualDensity: VisualDensity.compact,
@@ -2487,18 +2479,16 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
               // ➕ Create New Workout (existing)
               ElevatedButton.icon(
-                icon: const Icon(
+                icon: Icon(
                   Icons.add,
                   size: 32,
-                  color: Colors.cyanAccent, // 👈 cyan accent icon
+                  color: Theme.of(context).colorScheme.secondary, // 👈 cyan accent icon
                 ),
                 label: const Text(
                   "Add New Workout",
                   style: TextStyle(fontSize: 14),
                 ),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blueGrey.shade700,
-                  foregroundColor: Colors.white, // text stays white
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   minimumSize: const Size(0, 28),
                   visualDensity: VisualDensity.compact,
@@ -2519,8 +2509,6 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                   style: TextStyle(fontSize: 14),
                 ),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blueGrey.shade700,
-                  foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   minimumSize: const Size(0, 28),
                   visualDensity: VisualDensity.compact,

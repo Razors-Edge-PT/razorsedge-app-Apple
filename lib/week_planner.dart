@@ -1408,7 +1408,7 @@ class _WeekPlannerState extends State<WeekPlanner> {
           decoration: BoxDecoration(
             color: getRowColor(weekIndex, dayIndex, rowIndex),
             border: Border(
-              bottom: BorderSide(color: Colors.blueGrey.shade700, width: 0.5),
+              bottom: BorderSide(color: Theme.of(context).colorScheme.outline, width: 0.5),
             ),
           ),
           child: Row(
@@ -1687,7 +1687,6 @@ class _WeekPlannerState extends State<WeekPlanner> {
 
       return Card(
         margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-        color: Colors.blueGrey.shade900,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
@@ -1782,12 +1781,12 @@ class _WeekPlannerState extends State<WeekPlanner> {
                                   !PeriodizationModelUtils
                                       .exercisePreviousTopSetReps
                                       .containsKey(firstExercise)) {
-                                return const Text(
+                                return Text(
                                   "Top set history: None",
                                   style: TextStyle(
                                       fontSize: 10,
                                       fontWeight: FontWeight.w500,
-                                      color: Colors.cyanAccent),
+                                      color: Theme.of(context).colorScheme.secondary),
                                 );
                               }
 
@@ -1796,10 +1795,10 @@ class _WeekPlannerState extends State<WeekPlanner> {
 
                               return Text(
                                 "Top set history: ${history.reversed.join(', ')}",
-                                style: const TextStyle(
+                                style: TextStyle(
                                     fontSize: 10,
                                     fontWeight: FontWeight.w500,
-                                    color: Colors.cyanAccent),
+                                    color: Theme.of(context).colorScheme.secondary),
                               );
                             },
                           ),
@@ -2098,52 +2097,39 @@ class _WeekPlannerState extends State<WeekPlanner> {
               const SizedBox(height: 3),
 
               // 🟣 Table Header
-              Container(
-                padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-                color: Colors.blueGrey.shade800,
-                child: Row(
-                  children: const [
-                    Expanded(
-                        flex: 4,
-                        child: Text("Exercise",
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white))),
-                    Expanded(
-                        flex: 2,
-                        child: Text("Weight",
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white))),
-                    Expanded(
-                        flex: 1,
-                        child: Text("Reps",
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white))),
-                    Expanded(
-                        flex: 1,
-                        child: Text("RIR",
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white))),
-                    Expanded(
-                        flex: 2,
-                        child: Text("E1RM",
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white))),
-                  ],
+              Builder(
+                builder: (context) => Container(
+                  padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+                  color: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
+                  child: Row(
+                    children: [
+                      Expanded(
+                          flex: 4,
+                          child: Text("Exercise",
+                              textAlign: TextAlign.center,
+                              style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurface))),
+                      Expanded(
+                          flex: 2,
+                          child: Text("Weight",
+                              textAlign: TextAlign.center,
+                              style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurface))),
+                      Expanded(
+                          flex: 1,
+                          child: Text("Reps",
+                              textAlign: TextAlign.center,
+                              style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurface))),
+                      Expanded(
+                          flex: 1,
+                          child: Text("RIR",
+                              textAlign: TextAlign.center,
+                              style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurface))),
+                      Expanded(
+                          flex: 2,
+                          child: Text("E1RM",
+                              textAlign: TextAlign.center,
+                              style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurface))),
+                    ],
+                  ),
                 ),
               ),
 
@@ -2222,10 +2208,10 @@ class _WeekPlannerState extends State<WeekPlanner> {
                                 left: 8, bottom: 1, top: 6),
                             child: Text(
                               'Circuit ${row.circuitIndex + 1}',
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.bold,
-                                color: Colors.lightBlueAccent,
+                                color: Theme.of(context).colorScheme.primary,
                               ),
                             ),
                           ),
@@ -2379,7 +2365,7 @@ class _WeekPlannerState extends State<WeekPlanner> {
                                   label: const Text('Add Exercise',
                                       style: TextStyle(fontSize: 12)),
                                   style: TextButton.styleFrom(
-                                    foregroundColor: Colors.lightBlueAccent,
+                                    foregroundColor: Theme.of(context).colorScheme.primary,
                                     padding: const EdgeInsets.symmetric(
                                         horizontal: 8),
                                     minimumSize: Size.zero,
