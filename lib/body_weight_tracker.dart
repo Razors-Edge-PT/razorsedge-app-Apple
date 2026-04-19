@@ -830,6 +830,8 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                   icon: const Icon(Icons.save),
                   label: const Text('Save'),
                   style: ElevatedButton.styleFrom(
+                    backgroundColor: Theme.of(context).colorScheme.primary,
+                    foregroundColor: Theme.of(context).colorScheme.onPrimary,
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
                     minimumSize: const Size(0, 0),
                   ),
@@ -882,12 +884,15 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                       final weight = double.tryParse(_weightControllerPm.text) ?? 0.0;
                       if (weight > 0) {
                         _saveWeight(weight, 'kg', tod: 'pm');
-                        _weightControllerPm.clear();
+                        const Text('Save 2nd')
+                        ;
                       }
                     },
                     icon: const Icon(Icons.save),
                     label: const Text('Save 2nd'),
                     style: ElevatedButton.styleFrom(
+                      backgroundColor: Theme.of(context).colorScheme.primary,
+                      foregroundColor: Theme.of(context).colorScheme.onPrimary,
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
                       minimumSize: const Size(0, 0),
                     ),

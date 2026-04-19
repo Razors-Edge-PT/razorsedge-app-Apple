@@ -2431,9 +2431,11 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                     ),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: _plannedOnly
-                          ? Colors.blueGrey.shade700
+                          ? Theme.of(context).colorScheme.primary
                           : Colors.pink.shade200,
-                      foregroundColor: Colors.white,
+                      foregroundColor: _plannedOnly
+                          ? Theme.of(context).colorScheme.onPrimary
+                          : Colors.white,
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6), // ↓ tighter vertical padding
                       minimumSize: const Size(0, 28), // ✅ ensures button stays short
                       visualDensity: VisualDensity.compact, // ✅ reduces height slightly more
@@ -2456,16 +2458,14 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
 // 🔁 Regenerate Templates
               ElevatedButton.icon(
-                icon: Icon(
-                  Icons.refresh,
-                  size: 32,
-                  color: Theme.of(context).colorScheme.secondary, // 👈 cyan icon
-                ),
+                icon: const Icon(Icons.refresh, size: 32),
                 label: const Text(
                   "Regen",
                   style: TextStyle(fontSize: 13.5),
                 ),
                 style: ElevatedButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.primary,
+                  foregroundColor: Theme.of(context).colorScheme.onPrimary,
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   minimumSize: const Size(0, 28),
                   visualDensity: VisualDensity.compact,
@@ -2479,16 +2479,14 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
               // ➕ Create New Workout (existing)
               ElevatedButton.icon(
-                icon: Icon(
-                  Icons.add,
-                  size: 32,
-                  color: Theme.of(context).colorScheme.secondary, // 👈 cyan accent icon
-                ),
+                icon: const Icon(Icons.add, size: 32),
                 label: const Text(
                   "Add New Workout",
                   style: TextStyle(fontSize: 14),
                 ),
                 style: ElevatedButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.primary,
+                  foregroundColor: Theme.of(context).colorScheme.onPrimary,
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   minimumSize: const Size(0, 28),
                   visualDensity: VisualDensity.compact,
@@ -2503,12 +2501,14 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
 // 🛠️ Edit Training Preferences (opens the existing onboarding page in edit mode)
               ElevatedButton.icon(
-                icon: const Icon(Icons.settings, color: Colors.grey, size: 32),
+                icon: const Icon(Icons.settings, size: 32),
                 label: const Text(
                   "Edit Preferences",
                   style: TextStyle(fontSize: 14),
                 ),
                 style: ElevatedButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.primary,
+                  foregroundColor: Theme.of(context).colorScheme.onPrimary,
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   minimumSize: const Size(0, 28),
                   visualDensity: VisualDensity.compact,

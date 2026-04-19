@@ -16727,15 +16727,13 @@ class _WorkoutPageState extends State<WorkoutPage>
                         builder: (context, merging, _) {
                           return ElevatedButton.icon(
                             icon: const Icon(Icons.add, size: 16),
-                            label: Text(
+                            label: const Text(
                               "Add Exercises",
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: merging ? Colors.grey.shade400 : Colors.white,
-                              ),
+                              style: TextStyle(fontSize: 14),
                             ),
                             style: ElevatedButton.styleFrom(
-                              foregroundColor: merging ? Colors.grey.shade400 : null,
+                              backgroundColor: Theme.of(context).colorScheme.primary,
+                              foregroundColor: Theme.of(context).colorScheme.onPrimary,
                               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 8),
                             ),
                             onPressed: merging ? null : _showExercisePickerDialog,
@@ -16749,6 +16747,8 @@ class _WorkoutPageState extends State<WorkoutPage>
                       flex: 3,
                       child: ElevatedButton(
                         style: ElevatedButton.styleFrom(
+                          backgroundColor: Theme.of(context).colorScheme.primary,
+                          foregroundColor: Theme.of(context).colorScheme.onPrimary,
                           padding: const EdgeInsets.symmetric(
                               horizontal: 2, vertical: 8),
                         ),
@@ -16764,6 +16764,8 @@ class _WorkoutPageState extends State<WorkoutPage>
                       flex: 3,
                       child: ElevatedButton(
                         style: ElevatedButton.styleFrom(
+                          backgroundColor: Theme.of(context).colorScheme.primary,
+                          foregroundColor: Theme.of(context).colorScheme.onPrimary,
                           padding: const EdgeInsets.symmetric(
                               horizontal: 5, vertical: 8),
                         ),
@@ -17157,7 +17159,10 @@ class _WorkoutPageState extends State<WorkoutPage>
 
                                             // Existing History button
                                             ElevatedButton(
-                                              style: ElevatedButton.styleFrom(),
+                                              style: ElevatedButton.styleFrom(
+                                                backgroundColor: Theme.of(context).colorScheme.primary,
+                                                foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                                              ),
                                               onPressed: () {
                                                 _navigateToTopSets(
                                                   _selectedExercisesWithCircuits[i]['name'] ?? '',
@@ -17165,10 +17170,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                                               },
                                               child: const Text(
                                                 'History',
-                                                style: TextStyle(
-                                                  fontFamily: 'Verdana',
-                                                  color: Colors.white70,
-                                                ),
+                                                style: TextStyle(fontFamily: 'Verdana'),
                                               ),
                                             ),
                                           ],
