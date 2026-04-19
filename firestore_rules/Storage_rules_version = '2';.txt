@@ -1,0 +1,119 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // ======================================================
+    // HELPERS
+    // ======================================================
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && request.auth.uid == "yoVAqScwLMQLAgNHh8v9IK49fBw2";
+    }
+
+    // Bidirectional + accepted-status check (mirrors Firestore rules).
+    // Uses (default) database path — required syntax in Storage rules.
+    function isBuddyOf(ownerUid) {
+      return isSignedIn() && (
+        (
+          exists(/databases/(default)/documents/buddyAssignments/$(request.auth.uid)) &&
+          get(/databases/(default)/documents/buddyAssignments/$(request.auth.uid))
+            .data.athletes[ownerUid] != null &&
+          get(/databases/(default)/documents/buddyAssignments/$(request.auth.uid))
+            .data.athletes[ownerUid].status == 'accepted'
+        )
+        ||
+        (
+          exists(/databases/(default)/documents/buddyAssignments/$(ownerUid)) &&
+          get(/databases/(default)/documents/buddyAssignments/$(ownerUid))
+            .data.athletes[request.auth.uid] != null &&
+          get(/databases/(default)/documents/buddyAssignments/$(ownerUid))
+            .data.athletes[request.auth.uid].status == 'accepted'
+        )
+      );
+    }
+
+    // Social visibility: self, confirmed friend, or super admin.
+    // Coach is deliberately excluded — no media bypass for coach role.
+    function isSocial(ownerUid) {
+      return isSignedIn() && (
+        request.auth.uid == ownerUid ||
+        isBuddyOf(ownerUid) ||
+        isSuperAdmin()
+      );
+    }
+
+
+    // ======================================================
+    // AVATAR  —  users/{uid}/profile/{fileName}
+    //
+    // This path contains ONLY the profile photo (profile.jpg).
+    // It is a distinct subdirectory from /posts/ and /liftVideos/.
+    // Any signed-in user may read (avatar visible to all logged-in users,
+    // consistent with the users_public Firestore rule).
+    // Only the owner may upload / overwrite.
+    // ======================================================
+    match /users/{ownerUid}/profile/{fileName} {
+      allow read:  if isSignedIn();
+      allow write: if isSignedIn() && request.auth.uid == ownerUid;
+    }
+
+
+    // ======================================================
+    // POST MEDIA  —  users/{uid}/posts/{postId}/{fileName}
+    //
+    // Files: small.jpg, original.jpg, original.mp4, thumb.jpg
+    // Social visibility: self, confirmed friend, super admin.
+    // Only the owner may upload / delete.
+    // ======================================================
+    match /users/{ownerUid}/posts/{postId}/{fileName} {
+      allow read:  if isSocial(ownerUid);
+      allow write: if isSignedIn() && request.auth.uid == ownerUid;
+    }
+
+
+    // ======================================================
+    // LIFT VIDEOS  —  users/{uid}/liftVideos/{fileName}
+    //
+    // Files: {liftId}.mp4, {liftId}_thumb.jpg
+    // Social visibility: self, confirmed friend, super admin.
+    // Only the owner may upload / delete.
+    // ======================================================
+    match /users/{ownerUid}/liftVideos/{fileName} {
+      allow read:  if isSocial(ownerUid);
+      allow write: if isSignedIn() && request.auth.uid == ownerUid;
+    }
+
+
+    // ======================================================
+    // DM MEDIA  —  dm/{convId}/...
+    //
+    // Actual paths written by app:
+    //   dm/{convId}/{msgId}/image_{ts}.jpg
+    //   dm/{convId}/{msgId}/video_{ts}.mp4
+    //
+    // Participant check requires one Firestore read per request.
+    // Super admin has read-only access for moderation / safety.
+    // ======================================================
+    match /dm/{convId}/{allPaths=**} {
+      function isConvParticipant() {
+        return isSignedIn() &&
+          get(/databases/(default)/documents/conversations/$(convId))
+            .data.participants[request.auth.uid] == true;
+      }
+
+      // convId = uid1_uid2 (UIDs sorted ascending, joined by "_", total 57 chars).
+      // Mirrors the Firestore DM friend-gate — participants must be confirmed friends.
+      function isConvFriend() {
+        return isBuddyOf(convId[0:28]) || isBuddyOf(convId[29:57]);
+      }
+
+      allow read:  if (isConvParticipant() && isConvFriend()) || isSuperAdmin();
+      allow write: if isConvParticipant() && isConvFriend();
+    }
+
+  }
+}

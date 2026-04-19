@@ -130,6 +130,8 @@ class WorkoutPage extends StatefulWidget {
   _WorkoutPageState createState() => _WorkoutPageState();
 }
 
+enum _ExerciseMenuAction { replace, delete }
+
 class _WorkoutPageState extends State<WorkoutPage>
     with WidgetsBindingObserver, TickerProviderStateMixin {
 
@@ -12400,6 +12402,399 @@ class _WorkoutPageState extends State<WorkoutPage>
 
   }
 
+  Future<void> _deleteExerciseAtIndex(int i, {bool silent = false, bool pushUndo = true}) async {
+    if (i < 0 || i >= _selectedExercisesWithCircuits.length) return;
+
+    final capturedOrigIdx  = i;
+    final capturedExercise = Map<String, dynamic>.from(_selectedExercisesWithCircuits[i]);
+    final capturedSets     = _workoutSets[i]
+        .map((s) => SetDetails(reps: s.reps, weight: s.weight, rir: s.rir,
+                               velocity: s.velocity, notes: s.notes))
+        .toList();
+    final capturedRepsT     = _repsControllers[i].map((c) => c.text).toList();
+    final capturedWeightT   = _weightControllers[i].map((c) => c.text).toList();
+    final capturedRirT      = _rirControllers[i].map((c) => c.text).toList();
+    final capturedVelocityT = _velocityControllers[i].map((c) => c.text).toList();
+    final capturedNotesT    = _notesControllers[i].map((c) => c.text).toList();
+
+    final String removedName = ((capturedExercise['name'] ?? '') as String).trim();
+    final int removedCi = (capturedExercise['circuitIndex'] is num)
+        ? (capturedExercise['circuitIndex'] as num).toInt()
+        : 0;
+    final String? removedExId = (capturedExercise['exerciseId'] ?? capturedExercise['id'])?.toString();
+
+    for (final c in _repsControllers[i]) c.dispose();
+    for (final c in _weightControllers[i]) c.dispose();
+    for (final c in _rirControllers[i]) c.dispose();
+    for (final c in _velocityControllers[i]) c.dispose();
+    for (final c in _notesControllers[i]) c.dispose();
+
+    setState(() {
+      _selectedExercisesWithCircuits.removeAt(i);
+      _workoutSets.removeAt(i);
+      _repsControllers.removeAt(i);
+      _weightControllers.removeAt(i);
+      _rirControllers.removeAt(i);
+      _velocityControllers.removeAt(i);
+      _notesControllers.removeAt(i);
+    });
+
+    await _pruneBb2DayCacheForSelectedDate(
+      name: removedName,
+      circuitIndex: removedCi,
+      exerciseId: removedExId,
+    );
+
+    await _deleteExerciseEverywhereForDate(
+      exerciseRow: capturedExercise,
+      date: _selectedDate,
+    );
+
+    final VoidCallback undoAction = () {
+      if (!mounted) return;
+      final insertAt = capturedOrigIdx.clamp(0, _selectedExercisesWithCircuits.length);
+      setState(() {
+        _selectedExercisesWithCircuits.insert(insertAt, capturedExercise);
+        _workoutSets.insert(insertAt, capturedSets);
+        _repsControllers.insert(insertAt,
+            capturedRepsT.map((t) => TextEditingController(text: t)).toList());
+        _weightControllers.insert(insertAt,
+            capturedWeightT.map((t) => TextEditingController(text: t)).toList());
+        _rirControllers.insert(insertAt,
+            capturedRirT.map((t) => TextEditingController(text: t)).toList());
+        _velocityControllers.insert(insertAt,
+            capturedVelocityT.map((t) => TextEditingController(text: t)).toList());
+        _notesControllers.insert(insertAt,
+            capturedNotesT.map((t) => TextEditingController(text: t)).toList());
+      });
+      unawaited(_restoreBb2DayCacheForSelectedDate(exerciseRow: capturedExercise));
+      _attachDirtyListeners();
+    };
+
+    if (pushUndo) _undoStack.add(undoAction);
+
+    if (!silent && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Deleted "$removedName"'),
+          action: SnackBarAction(
+            label: 'Undo',
+            textColor: Colors.blueGrey.shade700,
+            onPressed: () {
+              if (_applyingUndo) return;
+              _applyingUndo = true;
+              _undoStack.remove(undoAction);
+              undoAction();
+              _applyingUndo = false;
+            },
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _replaceExerciseAtIndex(int i) async {
+    if (i < 0 || i >= _selectedExercisesWithCircuits.length) return;
+
+    final capturedCardId   = _selectedExercisesWithCircuits[i]['cardId']?.toString() ?? '';
+    final capturedCi       = ((_selectedExercisesWithCircuits[i]['circuitIndex'] ?? 0) as num).toInt();
+    final capturedOrigIdx  = i;
+
+    // Snapshot full state for undo restore
+    final capturedExercise = Map<String, dynamic>.from(_selectedExercisesWithCircuits[i]);
+    final capturedSets     = _workoutSets[i]
+        .map((s) => SetDetails(reps: s.reps, weight: s.weight, rir: s.rir,
+                               velocity: s.velocity, notes: s.notes))
+        .toList();
+    final capturedRepsT     = _repsControllers[i].map((c) => c.text).toList();
+    final capturedWeightT   = _weightControllers[i].map((c) => c.text).toList();
+    final capturedRirT      = _rirControllers[i].map((c) => c.text).toList();
+    final capturedVelocityT = _velocityControllers[i].map((c) => c.text).toList();
+    final capturedNotesT    = _notesControllers[i].map((c) => c.text).toList();
+
+    // Fetch exercises for picker
+    if (plannedExercises.isEmpty) await loadPlannedExercisesFromFirestore();
+    final snapshot = await FirebaseFirestore.instance.collection('exercises').get();
+    final allExercises = snapshot.docs.map((doc) => {
+      'id': doc.id,
+      'name': doc['name'] as String,
+      'category': doc['category'] as String,
+    }).toList();
+    final Map<String, String> nameToIdMap = {
+      for (final ex in allExercises) ex['name']!: ex['id']!,
+    };
+    final Map<String, String> nameToCategoryMap = {
+      for (final ex in allExercises) ex['name']!: ex['category']!,
+    };
+
+    bool plannedModeAvailable = plannedExercises.isNotEmpty;
+    bool showPlannedOnly = true;
+    final Map<String, bool> expandedGroups = {};
+    String searchQuery = '';
+
+    final String? selected = await showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        final Set<String> existingIds = {};
+        final Set<String> existingNames = {};
+        for (int ri = 0; ri < _selectedExercisesWithCircuits.length; ri++) {
+          if (_selectedExercisesWithCircuits[ri]['cardId']?.toString() == capturedCardId) continue;
+          final row = _selectedExercisesWithCircuits[ri];
+          final eid = (row['exerciseId'] ?? row['id'])?.toString().trim() ?? '';
+          if (eid.isNotEmpty) existingIds.add(eid);
+          final nm = (row['name'] ?? '').toString().trim().toLowerCase();
+          if (nm.isNotEmpty) existingNames.add(nm);
+        }
+
+        return StatefulBuilder(builder: (context, setLocalState) {
+          List<Widget> _buildExerciseList() {
+            var filteredExercises = (showPlannedOnly && plannedModeAvailable)
+                ? allExercises.where((ex) => plannedExercises.contains(ex['id'])).toList()
+                : List<Map<String, String>>.from(allExercises);
+
+            filteredExercises = filteredExercises
+                .where((ex) =>
+                    !existingIds.contains(ex['id']) &&
+                    !existingNames.contains(ex['name']!.trim().toLowerCase()))
+                .toList();
+
+            final searched = searchQuery.isNotEmpty
+                ? filteredExercises.where((ex) => ex['name']!.toLowerCase().contains(searchQuery)).toList()
+                : filteredExercises;
+
+            if (searchQuery.isNotEmpty) {
+              return searched.map((ex) => ListTile(
+                title: Text(ex['name']!, style: const TextStyle(color: Colors.white70)),
+                onTap: () => Navigator.pop(ctx, ex['name']!),
+                dense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+              )).toList();
+            }
+
+            final Map<String, List<String>> grouped = {};
+            for (final exercise in filteredExercises) {
+              final category = exercise['category'] ?? 'Other';
+              grouped.putIfAbsent(category, () => []).add(exercise['name'] ?? 'Unnamed');
+            }
+            for (final group in grouped.values) {
+              group.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+            }
+
+            const categoryOrder = [
+              'Horizontal Press', 'Horizontal Pull', 'Vertical Press', 'Vertical Pull',
+              'Lateral Raise', 'Arm Extension', 'Arm Curl', 'Squat Pattern', 'Hip Hinge',
+              'Leg Extension', 'Leg Curl', 'Hip Abduction/adduction', 'Calf Raise', 'Core',
+            ];
+
+            final Map<String, List<String>> orderedGrouped = {};
+            for (final cat in categoryOrder) {
+              if (grouped.containsKey(cat)) orderedGrouped[cat] = grouped[cat]!;
+            }
+            for (final entry in grouped.entries) {
+              if (!orderedGrouped.containsKey(entry.key)) orderedGrouped[entry.key] = entry.value;
+            }
+            for (final category in orderedGrouped.keys) {
+              expandedGroups.putIfAbsent(category, () => false);
+            }
+
+            return orderedGrouped.entries.map((entry) {
+              final category = entry.key;
+              final exercises = entry.value;
+              final isExpanded = expandedGroups[category] ?? false;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ListTile(
+                    title: Text(category, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    trailing: Icon(isExpanded ? Icons.expand_less : Icons.expand_more, color: Colors.white70),
+                    onTap: () => setLocalState(() => expandedGroups[category] = !isExpanded),
+                  ),
+                  if (isExpanded)
+                    ...exercises.map((name) => ListTile(
+                      title: Text(name, style: const TextStyle(color: Colors.white70)),
+                      onTap: () => Navigator.pop(ctx, name),
+                      dense: true,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+                    )),
+                  const Divider(height: 10, color: Colors.grey),
+                ],
+              );
+            }).toList();
+          }
+
+          return AlertDialog(
+            insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 2),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            title: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text("Replace Exercise", style: TextStyle(fontSize: 13, color: Colors.white)),
+                if (plannedModeAvailable)
+                  Row(
+                    children: [
+                      Text(
+                        showPlannedOnly ? "Planned Only" : "All Exercises",
+                        style: const TextStyle(fontSize: 12, color: Colors.white70),
+                      ),
+                      Switch(
+                        value: showPlannedOnly,
+                        onChanged: (value) => setLocalState(() => showPlannedOnly = value),
+                        activeColor: Theme.of(context).colorScheme.primary,
+                      ),
+                    ],
+                  )
+                else
+                  const SizedBox(),
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              height: 400,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10.0),
+                    child: TextField(
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        hintText: 'Search exercises...',
+                        hintStyle: const TextStyle(color: Colors.white54),
+                        filled: true,
+                        fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8.0)),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 10.0),
+                      ),
+                      onChanged: (val) => setLocalState(() => searchQuery = val.toLowerCase()),
+                    ),
+                  ),
+                  Expanded(child: ListView(children: _buildExerciseList())),
+                ],
+              ),
+            ),
+          );
+        });
+      },
+    );
+
+    if (selected == null || selected.isEmpty) return;
+
+    // Validate by stable identity — list may have changed during async dialog
+    final resolvedIdx = _selectedExercisesWithCircuits
+        .indexWhere((r) => r['cardId']?.toString() == capturedCardId);
+    if (resolvedIdx == -1) return; // exercise was already removed
+
+    final String newExName   = selected;
+    final String newExId     = nameToIdMap[selected] ?? '';
+    final String newCategory = nameToCategoryMap[selected] ?? '';
+    final String ymd         = DateFormat('yyyy-MM-dd').format(_selectedDate);
+    final String newCardId   = 'wes|$ymd|${DateTime.now().microsecondsSinceEpoch}|$newExId|$capturedCi';
+    final int desiredSets    = _defaultSets;
+
+    // Silently delete old exercise (no snackbar, no undo pushed)
+    await _deleteExerciseAtIndex(resolvedIdx, silent: true, pushUndo: false);
+
+    // Insert new exercise at the original position
+    final int insertAt = capturedOrigIdx.clamp(0, _selectedExercisesWithCircuits.length);
+    final newExerciseRow = {
+      'name': newExName,
+      'exerciseId': newExId,
+      'id': newExId,
+      'category': newCategory,
+      'circuitIndex': capturedCi,
+      'cardId': newCardId,
+    };
+    final newSets         = List.generate(desiredSets, (_) => SetDetails());
+    final newRepsCtrl     = List.generate(desiredSets, (_) => TextEditingController());
+    final newWeightCtrl   = List.generate(desiredSets, (_) => TextEditingController());
+    final newRirCtrl      = List.generate(desiredSets, (_) => TextEditingController());
+    final newVelocityCtrl = List.generate(desiredSets, (_) => TextEditingController());
+    final newNotesCtrl    = List.generate(desiredSets, (_) => TextEditingController());
+
+    setState(() {
+      _selectedExercisesWithCircuits.insert(insertAt, newExerciseRow);
+      _workoutSets.insert(insertAt, newSets);
+      _repsControllers.insert(insertAt, newRepsCtrl);
+      _weightControllers.insert(insertAt, newWeightCtrl);
+      _rirControllers.insert(insertAt, newRirCtrl);
+      _velocityControllers.insert(insertAt, newVelocityCtrl);
+      _notesControllers.insert(insertAt, newNotesCtrl);
+    });
+
+    _populateVelocityFlags();
+    _attachDirtyListeners();
+
+    unawaited(() async {
+      try {
+        await _upsertWorkoutToFirestore(alsoPushToBB2: false, markAllSaved: false);
+      } catch (_) {}
+    }());
+
+    // Replace undo: remove new exercise, restore old
+    final VoidCallback replaceUndoAction = () {
+      if (!mounted) return;
+      final newIdx = _selectedExercisesWithCircuits
+          .indexWhere((r) => r['cardId']?.toString() == newCardId);
+      if (newIdx != -1) {
+        for (final c in _repsControllers[newIdx]) c.dispose();
+        for (final c in _weightControllers[newIdx]) c.dispose();
+        for (final c in _rirControllers[newIdx]) c.dispose();
+        for (final c in _velocityControllers[newIdx]) c.dispose();
+        for (final c in _notesControllers[newIdx]) c.dispose();
+        setState(() {
+          _selectedExercisesWithCircuits.removeAt(newIdx);
+          _workoutSets.removeAt(newIdx);
+          _repsControllers.removeAt(newIdx);
+          _weightControllers.removeAt(newIdx);
+          _rirControllers.removeAt(newIdx);
+          _velocityControllers.removeAt(newIdx);
+          _notesControllers.removeAt(newIdx);
+        });
+        unawaited(_deleteExerciseEverywhereForDate(
+          exerciseRow: newExerciseRow,
+          date: _selectedDate,
+        ));
+      }
+      final restoreAt = capturedOrigIdx.clamp(0, _selectedExercisesWithCircuits.length);
+      setState(() {
+        _selectedExercisesWithCircuits.insert(restoreAt, capturedExercise);
+        _workoutSets.insert(restoreAt, capturedSets);
+        _repsControllers.insert(restoreAt,
+            capturedRepsT.map((t) => TextEditingController(text: t)).toList());
+        _weightControllers.insert(restoreAt,
+            capturedWeightT.map((t) => TextEditingController(text: t)).toList());
+        _rirControllers.insert(restoreAt,
+            capturedRirT.map((t) => TextEditingController(text: t)).toList());
+        _velocityControllers.insert(restoreAt,
+            capturedVelocityT.map((t) => TextEditingController(text: t)).toList());
+        _notesControllers.insert(restoreAt,
+            capturedNotesT.map((t) => TextEditingController(text: t)).toList());
+      });
+      unawaited(_restoreBb2DayCacheForSelectedDate(exerciseRow: capturedExercise));
+      _attachDirtyListeners();
+    };
+
+    _undoStack.add(replaceUndoAction);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('"$newExName" swapped in'),
+          action: SnackBarAction(
+            label: 'Undo',
+            textColor: Colors.blueGrey.shade700,
+            onPressed: () {
+              if (_applyingUndo) return;
+              _applyingUndo = true;
+              _undoStack.remove(replaceUndoAction);
+              replaceUndoAction();
+              _applyingUndo = false;
+            },
+          ),
+        ),
+      );
+    }
+  }
+
   void _onReorderExercises(int oldIndex, int newIndex) {
     setState(() {
       if (newIndex > oldIndex) newIndex--;
@@ -16876,107 +17271,7 @@ class _WorkoutPageState extends State<WorkoutPage>
                         ],
 
 
-                        Dismissible(
-                          key: ValueKey('dismiss_$cardId'),
-                          direction: DismissDirection.endToStart,
-                          background: Container(
-                            color: Colors.red,
-                            alignment: Alignment.centerRight,
-                            padding: const EdgeInsets.only(right: 16),
-                            child: const Icon(
-                                Icons.delete, color: Colors.white),
-                          ),
-                          onDismissed: (_) async {
-                            final capturedOrigIdx  = i;
-                            final capturedExercise = Map<String, dynamic>.from(_selectedExercisesWithCircuits[i]);
-                            final capturedSets     = _workoutSets[i]
-                                .map((s) => SetDetails(reps: s.reps, weight: s.weight, rir: s.rir,
-                                                       velocity: s.velocity, notes: s.notes))
-                                .toList();
-                            final capturedRepsT     = _repsControllers[i].map((c) => c.text).toList();
-                            final capturedWeightT   = _weightControllers[i].map((c) => c.text).toList();
-                            final capturedRirT      = _rirControllers[i].map((c) => c.text).toList();
-                            final capturedVelocityT = _velocityControllers[i].map((c) => c.text).toList();
-                            final capturedNotesT    = _notesControllers[i].map((c) => c.text).toList();
-
-                            // Extract keys for cache operations
-                            final String removedName = ((capturedExercise['name'] ?? '') as String).trim();
-                            final int removedCi = (capturedExercise['circuitIndex'] is num)
-                                ? (capturedExercise['circuitIndex'] as num).toInt()
-                                : 0;
-                            final String? removedExId = (capturedExercise['exerciseId'] ?? capturedExercise['id'])?.toString();
-
-                            // Dispose controllers before removing from lists
-                            for (final c in _repsControllers[i]) c.dispose();
-                            for (final c in _weightControllers[i]) c.dispose();
-                            for (final c in _rirControllers[i]) c.dispose();
-                            for (final c in _velocityControllers[i]) c.dispose();
-                            for (final c in _notesControllers[i]) c.dispose();
-
-                            setState(() {
-                              _selectedExercisesWithCircuits.removeAt(i);
-                              _workoutSets.removeAt(i);
-                              _repsControllers.removeAt(i);
-                              _weightControllers.removeAt(i);
-                              _rirControllers.removeAt(i);
-                              _velocityControllers.removeAt(i);
-                              _notesControllers.removeAt(i);
-                            });
-
-                            await _pruneBb2DayCacheForSelectedDate(
-                              name: removedName,
-                              circuitIndex: removedCi,
-                              exerciseId: removedExId,
-                            );
-
-                            await _deleteExerciseEverywhereForDate(
-                              exerciseRow: capturedExercise,
-                              date: _selectedDate,
-                            );
-
-                            final VoidCallback undoAction = () {
-                              if (!mounted) return;
-                              final insertAt = capturedOrigIdx.clamp(0, _selectedExercisesWithCircuits.length);
-                              setState(() {
-                                _selectedExercisesWithCircuits.insert(insertAt, capturedExercise);
-                                _workoutSets.insert(insertAt, capturedSets);
-                                _repsControllers.insert(insertAt,
-                                    capturedRepsT.map((t) => TextEditingController(text: t)).toList());
-                                _weightControllers.insert(insertAt,
-                                    capturedWeightT.map((t) => TextEditingController(text: t)).toList());
-                                _rirControllers.insert(insertAt,
-                                    capturedRirT.map((t) => TextEditingController(text: t)).toList());
-                                _velocityControllers.insert(insertAt,
-                                    capturedVelocityT.map((t) => TextEditingController(text: t)).toList());
-                                _notesControllers.insert(insertAt,
-                                    capturedNotesT.map((t) => TextEditingController(text: t)).toList());
-                              });
-                              unawaited(_restoreBb2DayCacheForSelectedDate(exerciseRow: capturedExercise));
-                              _attachDirtyListeners();
-                            };
-                            _undoStack.add(undoAction);
-
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Deleted "$removedName"'),
-                                action: SnackBarAction(
-                                  label: 'Undo',
-                                  textColor: Colors.blueGrey.shade700,
-                                  onPressed: () {
-                                    if (_applyingUndo) return;
-                                    _applyingUndo = true;
-                                    _undoStack.remove(undoAction);
-                                    undoAction();
-                                    _applyingUndo = false;
-                                  },
-                                ),
-                              ),
-                            );
-                          },
-
-
-
-                          child: FutureBuilder<void>(
+                        FutureBuilder<void>(
                               future: _initialLoad,
                               // ✅ Keep the wrapper, but do NOT gate rendering on snapshot
                               builder: (context, snapshot) {
@@ -17065,13 +17360,43 @@ class _WorkoutPageState extends State<WorkoutPage>
                                         style: TextStyle(color: Colors.white70),
                                       ),
                                     )
-                                        : Text(
-                                      _selectedExercisesWithCircuits[i]['name'],
-                                      style: TextStyle(
-                                        color: Colors.grey.shade300,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 14,
-                                      ),
+                                        : Row(
+                                      children: [
+                                        Expanded(
+                                          child: SingleChildScrollView(
+                                            scrollDirection: Axis.horizontal,
+                                            child: Text(
+                                              _selectedExercisesWithCircuits[i]['name'],
+                                              style: TextStyle(
+                                                color: Colors.grey.shade300,
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 14,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                        PopupMenuButton<_ExerciseMenuAction>(
+                                          icon: const Icon(Icons.more_vert, size: 18),
+                                          padding: EdgeInsets.zero,
+                                          onSelected: (action) {
+                                            if (action == _ExerciseMenuAction.delete) {
+                                              unawaited(_deleteExerciseAtIndex(i));
+                                            } else if (action == _ExerciseMenuAction.replace) {
+                                              unawaited(_replaceExerciseAtIndex(i));
+                                            }
+                                          },
+                                          itemBuilder: (_) => const [
+                                            PopupMenuItem(
+                                              value: _ExerciseMenuAction.replace,
+                                              child: Text('Replace exercise'),
+                                            ),
+                                            PopupMenuItem(
+                                              value: _ExerciseMenuAction.delete,
+                                              child: Text('Delete exercise'),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
                                     ),
 
                                     // 👇 Wrap trailing in a Builder so we can print before returning the Row
@@ -17162,6 +17487,10 @@ class _WorkoutPageState extends State<WorkoutPage>
                                               style: ElevatedButton.styleFrom(
                                                 backgroundColor: Theme.of(context).colorScheme.primary,
                                                 foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+                                                minimumSize: const Size(0, 38),
+                                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                                visualDensity: VisualDensity.compact,
                                               ),
                                               onPressed: () {
                                                 _navigateToTopSets(
@@ -17170,7 +17499,11 @@ class _WorkoutPageState extends State<WorkoutPage>
                                               },
                                               child: const Text(
                                                 'History',
-                                                style: TextStyle(fontFamily: 'Verdana'),
+                                                style: TextStyle(
+                                                  fontFamily: 'Verdana',
+                                                  fontSize: 12,
+                                                  height: 1.0,
+                                                ),
                                               ),
                                             ),
                                           ],
@@ -18133,7 +18466,6 @@ class _WorkoutPageState extends State<WorkoutPage>
                                   ),
                                 );
                               }), //old bracket for Card
-                        )
                       ],
                     );
                   }),

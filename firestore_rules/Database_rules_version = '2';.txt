@@ -1,0 +1,373 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ======================================================
+    // HELPERS
+    // ======================================================
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Only one hard-coded UID in all rules.
+    function isSuperAdmin() {
+      return isSignedIn() && request.auth.uid == "yoVAqScwLMQLAgNHh8v9IK49fBw2";
+    }
+
+    // Assignment-doc only — no hard-coded UID list.
+    // Every coach / admin / reviewer gets per-athlete access only through
+    // coachAssignments or athleteAssignments for that specific userId.
+    function isCoachFor(userId) {
+      return isSignedIn() && (
+        (
+          exists(/databases/$(database)/documents/coachAssignments/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/coachAssignments/$(request.auth.uid))
+            .data.athletes[userId] != null
+        )
+        ||
+        (
+          exists(/databases/$(database)/documents/athleteAssignments/$(userId)) &&
+          get(/databases/$(database)/documents/athleteAssignments/$(userId))
+            .data.coaches[request.auth.uid] != null
+        )
+      );
+    }
+
+    // Bidirectional + accepted-status check.
+    // Covers the asymmetric acceptance problem: when B accepts A's invite,
+    // only buddyAssignments/A.athletes.B is written. The second branch lets
+    // B see A's social content despite B having no reciprocal entry.
+    function isBuddyOf(ownerUid) {
+      return isSignedIn() && (
+        (
+          exists(/databases/$(database)/documents/buddyAssignments/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/buddyAssignments/$(request.auth.uid))
+            .data.athletes[ownerUid] != null &&
+          get(/databases/$(database)/documents/buddyAssignments/$(request.auth.uid))
+            .data.athletes[ownerUid].status == 'accepted'
+        )
+        ||
+        (
+          exists(/databases/$(database)/documents/buddyAssignments/$(ownerUid)) &&
+          get(/databases/$(database)/documents/buddyAssignments/$(ownerUid))
+            .data.athletes[request.auth.uid] != null &&
+          get(/databases/$(database)/documents/buddyAssignments/$(ownerUid))
+            .data.athletes[request.auth.uid].status == 'accepted'
+        )
+      );
+    }
+
+    // Social visibility gate: self, confirmed friend, or super admin.
+    // isCoachFor() is deliberately excluded — coach access does not bypass
+    // social or media visibility.
+    function isSocial(ownerUid) {
+      return isSelf(ownerUid) || isBuddyOf(ownerUid) || isSuperAdmin();
+    }
+
+    // Training data gate: self, assignment-based coach, or super admin.
+    function canAccessTraining(userId) {
+      return isSelf(userId) || isCoachFor(userId) || isSuperAdmin();
+    }
+
+
+    // ======================================================
+    // USERS PUBLIC (search, avatars, public stats)
+    // ======================================================
+    match /users_public/{userId} {
+      // Any signed-in user can search / read public profiles.
+      // Logged-out users cannot see any app data.
+      allow read: if isSignedIn();
+
+      // Only the owner or super admin may write (no coach write).
+      allow write: if isSelf(userId) || isSuperAdmin();
+    }
+
+
+    // ======================================================
+    // USERS PRIVATE (profile doc + subcollections)
+    // ======================================================
+    match /users/{userId} {
+      // Private profile: self, assigned coach, or super admin.
+      allow read: if isSelf(userId) || isCoachFor(userId) || isSuperAdmin();
+
+      // Only self or super admin can write the root profile doc.
+      // Coaches must not edit identity fields.
+      allow write: if isSelf(userId) || isSuperAdmin();
+
+      // ---- Lift video metadata ----
+      // Social visibility only — coach is NOT a bypass here.
+      match /liftVideos/{liftId} {
+        allow read: if isSocial(userId);
+        allow write: if isSelf(userId) || isSuperAdmin();
+      }
+
+      // ---- Buddy invite requests ----
+      // users/{userId}/buddyInvites/{fromUid}
+      // userId  = the receiver
+      // fromUid = the sender (doc key)
+      match /buddyInvites/{fromUid} {
+        // Receiver (owner of userId) or super admin can read their invites.
+        allow read: if isSelf(userId) || isSuperAdmin();
+
+        // Sender creates the invite doc.
+        allow create: if isSignedIn()
+                      && request.auth.uid == fromUid
+                      && request.resource.data.fromUid == fromUid
+                      && request.resource.data.buddyUid == userId;
+
+        // Receiver updates status (accepted / denied).
+        allow update: if isSignedIn()
+                      && request.auth.uid == userId
+                      && resource.data.fromUid == fromUid
+                      && resource.data.buddyUid == userId;
+
+        // Receiver may delete the invite doc.
+        allow delete: if isSignedIn() && request.auth.uid == userId;
+      }
+
+      // ---- Training subcollections (workouts, blocks, etc.) ----
+      match /{subcoll}/{doc=**} {
+        allow read, write: if canAccessTraining(userId);
+      }
+    }
+
+
+    // ======================================================
+    // PLANNED BLOCKS
+    // ======================================================
+    match /planned_blocks/{userId} {
+      allow read, write: if canAccessTraining(userId);
+    }
+    match /planned_blocks/{userId}/{doc=**} {
+      allow read, write: if canAccessTraining(userId);
+    }
+
+
+    // ======================================================
+    // BUDDY ASSIGNMENTS
+    // ======================================================
+    match /buddyAssignments/{ownerUid} {
+      // Only the owner or super admin can read their buddy list.
+      allow read: if request.auth.uid == ownerUid || isSuperAdmin();
+
+      // Owner or super admin may create / update / delete freely.
+      // An athlete who already appears in the existing athletes map may
+      // create or update (covers: accept invite, deny invite — B updating A's doc).
+      // They may NOT delete the whole document.
+      allow create, update: if isSignedIn() && (
+        request.auth.uid == ownerUid
+        || isSuperAdmin()
+        || resource.data.athletes[request.auth.uid] != null
+      );
+      allow delete: if request.auth.uid == ownerUid || isSuperAdmin();
+    }
+
+
+    // ======================================================
+    // POSTS
+    // ======================================================
+    match /posts/{postId} {
+      // Read: social access only (self, confirmed friend, super admin).
+      allow read: if isSocial(resource.data.ownerUid);
+
+      // Create: only for yourself.
+      allow create: if isSignedIn()
+                    && request.auth.uid == request.resource.data.ownerUid;
+
+      // Update:
+      //   - Post owner may change any field (caption edits, etc.).
+      //   - Super admin may change any field.
+      //   - Social visitor (friend liking / commenting) may only touch
+      //     the denormalised counter fields.
+      allow update: if isSelf(resource.data.ownerUid)
+                    || isSuperAdmin()
+                    || (
+                         isSocial(resource.data.ownerUid) &&
+                         request.resource.data.diff(resource.data)
+                           .changedKeys()
+                           .hasOnly(['likeCount', 'goodLiftCount', 'commentCount'])
+                       );
+
+      // Delete: owner or super admin only.
+      allow delete: if isSelf(resource.data.ownerUid) || isSuperAdmin();
+    }
+
+    // ---- Likes: doc ID = caller UID ----
+    // Only the caller may write their own like; anyone social may read.
+    match /posts/{postId}/likes/{uid} {
+      allow read: if isSocial(
+        get(/databases/$(database)/documents/posts/$(postId)).data.ownerUid
+      );
+      allow create, update: if isSelf(uid) && isSocial(
+        get(/databases/$(database)/documents/posts/$(postId)).data.ownerUid
+      );
+      allow delete: if isSelf(uid);
+    }
+
+    // ---- GoodLifts: doc ID = caller UID ----
+    match /posts/{postId}/goodLifts/{uid} {
+      allow read: if isSocial(
+        get(/databases/$(database)/documents/posts/$(postId)).data.ownerUid
+      );
+      allow create, update: if isSelf(uid) && isSocial(
+        get(/databases/$(database)/documents/posts/$(postId)).data.ownerUid
+      );
+      allow delete: if isSelf(uid);
+    }
+
+    // ---- Comments: auto-generated ID; uid field = author UID ----
+    match /posts/{postId}/comments/{commentId} {
+      allow read: if isSocial(
+        get(/databases/$(database)/documents/posts/$(postId)).data.ownerUid
+      );
+      // Creator must set uid == their own UID and must be social.
+      allow create: if isSignedIn()
+                    && request.resource.data.uid == request.auth.uid
+                    && isSocial(
+                         get(/databases/$(database)/documents/posts/$(postId)).data.ownerUid
+                       );
+      // Only the comment author may edit the comment body.
+      allow update: if isSignedIn() && resource.data.uid == request.auth.uid;
+      // Author, post owner, or super admin may delete.
+      allow delete: if isSignedIn() && (
+        resource.data.uid == request.auth.uid
+        || isSelf(get(/databases/$(database)/documents/posts/$(postId)).data.ownerUid)
+        || isSuperAdmin()
+      );
+    }
+
+    // ---- Catch-all: any unlisted post subcollection is read-only (social) ----
+    match /posts/{postId}/{sub=**} {
+      allow read: if isSocial(
+        get(/databases/$(database)/documents/posts/$(postId)).data.ownerUid
+      );
+      allow write: if false;
+    }
+
+
+    // ======================================================
+    // DIRECT MESSAGES
+    // ======================================================
+    match /conversations/{convId} {
+      // isParticipant() reads resource — only valid on existing docs
+      // (read / update / delete). Use request.resource for creates.
+      function isParticipant() {
+        return isSignedIn() && resource.data.participants[request.auth.uid] == true;
+      }
+
+      // convId = uid1_uid2 (UIDs sorted ascending, joined by "_", total 57 chars).
+      // Exactly one of the two UIDs matches the caller; isBuddyOf(self) is always
+      // false, so the OR resolves to the friendship check against the other person.
+      function isConvFriend() {
+        return isBuddyOf(convId[0:28]) || isBuddyOf(convId[29:57]);
+      }
+
+      // Read: participant + confirmed friend; super admin read-only for moderation.
+      allow read: if (isParticipant() && isConvFriend()) || isSuperAdmin();
+
+      // Create: caller must be a participant; exactly 2 participants;
+      // and caller must be a confirmed friend of the other person.
+      allow create: if isSignedIn()
+                    && request.resource.data.participants[request.auth.uid] == true
+                    && request.resource.data.participants.size() == 2
+                    && isConvFriend();
+
+      // Update: participant + still a confirmed friend.
+      allow update: if isParticipant() && isConvFriend();
+
+      // Conversations are never deleted via client.
+      allow delete: if false;
+
+      // ---- Messages subcollection ----
+      match /messages/{msgId} {
+        // convParticipant() must re-read the parent doc because resource here
+        // is the message doc, which has no participants field.
+        function convParticipant() {
+          return isSignedIn() &&
+            get(/databases/$(database)/documents/conversations/$(convId))
+              .data.participants[request.auth.uid] == true;
+        }
+
+        // Same friend gate as the parent conversation.
+        function msgConvFriend() {
+          return isBuddyOf(convId[0:28]) || isBuddyOf(convId[29:57]);
+        }
+
+        allow read: if (convParticipant() && msgConvFriend()) || isSuperAdmin();
+        allow create: if convParticipant() && msgConvFriend();
+        // Allows reaction updates and unread-count patches by participants.
+        allow update: if convParticipant() && msgConvFriend();
+        allow delete: if false;
+      }
+    }
+
+
+    // ======================================================
+    // COACH / ATHLETE ASSIGNMENTS
+    // ======================================================
+    match /coachAssignments/{coachUid} {
+      // Each coach manages their own roster; super admin can manage any.
+      allow read, write: if request.auth.uid == coachUid || isSuperAdmin();
+    }
+
+    match /athleteAssignments/{athleteUid} {
+      allow read: if isSignedIn() && (
+        request.auth.uid == athleteUid
+        || isSuperAdmin()
+        || (
+          resource.data.coaches != null &&
+          resource.data.coaches[request.auth.uid] != null &&
+          resource.data.coaches[request.auth.uid].approved == true
+        )
+      );
+      // Only the athlete themselves or super admin may write.
+      allow write: if request.auth.uid == athleteUid || isSuperAdmin();
+    }
+
+
+    // ======================================================
+    // ACCESS REQUESTS (coach → athlete approval workflow)
+    // ======================================================
+    match /accessRequests/{requestId} {
+      allow create, update: if isSignedIn()
+                            && request.auth.uid == request.resource.data.coachUid;
+
+      allow read: if isSignedIn() && (
+        request.auth.uid == resource.data.athleteUid
+        || request.auth.uid == resource.data.coachUid
+        || isSuperAdmin()
+      );
+
+      allow delete: if isSignedIn() && (
+        request.auth.uid == resource.data.athleteUid
+        || isSuperAdmin()
+      );
+    }
+
+
+    // ======================================================
+    // EXERCISES (catalog)
+    // ======================================================
+    match /exercises/{doc=**} {
+      allow read: if isSignedIn();
+      allow write: if isSuperAdmin();
+    }
+
+
+    // ======================================================
+    // EMAIL → UID LOOKUP
+    // ======================================================
+    match /user_lookup/{hash} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn()
+                   && request.resource.data.uid == request.auth.uid
+                   && request.resource.data.keys().hasOnly(['uid', 'displayName', 'updatedAt']);
+    }
+
+  }
+}

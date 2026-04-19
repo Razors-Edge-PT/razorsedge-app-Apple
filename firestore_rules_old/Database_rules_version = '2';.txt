@@ -1,0 +1,290 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+  
+  // ===== Posts (profile grid) =====
+// Dependencies: isSignedIn(), isCoachFor(userId) should already exist in your rules.
+// If not, copy their definitions from your existing helpers.
+
+// ===== DEV-OPEN: Posts + all subcollections =====
+match /posts/{postId} {
+  // any signed-in user can read/write the post doc
+  allow read, write: if request.auth != null;
+}
+
+match /posts/{postId}/{sub=**} {
+  // any signed-in user can read/write likes, goodLifts, comments, etc.
+  allow read, write: if request.auth != null;
+}
+
+
+    
+    // -------- Helpers --------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isCoachFor(userId) {
+  return isSignedIn() && (
+    // ✅ HARD-CODED COACH ACCESS (TEMP)
+    (
+          userId == "r69XbKqlVaYB00ioWxOjK1bvcbU2" && (
+        request.auth.uid == "LGxzlyBNh5f1zclM1F0l6tl6Py82" ||
+        request.auth.uid == "jhIB7Yi1whYwPvBSmK27KltJGn23" ||
+        request.auth.uid == "ejBDKEZPFfQz2Sdzd7BZlNydxZ33" ||
+        request.auth.uid == "L7YjSMnm7tXD3BwyskmmrgVhKsS2"  // Ruby Cakes
+      )
+
+    )
+
+    // Existing mappings still work
+    || (
+      // Coach-side mapping
+      exists(/databases/$(database)/documents/coachAssignments/$(request.auth.uid)) &&
+      get(/databases/$(database)/documents/coachAssignments/$(request.auth.uid))
+        .data.athletes[userId] != null
+    )
+    || (
+      // Athlete-side approval mapping
+      exists(/databases/$(database)/documents/athleteAssignments/$(userId)) &&
+      get(/databases/$(database)/documents/athleteAssignments/$(userId))
+        .data.coaches[request.auth.uid] != null
+    )
+  );
+}
+
+
+    function isSuperAdmin() {
+      return request.auth.uid in [
+        "yoVAqScwLMQLAgNHh8v9IK49fBw2",  // Richard
+      ];
+    }
+
+    function isAdmin() {
+  return request.auth.uid in [
+    "yoVAqScwLMQLAgNHh8v9IK49fBw2",  // Richard
+    "wuiMe7phxYQh0MM39bfnhgv20yS2",  // Campbell
+    "Rp6gFj16KMgsmOtC9tZGlUDCNRr1",  // Courtney
+    "LGxzlyBNh5f1zclM1F0l6tl6Py82",  // Adam W
+    "jhIB7Yi1whYwPvBSmK27KltJGn23",
+    "ejBDKEZPFfQz2Sdzd7BZlNydxZ33",  // Adam@razorsedgept
+  ];
+    }
+
+    function canAccessTraining(userId) {
+      return isSelf(userId) || isCoachFor(userId) || isAdmin();
+    }
+
+    function isBuddyOf(ownerUid) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/buddyAssignments/$(request.auth.uid))
+        && get(/databases/$(database)/documents/buddyAssignments/$(request.auth.uid))
+             .data.athletes[ownerUid] != null;
+    }
+
+    // -------- Users (private profile + subcollections) --------
+    match /users/{userId} {
+      // Private profile doc
+     allow read: if isSelf(userId) || isCoachFor(userId) || isAdmin() || isSuperAdmin();
+
+
+      // Owner/admin can write anything in their own doc.
+      // Coach can only edit a small set of identity fields.
+      allow write: if isSelf(userId) || isAdmin()
+                   || (
+                     isCoachFor(userId) &&
+                     request.resource.data.diff(resource.data)
+                       .changedKeys()
+                       .hasOnly(['fullName','dob','sex','username','usernameLower'])
+                   );
+
+      // Friends need to read video metadata under users/{userId}/liftVideos/*
+      match /liftVideos/{liftId} {
+        // Read metadata: owner, coaches, buddies, admins
+        allow get, list, read: if isSignedIn() && (
+          isSelf(userId) ||
+          isCoachFor(userId) ||
+          isBuddyOf(userId) ||
+          isAdmin()
+        );
+
+        // Write metadata: owner / coach / admin (NOT buddies)
+        allow create, update, delete: if isSignedIn() && (
+          isSelf(userId) ||
+          isCoachFor(userId) ||
+          isAdmin()
+        );
+      }
+      
+            // Buddy invite requests: users/{userId}/buddyInvites/{fromUid}
+      // - Sender (fromUid) creates the invite.
+      // - Receiver (userId) reads and updates status (accept/deny).
+      match /buddyInvites/{fromUid} {
+        // Receiver (owner of userId) or admin can read their invites
+        allow read: if isSelf(userId) || isAdmin();
+
+        // Sender creates an invite: must match fromUid and point at this userId
+        allow create: if isSignedIn()
+                      && request.auth.uid == fromUid
+                      && request.resource.data.fromUid == fromUid
+                      && request.resource.data.buddyUid == userId;
+
+        // Receiver updates status (accepted/denied)
+        allow update: if isSignedIn()
+                      && request.auth.uid == userId
+                      && resource.data.fromUid == fromUid
+                      && resource.data.buddyUid == userId;
+
+        // Optional: receiver can delete their invite doc
+        allow delete: if isSignedIn() && request.auth.uid == userId;
+      }
+
+      // Generic rule for other training subcollections
+      match /{subcoll}/{doc=**} {
+        allow read, write: if canAccessTraining(userId);
+      }
+
+
+      // Generic rule for other training subcollections
+      match /{subcoll}/{doc=**} {
+        allow read, write: if canAccessTraining(userId);
+      }
+    }
+
+    // -------- Public profiles (search, avatars, public stats) --------
+    match /users_public/{userId} {
+      // Username search / lookups are public
+      allow read: if true;
+
+      // Owner or admin can write anything
+      // Coach can ONLY update safe identity fields (add 'photoURL' so coaches can help update avatar if desired)
+      allow write: if (isSignedIn() && request.auth.uid == userId) || isAdmin()
+                   || (
+                     isCoachFor(userId) &&
+                     request.resource.data.diff(resource.data)
+                       .changedKeys()
+                       .hasOnly(['username','usernameLower','displayName','fullName','updatedAt','photoURL'])
+                   );
+    }
+
+    // -------- Planned blocks --------
+    match /planned_blocks/{userId} {
+      allow read, write: if canAccessTraining(userId);
+    }
+    match /planned_blocks/{userId}/{doc=**} {
+      allow read, write: if canAccessTraining(userId);
+    }
+
+    // -------- Coach/Athlete assignments --------
+match /coachAssignments/{coachUid} {
+  // Coach manages their own roster; admins/superadmins allowed
+  allow read, write: if isSignedIn() && (
+    request.auth.uid == coachUid ||
+    isAdmin() ||
+    isSuperAdmin()
+  );
+}
+
+match /athleteAssignments/{athleteUid} {
+
+  // READ:
+  // - athlete themselves
+  // - admins / superadmins
+  // - APPROVED coach listed on this athlete doc
+  allow read: if isSignedIn() && (
+    request.auth.uid == athleteUid ||
+    isAdmin() ||
+    isSuperAdmin() ||
+    (
+      resource.data.coaches != null &&
+      resource.data.coaches[request.auth.uid] != null &&
+      resource.data.coaches[request.auth.uid].approved == true
+    )
+  );
+
+  // WRITE:
+  // - athlete themselves
+  // - admins / superadmins
+  allow write: if isSignedIn() && (
+    request.auth.uid == athleteUid ||
+    isAdmin() ||
+    isSuperAdmin()
+  );
+}
+
+
+
+        // -------- Buddy list (read-only follower) --------
+    // buddyAssignments/{ownerUid}.athletes.<athleteUid> = { displayName, email, addedAt, status? }
+    // Owner controls their list; each athlete in .athletes can also update their own entry (accept/deny).
+    match /buddyAssignments/{ownerUid} {
+      // Any signed-in user can read buddy lists (tighten if you want)
+      allow read: if isSignedIn();
+
+      // Writes allowed if:
+      // - the owner themselves
+      // - an admin
+      // - OR an athlete who appears in the athletes map (either before or after this write)
+      allow write: if isSignedIn() && (
+        request.auth.uid == ownerUid ||
+        isAdmin() ||
+        request.resource.data.athletes[request.auth.uid] != null ||
+        resource.data.athletes[request.auth.uid] != null
+      );
+    }
+
+
+    // -------- Access requests workflow --------
+    match /accessRequests/{requestId} {
+      function coachUid()   { return request.resource.data.coachUid; }
+      function athleteUid() { return request.resource.data.athleteUid; }
+
+      allow create, update: if isSignedIn() && request.auth.uid == coachUid();
+      allow read:  if isSignedIn() && (
+                     request.auth.uid == resource.data.athleteUid ||
+                     request.auth.uid == resource.data.coachUid ||
+                     isAdmin()
+                   );
+      allow delete: if isSignedIn() && (
+                      request.auth.uid == resource.data.athleteUid || isAdmin()
+                    );
+    }
+
+    // -------- Exercises (catalog) --------
+    match /exercises/{doc=**} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin(); // keep restricted
+    }
+
+    // -------- Deterministic email → uid lookup --------
+    // Only owner can write their doc; anyone signed in can read to resolve emails.
+    // Limit allowed fields to prevent stuffing extra data.
+    match /user_lookup/{hash} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn()
+                   && request.resource.data.uid == request.auth.uid
+                   && request.resource.data.keys().hasOnly(['uid', 'displayName', 'updatedAt']);
+    }
+
+    // ===============================
+// Direct Messages (DM) — fully open
+// ===============================
+// 🔥 WHORE-HOUSE MODE: absolutely everything is readable/writable by anyone
+match /conversations/{convId} {
+  allow read, write: if true;
+
+  match /messages/{msgId} {
+    allow read, write: if true;
+  }
+}
+
+
+  }
+}
+
+
+

@@ -1,0 +1,110 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isCoachFor(userId) {
+      return isSignedIn() && (
+        (
+          exists(/databases/(default)/documents/coachAssignments/$(request.auth.uid)) &&
+          get(/databases/(default)/documents/coachAssignments/$(request.auth.uid)).data.athletes[userId] != null
+        )
+        ||
+        (
+          exists(/databases/(default)/documents/athleteAssignments/$(userId)) &&
+          get(/databases/(default)/documents/athleteAssignments/$(userId)).data.coaches[request.auth.uid] != null
+        )
+      );
+    }
+
+    function isBuddyOf(ownerUid) {
+      return isSignedIn()
+        && exists(/databases/(default)/documents/buddyAssignments/$(request.auth.uid))
+        && get(/databases/(default)/documents/buddyAssignments/$(request.auth.uid)).data.athletes[ownerUid] != null;
+    }
+
+    function isAllowedContent() {
+      return request.resource.contentType.matches('^video/.*')
+          || request.resource.contentType.matches('^image/.*');
+    }
+
+    function sizeOK() {
+      // ~100 MB cap: pragmatic for 1080p, ~40–90s at typical 8–20 Mbps encodes.
+      return request.resource.size < 100 * 1024 * 1024;
+    }
+
+
+// 📦 Unified: users/{ownerUid}/liftVideos/{fileName}
+// DEV-OPEN (scorched earth) — do NOT keep in prod
+match /{allPaths=**} {
+  allow read, write: if request.auth != null;
+}
+
+
+
+
+        // 🖼️ Profile photos: users/{ownerUid}/profile/{fileName}
+match /users/{ownerUid}/profile/{fileName} {
+// 🗂️ Posts media: users/{ownerUid}/posts/{fileName}
+//  - Accept images (<=10MB) and videos (<=100MB).
+//  - Owners and coaches may create/update (coach delete easy toggle below).
+//  - Reads allowed to owner, coaches, and buddies (same as other buckets).
+match /users/{ownerUid}/posts/{fileName} {
+
+  function isImage() { return request.resource.contentType.matches('^image/.*'); }
+  function isVideo() { return request.resource.contentType.matches('^video/.*'); }
+
+  allow create, update: if isSignedIn()
+                        && (request.auth.uid == ownerUid || isCoachFor(ownerUid))
+                        && (isImage() || isVideo())
+                        && (
+                              (isImage() && request.resource.size < 10 * 1024 * 1024)
+                              ||
+                              (isVideo() && request.resource.size < 100 * 1024 * 1024)
+                           );
+
+  // Owner-only delete (toggle coach delete by adding: || isCoachFor(ownerUid))
+  allow delete: if isSignedIn()
+                && (request.auth.uid == ownerUid /* || isCoachFor(ownerUid) */);
+
+  allow read: if isSignedIn()
+              && (
+                   request.auth.uid == ownerUid
+                   || isCoachFor(ownerUid)
+                   || isBuddyOf(ownerUid)
+                 );
+}
+
+
+  // Create/Update: owner or coach; images only; <=10MB
+  allow create, update: if isSignedIn()
+                        && (request.auth.uid == ownerUid || isCoachFor(ownerUid))
+                        && request.resource.contentType.matches('^image/.*')
+                        && request.resource.size < 10 * 1024 * 1024;
+
+  // Delete: owner or coach
+  allow delete: if isSignedIn()
+                && (request.auth.uid == ownerUid || isCoachFor(ownerUid));
+
+  // Reads: owner, coaches, and buddies
+  allow read: if isSignedIn()
+              && (
+                   request.auth.uid == ownerUid
+                   || isCoachFor(ownerUid)
+                   || isBuddyOf(ownerUid)
+                 );
+}
+
+// ========= DMs media (wide-open) =========
+// Upload anything image/* or video/* under dm/**
+match /dm/{allPaths=**} {
+  // Make it super open. If you want “signed-in only”, change `true` to `request.auth != null`.
+  allow read, write: if true;
+}
+
+
+  }
+}
