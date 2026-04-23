@@ -40,6 +40,8 @@ import 'exercise_video_assets.dart';
 import 'exercise_video_player_screen.dart';
 import 'demographics_cache.dart';
 import 'local_cache/isar_claude_bullet_snapshot.dart';
+import 'bb3_models.dart';
+import 'bb3_planned_exercise_service.dart';
 
 import 'package:cloud_firestore/cloud_firestore.dart' as firebase_firestore;
 
@@ -221,6 +223,15 @@ class _WorkoutPageState extends State<WorkoutPage>
   final Map<String, Map<int, String>> _claudeBulletRirHintOverrides = {};
   Timer? _claudeBulletSaveDebounce;
 
+  // ── BB3 per-set planned values ────────────────────────────────────────────
+  // exerciseId (lowercase) → setIndex (0-based) → {weight?, reps?, rir?}
+  // Null fields = no BB3 override; model hint flows through.
+  final Map<String, Map<int, Map<String, dynamic>>> _resolvedBB3PerSetValues = {};
+  final Set<String> _bb3PlannedKeysForSelectedDate = {};
+  final Map<String, String> _bb3ExerciseNotes = {};
+  final Set<String> _bb3ViewedNoteExIds = {};
+  DateTime? _bb3LoadedForDate; // guard: only load once per date
+
   // Stable key for a row: "name|circuitIndex"
   String _rowKeyBy(int i) {
     final row = _selectedExercisesWithCircuits[i];
@@ -358,6 +369,10 @@ class _WorkoutPageState extends State<WorkoutPage>
   late Future<void> _blockDateLoad;
   bool _didFastPaint = false;
   bool _bootPaintDone = false;  // prevent double fast-paint
+
+  // BB2 wiring kill-switch. Set false to sever all BB2→WES data paths.
+  // Flip to true when BB3 integration is ready.
+  static const bool _bb2WiringEnabled = false;
   bool _uiLoggedOnce = false; // debug: only log UI decision once
   bool _overlayLogged = false;
   bool _firstRowsLogged = false;
@@ -2013,6 +2028,19 @@ class _WorkoutPageState extends State<WorkoutPage>
       final ov = _claudeBulletWeightHintOverrides[ik]?[setIdx];
       if (ov != null) return ov;
     }
+    // BB3 per-set override: use BB3-planned weight as hint if present
+    if (_resolvedBB3PerSetValues.isNotEmpty) {
+      final row = _selectedExercisesWithCircuits[exIdx];
+      final rawId = (row['exerciseId'] ?? row['id'])?.toString().trim() ?? '';
+      final rName = (row['name'] ?? '').toString().trim();
+      final exIdLower = (rawId.isNotEmpty
+              ? rawId
+              : (PeriodizationModelUtils.nameToId[rName] ?? rName))
+          .toLowerCase();
+      final w = (_resolvedBB3PerSetValues[exIdLower]?[setIdx]?['weight'] as num?)
+          ?.toDouble();
+      if (w != null) return formatWeight(w);
+    }
     // current field texts
     final weightText = _weightControllers[exIdx][setIdx].text.trim();
     final repsText = _repsControllers[exIdx][setIdx].text.trim();
@@ -2087,6 +2115,19 @@ class _WorkoutPageState extends State<WorkoutPage>
       final ik = _rowKeyBy(exIdx);
       final ov = _claudeBulletRepsHintOverrides[ik]?[setIdx];
       if (ov != null) return ov;
+    }
+    // BB3 per-set override: use BB3-planned reps as hint if present
+    if (_resolvedBB3PerSetValues.isNotEmpty) {
+      final row = _selectedExercisesWithCircuits[exIdx];
+      final rawId = (row['exerciseId'] ?? row['id'])?.toString().trim() ?? '';
+      final rName = (row['name'] ?? '').toString().trim();
+      final exIdLower = (rawId.isNotEmpty
+              ? rawId
+              : (PeriodizationModelUtils.nameToId[rName] ?? rName))
+          .toLowerCase();
+      final r = (_resolvedBB3PerSetValues[exIdLower]?[setIdx]?['reps'] as num?)
+          ?.toInt();
+      if (r != null) return r.toString();
     }
     // current field texts
     final weightText = _weightControllers[exIdx][setIdx].text.trim();
@@ -2738,6 +2779,7 @@ class _WorkoutPageState extends State<WorkoutPage>
       } catch (e) {
         print('⚠️ [WES Refresh] _mergeNewBB2ExercisesIntoDraft failed (continuing): $e');
       }
+      unawaited(_loadBB3PlannedExercisesForDate());
 
       // ——— 2b) Server-first: prime Isar with fresh planned exercises ———
       // Without this, _loadPlannedDay inside doWarmWES reuses the Isar cache
@@ -2852,36 +2894,37 @@ class _WorkoutPageState extends State<WorkoutPage>
       }
 
       // ——— 5b) Re-hydrate _resolvedBB2Values from the fresh snapshot's planned exercises.
-      //         _mergeNewBB2ExercisesIntoDraft() ran before the server prime so its read
-      //         was stale. The snapshot's plannedExercisesJson was written by doWarmWES
-      //         from the Isar cache that step 2b just primed with server truth — so these
-      //         exercises carry the BB2-entered weight/reps/rir fields.
-      try {
-        final freshPlanned =
-            jsonDecode(after!.plannedExercisesJson) as List;
-        for (final ex in freshPlanned.whereType<Map>()) {
-          final name  = (ex['name'] ?? ex['exercise'] ?? '').toString().trim();
-          final rawId = (ex['exerciseId'] ?? ex['id'])?.toString().trim() ?? '';
-          final exId  = rawId.isNotEmpty
-              ? rawId
-              : (PeriodizationModelUtils.nameToId[name] ?? name);
-          final resolvedKey = exId.toString().toLowerCase();
-          if (resolvedKey.isEmpty) continue;
+      //         Gated: only runs when BB2 wiring is enabled.
+      if (_bb2WiringEnabled) {
+        try {
+          final freshPlanned =
+              jsonDecode(after!.plannedExercisesJson) as List;
+          for (final ex in freshPlanned.whereType<Map>()) {
+            final name  = (ex['name'] ?? ex['exercise'] ?? '').toString().trim();
+            final rawId = (ex['exerciseId'] ?? ex['id'])?.toString().trim() ?? '';
+            final exId  = rawId.isNotEmpty
+                ? rawId
+                : (PeriodizationModelUtils.nameToId[name] ?? name);
+            final resolvedKey = exId.toString().toLowerCase();
+            if (resolvedKey.isEmpty) continue;
 
-          final w     = ex['weight'];
-          final r     = ex['reps'];
-          final rir   = ex['rir'];
-          final added = ex['addedWeight'];
-          if (w != null || r != null || rir != null || added != null) {
-            _resolvedBB2Values[resolvedKey] = {
-              'weight': w, 'reps': r, 'rir': rir, 'addedWeight': added,
-            };
+            final w     = ex['weight'];
+            final r     = ex['reps'];
+            final rir   = ex['rir'];
+            final added = ex['addedWeight'];
+            if (w != null || r != null || rir != null || added != null) {
+              _resolvedBB2Values[resolvedKey] = {
+                'weight': w, 'reps': r, 'rir': rir, 'addedWeight': added,
+              };
+            }
           }
+          print('🔄 [WES Refresh] _resolvedBB2Values re-hydrated '
+              'from snapshot plannedExercises (${_resolvedBB2Values.length} entries)');
+        } catch (e) {
+          print('⚠️ [WES Refresh] _resolvedBB2Values re-hydration failed: $e');
         }
-        print('🔄 [WES Refresh] _resolvedBB2Values re-hydrated '
-            'from snapshot plannedExercises (${_resolvedBB2Values.length} entries)');
-      } catch (e) {
-        print('⚠️ [WES Refresh] _resolvedBB2Values re-hydration failed: $e');
+      } else {
+        print('[WES Refresh] _resolvedBB2Values re-hydration SKIPPED — BB2 wiring disabled');
       }
 
       // ——— 6) Full repaint from snapshot (rock-solid) ———
@@ -3222,6 +3265,7 @@ class _WorkoutPageState extends State<WorkoutPage>
           } catch (e) {
             debugPrint('⚠️ [HeavyCoalesce Merge] threw: $e');
           }
+          unawaited(_loadBB3PlannedExercisesForDate());
         } else {
           debugPrint('🛑 [HeavyCoalesce] Skipping merge: FS day≠picked calendar date.');
         }
@@ -6631,6 +6675,21 @@ class _WorkoutPageState extends State<WorkoutPage>
   double getRirFromPlanOrInput(int exerciseIndex, int setNumber) {
     if (setNumber < 1 || setNumber > 8) return 1; // Safety fallback
 
+    // BB3 per-set override: check before BB2 (setNumber is 1-based → setIndex = setNumber - 1)
+    if (_resolvedBB3PerSetValues.isNotEmpty) {
+      final row = _selectedExercisesWithCircuits[exerciseIndex];
+      final rawId = (row['exerciseId'] ?? row['id'])?.toString().trim() ?? '';
+      final rName = (row['name'] ?? '').toString().trim();
+      final exIdLower = (rawId.isNotEmpty
+              ? rawId
+              : (PeriodizationModelUtils.nameToId[rName] ?? rName))
+          .toLowerCase();
+      final rir =
+          (_resolvedBB3PerSetValues[exIdLower]?[setNumber - 1]?['rir'] as num?)
+              ?.toDouble();
+      if (rir != null) return rir;
+    }
+
     final exerciseName =
         _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
     final bb2LookupIdRir = (() {
@@ -7386,6 +7445,10 @@ class _WorkoutPageState extends State<WorkoutPage>
               _velocityControllers.clear();
               _notesControllers.clear();
               _resolvedBB2Values.clear();
+              _resolvedBB3PerSetValues.clear();
+              _bb3PlannedKeysForSelectedDate.clear();
+              _bb3ExerciseNotes.clear();
+              _bb3LoadedForDate = null;
             }
           }
 
@@ -7407,6 +7470,7 @@ class _WorkoutPageState extends State<WorkoutPage>
 
             _lastMergedUid = null;
             await _mergeNewBB2ExercisesIntoDraft();
+            unawaited(_loadBB3PlannedExercisesForDate());
           } else {
 
           }
@@ -7704,6 +7768,7 @@ class _WorkoutPageState extends State<WorkoutPage>
     if (draftLoaded) {
 
       await _mergeNewBB2ExercisesIntoDraft(); // Isar-first inside
+      unawaited(_loadBB3PlannedExercisesForDate());
     } else {
 
       if (_isStale(_loadEpoch) || _loadDayKey != _currentDayKey) {
@@ -7717,6 +7782,7 @@ class _WorkoutPageState extends State<WorkoutPage>
         _selectedExercisesWithCircuits.clear();
       }
       await _mergeNewBB2ExercisesIntoDraft();
+      unawaited(_loadBB3PlannedExercisesForDate());
 
     }
 
@@ -8417,6 +8483,10 @@ class _WorkoutPageState extends State<WorkoutPage>
 
     if (_bootPaintDone) return;
     _bootPaintDone = true;
+
+    // BB2 wiring disabled: skip snapshot fast-paint entirely so no BB2-planned
+    // rows, BB2-derived hints, or contaminated hintsJson reach WES state.
+    if (!_bb2WiringEnabled) return;
 
     try {
       final uid = _cachedUid ?? UserContext.of(context, listen: false).currentUid;
@@ -14282,7 +14352,117 @@ class _WorkoutPageState extends State<WorkoutPage>
     }
   }
 
+  // ── BB3 planned data loader ───────────────────────────────────────────────
+  //
+  // Reads BB3 planned exercises for _selectedDate from Isar/Firestore cache.
+  // Populates _resolvedBB3PerSetValues so hint functions can use BB3 values.
+  // Called after each (no-op) _mergeNewBB2ExercisesIntoDraft site.
+  // Guard: skips if already loaded for this date.
+
+  Future<void> _loadBB3PlannedExercisesForDate() async {
+    // Skip if already loaded for this exact date
+    final today = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day);
+    if (_bb3LoadedForDate != null &&
+        _bb3LoadedForDate!.year == today.year &&
+        _bb3LoadedForDate!.month == today.month &&
+        _bb3LoadedForDate!.day == today.day) return;
+
+    final uid = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    final blockId = _selectedBlockId ?? _activeBlockId;
+    if (blockId == null || blockId.isEmpty) return;
+
+    try {
+      final blockSettings =
+          await BB3PlannedExerciseService.getBlockSettings(uid, blockId);
+      final blockStart = blockSettings.startDate;
+      if (blockStart == null) return;
+
+      final (:weekIndex, :dayIndex) =
+          BB3PlannedExerciseService.dateToWeekDay(blockStart, _selectedDate);
+
+      final exercises = await BB3PlannedExerciseService.getPlannedDay(
+        uid: uid,
+        blockId: blockId,
+        weekIndex: weekIndex,
+        dayIndex: dayIndex,
+        date: _selectedDate,
+        exerciseSettings: blockSettings.exerciseSettings,
+      );
+
+      _resolvedBB3PerSetValues.clear();
+      _bb3PlannedKeysForSelectedDate.clear();
+      _bb3ExerciseNotes.clear();
+
+      for (final ex in exercises) {
+        final idLower = ex.exerciseId.toLowerCase();
+        _bb3PlannedKeysForSelectedDate.add(idLower);
+
+        if (ex.perExerciseNote != null && ex.perExerciseNote!.isNotEmpty) {
+          _bb3ExerciseNotes[idLower] = ex.perExerciseNote!;
+        }
+
+        final setMap = <int, Map<String, dynamic>>{};
+        for (int si = 0; si < ex.sets.length; si++) {
+          final s = ex.sets[si];
+          final m = <String, dynamic>{};
+          if (s.weight != null) m['weight'] = s.weight;
+          if (s.reps != null) m['reps'] = s.reps;
+          if (s.rir != null) m['rir'] = s.rir;
+          if (m.isNotEmpty) setMap[si] = m;
+        }
+        if (setMap.isNotEmpty) {
+          _resolvedBB3PerSetValues[idLower] = setMap;
+        }
+      }
+
+      _bb3LoadedForDate = today;
+
+      // Inject BB3-planned exercises not already present in WES row structures.
+      // setState also triggers a rebuild so hint functions see the populated maps.
+      if (mounted) {
+        final existingExIds = <String>{};
+        for (final r in _selectedExercisesWithCircuits) {
+          final id =
+              ((r['exerciseId'] ?? r['id'])?.toString().trim() ?? '').toLowerCase();
+          if (id.isNotEmpty) existingExIds.add(id);
+        }
+        final toInject = exercises
+            .where((ex) => !existingExIds.contains(ex.exerciseId.toLowerCase()))
+            .toList();
+        setState(() {
+          for (final ex in toInject) {
+            final setCount = ex.sets.isNotEmpty ? ex.sets.length : 3;
+            _selectedExercisesWithCircuits.add({
+              'name': ex.name,
+              'exerciseId': ex.exerciseId,
+              'id': ex.exerciseId,
+              'circuitIndex': ex.circuitIndex,
+            });
+            _workoutSets.add(List.generate(setCount, (_) => SetDetails()));
+            _repsControllers
+                .add(List.generate(setCount, (_) => TextEditingController()));
+            _weightControllers
+                .add(List.generate(setCount, (_) => TextEditingController()));
+            _rirControllers
+                .add(List.generate(setCount, (_) => TextEditingController()));
+            _velocityControllers
+                .add(List.generate(setCount, (_) => TextEditingController()));
+            _notesControllers
+                .add(List.generate(setCount, (_) => TextEditingController()));
+          }
+        });
+      }
+    } catch (_) {}
+  }
+
   Future<void> _mergeNewBB2ExercisesIntoDraft() async {
+    // BB2 wiring disabled: do not inject BB2-planned rows into WES draft.
+    if (!_bb2WiringEnabled) {
+      print('[WES] _mergeNewBB2ExercisesIntoDraft: SKIPPED — BB2 wiring disabled');
+      return;
+    }
+
     // Tripwire 2: Phase 0 already painted — skip merge to preserve restored state
     if (_claudeBulletPhase0Active) {
       print('[WES] _mergeNewBB2ExercisesIntoDraft: SKIPPED — Phase 0 active');
@@ -15407,6 +15587,12 @@ class _WorkoutPageState extends State<WorkoutPage>
     _lastMergedDate = null;                 // force merge to treat this as a new date
     _hasCompletedInitialMergeForThisDate = false;
 
+    // Clear BB3 per-date caches
+    _resolvedBB3PerSetValues.clear();
+    _bb3PlannedKeysForSelectedDate.clear();
+    _bb3ExerciseNotes.clear();
+    _bb3LoadedForDate = null;
+
 
 
     // Allow FastPaint to run for the new date
@@ -15562,8 +15748,9 @@ class _WorkoutPageState extends State<WorkoutPage>
       } else if (_allowMerge) {
         try { await _mergeNewBB2ExercisesIntoDraft(); } catch (e) { print('⚠️ [WES Merge] threw: $e'); }
       } else {
-        print('🛑 [WES] Skipping BB2 merge: FS day date doesn’t match picked calendar date.');
+        print("🛑 [WES] Skipping BB2 merge: FS day date doesn't match picked calendar date.");
       }
+      unawaited(_loadBB3PlannedExercisesForDate());
 
       _hasOpenedOnce = true;
     }
@@ -17375,6 +17562,47 @@ class _WorkoutPageState extends State<WorkoutPage>
                                             ),
                                           ),
                                         ),
+                                        // BB3 exercise note icon
+                                        Builder(builder: (ctx) {
+                                          final row = _selectedExercisesWithCircuits[i];
+                                          final rawId = (row['exerciseId'] ?? row['id'])?.toString().trim() ?? '';
+                                          final rName = (row['name'] ?? '').toString().trim();
+                                          final exIdLower = (rawId.isNotEmpty
+                                                  ? rawId
+                                                  : (PeriodizationModelUtils.nameToId[rName] ?? rName))
+                                              .toLowerCase();
+                                          final note = _bb3ExerciseNotes[exIdLower];
+                                          if (note == null || note.isEmpty) return const SizedBox.shrink();
+                                          final viewed = _bb3ViewedNoteExIds.contains(exIdLower);
+                                          return GestureDetector(
+                                            onTap: () {
+                                              setState(() => _bb3ViewedNoteExIds.add(exIdLower));
+                                              showDialog(
+                                                context: ctx,
+                                                builder: (_) => AlertDialog(
+                                                  title: Text(rName, style: const TextStyle(fontSize: 16)),
+                                                  content: Text(note),
+                                                  actions: [
+                                                    TextButton(
+                                                      onPressed: () => Navigator.pop(ctx),
+                                                      child: const Text('OK'),
+                                                    ),
+                                                  ],
+                                                ),
+                                              );
+                                            },
+                                            child: Padding(
+                                              padding: const EdgeInsets.symmetric(horizontal: 4),
+                                              child: Icon(
+                                                Icons.sticky_note_2_outlined,
+                                                size: 16,
+                                                color: viewed
+                                                    ? Colors.grey.shade500
+                                                    : Colors.amber.shade600,
+                                              ),
+                                            ),
+                                          );
+                                        }),
                                         PopupMenuButton<_ExerciseMenuAction>(
                                           icon: const Icon(Icons.more_vert, size: 18),
                                           padding: EdgeInsets.zero,

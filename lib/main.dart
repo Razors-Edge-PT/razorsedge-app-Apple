@@ -17,6 +17,7 @@ import 'planned_blocks_screen.dart';
 import 'Block_Planner.dart';
 import 'SavedWorkoutsScreen.dart';
 import 'Camp_BB2.dart';
+import 'bb3_week_planner.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -308,6 +309,7 @@ class MyApp extends StatelessWidget {
         '/saved_workouts': (c) => const SavedWorkoutsScreen(),
         '/body_weight': (c) => const BodyWeightTracker(),
         '/coach_home': (context) => const CoachHomeScreen(),
+        '/bb3_week_planner': (_) => const BB3WeekPlanner(),
 
       },
 

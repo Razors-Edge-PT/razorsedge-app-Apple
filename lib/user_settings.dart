@@ -32,6 +32,13 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
   bool _saving = false;
   String? _error;
 
+  // True when the signed-in user already has email/password as a provider.
+  bool get _hasPasswordProvider =>
+      FirebaseAuth.instance.currentUser
+          ?.providerData
+          .any((p) => p.providerId == 'password') ??
+      false;
+
   // Live username availability (emoji OK, 3–22, no spaces)
   bool _usernameChecking = false;
   bool? _usernameAvailable; // null = unknown, true = ok, false = taken
@@ -563,6 +570,193 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
 
 
 
+  Future<void> _showAddPasswordLoginDialog() async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    final emailCtrl = TextEditingController(text: currentUser.email ?? '');
+    final passwordCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+
+    String? localError;
+    bool localSaving = false;
+    bool showPassword = false;
+    bool showConfirm = false;
+    bool passwordsMatch = false;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (ctx, setDlg) {
+            void updateMatch() {
+              final pw = passwordCtrl.text.trim();
+              final cf = confirmCtrl.text.trim();
+              setDlg(() => passwordsMatch = pw.isNotEmpty && pw == cf);
+            }
+
+            Future<void> handleSave() async {
+              final email = emailCtrl.text.trim();
+              final pw = passwordCtrl.text.trim();
+              final cf = confirmCtrl.text.trim();
+
+              if (email.isEmpty || pw.isEmpty || cf.isEmpty) {
+                setDlg(() => localError = 'Please fill in all fields.');
+                return;
+              }
+              if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
+                setDlg(() => localError = 'Please enter a valid email address.');
+                return;
+              }
+              if (pw.length < 6) {
+                setDlg(() => localError = 'Password must be at least 6 characters.');
+                return;
+              }
+              if (pw != cf) {
+                setDlg(() {
+                  localError = 'Passwords do not match.';
+                  passwordsMatch = false;
+                });
+                return;
+              }
+
+              setDlg(() {
+                localSaving = true;
+                localError = null;
+              });
+
+              try {
+                final credential = EmailAuthProvider.credential(
+                  email: email,
+                  password: pw,
+                );
+                await currentUser.linkWithCredential(credential);
+                // Reload so FirebaseAuth.instance.currentUser.providerData
+                // reflects the newly linked password provider before setState.
+                await FirebaseAuth.instance.currentUser?.reload();
+
+                if (mounted) {
+                  Navigator.of(dialogCtx).pop();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content: Text('Password login added successfully.')),
+                  );
+                  // Rebuild: _hasPasswordProvider now reads refreshed providerData.
+                  setState(() {});
+                }
+              } on FirebaseAuthException catch (e) {
+                setDlg(() {
+                  localSaving = false;
+                  if (e.code == 'provider-already-linked') {
+                    localError =
+                        'Password login is already enabled for this account.';
+                  } else if (e.code == 'credential-already-in-use' ||
+                      e.code == 'email-already-in-use') {
+                    localError =
+                        'That email is already linked to another account.';
+                  } else if (e.code == 'requires-recent-login') {
+                    localError =
+                        'Please sign out and back in, then try again.';
+                  } else {
+                    localError = e.message ?? 'Failed to add password login.';
+                  }
+                });
+              } catch (_) {
+                setDlg(() {
+                  localSaving = false;
+                  localError = 'Failed to add password login.';
+                });
+              }
+            }
+
+            return AlertDialog(
+              title: const Text('Add password login'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextField(
+                      controller: emailCtrl,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: const InputDecoration(labelText: 'Email'),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: passwordCtrl,
+                      obscureText: !showPassword,
+                      onChanged: (_) => updateMatch(),
+                      decoration: InputDecoration(
+                        labelText: 'New password',
+                        suffixIcon: IconButton(
+                          icon: Icon(showPassword
+                              ? Icons.visibility_off
+                              : Icons.visibility),
+                          onPressed: () =>
+                              setDlg(() => showPassword = !showPassword),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: confirmCtrl,
+                      obscureText: !showConfirm,
+                      onChanged: (_) => updateMatch(),
+                      decoration: InputDecoration(
+                        labelText: 'Confirm password',
+                        labelStyle: TextStyle(
+                          color: passwordsMatch ? Colors.green : null,
+                        ),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            showConfirm
+                                ? Icons.visibility_off
+                                : Icons.visibility,
+                            color: passwordsMatch ? Colors.green : null,
+                          ),
+                          onPressed: () =>
+                              setDlg(() => showConfirm = !showConfirm),
+                        ),
+                      ),
+                    ),
+                    if (localError != null) ...[
+                      const SizedBox(height: 8),
+                      Text(localError!,
+                          style: const TextStyle(color: Colors.red)),
+                    ],
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: localSaving
+                      ? null
+                      : () => Navigator.of(dialogCtx).pop(),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: localSaving ? null : handleSave,
+                  child: localSaving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    emailCtrl.dispose();
+    passwordCtrl.dispose();
+    confirmCtrl.dispose();
+  }
+
   // ------------------- UI -------------------
 
   @override
@@ -737,29 +931,54 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
 
                     const SizedBox(height: 12),
 
-                    InkWell(
-                      onTap: _showChangePasswordDialog,
-                      borderRadius: BorderRadius.circular(12),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 10),
-                        child: Row(
-                          children: const [
-                            Icon(Icons.lock_reset, color: Colors.white70, size: 20),
-                            SizedBox(width: 12),
-                            Text(
-                              'Change password',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 15,
-                                fontWeight: FontWeight.w500,
+                    if (_hasPasswordProvider)
+                      InkWell(
+                        onTap: _showChangePasswordDialog,
+                        borderRadius: BorderRadius.circular(12),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          child: Row(
+                            children: const [
+                              Icon(Icons.lock_reset, color: Colors.white70, size: 20),
+                              SizedBox(width: 12),
+                              Text(
+                                'Change password',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w500,
+                                ),
                               ),
-                            ),
-                            Spacer(),
-                            Icon(Icons.chevron_right, color: Colors.white38, size: 20),
-                          ],
+                              Spacer(),
+                              Icon(Icons.chevron_right, color: Colors.white38, size: 20),
+                            ],
+                          ),
+                        ),
+                      )
+                    else
+                      InkWell(
+                        onTap: _showAddPasswordLoginDialog,
+                        borderRadius: BorderRadius.circular(12),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          child: Row(
+                            children: const [
+                              Icon(Icons.lock_outline, color: Colors.white70, size: 20),
+                              SizedBox(width: 12),
+                              Text(
+                                'Add password login',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              Spacer(),
+                              Icon(Icons.chevron_right, color: Colors.white38, size: 20),
+                            ],
+                          ),
                         ),
                       ),
-                    ),
 
                     InkWell(
                       onTap: () => Navigator.push(

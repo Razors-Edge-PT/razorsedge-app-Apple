@@ -1,0 +1,582 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'bb3_day_panel.dart';
+import 'bb3_models.dart';
+import 'bb3_planned_exercise_service.dart';
+import 'template_model.dart';
+import 'user_context.dart';
+
+// ─── BB3WeekPlanner ──────────────────────────────────────────────────────────
+//
+// Main BB3 screen: vertical day stack per week, horizontal swipe between weeks.
+//
+// Layout:
+//   • PageView (horizontal) — each page = one week
+//   • Each page = ListView (vertical) — one BB3DayPanel per day (Mon–Sun)
+//
+// Block switching jumps to the block's start week (spec requirement).
+// Outside-block days show a banner; fallback/default hints still render.
+
+class BB3WeekPlanner extends StatefulWidget {
+  const BB3WeekPlanner({super.key});
+
+  @override
+  State<BB3WeekPlanner> createState() => _BB3WeekPlannerState();
+}
+
+class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
+  // ── State ─────────────────────────────────────────────────────────────────
+
+  late DateTime _weekStart; // always a Monday
+  String? _selectedBlockId;
+  BB3BlockSettings? _blockSettings;
+
+  // 7-element lists, one per weekday (0=Mon … 6=Sun)
+  final List<List<BB3Exercise>> _plannedByDay = List.generate(7, (_) => []);
+  final List<List<Map<String, dynamic>>> _completedByDay =
+      List.generate(7, (_) => []);
+  final List<bool> _loadingByDay = List.filled(7, false);
+
+  List<BB3BlockSettings> _allBlocks = [];
+  List<Map<String, dynamic>> _allExercises = [];
+  List<Template> _templates = [];
+
+  bool _loadingBlocks = false;
+  bool _refreshing = false;
+
+  // PageView controller: each page = one week; anchor on a known Monday epoch.
+  late final PageController _pageController;
+
+  // Epoch: a known Monday used to convert between week-start dates and page indices.
+  static final DateTime _epoch = DateTime(2020, 1, 6);
+
+  static int _weekToPage(DateTime monday) =>
+      monday.difference(_epoch).inDays ~/ 7;
+
+  static DateTime _pageToWeek(int page) =>
+      _epoch.add(Duration(days: page * 7));
+
+  // ── Lifecycle ─────────────────────────────────────────────────────────────
+
+  @override
+  void initState() {
+    super.initState();
+    _weekStart = _mondayOf(DateTime.now());
+    _pageController = PageController(initialPage: _weekToPage(_weekStart));
+    _boot();
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _boot() async {
+    await Future.wait([
+      _loadBlocks(),
+      _loadExercises(),
+      _loadTemplates(),
+    ]);
+    await _loadWeek(fromServer: false);
+  }
+
+  // ── Block list ────────────────────────────────────────────────────────────
+
+  Future<void> _loadBlocks() async {
+    final uid = _uid;
+    setState(() => _loadingBlocks = true);
+    try {
+      final blocks = await BB3PlannedExerciseService.listBlocks(uid);
+      if (!mounted) return;
+      setState(() {
+        _allBlocks = blocks;
+        _loadingBlocks = false;
+      });
+      // Auto-select active block from UserContext if present
+      final userContext = UserContext.of(context, listen: false);
+      final activeId = userContext.activeBlockId;
+      if (activeId != null && activeId.isNotEmpty) {
+        final match = blocks.where((b) => b.blockId == activeId).toList();
+        if (match.isNotEmpty) {
+          await _selectBlock(match.first.blockId);
+          return;
+        }
+      }
+      // Fall back to most-recent block (list already sorted newest-first)
+      if (blocks.isNotEmpty) {
+        await _selectBlock(blocks.first.blockId);
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loadingBlocks = false);
+    }
+  }
+
+  // ── Block selection + week jump ───────────────────────────────────────────
+  //
+  // Spec: changing the selected block must jump to that block's start week.
+  // Hint path uses the SELECTED block's exerciseSettings / startDate / endDate
+  // exclusively — not the active-block context from UserContext.
+  //
+  // Hint source trace:
+  //   _blockSettings.exerciseSettings → BB3DayPanel.blockSettings.exerciseSettings
+  //       → BB3HintService.getHintsForSet(fullExerciseSettings: ...)
+  //       → BB3PlannedExerciseService.getRirFromPlan(exSettings: ...) ✓
+  //   _blockSettings.startDate → weekIndex computation in _buildPageContent()
+  //       → BB3DayPanel.weekIndex → BB3HintService.getHintsForSet(weekIndex: ...) ✓
+  //   _blockSettings.startDate / endDate → BB3HintService.getHintsForSet(
+  //       blockStartDate: ..., blockEndDate: ...) ✓
+  //   No blockId is passed to BB3HintService — the engine uses historical
+  //   workout data (uid + date), not Firestore block documents, so blockId
+  //   is irrelevant to hint generation. ✓
+
+  Future<void> _selectBlock(String blockId) async {
+    final uid = _uid;
+    final settings =
+        await BB3PlannedExerciseService.getBlockSettings(uid, blockId);
+    if (!mounted) return;
+
+    // Jump to the selected block's start week (spec requirement).
+    // Falls back to current _weekStart if the block has no startDate.
+    DateTime newWeekStart = _weekStart;
+    if (settings.startDate != null) {
+      newWeekStart = _mondayOf(settings.startDate!);
+    }
+
+    setState(() {
+      _selectedBlockId = blockId;
+      _blockSettings = settings;
+      _weekStart = newWeekStart;
+    });
+
+    // Animate page controller to the new week (no rebuild needed — setState
+    // already updated _weekStart; _loadWeek below loads data for the new week).
+    final targetPage = _weekToPage(newWeekStart);
+    if (_pageController.hasClients) {
+      _pageController.jumpToPage(targetPage);
+    }
+
+    await _loadWeek(fromServer: false);
+  }
+
+  // ── Exercise library ──────────────────────────────────────────────────────
+
+  Future<void> _loadExercises() async {
+    try {
+      final snap =
+          await FirebaseFirestore.instance.collection('exercises').get();
+      if (!mounted) return;
+      setState(() {
+        _allExercises = snap.docs.map((d) {
+          final data = Map<String, dynamic>.from(d.data());
+          data['id'] = d.id;
+          return data;
+        }).toList();
+      });
+    } catch (_) {}
+  }
+
+  // ── Templates ─────────────────────────────────────────────────────────────
+
+  Future<void> _loadTemplates() async {
+    final uid = _uid;
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('templates')
+          .get();
+      if (!mounted) return;
+      setState(() {
+        _templates = snap.docs
+            .map((d) => Template.fromFirestore(d.data(), d.id))
+            .toList();
+      });
+    } catch (_) {}
+  }
+
+  // ── Week data load ────────────────────────────────────────────────────────
+
+  Future<void> _loadWeek({required bool fromServer}) async {
+    final blockId = _selectedBlockId;
+    if (blockId == null || blockId.isEmpty) return;
+    final uid = _uid;
+
+    setState(() {
+      for (int d = 0; d < 7; d++) _loadingByDay[d] = true;
+    });
+
+    await Future.wait(List.generate(7, (d) async {
+      final date = _weekStart.add(Duration(days: d));
+      final (:weekIndex, :dayIndex) =
+          BB3PlannedExerciseService.dateToWeekDay(
+        _blockSettings?.startDate ?? _weekStart,
+        date,
+      );
+
+      try {
+        List<BB3Exercise> planned;
+        if (fromServer) {
+          final dayRef = FirebaseFirestore.instance
+              .collection('planned_blocks')
+              .doc(uid)
+              .collection('blocks')
+              .doc(blockId)
+              .collection('weeks')
+              .doc('week_$weekIndex')
+              .collection('days')
+              .doc('day_$dayIndex');
+          final snap =
+              await dayRef.get(const GetOptions(source: Source.server));
+          final exercises = snap.exists && snap.data() != null
+              ? _extractExercises(snap.data()!)
+              : <Map<String, dynamic>>[];
+          planned = _deserialize(exercises, weekIndex, dayIndex);
+        } else {
+          planned = await BB3PlannedExerciseService.getPlannedDay(
+            uid: uid,
+            blockId: blockId,
+            weekIndex: weekIndex,
+            dayIndex: dayIndex,
+            date: date,
+            exerciseSettings: _blockSettings?.exerciseSettings,
+          );
+        }
+
+        final completed =
+            await BB3PlannedExerciseService.getCompletedExercises(uid, date);
+
+        if (!mounted) return;
+        setState(() {
+          _plannedByDay[d] = planned;
+          _completedByDay[d] = completed;
+          _loadingByDay[d] = false;
+        });
+      } catch (_) {
+        if (!mounted) return;
+        setState(() => _loadingByDay[d] = false);
+      }
+    }));
+  }
+
+  List<Map<String, dynamic>> _extractExercises(Map<String, dynamic> data) {
+    final raw = data['exercises'];
+    if (raw is List) {
+      return raw
+          .whereType<Map>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+    }
+    return [];
+  }
+
+  List<BB3Exercise> _deserialize(
+      List<Map<String, dynamic>> raw, int weekIndex, int dayIndex) {
+    return raw
+        .where((m) =>
+            (m['exerciseId'] ?? m['id'] ?? m['name'] ?? '').toString().isNotEmpty)
+        .map((m) {
+          final exId = (m['exerciseId'] ?? m['id'] ?? '').toString().trim();
+          final exSettings = _blockSettings?.exerciseSettings != null
+              ? (_blockSettings!.exerciseSettings[exId] as Map<String, dynamic>?)
+              : null;
+          final defaultCount =
+              (exSettings?['defaultSets'] as num?)?.toInt() ?? 3;
+          return BB3Exercise.fromMap(m, fallbackSetCount: defaultCount);
+        })
+        .toList();
+  }
+
+  // ── Save ──────────────────────────────────────────────────────────────────
+
+  Future<void> _onDaySave(int dayIndex, List<BB3Exercise> exercises) async {
+    final blockId = _selectedBlockId;
+    if (blockId == null || blockId.isEmpty) return;
+    final uid = _uid;
+
+    final date = _weekStart.add(Duration(days: dayIndex));
+    final (:weekIndex, dayIndex: wdDayIndex) =
+        BB3PlannedExerciseService.dateToWeekDay(
+      _blockSettings?.startDate ?? _weekStart,
+      date,
+    );
+
+    setState(() => _plannedByDay[dayIndex] = exercises);
+
+    await BB3PlannedExerciseService.savePlannedDay(
+      uid: uid,
+      blockId: blockId,
+      weekIndex: weekIndex,
+      dayIndex: wdDayIndex,
+      exercises: exercises,
+    );
+  }
+
+  // ── Cross-day drag ────────────────────────────────────────────────────────
+
+  void _onDrop(int sourceDayIndex, int targetDayIndex, BB3Exercise exercise) {
+    if (sourceDayIndex == targetDayIndex) return;
+
+    final sourceList = List<BB3Exercise>.from(_plannedByDay[sourceDayIndex]);
+    final targetList = List<BB3Exercise>.from(_plannedByDay[targetDayIndex]);
+
+    final targetIds = targetList.map((e) => e.exerciseId).toSet();
+    if (targetIds.contains(exercise.exerciseId)) return;
+
+    sourceList.removeWhere((e) => e.exerciseId == exercise.exerciseId);
+    targetList.add(exercise.copyWith(orderIndex: targetList.length));
+
+    setState(() {
+      _plannedByDay[sourceDayIndex] = sourceList;
+      _plannedByDay[targetDayIndex] = targetList;
+    });
+
+    _onDaySave(sourceDayIndex, sourceList);
+    _onDaySave(targetDayIndex, targetList);
+  }
+
+  // ── Week navigation ───────────────────────────────────────────────────────
+
+  void _prevWeek() {
+    _pageController.previousPage(
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
+  }
+
+  void _nextWeek() {
+    _pageController.nextPage(
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
+  }
+
+  Future<void> _refresh() async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Refreshing ✨'),
+        duration: Duration(seconds: 1),
+      ),
+    );
+    setState(() => _refreshing = true);
+    await _loadWeek(fromServer: true);
+    if (mounted) setState(() => _refreshing = false);
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  String get _uid => UserContext.of(context, listen: false).actingAsUid;
+
+  static DateTime _mondayOf(DateTime d) {
+    final days = d.weekday - 1;
+    return DateTime(d.year, d.month, d.day).subtract(Duration(days: days));
+  }
+
+  // ── Build ─────────────────────────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: _buildAppBar(context),
+      body: _buildBody(context),
+    );
+  }
+
+  PreferredSizeWidget _buildAppBar(BuildContext context) {
+    final weekEnd = _weekStart.add(const Duration(days: 6));
+    final label =
+        '${DateFormat('MMM d').format(_weekStart)} – ${DateFormat('MMM d').format(weekEnd)}';
+
+    return AppBar(
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text('BB3 Week Planner',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          Text(label,
+              style: const TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.normal)),
+        ],
+      ),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.chevron_left),
+          tooltip: 'Previous week',
+          onPressed: _prevWeek,
+        ),
+        IconButton(
+          icon: const Icon(Icons.chevron_right),
+          tooltip: 'Next week',
+          onPressed: _nextWeek,
+        ),
+        _refreshing
+            ? const Padding(
+                padding: EdgeInsets.all(12),
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              )
+            : IconButton(
+                icon: const Icon(Icons.auto_awesome,
+                    color: Colors.amberAccent),
+                tooltip: 'Refresh hints',
+                onPressed: _refresh,
+              ),
+        Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: _buildBlockSelector(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBlockSelector() {
+    if (_loadingBlocks) {
+      return const SizedBox(
+        width: 20,
+        height: 20,
+        child: CircularProgressIndicator(strokeWidth: 2),
+      );
+    }
+    if (_allBlocks.isEmpty) {
+      return const Text('No blocks', style: TextStyle(fontSize: 12));
+    }
+    return DropdownButtonHideUnderline(
+      child: DropdownButton<String>(
+        value: _selectedBlockId,
+        isDense: true,
+        style: const TextStyle(fontSize: 13, color: Colors.white),
+        dropdownColor: Colors.blueGrey.shade800,
+        iconEnabledColor: Colors.white,
+        items: _allBlocks.map((b) {
+          return DropdownMenuItem(
+            value: b.blockId,
+            child: Text(
+              b.name ?? b.blockId,
+              style: const TextStyle(fontSize: 13, color: Colors.white),
+            ),
+          );
+        }).toList(),
+        onChanged: (id) {
+          if (id != null) _selectBlock(id);
+        },
+      ),
+    );
+  }
+
+  Widget _buildBody(BuildContext context) {
+    final theme = Theme.of(context);
+    final outsideBlock =
+        _blockSettings == null || !_blockSettings!.hasDateRange;
+
+    final anyDayOutsideBlock = !outsideBlock &&
+        List.generate(7, (d) {
+          final date = _weekStart.add(Duration(days: d));
+          return !_blockSettings!.isDateInRange(date);
+        }).any((v) => v);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (outsideBlock || anyDayOutsideBlock)
+          _buildOutsideBlockBanner(theme),
+        Expanded(
+          child: _buildWeekPageView(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildOutsideBlockBanner(ThemeData theme) {
+    return Container(
+      color: Colors.orange.shade50,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      child: Row(
+        children: [
+          Icon(Icons.warning_amber_rounded,
+              size: 18, color: Colors.orange.shade700),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Outside block range — showing default/fallback hints based on training history.',
+              style: TextStyle(fontSize: 12, color: Colors.orange.shade900),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── PageView: one page per week, days stacked vertically ──────────────────
+
+  Widget _buildWeekPageView() {
+    return PageView.builder(
+      controller: _pageController,
+      onPageChanged: (page) {
+        final newWeek = _pageToWeek(page);
+        if (newWeek != _weekStart) {
+          setState(() => _weekStart = newWeek);
+          _loadWeek(fromServer: false);
+        }
+      },
+      itemBuilder: (context, page) {
+        // itemBuilder is called for any page including non-current pages during
+        // swipe animation. We only have data for _weekStart (current page), so
+        // panels for adjacent pages during the swipe will load asynchronously.
+        final pageWeekStart = _pageToWeek(page);
+        return _buildDayList(pageWeekStart);
+      },
+    );
+  }
+
+  Widget _buildDayList(DateTime weekStart) {
+    return ListView.builder(
+      padding: const EdgeInsets.only(bottom: 16),
+      itemCount: 7,
+      itemBuilder: (context, d) {
+        final date = weekStart.add(Duration(days: d));
+        final isCurrentWeek = weekStart == _weekStart;
+        final isInBlock = _blockSettings?.isDateInRange(date) ?? false;
+
+        final (:weekIndex, :dayIndex) =
+            BB3PlannedExerciseService.dateToWeekDay(
+          _blockSettings?.startDate ?? weekStart,
+          date,
+        );
+
+        const sessionIndex = 0;
+
+        if (isCurrentWeek && _loadingByDay[d]) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: Center(
+                child: CircularProgressIndicator(strokeWidth: 2)),
+          );
+        }
+
+        return BB3DayPanel(
+          key: ValueKey('day_$d${weekStart.toIso8601String()}'),
+          dayIndex: d,
+          date: date,
+          plannedExercises:
+              isCurrentWeek ? _plannedByDay[d] : const [],
+          completedExercises:
+              isCurrentWeek ? _completedByDay[d] : const [],
+          blockSettings: _blockSettings,
+          weekIndex: weekIndex,
+          sessionIndex: sessionIndex,
+          uid: _uid,
+          allExercises: _allExercises,
+          templates: _templates,
+          onSave: _onDaySave,
+          onDrop: _onDrop,
+          isInsideBlock: isInBlock,
+        );
+      },
+    );
+  }
+}

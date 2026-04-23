@@ -803,11 +803,10 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                     ),
                                     DropdownMenuItem(
                                       value: 'N',
-                                      child: Text('Human, probably', style: TextStyle(color: Colors.black87)),
+                                      child: Text('Yes.', style: TextStyle(color: Colors.black87)),
                                     ),
                                   ],
                                   onChanged: (v) => setState(() => _selectedSex = v),
-                                  validator: (v) => (v == null || v.isEmpty) ? 'Please select your sex' : null,
                                 ),
                                 const SizedBox(height: 12),
                                 // Email
@@ -1347,7 +1346,6 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
       // 🔒 Gate: wait until /users has core fields (prevents female default)
       final hasCore = userSnap.exists &&
-          (data['sex'] != null) &&
           (data['username'] != null || data['fullName'] != null);
 
       if (!hasCore) {

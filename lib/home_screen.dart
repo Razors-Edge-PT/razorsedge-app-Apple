@@ -12,6 +12,7 @@ import 'user_context.dart';
 import 'coach_home_screen.dart';
 import 'approve_requests_screen.dart';
 import 'Camp_BB2.dart';
+import 'bb3_week_planner.dart';
 import 'update_exercises.dart';
 import 'core_exercises.dart';
 import 'profile_page.dart';
@@ -240,11 +241,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     final _warmDateSrc = _selectedDay ?? _focusedDay; // use picked day, else the visible day
     final _warmDate = DateTime(_warmDateSrc.year, _warmDateSrc.month, _warmDateSrc.day);
 
-    unawaited(WarmupService.instance.warmWES(
-      actingUid ?? '',
-      activeBlockId: userContext.activeBlockId,
-      selectedDate: _warmDate,
-    ));
+    // BB2 wiring disabled: warmWES pre-computes BB2-derived hints into WESInitSnapshot.
+    // Disabled until BB3 integration is ready.
+    // unawaited(WarmupService.instance.warmWES(
+    //   actingUid ?? '',
+    //   activeBlockId: userContext.activeBlockId,
+    //   selectedDate: _warmDate,
+    // ));
 
     debugPrint('🏁 [HOME] Triggering WarmupBB2 for $actingUid');
 
@@ -2879,7 +2882,57 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                 ),
                               ),
 
-
+                              SizedBox(
+                                width: kFeatureCardWidth,
+                                child: GestureDetector(
+                                  onTap: () {
+                                    final userContext = UserContext.of(context, listen: false);
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                          value: userContext,
+                                          child: const BB3WeekPlanner(),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  child: Card(
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(12),
+                                      child: Stack(
+                                        children: [
+                                          Positioned(
+                                            top: 0,
+                                            left: 0,
+                                            child: Icon(
+                                              Icons.calendar_view_week,
+                                              size: 48,
+                                              color: Theme.of(context).colorScheme.primary,
+                                            ),
+                                          ),
+                                          Positioned(
+                                            bottom: 0,
+                                            right: 0,
+                                            left: 50,
+                                            child: Text(
+                                              'BB3\nPlanner',
+                                              textAlign: TextAlign.center,
+                                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                                height: 1.3,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
 
                               SizedBox(
                                 width: kFeatureCardWidth,

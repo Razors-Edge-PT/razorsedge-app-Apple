@@ -6,7 +6,11 @@
       "Bash(grep -n \"lightBlueAccent\\\\|cyanAccent\\\\|Colors.blueGrey$\\\\b\" C:/Projects/RE-test/lib/home_screen.dart)",
       "Bash(flutter pub *)",
       "Bash(python3 *)",
-      "Bash(grep -v \"old\\\\\\\\\")"
+      "Bash(grep -v \"old\\\\\\\\\")",
+      "Bash(unzip -l \"docs/BB3_Product_Specification_Revised.docx\")",
+      "Bash(unzip -p \"docs/BB3_Product_Specification_Revised.docx\" word/document.xml)",
+      "Bash(sed 's/<w:t>//g')",
+      "Bash(grep -v \"^  info\\\\|^  warning\\\\|^   info\\\\|^warning\\\\|docs\\\\\\\\\")"
     ]
   }
 }

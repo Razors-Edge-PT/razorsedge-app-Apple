@@ -1,8 +1,9 @@
+import 'dart:io' show Platform;
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 import 'create_new_account_screen.dart';
 import 'template_generator.dart';
 
@@ -91,6 +92,29 @@ class _LoginScreenState extends State<LoginScreen> {
       Navigator.pushReplacementNamed(context, '/home');
     } on FirebaseAuthException catch (e) {
       setState(() => _errorMessage = e.message);
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> signInWithApple() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final appleProvider = AppleAuthProvider()
+        ..addScope('email')
+        ..addScope('name');
+
+      final cred = await FirebaseAuth.instance.signInWithProvider(appleProvider);
+      await _upsertUserDoc(cred.user);
+      Navigator.pushReplacementNamed(context, '/home');
+    } on FirebaseAuthException catch (e) {
+      setState(() => _errorMessage = e.message);
+    } catch (_) {
+      // user cancelled Apple sheet — loading state reset by finally
     } finally {
       setState(() => _isLoading = false);
     }
@@ -294,6 +318,27 @@ class _LoginScreenState extends State<LoginScreen> {
                                   ),
                                 ),
                                 const SizedBox(height: 12),
+                                if (Platform.isIOS) ...[
+                                  SizedBox(
+                                    width: double.infinity,
+                                    child: ElevatedButton(
+                                      style: ElevatedButton.styleFrom(
+                                        padding: const EdgeInsets.symmetric(vertical: 14),
+                                        backgroundColor: Colors.black,
+                                        foregroundColor: Colors.white,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(12),
+                                        ),
+                                      ),
+                                      onPressed: _isLoading ? null : signInWithApple,
+                                      child: const Text(
+                                        'Sign in with Apple',
+                                        style: TextStyle(fontSize: 18),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                ],
 
                                /* TextButton(
                                   onPressed: () async {
