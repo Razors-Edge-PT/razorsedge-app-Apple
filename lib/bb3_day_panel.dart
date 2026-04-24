@@ -144,8 +144,10 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     // Preserve existing controller values for exercises still present
     final keep = exercises.map((e) => e.exerciseId).toSet();
 
-    // Dispose removed exercises' controllers
-    final toRemove = _weightCtrl.keys.where((id) => !keep.contains(id)).toList();
+    // Dispose removed exercises' controllers — spare locally-staged ones
+    final toRemove = _weightCtrl.keys
+        .where((id) => !keep.contains(id) && !_localExercises.containsKey(id))
+        .toList();
     for (final id in toRemove) {
       for (final c in _weightCtrl[id]!) c.dispose();
       for (final c in _repsCtrl[id]!) c.dispose();
@@ -229,7 +231,11 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
       }
     }
 
-    _orderedExIds = exercises.map((e) => e.exerciseId).toList();
+    // Append locally-staged IDs not yet reflected by the parent
+    final localOnlyIds = _orderedExIds
+        .where((id) => _localExercises.containsKey(id) && !keep.contains(id))
+        .toList();
+    _orderedExIds = [...exercises.map((e) => e.exerciseId), ...localOnlyIds];
   }
 
   String _fmtNum(double v) {
@@ -735,50 +741,56 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (!isExpanded)
-            // ── Collapsed: one row with name + set fields ───────────────
+            // ── Collapsed: horizontally scrollable row ──────────────────
             InkWell(
               onTap: () =>
                   setState(() => _expandedByExId[exId] = true),
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                child: Row(
-                  children: [
-                    Icon(Icons.expand_more,
-                        size: 14, color: Colors.grey.shade400),
-                    const SizedBox(width: 2),
-                    if (!locked)
-                      ReorderableDelayedDragStartListener(
-                        index: listIndex,
-                        child: Icon(Icons.drag_handle,
-                            size: 16, color: Colors.grey.shade400),
-                      ),
-                    const SizedBox(width: 3),
-                    Expanded(
-                      child: Text(
-                        ex.name,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 12,
-                          fontStyle: locked ? FontStyle.italic : null,
-                          color: locked ? Colors.grey.shade600 : null,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                physics: const ClampingScrollPhysics(),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.expand_more,
+                          size: 14, color: Colors.grey.shade400),
+                      const SizedBox(width: 2),
+                      if (!locked)
+                        ReorderableDelayedDragStartListener(
+                          index: listIndex,
+                          child: Icon(Icons.drag_handle,
+                              size: 16, color: Colors.grey.shade400),
+                        ),
+                      const SizedBox(width: 3),
+                      SizedBox(
+                        width: 140,
+                        child: Text(
+                          ex.name,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 9,
+                            fontStyle: locked ? FontStyle.italic : null,
+                            color: locked ? Colors.grey.shade600 : null,
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 3),
-                    ..._setFieldWidgets(
-                        theme, ex, visibleSetIndex, locked,
-                        expandedMode: false),
-                    if (!locked) ...[
-                      const SizedBox(width: 4),
-                      GestureDetector(
-                        onTap: () => _confirmDelete(ex),
-                        child: Icon(Icons.close,
-                            size: 14, color: Colors.red.shade300),
-                      ),
+                      const SizedBox(width: 3),
+                      ..._setFieldWidgets(
+                          theme, ex, visibleSetIndex, locked,
+                          expandedMode: false),
+                      if (!locked) ...[
+                        const SizedBox(width: 4),
+                        GestureDetector(
+                          onTap: () => _confirmDelete(ex),
+                          child: Icon(Icons.close,
+                              size: 14, color: Colors.red.shade300),
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
               ),
             )

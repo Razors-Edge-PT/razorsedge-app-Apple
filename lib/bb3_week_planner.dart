@@ -100,13 +100,13 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
       if (activeId != null && activeId.isNotEmpty) {
         final match = blocks.where((b) => b.blockId == activeId).toList();
         if (match.isNotEmpty) {
-          await _selectBlock(match.first.blockId);
+          await _selectBlock(match.first.blockId, jumpToStart: false);
           return;
         }
       }
       // Fall back to most-recent block (list already sorted newest-first)
       if (blocks.isNotEmpty) {
-        await _selectBlock(blocks.first.blockId);
+        await _selectBlock(blocks.first.blockId, jumpToStart: false);
       }
     } catch (_) {
       if (mounted) setState(() => _loadingBlocks = false);
@@ -131,16 +131,18 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
   //   workout data (uid + date), not Firestore block documents, so blockId
   //   is irrelevant to hint generation. ✓
 
-  Future<void> _selectBlock(String blockId) async {
+  Future<void> _selectBlock(String blockId, {bool jumpToStart = true}) async {
     final uid = _uid;
     final settings =
         await BB3PlannedExerciseService.getBlockSettings(uid, blockId);
     if (!mounted) return;
 
-    // Jump to the selected block's start week (spec requirement).
-    // Falls back to current _weekStart if the block has no startDate.
+    // jumpToStart=true (manual block switch via dropdown): jump to the block's
+    // start week so the user immediately sees week 1 of what they selected.
+    // jumpToStart=false (auto-select on boot): stay on the current calendar
+    // week so BB3 opens to today's week of the active block.
     DateTime newWeekStart = _weekStart;
-    if (settings.startDate != null) {
+    if (jumpToStart && settings.startDate != null) {
       newWeekStart = _mondayOf(settings.startDate!);
     }
 
