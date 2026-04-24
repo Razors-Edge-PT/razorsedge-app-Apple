@@ -398,7 +398,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
           ),
           if (!widget.isInsideBlock) ...[
             const SizedBox(width: 6),
-            Icon(Icons.info_outline, size: 14, color: Colors.orange.shade700),
+            Icon(Icons.info_outline, size: 14, color: Colors.pink.shade200),
           ],
         ],
       ),
@@ -440,7 +440,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
           children: [
             const SizedBox(width: 24), // aligns with S1/S2/… label
             fl('Weight', 42),
-            const SizedBox(width: 8),
+            const SizedBox(width: 18),
             fl('Reps', 36),
             const SizedBox(width: 3),
             fl('RIR', 36),
@@ -461,11 +461,11 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
         children: [
           const SizedBox(width: 35), // space for expand + drag icons
           Expanded(child: Text('Exercise', style: labelStyle)),
-          const SizedBox(width: 3),
-          fl('Weight', 42),
-          const SizedBox(width: 3),
+          const SizedBox(width: 5),
+          fl('Weight', 38),
+          const SizedBox(width:5),
           fl('Reps', 32),
-          const SizedBox(width: 3),
+          const SizedBox(width: 1),
           fl('RIR', 32),
           const SizedBox(width: 1),
           fl('E1RM', 36),
@@ -761,23 +761,23 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                         ReorderableDelayedDragStartListener(
                           index: listIndex,
                           child: Icon(Icons.drag_handle,
-                              size: 16, color: Colors.grey.shade400),
+                              size: 1, color: Colors.grey.shade400),
                         ),
                       const SizedBox(width: 3),
                       SizedBox(
-                        width: 140,
+                        width: 110,
                         child: Text(
                           ex.name,
                           overflow: TextOverflow.ellipsis,
                           style: theme.textTheme.bodySmall?.copyWith(
                             fontWeight: FontWeight.w600,
-                            fontSize: 9,
+                            fontSize: 10,
                             fontStyle: locked ? FontStyle.italic : null,
                             color: locked ? Colors.grey.shade600 : null,
                           ),
                         ),
                       ),
-                      const SizedBox(width: 3),
+                      const SizedBox(width: 1),
                       ..._setFieldWidgets(
                           theme, ex, visibleSetIndex, locked,
                           expandedMode: false),
@@ -840,7 +840,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                       child: Icon(
                         Icons.insights,
                         size: 14,
-                        color: Colors.grey.shade500,
+                        color: Colors.cyanAccent,
                       ),
                     ),
                     if (hasNote) ...[
@@ -882,64 +882,64 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.only(left: 6, right: 6, bottom: 2),
+              padding: const EdgeInsets.only(left: 7, right: 6, bottom: 2),
               child: Row(
                 children: [
-                  const SizedBox(width: 24), // aligns with S1 / S2 / S3
+                  const SizedBox(width: 22), // aligns with S1 / S2 / S3
                   SizedBox(
-                    width: 46,
+                    width: 47,
                     child: Text('Weight',
                         textAlign: TextAlign.center,
                         style: theme.textTheme.labelSmall?.copyWith(
                           color: Colors.grey.shade400,
-                          fontSize: 9,
+                          fontSize: 10,
                         )),
                   ),
-                  const SizedBox(width: 3),
+                  const SizedBox(width: 16),
                   SizedBox(
                     width: 36,
                     child: Text('Reps',
                         textAlign: TextAlign.center,
                         style: theme.textTheme.labelSmall?.copyWith(
                           color: Colors.grey.shade400,
-                          fontSize: 9,
+                          fontSize: 10,
                         )),
                   ),
-                  const SizedBox(width: 3),
+                  const SizedBox(width: 8),
                   SizedBox(
                     width: 36,
                     child: Text('RIR',
                         textAlign: TextAlign.center,
                         style: theme.textTheme.labelSmall?.copyWith(
                           color: Colors.grey.shade400,
-                          fontSize: 9,
+                          fontSize: 10,
                         )),
                   ),
-                  const SizedBox(width: 1),
+                  const SizedBox(width: 7),
                   SizedBox(
                     width: 40,
                     child: Text('E1RM',
                         textAlign: TextAlign.center,
                         style: theme.textTheme.labelSmall?.copyWith(
                           color: Colors.grey.shade400,
-                          fontSize: 9,
+                          fontSize: 10,
                         )),
                   ),
-                  const SizedBox(width: 1),
+                  const SizedBox(width: 4),
                   SizedBox(
                     width: 38,
                     child: Text('Vel',
                         textAlign: TextAlign.center,
                         style: theme.textTheme.labelSmall?.copyWith(
                           color: Colors.grey.shade400,
-                          fontSize: 9,
+                          fontSize: 10,
                         )),
                   ),
-                  const SizedBox(width: 2),
+                  const SizedBox(width: 8),
                   Text('Notes',
                       style: theme.textTheme.labelSmall?.copyWith(
                         color: Colors.grey.shade400,
-                        fontSize: 9,
+                        fontSize: 10,
                       )),
                 ],
               ),
@@ -1131,9 +1131,9 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
         : null;
     final velHasValue = velCtrl != null && velCtrl.text.isNotEmpty;
 
-    final wWidth = expandedMode ? 57.0 : 40.0;
+    final wWidth = expandedMode ? 60.0 : 40.0;
     final rWidth = expandedMode ? 40.0 : 32.0;
-    final rirWidth = expandedMode ? 30.0 : 30.0;
+    final rirWidth = expandedMode ? 40.0 : 30.0;
     final e1rmWidth = expandedMode ? 48.0 : 36.0;
     final velWidth = expandedMode ? 38.0 : 34.0;
 
@@ -1204,7 +1204,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
             fontSize: 10,
-            color: Colors.grey.shade500,
+            color: Colors.white,
             fontStyle: FontStyle.italic,
           ),
         ),
@@ -1226,7 +1226,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
             style: theme.textTheme.bodySmall?.copyWith(
               fontSize: 10,
               color: velHasValue && !locked
-                  ? Colors.deepOrange.shade300
+                  ? Colors.pink.shade200
                   : (locked ? Colors.grey.shade600 : null),
             ),
             decoration: InputDecoration(
@@ -1254,13 +1254,13 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
             ),
           ),
         ),
-      const SizedBox(width: 2),
+      const SizedBox(width: 6),
       // Per-set note button — highlights when note is non-empty
       GestureDetector(
         onTap: () => _showSetNoteDialog(theme, exId, setIndex),
         child: Icon(
           Icons.edit_note,
-          size: 14,
+          size: 24,
           color: (_notesCtrl[exId]?.elementAtOrNull(setIndex)?.text
                       .isNotEmpty ==
                   true)
@@ -1289,7 +1289,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     if (isCompleted) {
       textColor = Colors.grey.shade600;
     } else if (hasUserValue && !locked) {
-      textColor = Colors.deepOrange.shade300; // salmon pink for BB3-entered values
+      textColor = Colors.pink.shade200; // salmon pink for BB3-entered values
     } else if (locked) {
       textColor = Colors.grey.shade600;
     }
