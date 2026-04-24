@@ -35,7 +35,8 @@ class BB3DayPanel extends StatefulWidget {
   final List<Map<String, dynamic>> completedExercises; // from users/{uid}/workouts/{date}
   final BB3BlockSettings? blockSettings;
   final int weekIndex;
-  final int sessionIndex;        // how many times exercises appear earlier this week
+  final int sessionIndex;        // fallback: 0 when sessionIndexByExerciseId is absent
+  final Map<String, int>? sessionIndexByExerciseId; // per-exercise session index
   final String uid;
   final List<Map<String, dynamic>> allExercises; // for the add-exercise picker
   final List<Template> templates;               // for the template picker
@@ -52,6 +53,7 @@ class BB3DayPanel extends StatefulWidget {
     required this.blockSettings,
     required this.weekIndex,
     required this.sessionIndex,
+    this.sessionIndexByExerciseId,
     required this.uid,
     required this.allExercises,
     required this.templates,
@@ -456,15 +458,15 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     }
 
     return Padding(
-      padding: const EdgeInsets.only(left: 6, right: 6, bottom: 1),
+      padding: const EdgeInsets.only(left: 6, right: 8, bottom: 1),
       child: Row(
         children: [
-          const SizedBox(width: 35), // space for expand + drag icons
+          const SizedBox(width: 43), // space for expand + drag icons
           Expanded(child: Text('Exercise', style: labelStyle)),
-          const SizedBox(width: 5),
-          fl('Weight', 38),
+          const SizedBox(width: 7),
+          fl('Weight', 32),
           const SizedBox(width:5),
-          fl('Reps', 32),
+          fl('Reps', 28),
           const SizedBox(width: 1),
           fl('RIR', 32),
           const SizedBox(width: 1),
@@ -1072,7 +1074,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
         exerciseName: ex.name,
         fullExerciseSettings: widget.blockSettings!.exerciseSettings,
         weekIndex: widget.weekIndex,
-        sessionIndex: widget.sessionIndex,
+        sessionIndex: widget.sessionIndexByExerciseId?[exId] ?? widget.sessionIndex,
         setIndex: setIndex,
         blockStartDate: widget.blockSettings!.startDate ?? widget.date,
         blockEndDate: widget.blockSettings!.endDate,
@@ -1131,10 +1133,10 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
         : null;
     final velHasValue = velCtrl != null && velCtrl.text.isNotEmpty;
 
-    final wWidth = expandedMode ? 60.0 : 40.0;
+    final wWidth = expandedMode ? 60.0 : 55.0;
     final rWidth = expandedMode ? 40.0 : 32.0;
-    final rirWidth = expandedMode ? 40.0 : 30.0;
-    final e1rmWidth = expandedMode ? 48.0 : 36.0;
+    final rirWidth = expandedMode ? 41.0 : 41.0;
+    final e1rmWidth = expandedMode ? 48.0 : 41.0;
     final velWidth = expandedMode ? 38.0 : 34.0;
 
     return [
@@ -1636,7 +1638,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
         setCount = BB3PlannedExerciseService.resolveSetCount(
           exSettings: exSettings.isNotEmpty ? exSettings : null,
           weekIndex: widget.weekIndex,
-          sessionIndex: widget.sessionIndex,
+          sessionIndex: widget.sessionIndexByExerciseId?[exerciseId] ?? widget.sessionIndex,
         );
       }
     }
@@ -1762,7 +1764,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
           setCount = BB3PlannedExerciseService.resolveSetCount(
             exSettings: exSettings,
             weekIndex: widget.weekIndex,
-            sessionIndex: widget.sessionIndex,
+            sessionIndex: widget.sessionIndexByExerciseId?[exId] ?? widget.sessionIndex,
           );
         }
       }
@@ -1776,8 +1778,12 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
       ));
     }
 
-    // Rebuild controllers for new exercise list (keeps completed untouched)
+    // Stage each exercise locally so _rebuildControllers preserves them if
+    // didUpdateWidget fires before the parent reflects the new list.
     setState(() {
+      for (final ex in newExercises) {
+        _localExercises[ex.exerciseId] = ex;
+      }
       _rebuildControllers(newExercises);
     });
 

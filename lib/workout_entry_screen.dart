@@ -6020,6 +6020,21 @@ class _WorkoutPageState extends State<WorkoutPage>
       // [perf] print removed from hot path
     }
 
+    // BB3 per-set override for set 0: use BB3-planned reps as hint.
+    // Guard: reps field is empty (!hasUserReps).
+    // Does not guard on weight — field-by-field, consistent with sets 2+ in _repsHintText.
+    if (!hasUserReps && _resolvedBB3PerSetValues.isNotEmpty) {
+      final _row = _selectedExercisesWithCircuits[exerciseIndex];
+      final _rawId = (_row['exerciseId'] ?? _row['id'])?.toString().trim() ?? '';
+      final _rName = (_row['name'] ?? '').toString().trim();
+      final _exIdLower = (_rawId.isNotEmpty
+              ? _rawId
+              : (PeriodizationModelUtils.nameToId[_rName] ?? _rName))
+          .toLowerCase();
+      final _bb3r = (_resolvedBB3PerSetValues[_exIdLower]?[0]?['reps'] as num?)
+          ?.toInt();
+      if (_bb3r != null && _bb3r > 0) return _bb3r.toDouble();
+    }
 
     final exerciseName =
         _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
@@ -6892,6 +6907,21 @@ class _WorkoutPageState extends State<WorkoutPage>
       // [perf] print removed from hot path
     }
 
+    // BB3 per-set override for set 0: use BB3-planned weight as hint.
+    // Guard: weight field is empty (!hasUserWeight).
+    // Does not guard on reps — field-by-field, consistent with sets 2+ in _weightHintText.
+    if (!hasUserWeight && _resolvedBB3PerSetValues.isNotEmpty) {
+      final _row = _selectedExercisesWithCircuits[exerciseIndex];
+      final _rawId = (_row['exerciseId'] ?? _row['id'])?.toString().trim() ?? '';
+      final _rName = (_row['name'] ?? '').toString().trim();
+      final _exIdLower = (_rawId.isNotEmpty
+              ? _rawId
+              : (PeriodizationModelUtils.nameToId[_rName] ?? _rName))
+          .toLowerCase();
+      final _bb3w = (_resolvedBB3PerSetValues[_exIdLower]?[0]?['weight'] as num?)
+          ?.toDouble();
+      if (_bb3w != null && _bb3w > 0) return _bb3w;
+    }
 
     final exerciseName =
         _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
@@ -14409,6 +14439,7 @@ class _WorkoutPageState extends State<WorkoutPage>
           if (s.weight != null) m['weight'] = s.weight;
           if (s.reps != null) m['reps'] = s.reps;
           if (s.rir != null) m['rir'] = s.rir;
+          if (s.velocity != null) m['velocity'] = s.velocity;
           if (m.isNotEmpty) setMap[si] = m;
         }
         if (setMap.isNotEmpty) {
@@ -18581,9 +18612,22 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                             child: TextField(
                                                               controller: _velocityControllers[i][j],
                                                               keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                                              decoration: const InputDecoration(
-                                                                hintText: '',
-                                                                hintStyle: TextStyle(
+                                                              decoration: InputDecoration(
+                                                                hintText: (() {
+                                                                  if (_resolvedBB3PerSetValues.isNotEmpty) {
+                                                                    final _vRow = _selectedExercisesWithCircuits[i];
+                                                                    final _vRawId = (_vRow['exerciseId'] ?? _vRow['id'])?.toString().trim() ?? '';
+                                                                    final _vName = (_vRow['name'] ?? '').toString().trim();
+                                                                    final _vIdLower = (_vRawId.isNotEmpty
+                                                                            ? _vRawId
+                                                                            : (PeriodizationModelUtils.nameToId[_vName] ?? _vName))
+                                                                        .toLowerCase();
+                                                                    final _vVal = (_resolvedBB3PerSetValues[_vIdLower]?[j]?['velocity'] as num?)?.toDouble();
+                                                                    if (_vVal != null) return _vVal.toStringAsFixed(2);
+                                                                  }
+                                                                  return '';
+                                                                })(),
+                                                                hintStyle: const TextStyle(
                                                                   color: Colors.grey,
                                                                   fontStyle: FontStyle.italic,
                                                                   fontSize: 11,

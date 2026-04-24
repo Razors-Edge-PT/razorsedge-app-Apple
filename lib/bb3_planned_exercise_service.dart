@@ -422,6 +422,45 @@ class BB3PlannedExerciseService {
     }
     return int.tryParse(raw.trim()) ?? 8;
   }
+
+  // ── Per-exercise session index for BB3 planning surface ──────────────────
+  //
+  // Returns how many distinct days earlier in this week (0..currentDayIndex-1)
+  // had this exercise either planned in BB3 or completed in WES.
+  // A day that is both planned and completed counts once (Set union).
+  // This is BB3-specific: unlike WES's getInstanceCountForExerciseInWeek,
+  // it counts planned exposures that may not yet be logged.
+
+  static int getPlannedSessionIndex({
+    required List<List<BB3Exercise>> plannedByDay,
+    required List<List<Map<String, dynamic>>> completedByDay,
+    required int currentDayIndex,
+    required String exerciseId,
+    required String exerciseName,
+  }) {
+    final Set<int> daysWithExposure = {};
+    final normName = exerciseName.trim().toLowerCase();
+
+    for (int prev = 0; prev < currentDayIndex; prev++) {
+      // Check planned first
+      if (plannedByDay[prev].any((e) =>
+          e.exerciseId == exerciseId ||
+          e.name.trim().toLowerCase() == normName)) {
+        daysWithExposure.add(prev);
+        continue; // already counted this day
+      }
+      // Check completed (WES-logged) for days not already added via planned
+      if (completedByDay[prev].any((ex) {
+        final exId = (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim();
+        final exName = (ex['name'] ?? '').toString().trim().toLowerCase();
+        return exId == exerciseId || exName == normName;
+      })) {
+        daysWithExposure.add(prev);
+      }
+    }
+
+    return daysWithExposure.length;
+  }
 }
 
 extension _BB3BlockSettingsExt on BB3BlockSettings {

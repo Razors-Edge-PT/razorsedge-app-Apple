@@ -550,7 +550,22 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
           date,
         );
 
-        const sessionIndex = 0;
+        // Compute per-exercise session index for this day's panel.
+        // BB3 is planning-forward: counts prior days with the exercise
+        // in either _plannedByDay or _completedByDay (union, no double-count).
+        final sessionIndexByExId = <String, int>{};
+        if (isCurrentWeek) {
+          for (final ex in _plannedByDay[d]) {
+            sessionIndexByExId[ex.exerciseId] =
+                BB3PlannedExerciseService.getPlannedSessionIndex(
+              plannedByDay: _plannedByDay,
+              completedByDay: _completedByDay,
+              currentDayIndex: d,
+              exerciseId: ex.exerciseId,
+              exerciseName: ex.name,
+            );
+          }
+        }
 
         if (isCurrentWeek && _loadingByDay[d]) {
           return const Padding(
@@ -570,7 +585,9 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
               isCurrentWeek ? _completedByDay[d] : const [],
           blockSettings: _blockSettings,
           weekIndex: weekIndex,
-          sessionIndex: sessionIndex,
+          sessionIndex: 0,
+          sessionIndexByExerciseId:
+              sessionIndexByExId.isNotEmpty ? sessionIndexByExId : null,
           uid: _uid,
           allExercises: _allExercises,
           templates: _templates,
