@@ -306,18 +306,21 @@ class _LoginScreenState extends State<LoginScreen> {
                                     ),
                                   ),
                                 ),
-                                const SizedBox(height: 12),
-                                SizedBox(
-                                  width: double.infinity,
-                                  child: GestureDetector(
-                                    onTap: _isLoading ? null : signInWithGoogle,
-                                    child: Image.asset(
-                                      'assets/google_sign_in.png',
-                                      height: 50,
+                                if (!Platform.isIOS) ...[
+                                  const SizedBox(height: 12),
+                                  SizedBox(
+                                    width: double.infinity,
+                                    child: GestureDetector(
+                                      onTap: _isLoading ? null : signInWithGoogle,
+                                      child: Image.asset(
+                                        'assets/google_sign_in.png',
+                                        height: 50,
+                                      ),
                                     ),
                                   ),
-                                ),
-                                const SizedBox(height: 12),
+                                ],
+                                // Apple Sign-In removed for App Review compliance (Guideline 4.8)
+                                /* const SizedBox(height: 12),
                                 if (Platform.isIOS) ...[
                                   SizedBox(
                                     width: double.infinity,
@@ -338,7 +341,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                     ),
                                   ),
                                   const SizedBox(height: 12),
-                                ],
+                                ], */
 
                                /* TextButton(
                                   onPressed: () async {
