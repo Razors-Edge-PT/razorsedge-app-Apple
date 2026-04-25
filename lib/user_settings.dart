@@ -7,6 +7,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'demographics_cache.dart';
 import 'package:localtest222/user_context.dart'; // <-- your UserContext
 import 'themes_screen.dart';
+import 'account_deletion_screen.dart';
 
 class UserSettingsScreen extends StatefulWidget {
   const UserSettingsScreen({super.key});
@@ -1002,6 +1003,38 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                             ),
                             Spacer(),
                             Icon(Icons.chevron_right, color: Colors.white38, size: 20),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    const Divider(height: 24, color: Colors.white24),
+
+                    InkWell(
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const AccountDeletionScreen()),
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Row(
+                          children: const [
+                            Icon(Icons.delete_forever,
+                                color: Colors.redAccent, size: 20),
+                            SizedBox(width: 12),
+                            Text(
+                              'Delete Account',
+                              style: TextStyle(
+                                color: Colors.redAccent,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            Spacer(),
+                            Icon(Icons.chevron_right,
+                                color: Colors.white38, size: 20),
                           ],
                         ),
                       ),

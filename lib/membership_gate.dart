@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:http/http.dart' as http;
 
 import 'login_screen.dart';   // only as a very defensive fallback
+import 'account_deletion_screen.dart';
 
 /// 🔐 UIDs that always have an "effective" active membership,
 /// regardless of what Firestore says.
@@ -312,6 +314,30 @@ class MembershipInactiveScreen extends StatelessWidget {
                     ),
                   ),
                 ),
+                // if (true) ...[
+                if (Platform.isIOS) ...[
+                  const SizedBox(height: 12),
+                  ElevatedButton.icon(
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const AccountDeletionScreen()),
+                    ),
+                    icon: const Icon(Icons.delete_forever, color: Colors.white),
+                    label: const Text('Delete Account'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
