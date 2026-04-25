@@ -88,7 +88,7 @@ class _AccountDeletionScreenState extends State<AccountDeletionScreen> {
       } catch (_) {}
 
       // Delete conversation docs where this user is a participant.
-      // TODO (Cloud Function follow-up): messages subcollections inside each
+
       // conversation doc require server-side recursive deletion.
       try {
         final convSnap = await db
