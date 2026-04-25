@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
+import 'package:in_app_purchase/in_app_purchase.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -15,7 +17,7 @@ const freeMembershipUids = <String>{
   'yoVAqScwLMQLAgNHh8v9IK49fBw2', // Richard
   'wuiMe7phxYQh0MM39bfnhgv20yS2', // Campbell
   'SMTEVGPH1MXgOgbcBbJFU1HjU8G3', // Adam
-  'ykx0RvDMc5OIuZ2R4kqWMhGbrGV2' // Google Play Reviewer Account
+  'ykx0RvDMc5OIuZ2R4kqWMhGbrGV2', // Google Play Reviewer Account
   'L7YjSMnm7tXD3BwyskmmrgVhKsS2' // Ruby cakes
   // add more testers here later
 };
@@ -112,48 +114,167 @@ class MembershipGate extends StatelessWidget {
 }
 
 /// Screen shown when the user is logged in but their membership is inactive.
-/// Screen shown when the user is logged in but their membership is inactive.
-class MembershipInactiveScreen extends StatelessWidget {
+class MembershipInactiveScreen extends StatefulWidget {
   const MembershipInactiveScreen({super.key});
 
-  // 🔗 Your marketing page (still used for "Learn more")
-  static const String _websiteUrl =
-      'https://www.razorsedgept.com/goodlift-membership';
+  @override
+  State<MembershipInactiveScreen> createState() =>
+      _MembershipInactiveScreenState();
+}
 
+class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
   // 🔗 HTTPS Function URL for createCheckoutSession (used by _startCheckout)
   static const String _checkoutFunctionUrl =
       'https://createcheckoutsession-eot2loyyrq-uc.a.run.app';
 
-  /// Open the website *with the current Firebase uid/email attached*,
+  // IAP state — iOS only; fields are never set on Android.
+  ProductDetails? _productDetails;
+  bool _iapAvailable = false;
+  bool _iapLoading = false;
+  StreamSubscription<List<PurchaseDetails>>? _purchaseSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    if (Platform.isIOS) {
+      _iapLoading = true; // disable button from first frame until query completes
+      _initIAP();
+    }
+  }
+
+  @override
+  void dispose() {
+    _purchaseSubscription?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _initIAP() async {
+    try {
+      // Attach before any await so no StoreKit events are missed during setup.
+      _purchaseSubscription =
+          InAppPurchase.instance.purchaseStream.listen(_onPurchaseUpdate);
+
+      _iapAvailable = await InAppPurchase.instance.isAvailable();
+      if (!_iapAvailable || !mounted) return;
+
+      final response = await InAppPurchase.instance
+          .queryProductDetails({'goodlift.membership.monthly'});
+
+      if (response.notFoundIDs.isNotEmpty) {
+        debugPrint(
+            '[IAP] Product not found in App Store: ${response.notFoundIDs}');
+      }
+
+      if (response.productDetails.isNotEmpty && mounted) {
+        setState(() => _productDetails = response.productDetails.first);
+      }
+    } finally {
+      if (mounted) setState(() => _iapLoading = false);
+    }
+  }
+
+  Future<void> _onPurchaseUpdate(List<PurchaseDetails> purchases) async {
+    for (final purchase in purchases) {
+      if (purchase.productID != 'goodlift.membership.monthly') continue;
+
+      if (purchase.status == PurchaseStatus.purchased ||
+          purchase.status == PurchaseStatus.restored) {
+        // TODO: Production must validate the App Store receipt server-side via a
+        // Cloud Function before fully trusting this client-side membership activation.
+        final uid = FirebaseAuth.instance.currentUser?.uid;
+        try {
+          if (uid != null) {
+            await FirebaseFirestore.instance
+                .collection('users')
+                .doc(uid)
+                .collection('profile')
+                .doc('membership')
+                .set({
+              'active': true,
+              'status': 'active',
+              'source': 'apple_iap',
+              'productId': purchase.productID,
+              'purchaseId': purchase.purchaseID,
+              'updatedAt': FieldValue.serverTimestamp(),
+            }, SetOptions(merge: true));
+          }
+        } catch (e) {
+          debugPrint('[IAP] Firestore membership write failed: $e');
+        } finally {
+          // Always acknowledge — StoreKit will refund if not completed,
+          // even when the Firestore write above failed.
+          if (purchase.pendingCompletePurchase) {
+            await InAppPurchase.instance.completePurchase(purchase);
+          }
+        }
+        if (mounted) {
+          setState(() => _iapLoading = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Membership activated.')),
+          );
+        }
+      } else if (purchase.status == PurchaseStatus.error) {
+        if (mounted) {
+          setState(() => _iapLoading = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Purchase failed. Please try again.')),
+          );
+        }
+      } else if (purchase.status == PurchaseStatus.canceled) {
+        if (mounted) {
+          setState(() => _iapLoading = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Purchase cancelled.')),
+          );
+        }
+      }
+      // PurchaseStatus.pending: StoreKit handles natively; _iapLoading stays true.
+    }
+  }
+
+  Future<void> _startApplePurchase(BuildContext context) async {
+    if (!_iapAvailable || _productDetails == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+              'Membership purchase is currently unavailable. Please try again shortly.'),
+        ),
+      );
+      return;
+    }
+    setState(() => _iapLoading = true);
+    try {
+      final purchaseParam = PurchaseParam(productDetails: _productDetails!);
+      await InAppPurchase.instance
+          .buyNonConsumable(purchaseParam: purchaseParam);
+      // Result arrives via purchaseStream → _onPurchaseUpdate.
+    } catch (_) {
+      // buyNonConsumable threw synchronously (e.g. already in a purchase flow).
+      if (mounted) setState(() => _iapLoading = false);
+    }
+  }
+
+  /// Opens the website with the current Firebase uid/email attached,
   /// so the landing page can start Stripe Checkout for this user.
   Future<void> _openWebsiteWithUid() async {
     final user = FirebaseAuth.instance.currentUser;
     final uid = user?.uid;
     final email = user?.email;
 
-    // Base URL for your Wix membership landing page
     const baseUrl = 'https://www.razorsedgept.com/goodlift-membership';
 
     Uri uri;
-
     if (uid == null) {
-      // If somehow no user is logged in, just open the landing page without params.
       uri = Uri.parse(baseUrl);
     } else {
-      // Append uid (and email if available)
       uri = Uri.parse(baseUrl).replace(queryParameters: {
         'uid': uid,
         if (email != null && email.isNotEmpty) 'email': email,
       });
     }
 
-    await launchUrl(
-      uri,
-      mode: LaunchMode.externalApplication,
-    );
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
-
-
 
   Future<void> _logout(BuildContext context) async {
     await FirebaseAuth.instance.signOut();
@@ -193,7 +314,6 @@ class MembershipInactiveScreen extends StatelessWidget {
       );
       debugPrint("STATUS: ${response.statusCode}");
       debugPrint("BODY: ${response.body}");
-
 
       if (response.statusCode != 200) {
         debugPrint(
@@ -244,7 +364,6 @@ class MembershipInactiveScreen extends StatelessWidget {
         ),
       );
     }
-
   }
 
   @override
@@ -283,19 +402,36 @@ class MembershipInactiveScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 24),
 
-                // ✅ Activate membership → Stripe Checkout
-               /* ElevatedButton(
-                  onPressed: () => _startCheckout(context),  // keep for now (dev / v1.1)
-                  child: const Text('Activate membership'),
-                ), */
-
-                const SizedBox(height: 16),
-
+                // iOS  → Apple IAP via StoreKit
+                // else → existing website / Stripe flow
+                /* _startCheckout kept as fallback for non-IAP testing (dev / v1.1) */
                 ElevatedButton(
-                    onPressed: _openWebsiteWithUid,  // keep for now (dev / v1.1)
-                  child: const Text('Activate membership'),
+                  onPressed: _iapLoading
+                      ? null
+                      : Platform.isIOS
+                          ? () => _startApplePurchase(context)
+                          : _openWebsiteWithUid,
+                  child: _iapLoading && Platform.isIOS
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text('Activate membership'),
                 ),
 
+                if (Platform.isIOS) ...[
+                  const SizedBox(height: 8),
+                  TextButton(
+                    onPressed: _iapLoading
+                        ? null
+                        : () => InAppPurchase.instance.restorePurchases(),
+                    child: const Text('Restore purchases'),
+                  ),
+                ],
 
                 const SizedBox(height: 20),
 
@@ -314,7 +450,7 @@ class MembershipInactiveScreen extends StatelessWidget {
                     ),
                   ),
                 ),
-                // if (true) ...[
+
                 if (Platform.isIOS) ...[
                   const SizedBox(height: 12),
                   ElevatedButton.icon(
