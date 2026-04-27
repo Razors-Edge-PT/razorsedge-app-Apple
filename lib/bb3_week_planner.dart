@@ -44,18 +44,28 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
 
   bool _loadingBlocks = false;
   bool _refreshing = false;
+  int _loadEpoch = 0;
 
   // PageView controller: each page = one week; anchor on a known Monday epoch.
   late final PageController _pageController;
 
   // Epoch: a known Monday used to convert between week-start dates and page indices.
-  static final DateTime _epoch = DateTime(2020, 1, 6);
+  // UTC-based so that DST transitions never cause inDays to round to the wrong week.
+  static final DateTime _epochUtc = DateTime.utc(2020, 1, 6);
 
-  static int _weekToPage(DateTime monday) =>
-      monday.difference(_epoch).inDays ~/ 7;
+  static int _weekToPage(DateTime monday) {
+    final m = DateTime.utc(monday.year, monday.month, monday.day);
+    return m.difference(_epochUtc).inDays ~/ 7;
+  }
 
-  static DateTime _pageToWeek(int page) =>
-      _epoch.add(Duration(days: page * 7));
+  static DateTime _pageToWeek(int page) {
+    final u = _epochUtc.add(Duration(days: page * 7));
+    return DateTime(u.year, u.month, u.day);
+  }
+
+  // Date-only equality: ignores time-of-day and DST offsets.
+  static bool _sameCalendarDate(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -75,11 +85,11 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
 
   Future<void> _boot() async {
     await Future.wait([
-      _loadBlocks(),
+      _loadBlocks(),       // _loadBlocks → _selectBlock → _loadWeek owns the first load
       _loadExercises(),
       _loadTemplates(),
     ]);
-    await _loadWeek(fromServer: false);
+    // _loadWeek is called inside _selectBlock; no second call needed here.
   }
 
   // ── Block list ────────────────────────────────────────────────────────────
@@ -205,15 +215,23 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
     if (blockId == null || blockId.isEmpty) return;
     final uid = _uid;
 
+    // Capture mutable state at call time so all 7 inner futures read the same
+    // week/block even if _weekStart or _blockSettings changes mid-flight.
+    final localWeekStart = _weekStart;
+    final localBlockSettings = _blockSettings;
+    final localEpoch = ++_loadEpoch;
+
+    debugPrint('[BB3 loadWeek start] epoch=$localEpoch weekStart=$localWeekStart block=$blockId fromServer=$fromServer');
+
     setState(() {
       for (int d = 0; d < 7; d++) _loadingByDay[d] = true;
     });
 
     await Future.wait(List.generate(7, (d) async {
-      final date = _weekStart.add(Duration(days: d));
+      final date = localWeekStart.add(Duration(days: d));
       final (:weekIndex, :dayIndex) =
           BB3PlannedExerciseService.dateToWeekDay(
-        _blockSettings?.startDate ?? _weekStart,
+        localBlockSettings?.startDate ?? localWeekStart,
         date,
       );
 
@@ -234,7 +252,8 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
           final exercises = snap.exists && snap.data() != null
               ? _extractExercises(snap.data()!)
               : <Map<String, dynamic>>[];
-          planned = _deserialize(exercises, weekIndex, dayIndex);
+          planned = _deserialize(exercises, weekIndex, dayIndex,
+              blockSettings: localBlockSettings);
         } else {
           planned = await BB3PlannedExerciseService.getPlannedDay(
             uid: uid,
@@ -242,21 +261,30 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
             weekIndex: weekIndex,
             dayIndex: dayIndex,
             date: date,
-            exerciseSettings: _blockSettings?.exerciseSettings,
+            exerciseSettings: localBlockSettings?.exerciseSettings,
           );
         }
 
         final completed =
             await BB3PlannedExerciseService.getCompletedExercises(uid, date);
 
-        if (!mounted) return;
+        debugPrint('[BB3 loadDay result] epoch=$localEpoch d=$d planned=${planned.length} completed=${completed.length}');
+
+        // If a newer load has started, discard this result silently. The newer
+        // load set _loadingByDay to true at its entry and will clear the flags
+        // when its own futures complete — no extra setState needed here.
+        if (!mounted || localEpoch != _loadEpoch) {
+          debugPrint('[BB3 loadWeek stale ignored] epoch=$localEpoch current=$_loadEpoch');
+          return;
+        }
         setState(() {
           _plannedByDay[d] = planned;
           _completedByDay[d] = completed;
           _loadingByDay[d] = false;
         });
       } catch (_) {
-        if (!mounted) return;
+        // Same stale check in error path — the newer load owns the flags.
+        if (!mounted || localEpoch != _loadEpoch) return;
         setState(() => _loadingByDay[d] = false);
       }
     }));
@@ -274,14 +302,16 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
   }
 
   List<BB3Exercise> _deserialize(
-      List<Map<String, dynamic>> raw, int weekIndex, int dayIndex) {
+      List<Map<String, dynamic>> raw, int weekIndex, int dayIndex,
+      {BB3BlockSettings? blockSettings}) {
+    final effectiveSettings = blockSettings ?? _blockSettings;
     return raw
         .where((m) =>
             (m['exerciseId'] ?? m['id'] ?? m['name'] ?? '').toString().isNotEmpty)
         .map((m) {
           final exId = (m['exerciseId'] ?? m['id'] ?? '').toString().trim();
-          final exSettings = _blockSettings?.exerciseSettings != null
-              ? (_blockSettings!.exerciseSettings[exId] as Map<String, dynamic>?)
+          final exSettings = effectiveSettings?.exerciseSettings != null
+              ? (effectiveSettings!.exerciseSettings[exId] as Map<String, dynamic>?)
               : null;
           final defaultCount =
               (exSettings?['defaultSets'] as num?)?.toInt() ?? 3;
@@ -472,20 +502,32 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
 
   Widget _buildBody(BuildContext context) {
     final theme = Theme.of(context);
-    final outsideBlock =
-        _blockSettings == null || !_blockSettings!.hasDateRange;
 
-    final anyDayOutsideBlock = !outsideBlock &&
-        List.generate(7, (d) {
+    // Do not evaluate outside-block status until block settings have loaded.
+    // Without this guard, _blockSettings == null triggers the banner on every open.
+    final settingsReady = !_loadingBlocks && _blockSettings != null;
+
+    bool showBanner = false;
+    if (settingsReady) {
+      if (!_blockSettings!.hasDateRange) {
+        showBanner = true;
+      } else {
+        showBanner = List.generate(7, (d) {
           final date = _weekStart.add(Duration(days: d));
           return !_blockSettings!.isDateInRange(date);
         }).any((v) => v);
+      }
+    }
+
+    debugPrint('[BB3 blockBanner] loadingBlocks=$_loadingBlocks '
+        'hasSettings=$settingsReady '
+        'hasDateRange=${_blockSettings?.hasDateRange} '
+        'show=$showBanner');
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (outsideBlock || anyDayOutsideBlock)
-          _buildOutsideBlockBanner(theme),
+        if (showBanner) _buildOutsideBlockBanner(theme),
         Expanded(
           child: _buildWeekPageView(),
         ),
@@ -541,8 +583,13 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
       itemCount: 7,
       itemBuilder: (context, d) {
         final date = weekStart.add(Duration(days: d));
-        final isCurrentWeek = weekStart == _weekStart;
+        final isCurrentWeek = _sameCalendarDate(weekStart, _weekStart);
         final isInBlock = _blockSettings?.isDateInRange(date) ?? false;
+        if (d == 0) {
+          debugPrint('[BB3 buildDay] d=$d isCurrentWeek=$isCurrentWeek '
+              'planned=${isCurrentWeek ? _plannedByDay[d].length : -1} '
+              'completed=${isCurrentWeek ? _completedByDay[d].length : -1}');
+        }
 
         final (:weekIndex, :dayIndex) =
             BB3PlannedExerciseService.dateToWeekDay(
@@ -594,6 +641,7 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
           onSave: _onDaySave,
           onDrop: _onDrop,
           isInsideBlock: isInBlock,
+          blockId: _selectedBlockId,
         );
       },
     );

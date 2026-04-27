@@ -43,6 +43,7 @@ class BB3DayPanel extends StatefulWidget {
   final BB3SaveCallback onSave;
   final BB3DropCallback onDrop;   // cross-day drag
   final bool isInsideBlock;       // whether this day is inside the active block range
+  final String? blockId;          // needed for direct savePlannedDay on dispose
 
   const BB3DayPanel({
     super.key,
@@ -60,6 +61,7 @@ class BB3DayPanel extends StatefulWidget {
     required this.onSave,
     required this.onDrop,
     required this.isInsideBlock,
+    this.blockId,
   });
 
   @override
@@ -84,6 +86,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
   final Map<String, bool> _expandedByExId = {};
   final Set<String> _viewedNoteExIds = {};
   bool _saveInProgress = false;
+  bool _pendingSave = false;
 
   // Keep an ordered list of exerciseIds matching widget.plannedExercises
   List<String> _orderedExIds = [];
@@ -116,6 +119,28 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
 
   @override
   void dispose() {
+    // Best-effort flush: snapshot current controller state before controllers are
+    // disposed. Calls savePlannedDay directly — no setState — so this is safe even
+    // after the parent (BB3WeekPlanner) has been deactivated. The returned Future is
+    // intentionally unawaited; Firestore's offline queue guarantees the write.
+    final bid = widget.blockId;
+    if (_orderedExIds.isNotEmpty && bid != null && bid.isNotEmpty) {
+      final exercises = _buildCurrentExercises();
+      debugPrint('[BB3 dispose flush] day=${widget.dayIndex} count=${exercises.length}');
+      final blockDayIndex = widget.blockSettings?.startDate != null
+          ? BB3PlannedExerciseService.dateToWeekDay(
+              widget.blockSettings!.startDate!, widget.date).dayIndex
+          : widget.dayIndex;
+      // ignore: discarded_futures
+      BB3PlannedExerciseService.savePlannedDay(
+        uid: widget.uid,
+        blockId: bid,
+        weekIndex: widget.weekIndex,
+        dayIndex: blockDayIndex,
+        exercises: exercises,
+      );
+    }
+
     for (final list in _weightCtrl.values) {
       for (final c in list) c.dispose();
     }
@@ -250,9 +275,24 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
   // and saves the full day. _saveInProgress guards against concurrent saves.
 
   void _saveIfDirty() {
-    if (_saveInProgress) return;
+    if (!mounted) return;
+    if (_saveInProgress) {
+      _pendingSave = true;
+      debugPrint('[BB3 save queued] day=${widget.dayIndex}');
+      return;
+    }
     _saveInProgress = true;
-    _doSave().whenComplete(() => _saveInProgress = false);
+    _pendingSave = false;
+    debugPrint('[BB3 save] start day=${widget.dayIndex} count=${_orderedExIds.length}');
+    _doSave().whenComplete(() {
+      _saveInProgress = false;
+      debugPrint('[BB3 save] complete day=${widget.dayIndex} count=${_orderedExIds.length}');
+      // Re-enter with a fresh _buildCurrentExercises() snapshot if a save was
+      // requested while this one was in flight.
+      if (_pendingSave && mounted) {
+        _saveIfDirty();
+      }
+    });
   }
 
   Future<void> _doSave() async {
