@@ -374,9 +374,10 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
         centerTitle: true,
         automaticallyImplyLeading: false, // no back button trap
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Center(
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
+          child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 500),
             child: Column(
@@ -422,6 +423,71 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
                         )
                       : const Text('Activate membership'),
                 ),
+
+                if (Platform.isIOS) ...[
+                  const SizedBox(height: 16),
+                  const Text(
+                    'GoodLift Membership — \$29 per month, includes full access to GoodLift training.',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'GoodLift Membership is an auto-renewable monthly subscription. '
+                    'Your subscription provides access to all training features during each billing period. '
+                    'Payment will be charged to your Apple ID at confirmation of purchase. '
+                    'The subscription automatically renews unless cancelled at least 24 hours before the end of the current period. '
+                    'You can manage or cancel your subscription in your Apple ID account settings.',
+                    style: TextStyle(fontSize: 14),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  GestureDetector(
+                    onTap: () async {
+                      final uri = Uri.parse(
+                          'https://www.apple.com/legal/internet-services/itunes/dev/stdeula/');
+                      await launchUrl(uri, mode: LaunchMode.externalApplication);
+                    },
+                    child: const Text(
+                      'Terms of Use',
+                      style: TextStyle(
+                        color: Colors.blue,
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  GestureDetector(
+                    onTap: () async {
+                      final uri = Uri.parse(
+                          'https://www.razorsedgept.com/goodlift-privacy');
+                      await launchUrl(uri, mode: LaunchMode.externalApplication);
+                    },
+                    child: const Text(
+                      'Privacy Policy',
+                      style: TextStyle(
+                        color: Colors.blue,
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: _iapLoading
+                        ? null
+                        : () => _startApplePurchase(context),
+                    child: _iapLoading
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Text('Activate membership'),
+                  ),
+                ],
 
                 if (Platform.isIOS) ...[
                   const SizedBox(height: 8),
@@ -477,6 +543,7 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
               ],
             ),
           ),
+        ),
         ),
       ),
     );
