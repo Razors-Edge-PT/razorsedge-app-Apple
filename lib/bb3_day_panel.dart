@@ -453,7 +453,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
 
   Color _completedSurface(ThemeData theme) {
     return Color.alphaBlend(
-      Colors.black.withValues(alpha: -0.28),
+      Colors.black.withValues(alpha: -0.62),
       theme.colorScheme.surface,
     );
   }
@@ -524,12 +524,54 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
   // ALWAYS renders above the planned section. Layout-enforced.
 
   Widget _buildCompletedSection(ThemeData theme) {
-    // Group by exerciseId to show one row per exercise
+    // Completed exercises that are already represented in the planned list
+    // will render as locked BB3-style rows inside _buildPlannedSection().
+    // Do not also render them here, or the same completed exercise appears twice
+    // and shares the same _expandedByExId expansion state.
+    final plannedIdentityKeys = <String>{};
+
+    for (final ex in widget.plannedExercises) {
+      final id = ex.exerciseId.trim().toLowerCase();
+      final name = ex.name.trim().toLowerCase();
+      if (id.isNotEmpty) plannedIdentityKeys.add(id);
+      if (name.isNotEmpty) plannedIdentityKeys.add(name);
+    }
+
+    for (final id in _orderedExIds) {
+      final key = id.trim().toLowerCase();
+      if (key.isNotEmpty) plannedIdentityKeys.add(key);
+
+      final local = _localExercises[id];
+      final localName = local?.name.trim().toLowerCase();
+      if (localName != null && localName.isNotEmpty) {
+        plannedIdentityKeys.add(localName);
+      }
+    }
+
+    // Group by exerciseId to show one row per completed-only exercise.
+    // Planned+completed exercises are intentionally skipped because they are
+    // shown once, in the better BB3-style locked row below.
     final Map<String, List<Map<String, dynamic>>> byExId = {};
+
     for (final ex in widget.completedExercises) {
       final id = (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim();
-      if (id.isEmpty) continue;
-      byExId.putIfAbsent(id, () => []).add(ex);
+      final name = (ex['name'] ?? ex['exercise'] ?? '').toString().trim();
+
+      final idKey = id.toLowerCase();
+      final nameKey = name.toLowerCase();
+
+      final alreadyShownAsPlannedLockedRow =
+          (idKey.isNotEmpty && plannedIdentityKeys.contains(idKey)) ||
+              (nameKey.isNotEmpty && plannedIdentityKeys.contains(nameKey));
+
+      if (alreadyShownAsPlannedLockedRow) {
+        continue;
+      }
+
+      final groupKey = id.isNotEmpty ? id : name;
+      if (groupKey.isEmpty) continue;
+
+      byExId.putIfAbsent(groupKey, () => []).add(ex);
     }
 
     if (byExId.isEmpty) return const SizedBox.shrink();
@@ -684,14 +726,9 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
       );
     }
 
-    return ReorderableListView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: _orderedExIds.length,
-      onReorder: _onReorder,
-      buildDefaultDragHandles: false,
-      itemBuilder: (ctx, idx) {
-        final exId = _orderedExIds[idx];
+    return Column(
+      children: _orderedExIds.map((exId) {
+        final idx = _orderedExIds.indexOf(exId);
         final ex = widget.plannedExercises.firstWhere(
           (e) => e.exerciseId == exId,
           orElse: () =>
@@ -708,11 +745,24 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
           exerciseId: exId,
           completedExercisesForDay: widget.completedExercises,
         );
-        return KeyedSubtree(
+        return DragTarget<_BB3DragPayload>(
           key: ValueKey(exId),
-          child: _buildExerciseCard(theme, ex, idx, locked),
+          onAcceptWithDetails: (details) {
+            final payload = details.data;
+            if (payload.sourceDayIndex == widget.dayIndex) {
+              final fromIdx = _orderedExIds.indexOf(payload.exercise.exerciseId);
+              final toIdx = _orderedExIds.indexOf(exId);
+              if (fromIdx >= 0 && toIdx >= 0 && fromIdx != toIdx) {
+                _onReorder(fromIdx, toIdx);
+              }
+            } else {
+              widget.onDrop(payload.sourceDayIndex, widget.dayIndex, payload.exercise);
+            }
+          },
+          builder: (ctx, candidateData, rejectedData) =>
+              _buildExerciseCard(theme, ex, locked),
         );
-      },
+      }).toList(),
     );
   }
 
@@ -762,7 +812,6 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
   Widget _buildExerciseCard(
     ThemeData theme,
     BB3Exercise ex,
-    int listIndex,
     bool locked,
   ) {
     final exId = ex.exerciseId;
@@ -800,11 +849,8 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                           size: 14, color: Colors.grey.shade400),
                       const SizedBox(width: 2),
                       if (!locked)
-                        ReorderableDelayedDragStartListener(
-                          index: listIndex,
-                          child: Icon(Icons.drag_handle,
-                              size: 1, color: Colors.grey.shade400),
-                        ),
+                        Icon(Icons.drag_handle,
+                            size: 1, color: Colors.grey.shade400),
                       const SizedBox(width: 3),
                       SizedBox(
                         width: 110,
@@ -812,10 +858,10 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                           ex.name,
                           overflow: TextOverflow.ellipsis,
                           style: theme.textTheme.bodySmall?.copyWith(
-                            fontWeight: FontWeight.w600,
+                            fontWeight: FontWeight.w800,
                             fontSize: 10,
                             fontStyle: locked ? FontStyle.italic : null,
-                            color: locked ? Colors.grey.shade600 : null,
+                            color: locked ? Colors.grey.shade100 : null,
                           ),
                         ),
                       ),
@@ -850,11 +896,8 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                         size: 14, color: Colors.grey.shade500),
                     const SizedBox(width: 2),
                     if (!locked)
-                      ReorderableDelayedDragStartListener(
-                        index: listIndex,
-                        child: Icon(Icons.drag_handle,
-                            size: 16, color: Colors.grey.shade400),
-                      ),
+                      Icon(Icons.drag_handle,
+                          size: 16, color: Colors.grey.shade400),
                     const SizedBox(width: 3),
                     Expanded(
                       child: Text(
@@ -864,7 +907,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                           fontWeight: FontWeight.w600,
                           fontSize: 12,
                           fontStyle: locked ? FontStyle.italic : null,
-                          color: locked ? Colors.grey.shade600 : null,
+                          color: locked ? Colors.grey.shade100 : null,
                         ),
                       ),
                     ),
@@ -933,7 +976,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                     child: Text('Weight',
                         textAlign: TextAlign.center,
                         style: theme.textTheme.labelSmall?.copyWith(
-                          color: Colors.grey.shade400,
+                          color: Colors.grey.shade100,
                           fontSize: 10,
                         )),
                   ),
@@ -943,7 +986,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                     child: Text('Reps',
                         textAlign: TextAlign.center,
                         style: theme.textTheme.labelSmall?.copyWith(
-                          color: Colors.grey.shade400,
+                          color: Colors.grey.shade100,
                           fontSize: 10,
                         )),
                   ),
@@ -953,7 +996,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                     child: Text('RIR',
                         textAlign: TextAlign.center,
                         style: theme.textTheme.labelSmall?.copyWith(
-                          color: Colors.grey.shade400,
+                          color: Colors.grey.shade100,
                           fontSize: 10,
                         )),
                   ),
@@ -963,7 +1006,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                     child: Text('E1RM',
                         textAlign: TextAlign.center,
                         style: theme.textTheme.labelSmall?.copyWith(
-                          color: Colors.grey.shade400,
+                          color: Colors.grey.shade100,
                           fontSize: 10,
                         )),
                   ),
@@ -973,14 +1016,14 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                     child: Text('Vel',
                         textAlign: TextAlign.center,
                         style: theme.textTheme.labelSmall?.copyWith(
-                          color: Colors.grey.shade400,
+                          color: Colors.grey.shade100,
                           fontSize: 10,
                         )),
                   ),
                   const SizedBox(width: 8),
                   Text('Notes',
                       style: theme.textTheme.labelSmall?.copyWith(
-                        color: Colors.grey.shade400,
+                        color: Colors.grey.shade100,
                         fontSize: 10,
                       )),
                 ],
@@ -1000,7 +1043,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                       child: Text(
                         'S${si + 1}',
                         style: theme.textTheme.labelSmall
-                            ?.copyWith(color: Colors.grey.shade500),
+                            ?.copyWith(color: Colors.grey.shade100),
                       ),
                     ),
                     ..._setFieldWidgets(theme, ex, si, locked,
@@ -1022,7 +1065,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                 ),
               ),
           ],
-          Divider(height: 0.5, color: Colors.grey.shade100),
+          Divider(height: 0.5, color: Colors.grey.shade400),
         ],
       ),
     );
@@ -1269,12 +1312,12 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
               fontSize: 10,
               color: velHasValue && !locked
                   ? Colors.pink.shade200
-                  : (locked ? Colors.grey.shade600 : null),
+                  : (locked ? Colors.grey.shade100 : null),
             ),
             decoration: InputDecoration(
               hintText: 'm/s',
               hintStyle: TextStyle(
-                  color: Colors.grey.shade300, fontSize: 10),
+                  color: Colors.grey.shade100, fontSize: 10),
               isDense: true,
               contentPadding:
                   const EdgeInsets.symmetric(horizontal: 2, vertical: 3),
@@ -1307,7 +1350,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                       .isNotEmpty ==
                   true)
               ? theme.colorScheme.secondary
-              : Colors.grey.shade400,
+              : Colors.grey.shade100,
         ),
       ),
     ];
@@ -1336,7 +1379,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
       textColor = Colors.grey.shade600;
     }
 
-    final Color? fillColor = isCompleted ? Colors.white : null;
+    final Color? fillColor = isCompleted ? Colors.grey.shade800 : null;
 
     return GestureDetector(
       onDoubleTap: (!locked && ctrl.text.isEmpty && hint.isNotEmpty)
@@ -1360,7 +1403,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
         decoration: InputDecoration(
           hintText: hint.isEmpty ? label : hint,
           hintStyle: TextStyle(
-            color: hint.isEmpty ? Colors.grey.shade300 : Colors.grey.shade400,
+            color: hint.isEmpty ? Colors.grey.shade300 : Colors.white,
             fontSize: 11,
           ),
           filled: fillColor != null,
