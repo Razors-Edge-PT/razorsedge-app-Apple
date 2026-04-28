@@ -445,10 +445,10 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
         ),
         _refreshing
             ? const Padding(
-                padding: EdgeInsets.all(12),
+                padding: EdgeInsets.all(8),
                 child: SizedBox(
-                  width: 20,
-                  height: 20,
+                  width: 15,
+                  height: 15,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 ),
               )
@@ -458,9 +458,12 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
                 tooltip: 'Refresh hints',
                 onPressed: _refresh,
               ),
-        Padding(
-          padding: const EdgeInsets.only(right: 8),
-          child: _buildBlockSelector(),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 120),
+          child: Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: _buildBlockSelector(),
+          ),
         ),
       ],
     );
@@ -481,15 +484,31 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
       child: DropdownButton<String>(
         value: _selectedBlockId,
         isDense: true,
+        isExpanded: true,
         style: const TextStyle(fontSize: 13, color: Colors.white),
         dropdownColor: Colors.blueGrey.shade800,
         iconEnabledColor: Colors.white,
+        selectedItemBuilder: (context) {
+          return _allBlocks.map((b) {
+            return Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                b.name ?? b.blockId,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                softWrap: false,
+                style: const TextStyle(fontSize: 13, color: Colors.white),
+              ),
+            );
+          }).toList();
+        },
         items: _allBlocks.map((b) {
           return DropdownMenuItem(
             value: b.blockId,
             child: Text(
               b.name ?? b.blockId,
               style: const TextStyle(fontSize: 13, color: Colors.white),
+              overflow: TextOverflow.ellipsis,
             ),
           );
         }).toList(),
