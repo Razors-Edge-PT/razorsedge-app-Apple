@@ -2909,7 +2909,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                             child: Icon(
                                               Icons.calendar_view_week,
                                               size: 48,
-                                              color: Theme.of(context).colorScheme.tertiary,
+                                              color: Theme.of(context).colorScheme.secondary,
                                             ),
                                           ),
                                           Positioned(

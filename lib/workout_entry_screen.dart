@@ -17412,12 +17412,15 @@ class _WorkoutPageState extends State<WorkoutPage>
               if (_selectedExercisesWithCircuits.isEmpty) ...[
                 // Empty-state info
                 Column(
-                  children: const [
-                    Text(
-                      'No exercises selected yet. Add some to get started.',
-                      style: TextStyle(color: Colors.white, fontSize: 14),
-                    ),
-                    SizedBox(height: 6),
+                  children: [
+                    if (!_isInitialized || _isLoadingData)
+                      const _AnimatedWaitForItText()
+                    else
+                      const Text(
+                        'No exercises selected yet. Add some to get started.',
+                        style: TextStyle(color: Colors.white, fontSize: 14),
+                      ),
+                    const SizedBox(height: 6),
                   ],
                 ),
 
@@ -18919,5 +18922,39 @@ class ExerciseVideoButton extends StatelessWidget {
       },
     );
 
+  }
+}
+
+class _AnimatedWaitForItText extends StatefulWidget {
+  const _AnimatedWaitForItText();
+
+  @override
+  State<_AnimatedWaitForItText> createState() => _AnimatedWaitForItTextState();
+}
+
+class _AnimatedWaitForItTextState extends State<_AnimatedWaitForItText> {
+  int _dots = 0;
+  late Timer _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      if (mounted) setState(() => _dots = (_dots + 1) % 4);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      'Wait for it${'.' * _dots}',
+      style: const TextStyle(color: Colors.white, fontSize: 14),
+    );
   }
 }

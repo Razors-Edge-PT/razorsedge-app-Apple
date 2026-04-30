@@ -465,7 +465,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
           TextButton.icon(
             onPressed: _goToWorkoutForDay,
             icon: const Icon(Icons.fitness_center, size: 14),
-            label: const Text('Workout', style: TextStyle(fontSize: 11)),
+            label: const Text('Go to Workout', style: TextStyle(fontSize: 11)),
             style: TextButton.styleFrom(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
               minimumSize: const Size(0, 28),
@@ -528,15 +528,16 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
       );
     }
 
+    //collapsed exercises labels header
     return Padding(
       padding: const EdgeInsets.only(left: 6, right: 8, bottom: 1),
       child: Row(
         children: [
-          const SizedBox(width: 43), // space for expand + drag icons
+          const SizedBox(width: 49), // space for expand + drag icons
           Expanded(child: Text('Exercise', style: labelStyle)),
           const SizedBox(width: 7),
           fl('Weight', 32),
-          const SizedBox(width:5),
+          const SizedBox(width:8),
           fl('Reps', 28),
           const SizedBox(width: 1),
           fl('RIR', 32),
