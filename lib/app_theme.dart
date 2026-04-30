@@ -24,7 +24,7 @@ class AppTheme {
   static ThemeData dark({Color? primary, Color? secondary, Color? tertiary}) {
     final chrome = primary   ?? defaultPrimary;    // scaffold / AppBar bg
     final active = secondary ?? defaultSecondary;  // colorScheme.primary slot
-    final accent = tertiary  ?? defaultTertiary;   // colorScheme.secondary / tertiary slots
+    final accent = tertiary  ?? defaultTertiary;   // colorScheme.tertiary slot
     final onActive = onColor(active);
     final onAccent = onColor(accent);
 
@@ -38,8 +38,8 @@ class AppTheme {
       colorScheme: ColorScheme.dark(
         primary: active,
         onPrimary: onActive,
-        secondary: accent,
-        onSecondary: onAccent,
+        secondary: active,
+        onSecondary: onActive,
         tertiary: accent,
         onTertiary: onAccent,
         surface: chrome,

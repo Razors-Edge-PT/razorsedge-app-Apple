@@ -68,9 +68,13 @@ class ThemesScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
+                  Text(
                     'Theme Mode',
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: Theme.of(context).colorScheme.tertiary,
+                    ),
                   ),
                   const SizedBox(height: 12),
                   SegmentedButton<ThemeMode>(
@@ -92,6 +96,12 @@ class ThemesScreen extends StatelessWidget {
                       ),
                     ],
                     selected: {tc.themeMode},
+                    style: SegmentedButton.styleFrom(
+                      backgroundColor: Theme.of(context).colorScheme.secondary,
+                      selectedBackgroundColor: Theme.of(context).colorScheme.secondary,
+                      foregroundColor: AppTheme.onColor(Theme.of(context).colorScheme.secondary),
+                      selectedForegroundColor: AppTheme.onColor(Theme.of(context).colorScheme.secondary),
+                    ),
                     onSelectionChanged: (s) => tc.update(mode: s.first),
                   ),
                   const SizedBox(height: 28),
@@ -122,6 +132,13 @@ class ThemesScreen extends StatelessWidget {
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        backgroundColor: Theme.of(context).colorScheme.secondary,
+                        foregroundColor: AppTheme.onColor(Theme.of(context).colorScheme.secondary),
+                        side: BorderSide(
+                          color: Theme.of(context).colorScheme.secondary,
+                        ),
+                      ),
                       onPressed: () => tc.reset(),
                       icon: const Icon(Icons.refresh),
                       label: const Text('Reset to Defaults'),
@@ -162,7 +179,11 @@ class _ColorSection extends StatelessWidget {
       children: [
         Text(
           label,
-          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+            color: Theme.of(context).colorScheme.tertiary,
+          ),
         ),
         const SizedBox(height: 2),
         Text(

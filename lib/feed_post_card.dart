@@ -30,7 +30,7 @@ class FeedPostCard extends StatelessWidget {
     return SizedBox(
       width: double.infinity, // 👈 stretch card to full available width
       child: Card(
-        color: Colors.blueGrey.shade600, // 👈 your background
+        color: Theme.of(context).colorScheme.secondary, // 👈 your background
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         margin: const EdgeInsets.symmetric(vertical: 8),
         child: Padding(

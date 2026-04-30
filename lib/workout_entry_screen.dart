@@ -10503,6 +10503,7 @@ class _WorkoutPageState extends State<WorkoutPage>
     // ── 1) Snapshot current state synchronously (before any await) for undo ──
     final snapExercises = List<Map<String,dynamic>>.from(
         _selectedExercisesWithCircuits.map((e) => Map<String,dynamic>.from(e)));
+    final hadExistingExercises = snapExercises.isNotEmpty;
     final snapSets = _workoutSets
         .map((r) => r.map((s) => SetDetails(
               reps: s.reps, weight: s.weight, rir: s.rir,
@@ -10651,8 +10652,9 @@ class _WorkoutPageState extends State<WorkoutPage>
 
     if (!_applyingUndo) _undoStack.add(undoAction);
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+    debugPrint('[SNACK template] hadExistingExercises=$hadExistingExercises mounted=$mounted');
+    if (hadExistingExercises) {
+      rootScaffoldMessengerKey.currentState?.showSnackBar(SnackBar(
         content: Text('Loaded "${template.name}" — previous exercises replaced'),
         action: SnackBarAction(
           label: 'Undo',
@@ -12875,24 +12877,23 @@ class _WorkoutPageState extends State<WorkoutPage>
 
     _undoStack.add(replaceUndoAction);
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('"$newExName" swapped in'),
-          action: SnackBarAction(
-            label: 'Undo',
-            textColor: Colors.blueGrey.shade700,
-            onPressed: () {
-              if (_applyingUndo) return;
-              _applyingUndo = true;
-              _undoStack.remove(replaceUndoAction);
-              replaceUndoAction();
-              _applyingUndo = false;
-            },
-          ),
+    debugPrint('[SNACK replace] mounted=$mounted old=${capturedExercise['name']} new=$newExName');
+    rootScaffoldMessengerKey.currentState?.showSnackBar(
+      SnackBar(
+        content: Text('"$newExName" swapped in'),
+        action: SnackBarAction(
+          label: 'Undo',
+          textColor: Colors.blueGrey.shade700,
+          onPressed: () {
+            if (_applyingUndo) return;
+            _applyingUndo = true;
+            _undoStack.remove(replaceUndoAction);
+            replaceUndoAction();
+            _applyingUndo = false;
+          },
         ),
-      );
-    }
+      ),
+    );
   }
 
   void _onReorderExercises(int oldIndex, int newIndex) {
@@ -17151,9 +17152,10 @@ class _WorkoutPageState extends State<WorkoutPage>
                                   dobRaw: dob,
                                 );
 
-                                showAppSnack(msg);
-
-
+                                debugPrint('[SNACK delete-day] msg=$msg messenger=${rootScaffoldMessengerKey.currentState != null ? "available" : "null"}');
+                                rootScaffoldMessengerKey.currentState?.showSnackBar(
+                                  SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating),
+                                );
 
                               } catch (e, st) {
                                 debugPrint('❌ [ClearWorkout] Nuke failed: $e');
@@ -18068,10 +18070,10 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                               _selectedExercisesWithCircuits[i]['name'] ??
                                                                   '')
                                                               .toStringAsFixed(1)}Kg',
-                                                          style: const TextStyle(
-                                                            fontSize: 12.0,
+                                                          style: TextStyle(
+                                                            fontSize: 12,
                                                             fontWeight: FontWeight.bold,
-                                                            color: Colors.blueGrey,
+                                                            color: Theme.of(context).colorScheme.tertiary,
                                                           ),
                                                         ),
 
@@ -18822,9 +18824,20 @@ class _WorkoutPageState extends State<WorkoutPage>
 
                     ElevatedButton.icon(
                       onPressed: _addNewCircuitExercise,
-                      icon: const Icon(Icons.add),
-                      label: const Text("Add Circuit"),
-                      style: ElevatedButton.styleFrom(),
+                      icon: Icon(
+                        Icons.add,
+                        color: Theme.of(context).colorScheme.tertiary,
+                      ),
+                      label: Text(
+                        "Add Circuit",
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.tertiary,
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Theme.of(context).colorScheme.secondary,
+                        foregroundColor: Theme.of(context).colorScheme.tertiary,
+                      ),
                     ),
                   ],
                 ),
@@ -18892,14 +18905,14 @@ class ExerciseVideoButton extends StatelessWidget {
       icon: Icon(
         Icons.play_circle_fill,
         size: size,
-        color: Colors.green,
+        color: Theme.of(context).colorScheme.secondary,
       ),
       onPressed: () {
         Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) => ExerciseVideoPlayerScreen(
               assetPath: assetPath,
-              exerciseName: exerciseId,   // ← THIS is valid and always available
+              exerciseName: exerciseId,
             ),
           ),
         );

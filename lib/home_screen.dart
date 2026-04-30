@@ -2909,7 +2909,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                             child: Icon(
                                               Icons.calendar_view_week,
                                               size: 48,
-                                              color: Theme.of(context).colorScheme.primary,
+                                              color: Theme.of(context).colorScheme.tertiary,
                                             ),
                                           ),
                                           Positioned(
@@ -3042,7 +3042,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
                                   border: isTraining
-                                      ? Border.all(color: Colors.cyan, width: 2)
+                                      ? Border.all(
+                                    color: Theme.of(context).colorScheme.tertiary,
+                                    width: 2,
+                                  )
                                       : null,
                                 ),
                                 alignment: Alignment.center,
@@ -3059,8 +3062,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
                                   color: Colors.white24,
-                                  border:
-                                      Border.all(color: Colors.cyan, width: 2),
+                                  border: Border.all(
+                                    color: Theme.of(context).colorScheme.tertiary,
+                                    width: 2,
+                                  ),
                                 ),
                                 alignment: Alignment.center,
                                 child: Text(
