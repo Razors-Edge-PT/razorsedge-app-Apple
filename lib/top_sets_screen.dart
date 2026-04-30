@@ -239,9 +239,9 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
                   child: ElevatedButton(
                     onPressed: null,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor:Colors.blueGrey[700], // Sort button color
-                      disabledBackgroundColor: Colors.blueGrey[700],
-                      disabledForegroundColor: Colors.grey,
+                      backgroundColor: Theme.of(context).colorScheme.secondary, // Sort button color
+                      disabledBackgroundColor: Theme.of(context).colorScheme.secondary,
+                      disabledForegroundColor: Theme.of(context).colorScheme.secondary,
                       elevation: 0,
                     ),
                     child: const Text("Sort", style: TextStyle(color: Colors.white)),
@@ -250,7 +250,7 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
                 ElevatedButton(
                   onPressed: () => _showFilterDialog(context),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor:  Colors.blueGrey[700], // Filter button color
+                    backgroundColor:  Theme.of(context).colorScheme.secondary,// Filter button color
                   ),
                   child: const Text("Filters", style: TextStyle(color: Colors.white)),
                 ),
@@ -335,14 +335,59 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
                       text: TextSpan(
                         style: DefaultTextStyle.of(context).style,
                         children: [
-                          TextSpan(text: '${topSet!.weight}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.lightBlue)),
-                          const TextSpan(text: 'kg ', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.lightBlue)),
-                          const TextSpan(text: 'x ', style: TextStyle(color: Colors.lightBlue)),
-                          TextSpan(text: '${topSet!.reps}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.lightBlue)),
-                          const TextSpan(text: ', RIR: ', style: TextStyle(color: Colors.lightBlue)),
-                          TextSpan(text: '${topSet!.rir}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.lightBlue)),
-                          const TextSpan(text: ' | E1RM: ', style: TextStyle(color: Colors.lightBlue)),
-                          TextSpan(text: '${highestE1RM.toStringAsFixed(1)} kg', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.lightBlue)),
+                          TextSpan(
+                            text: '${topSet!.weight}',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Theme.of(context).colorScheme.tertiary,
+                            ),
+                          ),
+                          TextSpan(
+                            text: 'kg ',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Theme.of(context).colorScheme.tertiary,
+                            ),
+                          ),
+                          TextSpan(
+                            text: 'x ',
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.tertiary,
+                            ),
+                          ),
+                          TextSpan(
+                            text: '${topSet!.reps}',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Theme.of(context).colorScheme.tertiary,
+                            ),
+                          ),
+                          TextSpan(
+                            text: ', RIR: ',
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.tertiary,
+                            ),
+                          ),
+                          TextSpan(
+                            text: '${topSet!.rir}',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Theme.of(context).colorScheme.tertiary,
+                            ),
+                          ),
+                          TextSpan(
+                            text: ' | E1RM: ',
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.tertiary,
+                            ),
+                          ),
+                          TextSpan(
+                            text: '${highestE1RM.toStringAsFixed(1)} kg',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Theme.of(context).colorScheme.tertiary,
+                            ),
+                          ),
                         ],
                       ),
                     ),
