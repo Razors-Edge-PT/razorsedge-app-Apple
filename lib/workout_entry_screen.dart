@@ -17595,16 +17595,30 @@ class _WorkoutPageState extends State<WorkoutPage>
                                         : Row(
                                       children: [
                                         Expanded(
-                                          child: SingleChildScrollView(
-                                            scrollDirection: Axis.horizontal,
-                                            child: Text(
-                                              _selectedExercisesWithCircuits[i]['name'],
-                                              style: TextStyle(
-                                                color: Colors.grey.shade300,
-                                                fontWeight: FontWeight.bold,
-                                                fontSize: 14,
-                                              ),
-                                            ),
+                                          child: LayoutBuilder(
+                                            builder: (context, constraints) {
+                                              final nameScrollWidth = (constraints.maxWidth * 1.6).clamp(
+                                                constraints.maxWidth,
+                                                320.0,
+                                              );
+                                              return SingleChildScrollView(
+                                                scrollDirection: Axis.horizontal,
+                                                child: SizedBox(
+                                                  width: nameScrollWidth,
+                                                  child: Text(
+                                                    _selectedExercisesWithCircuits[i]['name'],
+                                                    style: TextStyle(
+                                                      color: Colors.grey.shade300,
+                                                      fontWeight: FontWeight.bold,
+                                                      fontSize: 14,
+                                                    ),
+                                                    maxLines: 2,
+                                                    softWrap: true,
+                                                    overflow: TextOverflow.ellipsis,
+                                                  ),
+                                                ),
+                                              );
+                                            },
                                           ),
                                         ),
                                         // BB3 exercise note icon
