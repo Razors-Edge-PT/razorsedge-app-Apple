@@ -425,15 +425,17 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Text('BB3 Week Planner',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          const
+          Text('Week Planner',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
           Text(label,
               style: const TextStyle(
                   fontSize: 12, fontWeight: FontWeight.normal)),
+
         ],
       ),
       actions: [
-        IconButton(
+       /* IconButton(
           icon: const Icon(Icons.chevron_left),
           tooltip: 'Previous week',
           onPressed: _prevWeek,
@@ -443,6 +445,8 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
           tooltip: 'Next week',
           onPressed: _nextWeek,
         ),
+
+        */
         _refreshing
             ? const Padding(
                 padding: EdgeInsets.all(8),

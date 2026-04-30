@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 import 'bb3_models.dart';
 import 'bb3_hint_service.dart';
 import 'bb3_planned_exercise_service.dart';
 import 'template_model.dart';
 import 'periodization_model_utils.dart';
 import 'exercise_details_screen.dart';
+import 'user_context.dart';
+import 'workout_entry_screen.dart';
 
 // ─── BB3DayPanel ─────────────────────────────────────────────────────────────
 //
@@ -423,6 +426,22 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
 
   // ── Day header ────────────────────────────────────────────────────────────
 
+  void _goToWorkoutForDay() {
+    final userContext = UserContext.of(context, listen: false);
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChangeNotifierProvider<UserContext>.value(
+          value: userContext,
+          child: WorkoutPage(
+            initialDate: widget.date,
+            blockId: widget.blockId,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildDayHeader(ThemeData theme, String label) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -442,6 +461,18 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
             const SizedBox(width: 6),
             Icon(Icons.info_outline, size: 14, color: Colors.pink.shade200),
           ],
+          const Spacer(),
+          TextButton.icon(
+            onPressed: _goToWorkoutForDay,
+            icon: const Icon(Icons.fitness_center, size: 14),
+            label: const Text('Workout', style: TextStyle(fontSize: 11)),
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              minimumSize: const Size(0, 28),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+            ),
+          ),
         ],
       ),
     );

@@ -14428,8 +14428,22 @@ class _WorkoutPageState extends State<WorkoutPage>
         final idLower = ex.exerciseId.toLowerCase();
         _bb3PlannedKeysForSelectedDate.add(idLower);
 
-        if (ex.perExerciseNote != null && ex.perExerciseNote!.isNotEmpty) {
-          _bb3ExerciseNotes[idLower] = ex.perExerciseNote!;
+        final noteLines = <String>[];
+        if (ex.perExerciseNote != null && ex.perExerciseNote!.trim().isNotEmpty) {
+          noteLines.add('Exercise note: ${ex.perExerciseNote!.trim()}');
+        }
+        for (int si = 0; si < ex.sets.length; si++) {
+          final sNote = ex.sets[si].notes?.trim();
+          if (sNote != null && sNote.isNotEmpty) {
+            noteLines.add('Set ${si + 1}: $sNote');
+          }
+        }
+        if (noteLines.isNotEmpty) {
+          final joined = noteLines.join('\n\n');
+          _bb3ExerciseNotes[idLower] = joined;
+          final nameLower = ex.name.trim().toLowerCase();
+          if (nameLower.isNotEmpty) _bb3ExerciseNotes[nameLower] = joined;
+          debugPrint('[BB3 notes→WES] ${ex.name} notes=${noteLines.length}');
         }
 
         final setMap = <int, Map<String, dynamic>>{};
@@ -17602,35 +17616,72 @@ class _WorkoutPageState extends State<WorkoutPage>
                                                   ? rawId
                                                   : (PeriodizationModelUtils.nameToId[rName] ?? rName))
                                               .toLowerCase();
-                                          final note = _bb3ExerciseNotes[exIdLower];
+                                          final note = _bb3ExerciseNotes[exIdLower] ??
+                                              _bb3ExerciseNotes[rName.toLowerCase()];
                                           if (note == null || note.isEmpty) return const SizedBox.shrink();
-                                          final viewed = _bb3ViewedNoteExIds.contains(exIdLower);
-                                          return GestureDetector(
-                                            onTap: () {
-                                              setState(() => _bb3ViewedNoteExIds.add(exIdLower));
-                                              showDialog(
-                                                context: ctx,
-                                                builder: (_) => AlertDialog(
-                                                  title: Text(rName, style: const TextStyle(fontSize: 16)),
-                                                  content: Text(note),
-                                                  actions: [
-                                                    TextButton(
-                                                      onPressed: () => Navigator.pop(ctx),
-                                                      child: const Text('OK'),
-                                                    ),
-                                                  ],
+                                          final unread = !_bb3ViewedNoteExIds.contains(exIdLower);
+
+                                          void onNoteTap() {
+                                            setState(() => _bb3ViewedNoteExIds.add(exIdLower));
+                                            debugPrint('[BB3 note opened] $rName');
+                                            showDialog(
+                                              context: ctx,
+                                              builder: (_) => AlertDialog(
+                                                title: Text(
+                                                  rName.isNotEmpty ? rName : 'BB3 note',
+                                                  style: const TextStyle(fontSize: 16),
                                                 ),
-                                              );
-                                            },
+                                                content: Text(note),
+                                                actions: [
+                                                  TextButton(
+                                                    onPressed: () => Navigator.pop(ctx),
+                                                    child: const Text('OK'),
+                                                  ),
+                                                ],
+                                              ),
+                                            );
+                                          }
+
+                                          final baseIcon = Icon(
+                                            Icons.sticky_note_2_outlined,
+                                            size: unread ? 20 : 16,
+                                            color: unread ? Colors.amberAccent : Colors.grey.shade400,
+                                          );
+
+                                          Widget iconWidget;
+                                          if (unread && _catchupShineAnim != null) {
+                                            iconWidget = AnimatedBuilder(
+                                              animation: _catchupShineAnim!,
+                                              builder: (context, _) {
+                                                final t = _catchupShineAnim!.value;
+                                                const band = 0.25;
+                                                double a = (t - band / 2).clamp(0.0, 1.0);
+                                                double b = t.clamp(0.0, 1.0);
+                                                double c = (t + band / 2).clamp(0.0, 1.0);
+                                                const eps = 0.001;
+                                                if (b <= a) b = (a + eps).clamp(0.0, 1.0);
+                                                if (c <= b) c = (b + eps).clamp(0.0, 1.0);
+                                                return ShaderMask(
+                                                  shaderCallback: (rect) => LinearGradient(
+                                                    begin: Alignment.centerLeft,
+                                                    end: Alignment.centerRight,
+                                                    colors: const [Colors.white24, Colors.white, Colors.white24],
+                                                    stops: [a, b, c],
+                                                  ).createShader(rect),
+                                                  blendMode: BlendMode.srcATop,
+                                                  child: baseIcon,
+                                                );
+                                              },
+                                            );
+                                          } else {
+                                            iconWidget = baseIcon;
+                                          }
+
+                                          return GestureDetector(
+                                            onTap: onNoteTap,
                                             child: Padding(
                                               padding: const EdgeInsets.symmetric(horizontal: 4),
-                                              child: Icon(
-                                                Icons.sticky_note_2_outlined,
-                                                size: 16,
-                                                color: viewed
-                                                    ? Colors.grey.shade500
-                                                    : Colors.amber.shade600,
-                                              ),
+                                              child: iconWidget,
                                             ),
                                           );
                                         }),
