@@ -74,7 +74,7 @@ const ClaudeBulletSnapshotSchema = CollectionSchema(
   getId: _claudeBulletSnapshotGetId,
   getLinks: _claudeBulletSnapshotGetLinks,
   attach: _claudeBulletSnapshotAttach,
-  version: '3.1.0+1',
+  version: '3.3.2',
 );
 
 int _claudeBulletSnapshotEstimateSize(

@@ -8,7 +8,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   firebase_auth
   firebase_core
   firebase_storage
-  isar_flutter_libs
+  isar_community_flutter_libs
   url_launcher_windows
 )
 

@@ -94,7 +94,7 @@ const WESInitSnapshotSchema = CollectionSchema(
   getId: _wESInitSnapshotGetId,
   getLinks: _wESInitSnapshotGetLinks,
   attach: _wESInitSnapshotAttach,
-  version: '3.1.0+1',
+  version: '3.3.2',
 );
 
 int _wESInitSnapshotEstimateSize(

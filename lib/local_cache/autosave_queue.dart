@@ -17,7 +17,7 @@ import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:intl/intl.dart';
-import 'package:isar/isar.dart'; // ← add this
+import 'package:isar_community/isar.dart';
 
 
 // 🧠 Local cache + database

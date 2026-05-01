@@ -64,7 +64,7 @@ const BlockDaySchema = CollectionSchema(
   getId: _blockDayGetId,
   getLinks: _blockDayGetLinks,
   attach: _blockDayAttach,
-  version: '3.1.0+1',
+  version: '3.3.2',
 );
 
 int _blockDayEstimateSize(

@@ -30,7 +30,7 @@ import 'local_cache/workout_day_cache.dart';
 import 'local_cache/isar_block_plan.dart';
 import 'local_cache/isar_wes_init.dart';
 import 'local_cache/isar_db.dart';
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 import 're_daily.dart';
 import 'progression_engine.dart';
 import 'package:lottie/lottie.dart';

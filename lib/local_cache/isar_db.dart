@@ -1,6 +1,6 @@
 // lib/local_cache/isar_db.dart
 import 'dart:io';
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 import 'package:path_provider/path_provider.dart';
 import 'isar_wes_init.dart';
 import 'workout_day_cache.dart'; // <-- brings in WorkoutDayCacheSchema

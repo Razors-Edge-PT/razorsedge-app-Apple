@@ -10,7 +10,29 @@
       "Bash(unzip -l \"docs/BB3_Product_Specification_Revised.docx\")",
       "Bash(unzip -p \"docs/BB3_Product_Specification_Revised.docx\" word/document.xml)",
       "Bash(sed 's/<w:t>//g')",
-      "Bash(grep -v \"^  info\\\\|^  warning\\\\|^   info\\\\|^warning\\\\|docs\\\\\\\\\")"
+      "Bash(grep -v \"^  info\\\\|^  warning\\\\|^   info\\\\|^warning\\\\|docs\\\\\\\\\")",
+      "Bash(flutter --version)",
+      "Bash(flutter build *)",
+      "Bash(.\\\\gradlew.bat --stop)",
+      "WebFetch(domain:pub.dev)",
+      "WebSearch",
+      "Bash(gh issue *)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:community.sendbird.com)",
+      "WebFetch(domain:deepwiki.com)",
+      "WebFetch(domain:man.archlinux.org)",
+      "Bash(dart run *)",
+      "Bash(dart build *)",
+      "Bash(dart pub *)",
+      "PowerShell(cmd /c \"dir /a /b C:\\\\Users\\\\OEM\\\\AppData\\\\Local\\\\Pub\\\\Cache\\\\hosted\\\\pub.dev\\\\isar_community_generator-3.3.2\")",
+      "PowerShell(cmd /c \"dir /a /b C:\\\\Users\\\\OEM\\\\AppData\\\\Local\\\\Pub\\\\Cache\\\\hosted\\\\pub.dev\\\\isar_community_generator-3.3.2\\\\lib\")",
+      "PowerShell(cmd /c \"dir /a /b C:\\\\Users\\\\OEM\\\\AppData\\\\Local\\\\Pub\\\\Cache\\\\hosted\\\\pub.dev\\\\build_runner-2.14.1\")",
+      "PowerShell(cmd /c \"dir /a /b C:\\\\Users\\\\OEM\\\\AppData\\\\Local\\\\Pub\\\\Cache\\\\hosted\\\\pub.dev\\\\build_runner-2.14.1\\\\bin\")",
+      "PowerShell(cmd /c \"dir /a /b C:\\\\Users\\\\OEM\\\\AppData\\\\Local\\\\Pub\\\\Cache\\\\hosted\\\\pub.dev\\\\build-4.0.6\")",
+      "PowerShell(cmd /c \"dir /a /b C:\\\\Users\\\\OEM\\\\AppData\\\\Local\\\\Pub\\\\Cache\\\\hosted\\\\pub.dev\\\\build_runner-2.14.1\\\\lib\\\\src\")",
+      "PowerShell(cmd /c \"dir /a /b C:\\\\Users\\\\OEM\\\\AppData\\\\Local\\\\Pub\\\\Cache\\\\hosted\\\\pub.dev\\\\build_runner-2.14.1\\\\lib\\\\src\\\\bootstrap\")",
+      "PowerShell(cmd /c \"dir /a /b C:\\\\Users\\\\OEM\\\\AppData\\\\Local\\\\Pub\\\\Cache\\\\hosted\\\\pub.dev\\\\isar_community-3.3.2\\\\lib\")",
+      "Bash(grep -v \"avoid_print\\\\|unused_import\\\\|unused_field\\\\|uri_does_not_exist.*docs\\\\\\\\\")"
     ]
   }
 }

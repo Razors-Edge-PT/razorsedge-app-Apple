@@ -84,7 +84,7 @@ const AutosaveJobSchema = CollectionSchema(
   getId: _autosaveJobGetId,
   getLinks: _autosaveJobGetLinks,
   attach: _autosaveJobAttach,
-  version: '3.1.0+1',
+  version: '3.3.2',
 );
 
 int _autosaveJobEstimateSize(
@@ -1867,7 +1867,7 @@ const LastSaveHashSchema = CollectionSchema(
   getId: _lastSaveHashGetId,
   getLinks: _lastSaveHashGetLinks,
   attach: _lastSaveHashAttach,
-  version: '3.1.0+1',
+  version: '3.3.2',
 );
 
 int _lastSaveHashEstimateSize(

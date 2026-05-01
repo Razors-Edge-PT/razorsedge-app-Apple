@@ -27,7 +27,7 @@ import 'local_cache/isar_claude_bullet_snapshot.dart';
 import 'warmup_service.dart';
 import 'warmupBB2.dart';
 import 'local_cache/isar_db.dart';
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 import 'local_cache/isar_bb2_merged_day.dart';
 import 'exercise_details_screen.dart';
 

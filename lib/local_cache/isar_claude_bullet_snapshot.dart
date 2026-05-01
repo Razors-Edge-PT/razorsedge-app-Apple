@@ -8,7 +8,7 @@
 // collections -- it captures UI truth (controller text + hint text) rather
 // than data-model truth.
 
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 
 part 'isar_claude_bullet_snapshot.g.dart';
 

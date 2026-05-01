@@ -1,7 +1,7 @@
 // lib/local_cache/block_plan_cache.dart
 import 'dart:convert';
 
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 import 'isar_db.dart';
 import 'isar_block_plan.dart';
 import 'isar_wes_init.dart'; // ⬅️ new file you’ll create for WESInitSnapshot

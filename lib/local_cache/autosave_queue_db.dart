@@ -1,6 +1,6 @@
 // lib/local_cache/autosave_queue_db.dart
 import 'dart:convert';
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 import 'isar_db.dart';
 
 part 'autosave_queue_db.g.dart';

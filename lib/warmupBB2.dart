@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 
 import 'local_cache/isar_db.dart';
 import 'local_cache/isar_bb2_merged_day.dart';

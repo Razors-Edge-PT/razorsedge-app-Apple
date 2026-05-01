@@ -89,7 +89,7 @@ const BB2MergedDaySchema = CollectionSchema(
   getId: _bB2MergedDayGetId,
   getLinks: _bB2MergedDayGetLinks,
   attach: _bB2MergedDayAttach,
-  version: '3.1.0+1',
+  version: '3.3.2',
 );
 
 int _bB2MergedDayEstimateSize(

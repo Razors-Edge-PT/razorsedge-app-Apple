@@ -1,5 +1,5 @@
 // lib/local_cache/isar_wes_init.dart
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 
 part 'isar_wes_init.g.dart';
 
