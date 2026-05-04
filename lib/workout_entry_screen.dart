@@ -4762,6 +4762,7 @@ class _WorkoutPageState extends State<WorkoutPage>
       final ymd = DateFormat('yyyy-MM-dd').format(_selectedDate);
       final uid = UserContext.of(context, listen: false).currentUid;
       final uidDateKey = '$uid|$ymd';
+      debugPrint('[Claude_bullet save] uidDateKey=$uidDateKey');
 
       final nowMs = DateTime.now().millisecondsSinceEpoch;
       final workoutName = _workoutNameController.text;
@@ -4964,7 +4965,7 @@ class _WorkoutPageState extends State<WorkoutPage>
           .filter()
           .uidDateKeyEqualTo(uidDateKey)
           .findFirst();
-
+      debugPrint('[Claude_bullet restore] uidDateKey=$uidDateKey found=${snap != null}');
 
       if (snap == null) {
         print('[Claude_bullet] No snapshot found for $ymd');
@@ -7313,6 +7314,8 @@ class _WorkoutPageState extends State<WorkoutPage>
     // Read global block meta published by UserContext bootstrap (instant, no fetch)
     _cachedUid = UserContext.of(context, listen: false).currentUid;
     final uc = UserContext.of(context, listen: false);
+    debugPrint('[WES UID] actor=${uc.actorUid} acting=${uc.actingAsUid} '
+        'current=${uc.currentUid} target=$_cachedUid');
     _activeBlockId   = uc.activeBlockId ?? _activeBlockId;
     _selectedBlockId = uc.activeBlockId ?? _selectedBlockId;
     _blockStartDate  = uc.blockStartDate ?? _blockStartDate;
@@ -9248,6 +9251,7 @@ class _WorkoutPageState extends State<WorkoutPage>
           .of(context, listen: false)
           .currentUid ?? FirebaseAuth.instance.currentUser?.uid;
       if (uid == null) return;
+      debugPrint('[WES loadExisting] targetUid=$uid date=${DateFormat('yyyy-MM-dd').format(_selectedDate)}');
 
       final workoutsCol = FirebaseFirestore.instance.collection('users').doc(
           uid).collection('workouts');
@@ -14106,6 +14110,7 @@ class _WorkoutPageState extends State<WorkoutPage>
       try { return _workoutNameController.text; } catch (_) { return ''; }
     })();
     final capturedDate = _selectedDate;
+    final capturedUid = _cachedUid ?? '';
     final capturedExercises = List<Map<String, dynamic>>.from(
         _selectedExercisesWithCircuits.map((e) => Map<String, dynamic>.from(e)));
     final capturedSets = _workoutSets.map((setsForExercise) {
@@ -14121,8 +14126,9 @@ class _WorkoutPageState extends State<WorkoutPage>
     final dateKey =
         '${capturedDate.year}-${capturedDate.month.toString().padLeft(
         2, '0')}-${capturedDate.day.toString().padLeft(2, '0')}';
-    final draftKey = 'workout_draft_$dateKey';
-    final timestampKey = 'draft_last_saved_$dateKey';
+    final draftKey = 'workout_draft_${capturedUid}_$dateKey';
+    final timestampKey = 'draft_last_saved_${capturedUid}_$dateKey';
+    debugPrint('[WES draft key] save key=$draftKey');
 
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -14156,8 +14162,10 @@ class _WorkoutPageState extends State<WorkoutPage>
     final dateKey =
         '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(
         2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
-    final draftKey = 'workout_draft_$dateKey';
-    final timestampKey = 'draft_last_saved_$dateKey';
+    final uid = _cachedUid ?? '';
+    final draftKey = 'workout_draft_${uid}_$dateKey';
+    final timestampKey = 'draft_last_saved_${uid}_$dateKey';
+    debugPrint('[WES draft key] load key=$draftKey');
 
     print('[WES_REENTER] _loadWorkoutDraftFromCache: key=$draftKey');
 
@@ -17515,19 +17523,6 @@ class _WorkoutPageState extends State<WorkoutPage>
                                 // 🔓 No gating: always render the row; reconciliation happens in background
                                 final bool isSaved = _isExerciseSaved(i);
 
-                                final exId   = _selectedExercisesWithCircuits[i]['exerciseId'] ?? _selectedExercisesWithCircuits[i]['id'];
-                                final exName = _selectedExercisesWithCircuits[i]['name'] ?? '';
-
-// Try ID → fallback to name
-                                String? videoKey;
-                                if (exId != null && kExerciseVideoAssets.containsKey(exId)) {
-                                  videoKey = exId;
-                                } else if (exName.isNotEmpty && kExerciseVideoAssets.containsKey(exName)) {
-                                  videoKey = exName;
-                                }
-
-
-
                                 // TEMP: inspect structure for this row
                                 debugPrint('_selectedExercisesWithCircuits[$i] = ${_selectedExercisesWithCircuits[i]}');
 
@@ -17735,19 +17730,14 @@ class _WorkoutPageState extends State<WorkoutPage>
                                         final String name = ex['name'] ?? '';
                                         final String? id = (ex['exerciseId'] ?? ex['id'])?.toString();
 
-// Prefer ID, fall back to name (matches your kExerciseVideoAssets keys)
-                                        final String videoKey = (id ?? name).trim();
-
-// Look up the asset path in the map
-                                        final String? assetPath = videoKey.isEmpty
-                                            ? null
-                                            : (kExerciseVideoAssets[videoKey] ??
-                                            kExerciseVideoAssets[videoKey.trim()]);
-
+// ID-first lookup; skip empty IDs, fall back to name
+                                        final String? assetPath = (id != null && id.isNotEmpty)
+                                            ? (kExerciseVideoAssets[id] ?? kExerciseVideoAssets[name])
+                                            : (name.isNotEmpty ? kExerciseVideoAssets[name] : null);
 
                                         debugPrint(
                                           '🎥 row video lookup → '
-                                              'name="$name", id="$id", key="$videoKey", asset="$assetPath"',
+                                              'name="$name", id="$id", asset="$assetPath"',
                                         );
 
                                         return Row(

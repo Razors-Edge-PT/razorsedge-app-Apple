@@ -11,6 +11,7 @@ import 'dart:async' show unawaited;
 import 'block_repository.dart';
 
 enum TrendRange { d14, m30, m90, m180, y365 }
+enum BodyWeightAverageSource { am, pm }
 
 class _LegendDot extends StatelessWidget {
   final Color color;
@@ -52,6 +53,7 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
 
   TrendRange _trend = TrendRange.y365;
   bool _showSecondWeighIn = false; // controls expansion + 2nd line visibility
+  BodyWeightAverageSource _averageSource = BodyWeightAverageSource.am;
   List<Map<String, dynamic>> _series14 = [];
   List<Map<String, dynamic>> _series30 = [];
   List<Map<String, dynamic>> _series90 = [];
@@ -317,7 +319,37 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
     return list;
   }
 
+  String _normalisedTod(Map<String, dynamic> w) {
+    final v = (w['tod'] as String?)?.toLowerCase().trim();
+    return (v == 'am' || v == 'pm') ? v! : 'am';
+  }
 
+  String get _averageSourceTod =>
+      _averageSource == BodyWeightAverageSource.am ? 'am' : 'pm';
+
+  String get _averageSourceLabel =>
+      _averageSource == BodyWeightAverageSource.am ? 'AM' : 'PM';
+
+  List<Map<String, dynamic>> _weightsForAverageSource() =>
+      _weights.where((w) => _normalisedTod(w) == _averageSourceTod).toList();
+
+  double? _averageRecentEntries(List<Map<String, dynamic>> entries, int count) {
+    final take = entries.take(count).toList();
+    if (take.isEmpty) return null;
+    final sum = take.fold<double>(0, (s, w) => s + (w['weight'] as num).toDouble());
+    return sum / take.length;
+  }
+
+  double? _averageWithinWindow(
+      List<Map<String, dynamic>> entries, DateTime after, DateTime before) {
+    final window = entries.where((w) {
+      final d = w['date'] as DateTime;
+      return d.isAfter(after) && d.isBefore(before);
+    }).toList();
+    if (window.isEmpty) return null;
+    final sum = window.fold<double>(0, (s, w) => s + (w['weight'] as num).toDouble());
+    return sum / window.length;
+  }
 
   Widget _buildWeightCard(Map<String, dynamic> item) {
     final date = item['date'] as DateTime;
@@ -690,34 +722,20 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
   Widget build(BuildContext context) {
     final mostRecent = _weights.isNotEmpty ? _weights.first : null;
 
-    double? average3Day;
-    if (_weights.length >= 3) {
-      final recent3 = _weights.take(3).map((w) => w['weight'] as double);
-      average3Day = recent3.reduce((a, b) => a + b) / 3;
-    }
-
     final now = DateTime.now();
-    final last7Days = _weights.where((entry) {
-      final date = entry['date'] as DateTime;
-      return date.isBefore(now.add(const Duration(days: 1))) &&
-          date.isAfter(now.subtract(const Duration(days: 7)));
-    }).toList().reversed.toList();
+    final averageSourceWeights = _weightsForAverageSource();
 
-    final lastWeek = _weights.where((entry) {
-      final date = entry['date'] as DateTime;
-      return date.isBefore(now.subtract(const Duration(days: 7))) &&
-          date.isAfter(now.subtract(const Duration(days: 14)));
-    }).toList();
-
-    double? averageLast7;
-    if (last7Days.isNotEmpty) {
-      averageLast7 = last7Days.map((w) => w['weight'] as double).reduce((a, b) => a + b) / last7Days.length;
-    }
-
-    double? averagePrev7;
-    if (lastWeek.isNotEmpty) {
-      averagePrev7 = lastWeek.map((w) => w['weight'] as double).reduce((a, b) => a + b) / lastWeek.length;
-    }
+    final double? average3Day = _averageRecentEntries(averageSourceWeights, 3);
+    final double? averageLast7 = _averageWithinWindow(
+      averageSourceWeights,
+      now.subtract(const Duration(days: 7)),
+      now.add(const Duration(days: 1)),
+    );
+    final double? averagePrev7 = _averageWithinWindow(
+      averageSourceWeights,
+      now.subtract(const Duration(days: 14)),
+      now.subtract(const Duration(days: 7)),
+    );
 
     return Scaffold(
       appBar: AppBar(
@@ -840,16 +858,6 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
               ],
             ),
 
-            // toggle button or switch for showing 2nd weigh-in
-            TextButton(
-              onPressed: () {
-                setState(() => _showSecondWeighIn = !_showSecondWeighIn);
-              },
-              child: Text(
-                _showSecondWeighIn ? 'Hide 2nd weigh-in' : 'Add 2nd weigh-in',
-                style: const TextStyle(fontSize: 14),
-              ),
-            ),
 
             if (_showSecondWeighIn) ...[
               const SizedBox(height: 0),
@@ -931,64 +939,129 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                 }
 
                 // Decide which series to show
-                final showPm = _showSecondWeighIn && pm.length >= 2;
-                final hasAm = am.length >= 2;
-                if (!hasAm && !showPm) {
-                  return const SizedBox.shrink();
-                }
-
-                // Base series for x-axis labels
-                final baseSeries = hasAm ? am : pm;
-                final allY = <double>[
-                  ...am.map<double>((e) => e['weight'] as double),
-                  if (showPm) ...pm.map<double>((e) => e['weight'] as double),
-                ];
-                final double minY = (allY.isEmpty ? 0.0 : allY.reduce((a, b) => a < b ? a : b)) - 1;
-                final double maxY = (allY.isEmpty ? 0.0 : allY.reduce((a, b) => a > b ? a : b)) + 1;
-                final double maxX = (hasAm ? am.length - 1 : (showPm ? pm.length - 1 : 1)).toDouble();
+                final showPm = _showSecondWeighIn && pm.isNotEmpty;
+                final hasAm = am.isNotEmpty;
+                final hasData = hasAm || showPm;
 
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     const SizedBox(height: 20),
 
-                    // 🔹 Title doubles as toggle
-                    GestureDetector(
-                      onTap: () {
-                        setState(() {
-                          _trend = () {
-                            switch (_trend) {
-                              case TrendRange.d14:  return TrendRange.m30;
-                              case TrendRange.m30:  return TrendRange.m90;
-                              case TrendRange.m90:  return TrendRange.m180;
-                              case TrendRange.m180: return TrendRange.y365;
-                              case TrendRange.y365: return TrendRange.d14;
-                            }
-                          }();
-                        });
-                      },
-                      child: Text(
-                            () {
-                          switch (_trend) {
-                            case TrendRange.d14:  return '14-Day Trend';
-                            case TrendRange.m30:  return '1-Month Trend';
-                            case TrendRange.m90:  return '3-Month Trend';
-                            case TrendRange.m180: return '6-Month Trend';
-                            case TrendRange.y365: return '1-Year Trend';
-                          }
-                        }(),
-                        style: const TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold, // optional to show it's tappable
+                    // 🔹 Chart title row with 3-dot menu
+                    Row(
+                      children: [
+                        const SizedBox(width: 48),
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () {
+                              setState(() {
+                                _trend = () {
+                                  switch (_trend) {
+                                    case TrendRange.d14:  return TrendRange.m30;
+                                    case TrendRange.m30:  return TrendRange.m90;
+                                    case TrendRange.m90:  return TrendRange.m180;
+                                    case TrendRange.m180: return TrendRange.y365;
+                                    case TrendRange.y365: return TrendRange.d14;
+                                  }
+                                }();
+                              });
+                            },
+                            child: Text(
+                              () {
+                                switch (_trend) {
+                                  case TrendRange.d14:  return '14-Day Trend';
+                                  case TrendRange.m30:  return '1-Month Trend';
+                                  case TrendRange.m90:  return '3-Month Trend';
+                                  case TrendRange.m180: return '6-Month Trend';
+                                  case TrendRange.y365: return '1-Year Trend';
+                                }
+                              }(),
+                              style: const TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              textAlign: TextAlign.center,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
                         ),
-                        textAlign: TextAlign.center,
-                      ),
+                        SizedBox(
+                          width: 48,
+                          child: PopupMenuButton<String>(
+                            icon: const Icon(Icons.more_vert),
+                            onSelected: (value) {
+                              setState(() {
+                                switch (value) {
+                                  case 'toggle_second':
+                                    _showSecondWeighIn = !_showSecondWeighIn;
+                                    break;
+                                  case 'avg_am':
+                                    _averageSource = BodyWeightAverageSource.am;
+                                    break;
+                                  case 'avg_pm':
+                                    _averageSource = BodyWeightAverageSource.pm;
+                                    break;
+                                }
+                              });
+                            },
+                            itemBuilder: (_) => [
+                              PopupMenuItem<String>(
+                                value: 'toggle_second',
+                                child: Text(_showSecondWeighIn
+                                    ? 'Hide 2nd weigh-in'
+                                    : 'Add 2nd weigh-in'),
+                              ),
+                              PopupMenuItem<String>(
+                                value: 'avg_am',
+                                child: Row(
+                                  children: [
+                                    const Expanded(
+                                      child: Text('Use AM weigh-in for average'),
+                                    ),
+                                    if (_averageSource == BodyWeightAverageSource.am)
+                                      const Icon(Icons.check, size: 18),
+                                  ],
+                                ),
+                              ),
+                              PopupMenuItem<String>(
+                                value: 'avg_pm',
+                                child: Row(
+                                  children: [
+                                    const Expanded(
+                                      child: Text('Use PM weigh-in for average'),
+                                    ),
+                                    if (_averageSource == BodyWeightAverageSource.pm)
+                                      const Icon(Icons.check, size: 18),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
 
                     const SizedBox(height: 6),
 
-
-                    SizedBox(
+                    if (!hasData)
+                      const SizedBox(
+                        height: 200,
+                        child: Center(child: Text('No data for this range')),
+                      )
+                    else
+                    Builder(builder: (context) {
+                      final baseSeries = hasAm ? am : pm;
+                      final allY = <double>[
+                        ...am.map<double>((e) => e['weight'] as double),
+                        if (showPm) ...pm.map<double>((e) => e['weight'] as double),
+                      ];
+                      final double minY = allY.reduce((a, b) => a < b ? a : b) - 1;
+                      final double maxY = allY.reduce((a, b) => a > b ? a : b) + 1;
+                      final double rawMaxX = (hasAm ? am.length - 1 : pm.length - 1).toDouble();
+                      final double maxX = rawMaxX < 1.0 ? 1.0 : rawMaxX;
+                      return SizedBox(
                       height: 200,
                       child: LineChart(
                         LineChartData(
@@ -1070,7 +1143,15 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                                 ),
                                 barWidth: 2,
                                 color: Theme.of(context).colorScheme.primary, // AM
-                                dotData: FlDotData(show: true),
+                                dotData: FlDotData(
+                                  show: true,
+                                  getDotPainter: (spot, percent, bar, index) =>
+                                      FlDotCirclePainter(
+                                    radius: 2,
+                                    strokeWidth: 0,
+                                    color: Theme.of(context).colorScheme.primary,
+                                  ),
+                                ),
                               ),
                             if (showPm)
                               LineChartBarData(
@@ -1081,7 +1162,15 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                                 ),
                                 barWidth: 2,
                                 color: Colors.pinkAccent, // PM
-                                dotData: FlDotData(show: true),
+                                dotData: FlDotData(
+                                  show: true,
+                                  getDotPainter: (spot, percent, bar, index) =>
+                                      FlDotCirclePainter(
+                                    radius: 2,
+                                    strokeWidth: 0,
+                                    color: Colors.pinkAccent,
+                                  ),
+                                ),
                               ),
                           ],
 
@@ -1111,7 +1200,8 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                           ),
                         ),
                       ),
-                    ),
+                    );
+                    }),
 
                   ],
                 );
@@ -1156,7 +1246,7 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                         child: ListTile(
                           contentPadding: const EdgeInsets.all(12),
                           leading: const Icon(Icons.trending_up, color: Colors.green),
-                          title: Text(show3DayAverage ? '3-Day Avg' : '7-Day Avg'),
+                          title: Text(show3DayAverage ? '3-Day Avg ($_averageSourceLabel)' : '7-Day Avg ($_averageSourceLabel)'),
                           subtitle: Text(
                             show3DayAverage
                                 ? (average3Day != null ? '${average3Day.toStringAsFixed(1)} ${mostRecent['unit']}' : 'Not enough data')
@@ -1179,7 +1269,7 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   child: ListTile(
                     leading: const Icon(Icons.compare, color: Colors.cyan),
-                    title: const Text('Weekly Comparison'),
+                    title: Text('Weekly Comparison ($_averageSourceLabel)'),
                     subtitle: Text('This week: ${averageLast7!.toStringAsFixed(1)} kg\nLast week: ${averagePrev7!.toStringAsFixed(1)} kg'),
                   ),
                 ),

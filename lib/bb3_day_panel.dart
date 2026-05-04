@@ -623,10 +623,32 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
               ),
             ),
           ),
-          ...byExId.entries.map((entry) =>
-              _buildCompletedRow(theme, entry.key, entry.value)),
+          ...byExId.entries.map((entry) {
+            final stub = _completedOnlyStub(entry.key, entry.value);
+            return _buildExerciseCard(theme, stub, true);
+          }),
         ],
       ),
+    );
+  }
+
+  BB3Exercise _completedOnlyStub(
+    String exerciseId,
+    List<Map<String, dynamic>> completedEntries,
+  ) {
+    final name = (completedEntries.first['name'] ??
+            completedEntries.first['exercise'] ??
+            exerciseId)
+        .toString();
+    final maxSets = completedEntries
+        .map((e) => ((e['sets'] as List?)?.length ?? 0))
+        .fold(0, (a, b) => a > b ? a : b);
+    return BB3Exercise(
+      exerciseId: exerciseId,
+      name: name,
+      circuitIndex: 0,
+      orderIndex: 999,
+      sets: List.generate(maxSets, (_) => const BB3Set()),
     );
   }
 
@@ -1157,10 +1179,28 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     final rirCtrls = _rirCtrl[exId];
     final fns = _focusNodes[exId];
 
-    if (wCtrls == null ||
-        setIndex >= wCtrls.length ||
-        fns == null ||
-        setIndex * 3 + 2 >= fns.length) {
+    Map<String, dynamic>? completedSet;
+    if (locked) {
+      for (final comp in widget.completedExercises) {
+        final cId = (comp['exerciseId'] ?? comp['id'] ?? '').toString();
+        if (cId != exId) continue;
+        final sets = comp['sets'] as List?;
+        if (sets != null && setIndex < sets.length && sets[setIndex] is Map) {
+          completedSet = Map<String, dynamic>.from(sets[setIndex] as Map);
+        }
+      }
+    }
+
+    final bool controllersPresent = wCtrls != null &&
+        setIndex < wCtrls.length &&
+        fns != null &&
+        setIndex * 3 + 2 < fns.length;
+
+    if (!controllersPresent) {
+      if (locked && completedSet != null) {
+        return _buildLockedCompletedSetWidgets(
+            theme, ex, setIndex, completedSet, expandedMode: expandedMode);
+      }
       return [const SizedBox.shrink()];
     }
 
@@ -1202,19 +1242,6 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
       );
     } else {
       hint = const BB3SetHint();
-    }
-
-    Map<String, dynamic>? completedSet;
-    if (locked) {
-      for (final comp in widget.completedExercises) {
-        final cId = (comp['exerciseId'] ?? comp['id'] ?? '').toString();
-        if (cId != exId) continue;
-        final sets = comp['sets'] as List?;
-        if (sets != null && setIndex < sets.length && sets[setIndex] is Map) {
-          completedSet =
-              Map<String, dynamic>.from(sets[setIndex] as Map);
-        }
-      }
     }
 
     final double? dispW = userWeight ??
@@ -1388,6 +1415,70 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     ];
   }
 
+  List<Widget> _buildLockedCompletedSetWidgets(
+    ThemeData theme,
+    BB3Exercise ex,
+    int setIndex,
+    Map<String, dynamic> completedSet, {
+    required bool expandedMode,
+  }) {
+    final exId = ex.exerciseId;
+    final wWidth = expandedMode ? 60.0 : 55.0;
+    final rWidth = expandedMode ? 40.0 : 32.0;
+    const rirWidth = 41.0;
+    final e1rmWidth = expandedMode ? 48.0 : 41.0;
+    final velWidth = expandedMode ? 38.0 : 34.0;
+
+    final double? dispW = (completedSet['weight'] as num?)?.toDouble();
+    final double? dispR = (completedSet['reps'] as num?)?.toDouble();
+    final double dispRir = (completedSet['rir'] as num?)?.toDouble() ?? 0.0;
+    String e1rmLabel = '';
+    if (dispW != null && dispW > 0 && dispR != null && dispR > 0) {
+      final e1rm = PeriodizationModelUtils.calculateE1RM(dispW, dispR, dispRir);
+      if (e1rm > 0) e1rmLabel = _fmtNum(e1rm);
+    }
+    final String velValue = completedSet['velocity']?.toString() ?? '';
+
+    return [
+      _lockedReadOnlyCell(
+          theme: theme,
+          value: completedSet['weight']?.toString() ?? '',
+          label: 'kg',
+          width: wWidth),
+      const SizedBox(width: 3),
+      _lockedReadOnlyCell(
+          theme: theme,
+          value: completedSet['reps']?.toString() ?? '',
+          label: 'reps',
+          width: rWidth),
+      const SizedBox(width: 3),
+      _lockedReadOnlyCell(
+          theme: theme,
+          value: completedSet['rir']?.toString() ?? '',
+          label: 'RIR',
+          width: rirWidth),
+      const SizedBox(width: 1),
+      SizedBox(
+        width: e1rmWidth,
+        child: Text(
+          e1rmLabel,
+          textAlign: TextAlign.center,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+              fontSize: 10, color: Colors.white, fontStyle: FontStyle.italic),
+        ),
+      ),
+      const SizedBox(width: 1),
+      _lockedReadOnlyCell(
+          theme: theme, value: velValue, label: 'm/s', width: velWidth),
+      const SizedBox(width: 6),
+      GestureDetector(
+        onTap: () => _showSetNoteDialog(theme, exId, setIndex),
+        child: Icon(Icons.edit_note, size: 24, color: Colors.grey.shade100),
+      ),
+    ];
+  }
+
   Widget _fieldCell({
     required ThemeData theme,
     required TextEditingController ctrl,
@@ -1459,6 +1550,37 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
               color: theme.colorScheme.primary,
               width: 1,
             ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _lockedReadOnlyCell({
+    required ThemeData theme,
+    required String value,
+    required String label,
+    required double width,
+  }) {
+    final bool hasValue = value.isNotEmpty;
+    return SizedBox(
+      width: width,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.grey.shade800,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: Colors.grey.shade300, width: 0.5),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+        alignment: Alignment.center,
+        child: Text(
+          hasValue ? value : label,
+          textAlign: TextAlign.center,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.bodySmall?.copyWith(
+            fontSize: 11,
+            color: hasValue ? Colors.white : Colors.grey.shade300,
+            fontStyle: hasValue ? FontStyle.italic : null,
           ),
         ),
       ),

@@ -55,14 +55,14 @@ const ClaudeBulletSnapshotSchema = CollectionSchema(
   deserializeProp: _claudeBulletSnapshotDeserializeProp,
   idName: r'id',
   indexes: {
-    r'dateYmd': IndexSchema(
-      id: -1092129815763616414,
-      name: r'dateYmd',
+    r'uidDateKey': IndexSchema(
+      id: 7003331595625986062,
+      name: r'uidDateKey',
       unique: true,
       replace: true,
       properties: [
         IndexPropertySchema(
-          name: r'dateYmd',
+          name: r'uidDateKey',
           type: IndexType.hash,
           caseSensitive: true,
         )
@@ -165,58 +165,59 @@ void _claudeBulletSnapshotAttach(
 }
 
 extension ClaudeBulletSnapshotByIndex on IsarCollection<ClaudeBulletSnapshot> {
-  Future<ClaudeBulletSnapshot?> getByDateYmd(String dateYmd) {
-    return getByIndex(r'dateYmd', [dateYmd]);
+  Future<ClaudeBulletSnapshot?> getByUidDateKey(String uidDateKey) {
+    return getByIndex(r'uidDateKey', [uidDateKey]);
   }
 
-  ClaudeBulletSnapshot? getByDateYmdSync(String dateYmd) {
-    return getByIndexSync(r'dateYmd', [dateYmd]);
+  ClaudeBulletSnapshot? getByUidDateKeySync(String uidDateKey) {
+    return getByIndexSync(r'uidDateKey', [uidDateKey]);
   }
 
-  Future<bool> deleteByDateYmd(String dateYmd) {
-    return deleteByIndex(r'dateYmd', [dateYmd]);
+  Future<bool> deleteByUidDateKey(String uidDateKey) {
+    return deleteByIndex(r'uidDateKey', [uidDateKey]);
   }
 
-  bool deleteByDateYmdSync(String dateYmd) {
-    return deleteByIndexSync(r'dateYmd', [dateYmd]);
+  bool deleteByUidDateKeySync(String uidDateKey) {
+    return deleteByIndexSync(r'uidDateKey', [uidDateKey]);
   }
 
-  Future<List<ClaudeBulletSnapshot?>> getAllByDateYmd(
-      List<String> dateYmdValues) {
-    final values = dateYmdValues.map((e) => [e]).toList();
-    return getAllByIndex(r'dateYmd', values);
+  Future<List<ClaudeBulletSnapshot?>> getAllByUidDateKey(
+      List<String> uidDateKeyValues) {
+    final values = uidDateKeyValues.map((e) => [e]).toList();
+    return getAllByIndex(r'uidDateKey', values);
   }
 
-  List<ClaudeBulletSnapshot?> getAllByDateYmdSync(List<String> dateYmdValues) {
-    final values = dateYmdValues.map((e) => [e]).toList();
-    return getAllByIndexSync(r'dateYmd', values);
+  List<ClaudeBulletSnapshot?> getAllByUidDateKeySync(
+      List<String> uidDateKeyValues) {
+    final values = uidDateKeyValues.map((e) => [e]).toList();
+    return getAllByIndexSync(r'uidDateKey', values);
   }
 
-  Future<int> deleteAllByDateYmd(List<String> dateYmdValues) {
-    final values = dateYmdValues.map((e) => [e]).toList();
-    return deleteAllByIndex(r'dateYmd', values);
+  Future<int> deleteAllByUidDateKey(List<String> uidDateKeyValues) {
+    final values = uidDateKeyValues.map((e) => [e]).toList();
+    return deleteAllByIndex(r'uidDateKey', values);
   }
 
-  int deleteAllByDateYmdSync(List<String> dateYmdValues) {
-    final values = dateYmdValues.map((e) => [e]).toList();
-    return deleteAllByIndexSync(r'dateYmd', values);
+  int deleteAllByUidDateKeySync(List<String> uidDateKeyValues) {
+    final values = uidDateKeyValues.map((e) => [e]).toList();
+    return deleteAllByIndexSync(r'uidDateKey', values);
   }
 
-  Future<Id> putByDateYmd(ClaudeBulletSnapshot object) {
-    return putByIndex(r'dateYmd', object);
+  Future<Id> putByUidDateKey(ClaudeBulletSnapshot object) {
+    return putByIndex(r'uidDateKey', object);
   }
 
-  Id putByDateYmdSync(ClaudeBulletSnapshot object, {bool saveLinks = true}) {
-    return putByIndexSync(r'dateYmd', object, saveLinks: saveLinks);
+  Id putByUidDateKeySync(ClaudeBulletSnapshot object, {bool saveLinks = true}) {
+    return putByIndexSync(r'uidDateKey', object, saveLinks: saveLinks);
   }
 
-  Future<List<Id>> putAllByDateYmd(List<ClaudeBulletSnapshot> objects) {
-    return putAllByIndex(r'dateYmd', objects);
+  Future<List<Id>> putAllByUidDateKey(List<ClaudeBulletSnapshot> objects) {
+    return putAllByIndex(r'uidDateKey', objects);
   }
 
-  List<Id> putAllByDateYmdSync(List<ClaudeBulletSnapshot> objects,
+  List<Id> putAllByUidDateKeySync(List<ClaudeBulletSnapshot> objects,
       {bool saveLinks = true}) {
-    return putAllByIndexSync(r'dateYmd', objects, saveLinks: saveLinks);
+    return putAllByIndexSync(r'uidDateKey', objects, saveLinks: saveLinks);
   }
 }
 
@@ -301,44 +302,44 @@ extension ClaudeBulletSnapshotQueryWhere
   }
 
   QueryBuilder<ClaudeBulletSnapshot, ClaudeBulletSnapshot, QAfterWhereClause>
-      dateYmdEqualTo(String dateYmd) {
+      uidDateKeyEqualTo(String uidDateKey) {
     return QueryBuilder.apply(this, (query) {
       return query.addWhereClause(IndexWhereClause.equalTo(
-        indexName: r'dateYmd',
-        value: [dateYmd],
+        indexName: r'uidDateKey',
+        value: [uidDateKey],
       ));
     });
   }
 
   QueryBuilder<ClaudeBulletSnapshot, ClaudeBulletSnapshot, QAfterWhereClause>
-      dateYmdNotEqualTo(String dateYmd) {
+      uidDateKeyNotEqualTo(String uidDateKey) {
     return QueryBuilder.apply(this, (query) {
       if (query.whereSort == Sort.asc) {
         return query
             .addWhereClause(IndexWhereClause.between(
-              indexName: r'dateYmd',
+              indexName: r'uidDateKey',
               lower: [],
-              upper: [dateYmd],
+              upper: [uidDateKey],
               includeUpper: false,
             ))
             .addWhereClause(IndexWhereClause.between(
-              indexName: r'dateYmd',
-              lower: [dateYmd],
+              indexName: r'uidDateKey',
+              lower: [uidDateKey],
               includeLower: false,
               upper: [],
             ));
       } else {
         return query
             .addWhereClause(IndexWhereClause.between(
-              indexName: r'dateYmd',
-              lower: [dateYmd],
+              indexName: r'uidDateKey',
+              lower: [uidDateKey],
               includeLower: false,
               upper: [],
             ))
             .addWhereClause(IndexWhereClause.between(
-              indexName: r'dateYmd',
+              indexName: r'uidDateKey',
               lower: [],
-              upper: [dateYmd],
+              upper: [uidDateKey],
               includeUpper: false,
             ));
       }

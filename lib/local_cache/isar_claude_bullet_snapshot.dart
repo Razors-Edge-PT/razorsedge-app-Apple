@@ -18,8 +18,9 @@ class ClaudeBulletSnapshot {
   Id id = Isar.autoIncrement;
 
   /// "yyyy-MM-dd" of the workout day.
-  @Index(unique: true, replace: true)
   late String dateYmd;
+
+  @Index(unique: true, replace: true)
   late String uidDateKey;
 
   /// Epoch millis (UTC) of the last edit / save.
