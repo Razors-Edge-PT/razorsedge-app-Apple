@@ -216,6 +216,77 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     }).toList();
   }
 
+  /// Called when any set field loses focus. Parses the raw text and fires a
+  /// fire-and-forget Firestore field patch via [_saveFieldSilently].
+  void _onFieldUnfocused(
+    String exerciseId,
+    int setIndex,
+    Wes2FieldKey fieldKey,
+    String rawText,
+  ) {
+    final text = rawText.trim();
+    final dynamic value;
+    if (text.isEmpty) {
+      value = null; // blank → remove field from Firestore set map
+    } else {
+      value = _parseFieldValue(fieldKey, text);
+      if (value == null) return; // invalid non-empty → skip save
+    }
+    final rowIdx =
+        _controller.rows.indexWhere((r) => r.exerciseId == exerciseId);
+    if (rowIdx == -1) return;
+    final row = _controller.rows[rowIdx];
+    // ignore: discarded_futures
+    _saveFieldSilently(
+      uid: _controller.actingUid,
+      date: _controller.selectedDate,
+      row: row,
+      setIndex: setIndex,
+      fieldKey: fieldKey,
+      value: value,
+    );
+  }
+
+  /// Calls [_repository.saveFieldPatch] and silently swallows any error.
+  /// UI state and local draft are intentionally left intact on failure.
+  Future<void> _saveFieldSilently({
+    required String uid,
+    required DateTime date,
+    required Wes2ExerciseRow row,
+    required int setIndex,
+    required Wes2FieldKey fieldKey,
+    required dynamic value,
+  }) async {
+    try {
+      await _repository.saveFieldPatch(
+        uid: uid,
+        date: date,
+        row: row,
+        setIndex: setIndex,
+        fieldKey: fieldKey,
+        value: value,
+      );
+    } catch (_) {
+      // Silent failure for Phase 8.
+      // Retry queue and error indicator deferred to a future phase.
+    }
+  }
+
+  /// Parses [text] into the correct Dart type for [fieldKey].
+  /// Returns null if [text] cannot be parsed (invalid non-empty input).
+  static dynamic _parseFieldValue(Wes2FieldKey fieldKey, String text) {
+    switch (fieldKey) {
+      case Wes2FieldKey.weight:
+        return double.tryParse(text);
+      case Wes2FieldKey.reps:
+        return int.tryParse(text);
+      case Wes2FieldKey.rir:
+        return double.tryParse(text);
+      case Wes2FieldKey.velocity:
+        return double.tryParse(text);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider<Wes2SessionController>.value(
@@ -284,7 +355,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             );
             prevCi = row.circuitIndex;
           }
-          items.add(Wes2ExerciseCard(row: row));
+          items.add(Wes2ExerciseCard(
+            row: row,
+            onFieldUnfocused: _onFieldUnfocused,
+          ));
         }
 
         return Column(

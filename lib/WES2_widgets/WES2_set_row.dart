@@ -64,12 +64,14 @@ class Wes2SetRow extends StatefulWidget {
   final Wes2SetState set;
   final bool showVelocity;
   final void Function(Wes2FieldKey fieldKey, String rawText) onFieldChanged;
+  final void Function(Wes2FieldKey fieldKey, String rawText) onFieldUnfocused;
 
   const Wes2SetRow({
     super.key,
     required this.set,
     required this.showVelocity,
     required this.onFieldChanged,
+    required this.onFieldUnfocused,
   });
 
   @override
@@ -114,10 +116,34 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
     _velocityCtrl = TextEditingController(
       text: _fromActual(widget.set.velocity, _fmtDouble),
     );
-    _weightFocus = FocusNode();
-    _repsFocus = FocusNode();
-    _rirFocus = FocusNode();
-    _velocityFocus = FocusNode();
+    _weightFocus = FocusNode()..addListener(_onWeightFocusChange);
+    _repsFocus = FocusNode()..addListener(_onRepsFocusChange);
+    _rirFocus = FocusNode()..addListener(_onRirFocusChange);
+    _velocityFocus = FocusNode()..addListener(_onVelocityFocusChange);
+  }
+
+  void _onWeightFocusChange() {
+    if (!_weightFocus.hasFocus) {
+      widget.onFieldUnfocused(Wes2FieldKey.weight, _weightCtrl.text);
+    }
+  }
+
+  void _onRepsFocusChange() {
+    if (!_repsFocus.hasFocus) {
+      widget.onFieldUnfocused(Wes2FieldKey.reps, _repsCtrl.text);
+    }
+  }
+
+  void _onRirFocusChange() {
+    if (!_rirFocus.hasFocus) {
+      widget.onFieldUnfocused(Wes2FieldKey.rir, _rirCtrl.text);
+    }
+  }
+
+  void _onVelocityFocusChange() {
+    if (!_velocityFocus.hasFocus) {
+      widget.onFieldUnfocused(Wes2FieldKey.velocity, _velocityCtrl.text);
+    }
   }
 
   @override
@@ -168,6 +194,11 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
 
   @override
   void dispose() {
+    // Remove listeners before disposing FocusNodes.
+    _weightFocus.removeListener(_onWeightFocusChange);
+    _repsFocus.removeListener(_onRepsFocusChange);
+    _rirFocus.removeListener(_onRirFocusChange);
+    _velocityFocus.removeListener(_onVelocityFocusChange);
     _weightCtrl.dispose();
     _repsCtrl.dispose();
     _rirCtrl.dispose();

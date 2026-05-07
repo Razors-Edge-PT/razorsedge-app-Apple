@@ -23,14 +23,16 @@ abstract class Wes2Repository {
     required List<Wes2ExerciseRow> plannedRows,
   });
 
-  /// Granular field-level save on unfocus. Uses merge/transaction strategy
-  /// so one device field edit does not wipe another device's unrelated field.
+  /// Granular field-level save on unfocus. Uses a Firestore transaction so
+  /// one device's field edit never wipes another device's unrelated fields.
+  /// [row] supplies full row context for create/promote paths.
+  /// [value] is the parsed actual value, or null to remove the field.
   Future<void> saveFieldPatch({
     required String uid,
     required DateTime date,
-    required String exerciseId,
+    required Wes2ExerciseRow row,
     required int setIndex,
-    required String fieldKey,
+    required Wes2FieldKey fieldKey,
     required dynamic value,
   });
 
@@ -44,7 +46,8 @@ abstract class Wes2Repository {
 }
 
 /// Concrete Firestore implementation.
-/// Phase 3: loadDay only. Write methods throw UnimplementedError until Phase 5.
+/// Phase 3: loadDay only. saveFieldPatch implemented in Phase 8.
+/// Other write methods throw UnimplementedError until a later phase.
 class FirestoreWes2Repository implements Wes2Repository {
   @override
   Future<List<Wes2ExerciseRow>> loadDay({
@@ -62,8 +65,7 @@ class FirestoreWes2Repository implements Wes2Repository {
     final data = snap.data();
     if (data == null) return const [];
 
-    final exercises =
-        (data['exercises'] as List<dynamic>?) ?? const [];
+    final exercises = (data['exercises'] as List<dynamic>?) ?? const [];
     final wesPlanned =
         (data['wesPlannedExercises'] as List<dynamic>?) ?? const [];
 
@@ -104,12 +106,10 @@ class FirestoreWes2Repository implements Wes2Repository {
     if (exerciseId.isEmpty) return null;
 
     final rawName = raw['name'] as String?;
-    final name =
-        (rawName != null && rawName.isNotEmpty) ? rawName : exerciseId;
+    final name = (rawName != null && rawName.isNotEmpty) ? rawName : exerciseId;
 
     final circuitIndex = (raw['circuitIndex'] as num?)?.toInt() ?? 0;
-    final orderIndex =
-        (raw['orderIndex'] as num?)?.toInt() ?? fallbackOrder;
+    final orderIndex = (raw['orderIndex'] as num?)?.toInt() ?? fallbackOrder;
     final storedSetCount = (raw['setCount'] as num?)?.toInt() ?? 0;
     final isMarkedDone = (raw['isMarkedDone'] as bool?) ?? false;
 
@@ -167,7 +167,190 @@ class FirestoreWes2Repository implements Wes2Repository {
       '${d.month.toString().padLeft(2, '0')}-'
       '${d.day.toString().padLeft(2, '0')}';
 
-  // ── Write stubs (Phase 5+) ────────────────────────────────────────────────
+  // ── saveFieldPatch (Phase 8) ───────────────────────────────────────────────
+
+  /// Runs a Firestore transaction to patch a single field on a single set of
+  /// a single exercise row, preserving all unrelated rows/sets/fields.
+  ///
+  /// Decision table (exerciseId location → action):
+  ///   exercises[]       → surgical single-field patch of existing row
+  ///   wesPlanned, null  → patch wesPlanned in place (keep blank row)
+  ///   wesPlanned, !null → promote row to exercises[], rebuild from [row]
+  ///   neither,   !null  → create new row in exercises[], built from [row]
+  ///   neither,   null   → no-op (nothing to clear)
+  ///
+  /// Errors are NOT caught here; the caller wraps in a silent-catch helper.
+  @override
+  Future<void> saveFieldPatch({
+    required String uid,
+    required DateTime date,
+    required Wes2ExerciseRow row,
+    required int setIndex,
+    required Wes2FieldKey fieldKey,
+    required dynamic value,
+  }) async {
+    final docRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('workouts')
+        .doc(_dateDocId(date));
+
+    await FirebaseFirestore.instance.runTransaction((txn) async {
+      final snap = await txn.get(docRef);
+      final data = snap.exists
+          ? (snap.data() ?? <String, dynamic>{})
+          : <String, dynamic>{};
+
+      // Defensive copy — we mutate these lists during the transaction.
+      final exercises = (data['exercises'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+      final wesPlanned = (data['wesPlannedExercises'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+
+      final exerciseId = row.exerciseId;
+      final exIdx = exercises.indexWhere((m) => m['exerciseId'] == exerciseId);
+      final wpIdx = wesPlanned.indexWhere((m) => m['exerciseId'] == exerciseId);
+
+      if (exIdx != -1) {
+        // Surgical patch of the one field — preserves all other fields/sets.
+        exercises[exIdx] =
+            _patchSetInRow(exercises[exIdx], setIndex, fieldKey, value);
+      } else if (wpIdx != -1) {
+        if (value == null) {
+          // Clearing a field on a wesPlanned-only row — patch in place.
+          wesPlanned[wpIdx] =
+              _patchSetInRow(wesPlanned[wpIdx], setIndex, fieldKey, value);
+        } else {
+          // Real value typed → promote row to exercises[] using in-memory state.
+          exercises.add(_buildRowMap(row));
+          wesPlanned.removeAt(wpIdx);
+        }
+      } else if (value != null) {
+        // BB3 or new row not yet in the workout doc → create in exercises[].
+        exercises.add(_buildRowMap(row));
+      }
+      // value == null and row not found → no-op (nothing to clear).
+
+      txn.set(
+        docRef,
+        {
+          'userId': uid,
+          'date': _dateDocId(date),
+          'lastEditedAt': FieldValue.serverTimestamp(),
+          'exercises': exercises,
+          'wesPlannedExercises': wesPlanned,
+        },
+        SetOptions(merge: true),
+      );
+    });
+  }
+
+  // ── saveFieldPatch helpers ─────────────────────────────────────────────────
+
+  /// Patches one field on one set inside an existing Firestore row map.
+  /// Locates the set by stored setIndex key (preferred) or array index
+  /// (fallback for legacy sets that lack a setIndex field).
+  /// Preserves all other fields in the set map and in the row map.
+  static Map<String, dynamic> _patchSetInRow(
+    Map<String, dynamic> rowMap,
+    int setIndex,
+    Wes2FieldKey fieldKey,
+    dynamic value,
+  ) {
+    final result = Map<String, dynamic>.from(rowMap);
+    final rawSets = ((result['sets'] as List<dynamic>?) ?? [])
+        .map((s) => s is Map<String, dynamic>
+            ? Map<String, dynamic>.from(s)
+            : <String, dynamic>{})
+        .toList();
+
+    // Locate target set: prefer stored setIndex key; fall back to array index
+    // for legacy WES sets that were written without a setIndex field.
+    int? arrayPos;
+    for (int i = 0; i < rawSets.length; i++) {
+      final stored = (rawSets[i]['setIndex'] as num?)?.toInt();
+      if (stored != null) {
+        if (stored == setIndex) {
+          arrayPos = i;
+          break;
+        }
+      } else {
+        // Legacy: no setIndex key — array position IS the set identity.
+        if (i == setIndex) {
+          arrayPos = i;
+          break;
+        }
+      }
+    }
+
+    if (arrayPos != null) {
+      rawSets[arrayPos] =
+          _applyFieldToSetMap(rawSets[arrayPos], fieldKey, value);
+    } else if (value != null) {
+      // New set index not yet in Firestore — pad and insert at correct position.
+      while (rawSets.length <= setIndex) {
+        rawSets.add(<String, dynamic>{'setIndex': rawSets.length});
+      }
+      rawSets[setIndex] =
+          _applyFieldToSetMap(rawSets[setIndex], fieldKey, value);
+    }
+    // value == null and set not found → no-op.
+
+    // setCount is only ever increased, never decreased.
+    final existingCount = (result['setCount'] as num?)?.toInt() ?? 0;
+    result['setCount'] =
+        (setIndex + 1) > existingCount ? (setIndex + 1) : existingCount;
+    result['sets'] = rawSets;
+    return result;
+  }
+
+  /// Sets or removes [fieldKey] in a set map copy; all other keys are kept.
+  /// null value → removes the key (no empty/zero/null stored in Firestore).
+  static Map<String, dynamic> _applyFieldToSetMap(
+    Map<String, dynamic> setMap,
+    Wes2FieldKey fieldKey,
+    dynamic value,
+  ) {
+    final result = Map<String, dynamic>.from(setMap);
+    if (value == null) {
+      result.remove(fieldKey.name);
+    } else {
+      result[fieldKey.name] = value;
+    }
+    return result;
+  }
+
+  /// Serialises the full in-memory [row] to a Firestore row map.
+  /// Only actualValues are written — hintValues are never persisted as actuals.
+  /// Used for create (BB3/new row) and promote (wesPlanned → exercises) paths.
+  static Map<String, dynamic> _buildRowMap(Wes2ExerciseRow row) {
+    final sets = <Map<String, dynamic>>[];
+    for (final s in row.sets) {
+      final setMap = <String, dynamic>{'setIndex': s.setIndex};
+      if (s.weight.actualValue != null) setMap['weight'] = s.weight.actualValue;
+      if (s.reps.actualValue != null) setMap['reps'] = s.reps.actualValue;
+      if (s.rir.actualValue != null) setMap['rir'] = s.rir.actualValue;
+      if (s.velocity.actualValue != null) {
+        setMap['velocity'] = s.velocity.actualValue;
+      }
+      sets.add(setMap);
+    }
+    return {
+      'exerciseId': row.exerciseId,
+      'name': row.name,
+      'circuitIndex': row.circuitIndex,
+      'orderIndex': row.orderIndex,
+      'setCount': row.setCount,
+      'isMarkedDone': false,
+      'sets': sets,
+    };
+  }
+
+  // ── Write stubs (future phases) ───────────────────────────────────────────
 
   @override
   Future<void> saveCompletedRows({
@@ -175,7 +358,7 @@ class FirestoreWes2Repository implements Wes2Repository {
     required DateTime date,
     required List<Wes2ExerciseRow> completedRows,
   }) =>
-      throw UnimplementedError('saveCompletedRows not implemented until Phase 5');
+      throw UnimplementedError('saveCompletedRows not implemented yet');
 
   @override
   Future<void> savePlannedRows({
@@ -183,18 +366,7 @@ class FirestoreWes2Repository implements Wes2Repository {
     required DateTime date,
     required List<Wes2ExerciseRow> plannedRows,
   }) =>
-      throw UnimplementedError('savePlannedRows not implemented until Phase 5');
-
-  @override
-  Future<void> saveFieldPatch({
-    required String uid,
-    required DateTime date,
-    required String exerciseId,
-    required int setIndex,
-    required String fieldKey,
-    required dynamic value,
-  }) =>
-      throw UnimplementedError('saveFieldPatch not implemented until Phase 5');
+      throw UnimplementedError('savePlannedRows not implemented yet');
 
   @override
   Future<void> setMarkedDone({
@@ -203,5 +375,5 @@ class FirestoreWes2Repository implements Wes2Repository {
     required String exerciseId,
     required bool isDone,
   }) =>
-      throw UnimplementedError('setMarkedDone not implemented until Phase 5');
+      throw UnimplementedError('setMarkedDone not implemented yet');
 }

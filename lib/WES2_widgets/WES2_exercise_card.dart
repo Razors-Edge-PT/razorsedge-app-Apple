@@ -15,8 +15,18 @@ const _kBb3LabelColor = Color(0xFF78909C); // blueGrey.shade400
 /// behavior is implemented until Phase 5 write path.
 class Wes2ExerciseCard extends StatelessWidget {
   final Wes2ExerciseRow row;
+  final void Function(
+    String exerciseId,
+    int setIndex,
+    Wes2FieldKey fieldKey,
+    String rawText,
+  ) onFieldUnfocused;
 
-  const Wes2ExerciseCard({super.key, required this.row});
+  const Wes2ExerciseCard({
+    super.key,
+    required this.row,
+    required this.onFieldUnfocused,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -142,6 +152,12 @@ class Wes2ExerciseCard extends StatelessWidget {
                         setIndex: s.setIndex,
                         fieldKey: fieldKey,
                         rawText: rawText,
+                      ),
+                      onFieldUnfocused: (fieldKey, rawText) => onFieldUnfocused(
+                        row.exerciseId,
+                        s.setIndex,
+                        fieldKey,
+                        rawText,
                       ),
                     );
                   }),
