@@ -35,12 +35,16 @@ class Wes2TopActionsBar extends StatelessWidget {
 }
 
 /// Bottom action row: read-only summary label + "Add Circuit" button + 55px spacer.
-/// "Add Circuit" is inactive in Phase 5 — structural add not yet implemented.
 class Wes2BottomActionsRow extends StatelessWidget {
   /// Total sets with any actual (logged) value across all exercise rows.
   final int setsLogged;
+  final void Function() onAddCircuit;
 
-  const Wes2BottomActionsRow({super.key, required this.setsLogged});
+  const Wes2BottomActionsRow({
+    super.key,
+    required this.setsLogged,
+    required this.onAddCircuit,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -73,8 +77,7 @@ class Wes2BottomActionsRow extends StatelessWidget {
                   backgroundColor: Theme.of(context).colorScheme.secondary,
                   foregroundColor: Theme.of(context).colorScheme.tertiary,
                 ),
-                onPressed:
-                    null, // inactive — structural add not yet implemented
+                onPressed: onAddCircuit,
               ),
             ],
           ),

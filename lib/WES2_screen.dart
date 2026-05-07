@@ -508,7 +508,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         return Column(
           children: [
             Expanded(child: ListView(children: items)),
-            Wes2BottomActionsRow(setsLogged: setsLogged),
+            Wes2BottomActionsRow(
+              setsLogged: setsLogged,
+              onAddCircuit: _onAddCircuit,
+            ),
           ],
         );
       case Wes2LoadState.error:
@@ -517,6 +520,55 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   }
 
   // ── Add Exercise (Phase 11) ───────────────────────────────────────────────
+
+  // ── Add Circuit (Phase 12b) ───────────────────────────────────────────────
+
+  Future<void> _onAddCircuit() async {
+    if (_controller.loadState != Wes2LoadState.loaded) return;
+
+    final nextCircuitIndex = _controller.rows.fold(
+          -1,
+          (int m, Wes2ExerciseRow r) => r.circuitIndex > m ? r.circuitIndex : m,
+        ) +
+        1;
+
+    final excludedIds = _controller.rows.map((r) => r.exerciseId).toSet();
+    final result =
+        await showModalBottomSheet<({String exerciseId, String name})>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => Wes2ExercisePicker(
+        excludedIds: excludedIds,
+        actingUid: _controller.actingUid,
+        activeBlockId: _controller.activeBlockId,
+        title: 'Add Exercise to Circuit ${nextCircuitIndex + 1}',
+      ),
+    );
+    if (result == null) return;
+
+    final added = _controller.addExercise(
+      result.exerciseId,
+      result.name,
+      circuitIndex: nextCircuitIndex,
+    );
+    if (!added) return;
+
+    _saveDraftNow();
+
+    if (_controller.loadState == Wes2LoadState.loaded) {
+      final rowIdx =
+          _controller.rows.indexWhere((r) => r.exerciseId == result.exerciseId);
+      if (rowIdx != -1) {
+        // ignore: discarded_futures
+        _saveManualExerciseSilently(
+          uid: _controller.actingUid,
+          date: _controller.selectedDate,
+          row: _controller.rows[rowIdx],
+        );
+      }
+    }
+  }
 
   Future<void> _onAddExercise() async {
     final excludedIds = _controller.rows.map((r) => r.exerciseId).toSet();

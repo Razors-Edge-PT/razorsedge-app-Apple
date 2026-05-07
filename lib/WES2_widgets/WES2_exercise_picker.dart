@@ -14,12 +14,14 @@ class Wes2ExercisePicker extends StatefulWidget {
   final Set<String> excludedIds;
   final String actingUid;
   final String? activeBlockId;
+  final String title;
 
   const Wes2ExercisePicker({
     super.key,
     required this.excludedIds,
     required this.actingUid,
     required this.activeBlockId,
+    this.title = 'Add Exercise',
   });
 
   @override
@@ -103,8 +105,7 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
           .get();
       if (!mounted) return;
       final data = doc.data();
-      final settings =
-          data?['exerciseSettings'] as Map<String, dynamic>? ?? {};
+      final settings = data?['exerciseSettings'] as Map<String, dynamic>? ?? {};
       setState(() {
         _plannedIds = settings.keys.toSet();
         _showPlannedOnly = _plannedIds.isNotEmpty;
@@ -148,11 +149,9 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
       }
     }
     for (final list in map.values) {
-      list.sort((a, b) =>
-          ((a.data()['name'] as String?) ?? '')
-              .toLowerCase()
-              .compareTo(
-                  ((b.data()['name'] as String?) ?? '').toLowerCase()));
+      list.sort((a, b) => ((a.data()['name'] as String?) ?? '')
+          .toLowerCase()
+          .compareTo(((b.data()['name'] as String?) ?? '').toLowerCase()));
     }
     map.removeWhere((_, list) => list.isEmpty);
     return map;
@@ -181,9 +180,9 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Row(
               children: [
-                const Text(
-                  'Add Exercise',
-                  style: TextStyle(
+                Text(
+                  widget.title,
+                  style: const TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
                   ),
@@ -260,11 +259,9 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
     }
     if (_query.isNotEmpty) {
       final sorted = List.of(docs)
-        ..sort((a, b) =>
-            ((a.data()['name'] as String?) ?? '')
-                .toLowerCase()
-                .compareTo(
-                    ((b.data()['name'] as String?) ?? '').toLowerCase()));
+        ..sort((a, b) => ((a.data()['name'] as String?) ?? '')
+            .toLowerCase()
+            .compareTo(((b.data()['name'] as String?) ?? '').toLowerCase()));
       return ListView.builder(
         controller: scrollCtrl,
         itemCount: sorted.length,
@@ -329,8 +326,7 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
     return ListTile(
       title: Text(name, style: const TextStyle(fontSize: 14)),
       dense: true,
-      onTap: () =>
-          Navigator.of(context).pop((exerciseId: doc.id, name: name)),
+      onTap: () => Navigator.of(context).pop((exerciseId: doc.id, name: name)),
     );
   }
 }

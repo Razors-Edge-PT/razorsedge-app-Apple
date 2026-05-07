@@ -247,7 +247,7 @@ class Wes2SessionController extends ChangeNotifier {
   /// Adds a new blank wes2Manual exercise row in memory.
   /// Returns false if [exerciseId] is already present — caller skips silently.
   /// If the day is still loading, queues the add for [setRows] to flush.
-  bool addExercise(String exerciseId, String name) {
+  bool addExercise(String exerciseId, String name, {int circuitIndex = 0}) {
     if (_rows.any((r) => r.exerciseId == exerciseId)) return false;
     if (_loadState == Wes2LoadState.loading ||
         _loadState == Wes2LoadState.idle) {
@@ -257,19 +257,20 @@ class Wes2SessionController extends ChangeNotifier {
       }
       return true;
     }
-    _doAddExercise(exerciseId, name);
+    _doAddExercise(exerciseId, name, circuitIndex: circuitIndex);
     notifyListeners();
     return true;
   }
 
-  Wes2ExerciseRow _doAddExercise(String exerciseId, String name) {
+  Wes2ExerciseRow _doAddExercise(String exerciseId, String name,
+      {int circuitIndex = 0}) {
     final nextOrder = _rows.isEmpty
         ? 0
         : _rows.map((r) => r.orderIndex).reduce((a, b) => a > b ? a : b) + 1;
     final newRow = Wes2ExerciseRow(
       exerciseId: exerciseId,
       name: name,
-      circuitIndex: 0,
+      circuitIndex: circuitIndex,
       orderIndex: nextOrder,
       setCount: 3,
       sets: const [],
