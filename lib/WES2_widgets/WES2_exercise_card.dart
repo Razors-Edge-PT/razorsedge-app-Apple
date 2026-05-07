@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../WES2_controller.dart';
 import '../WES2_models.dart';
 import '../exercise_video_button.dart';
 import 'WES2_set_row.dart';
@@ -125,9 +127,24 @@ class Wes2ExerciseCard extends StatelessWidget {
                 children: [
                   const SizedBox(height: 2),
                   Wes2SetColumnHeaders(showVelocity: showVelocity),
-                  ...paddedSets.map(
-                    (s) => Wes2SetRow(set: s, showVelocity: showVelocity),
-                  ),
+                  ...paddedSets.map((s) {
+                    final wes2Ctrl = Provider.of<Wes2SessionController>(
+                      context,
+                      listen: false,
+                    );
+                    return Wes2SetRow(
+                      key: ValueKey('${row.exerciseId}_${s.setIndex}'),
+                      set: s,
+                      showVelocity: showVelocity,
+                      onFieldChanged: (fieldKey, rawText) =>
+                          wes2Ctrl.updateSetField(
+                        exerciseId: row.exerciseId,
+                        setIndex: s.setIndex,
+                        fieldKey: fieldKey,
+                        rawText: rawText,
+                      ),
+                    );
+                  }),
                 ],
               ),
             ),

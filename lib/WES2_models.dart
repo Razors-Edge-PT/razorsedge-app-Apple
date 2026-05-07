@@ -18,6 +18,8 @@ enum FieldOrigin {
   localDraft,
 }
 
+enum Wes2FieldKey { weight, reps, rir, velocity }
+
 /// Holds both the user-entered actual value and the computed hint for a
 /// single field. Identity: date + exerciseId + setIndex + fieldKey.
 class Wes2FieldState<T> {
@@ -130,8 +132,8 @@ class Wes2ExerciseRow {
       sets.any((s) => s.weight.hasActual && s.reps.hasActual);
 
   /// WES2 "Completed?" pill eligibility: weight + reps + RIR in at least one set.
-  bool get isCompletedPillEligible =>
-      sets.any((s) => s.weight.hasActual && s.reps.hasActual && s.rir.hasActual);
+  bool get isCompletedPillEligible => sets
+      .any((s) => s.weight.hasActual && s.reps.hasActual && s.rir.hasActual);
 
   /// True if any set carries a user-entered value (exercises[] rather than
   /// wesPlannedExercises[]).

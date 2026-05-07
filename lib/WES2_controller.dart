@@ -120,4 +120,78 @@ class Wes2SessionController extends ChangeNotifier {
     if (_undoStack.length > 50) _undoStack.removeAt(0);
   }
 
+  // ── Field edits (Phase 6) ─────────────────────────────────────────────────
+
+  /// Updates a single set field in local state only. No Firestore write.
+  /// blank → clears actualValue (reveals hint)
+  /// valid → updates actualValue
+  /// invalid non-empty → no-op (model unchanged, no notifyListeners)
+  void updateSetField({
+    required String exerciseId,
+    required int setIndex,
+    required Wes2FieldKey fieldKey,
+    required String rawText,
+  }) {
+    final text = rawText.trim();
+    if (text.isNotEmpty && !_canParse(fieldKey, text)) return;
+
+    final rowIdx = _rows.indexWhere((r) => r.exerciseId == exerciseId);
+    if (rowIdx == -1) return;
+    final row = _rows[rowIdx];
+    final sets = List<Wes2SetState>.from(row.sets);
+    while (sets.length <= setIndex) {
+      sets.add(Wes2SetState(setIndex: sets.length));
+    }
+    sets[setIndex] = _applyFieldUpdate(sets[setIndex], fieldKey, text);
+    final newRows = List<Wes2ExerciseRow>.from(_rows);
+    newRows[rowIdx] = row.copyWith(sets: sets);
+    _rows = newRows;
+    notifyListeners();
+  }
+
+  static bool _canParse(Wes2FieldKey key, String text) {
+    switch (key) {
+      case Wes2FieldKey.weight:
+        return double.tryParse(text) != null;
+      case Wes2FieldKey.reps:
+        return int.tryParse(text) != null;
+      case Wes2FieldKey.rir:
+        return double.tryParse(text) != null;
+      case Wes2FieldKey.velocity:
+        return double.tryParse(text) != null;
+    }
+  }
+
+  static Wes2SetState _applyFieldUpdate(
+    Wes2SetState set,
+    Wes2FieldKey key,
+    String text,
+  ) {
+    switch (key) {
+      case Wes2FieldKey.weight:
+        return set.copyWith(
+          weight: set.weight.withActual(
+            text.isEmpty ? null : double.tryParse(text),
+          ),
+        );
+      case Wes2FieldKey.reps:
+        return set.copyWith(
+          reps: set.reps.withActual(
+            text.isEmpty ? null : int.tryParse(text),
+          ),
+        );
+      case Wes2FieldKey.rir:
+        return set.copyWith(
+          rir: set.rir.withActual(
+            text.isEmpty ? null : double.tryParse(text),
+          ),
+        );
+      case Wes2FieldKey.velocity:
+        return set.copyWith(
+          velocity: set.velocity.withActual(
+            text.isEmpty ? null : double.tryParse(text),
+          ),
+        );
+    }
+  }
 }
