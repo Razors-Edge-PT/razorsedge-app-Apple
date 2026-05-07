@@ -66,6 +66,31 @@ abstract class Wes2Repository {
     required DateTime date,
     required Wes2ExerciseRow row,
   });
+
+  /// Remove an exercise from both exercises[] and wesPlannedExercises[].
+  Future<void> deleteExercise({
+    required String uid,
+    required DateTime date,
+    required String exerciseId,
+  });
+
+  /// Replace an exercise in-place (both arrays). Clears sets for the new entry.
+  /// Replaces in exercises[] if present there; otherwise in wesPlannedExercises[].
+  Future<void> replaceExercise({
+    required String uid,
+    required DateTime date,
+    required String oldExerciseId,
+    required String newExerciseId,
+    required String newName,
+  });
+
+  /// Update circuitIndex for an exercise in both arrays.
+  Future<void> moveExerciseToCircuit({
+    required String uid,
+    required DateTime date,
+    required String exerciseId,
+    required int targetCircuitIndex,
+  });
 }
 
 /// Concrete Firestore implementation.
@@ -575,6 +600,176 @@ class FirestoreWes2Repository implements Wes2Repository {
       if (alreadyExists) return; // server-side duplicate guard
 
       wesPlanned.add(_buildWesPlannedRowMap(row));
+
+      txn.set(
+        docRef,
+        {
+          'userId': uid,
+          'date': _dateDocId(date),
+          'lastEditedAt': FieldValue.serverTimestamp(),
+          'exercises': exercises,
+          'wesPlannedExercises': wesPlanned,
+        },
+        SetOptions(merge: true),
+      );
+    });
+  }
+
+  // ── deleteExercise (Phase 13) ─────────────────────────────────────────────
+
+  @override
+  Future<void> deleteExercise({
+    required String uid,
+    required DateTime date,
+    required String exerciseId,
+  }) async {
+    final docRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('workouts')
+        .doc(_dateDocId(date));
+
+    await FirebaseFirestore.instance.runTransaction((txn) async {
+      final snap = await txn.get(docRef);
+      if (!snap.exists) return;
+      final data = snap.data() ?? <String, dynamic>{};
+
+      final exercises = (data['exercises'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+      final wesPlanned = (data['wesPlannedExercises'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+
+      exercises.removeWhere((m) => m['exerciseId'] == exerciseId);
+      wesPlanned.removeWhere((m) => m['exerciseId'] == exerciseId);
+
+      txn.set(
+        docRef,
+        {
+          'userId': uid,
+          'date': _dateDocId(date),
+          'lastEditedAt': FieldValue.serverTimestamp(),
+          'exercises': exercises,
+          'wesPlannedExercises': wesPlanned,
+        },
+        SetOptions(merge: true),
+      );
+    });
+  }
+
+  // ── replaceExercise (Phase 13) ────────────────────────────────────────────
+
+  @override
+  Future<void> replaceExercise({
+    required String uid,
+    required DateTime date,
+    required String oldExerciseId,
+    required String newExerciseId,
+    required String newName,
+  }) async {
+    final docRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('workouts')
+        .doc(_dateDocId(date));
+
+    await FirebaseFirestore.instance.runTransaction((txn) async {
+      final snap = await txn.get(docRef);
+      if (!snap.exists) return;
+      final data = snap.data() ?? <String, dynamic>{};
+
+      final exercises = (data['exercises'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+      final wesPlanned = (data['wesPlannedExercises'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+
+      final exIdx =
+          exercises.indexWhere((m) => m['exerciseId'] == oldExerciseId);
+      final wpIdx =
+          wesPlanned.indexWhere((m) => m['exerciseId'] == oldExerciseId);
+
+      if (exIdx != -1) {
+        final old = exercises[exIdx];
+        exercises[exIdx] = {
+          'exerciseId': newExerciseId,
+          'name': newName,
+          'circuitIndex': old['circuitIndex'],
+          'orderIndex': old['orderIndex'],
+          'setCount': old['setCount'],
+          'sets': <Map<String, dynamic>>[],
+        };
+      } else if (wpIdx != -1) {
+        final old = wesPlanned[wpIdx];
+        wesPlanned[wpIdx] = {
+          'exerciseId': newExerciseId,
+          'name': newName,
+          'circuitIndex': old['circuitIndex'],
+          'orderIndex': old['orderIndex'],
+          'setCount': old['setCount'],
+          'sets': <Map<String, dynamic>>[],
+        };
+      }
+
+      txn.set(
+        docRef,
+        {
+          'userId': uid,
+          'date': _dateDocId(date),
+          'lastEditedAt': FieldValue.serverTimestamp(),
+          'exercises': exercises,
+          'wesPlannedExercises': wesPlanned,
+        },
+        SetOptions(merge: true),
+      );
+    });
+  }
+
+  // ── moveExerciseToCircuit (Phase 13) ──────────────────────────────────────
+
+  @override
+  Future<void> moveExerciseToCircuit({
+    required String uid,
+    required DateTime date,
+    required String exerciseId,
+    required int targetCircuitIndex,
+  }) async {
+    final docRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('workouts')
+        .doc(_dateDocId(date));
+
+    await FirebaseFirestore.instance.runTransaction((txn) async {
+      final snap = await txn.get(docRef);
+      if (!snap.exists) return;
+      final data = snap.data() ?? <String, dynamic>{};
+
+      final exercises = (data['exercises'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+      final wesPlanned = (data['wesPlannedExercises'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+
+      final exIdx = exercises.indexWhere((m) => m['exerciseId'] == exerciseId);
+      final wpIdx = wesPlanned.indexWhere((m) => m['exerciseId'] == exerciseId);
+
+      if (exIdx != -1) {
+        exercises[exIdx] = Map<String, dynamic>.from(exercises[exIdx])
+          ..['circuitIndex'] = targetCircuitIndex;
+      } else if (wpIdx != -1) {
+        wesPlanned[wpIdx] = Map<String, dynamic>.from(wesPlanned[wpIdx])
+          ..['circuitIndex'] = targetCircuitIndex;
+      }
 
       txn.set(
         docRef,

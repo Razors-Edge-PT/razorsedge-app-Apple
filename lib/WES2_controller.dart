@@ -120,7 +120,6 @@ class Wes2SessionController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ignore: unused_element — wired in Phase 7 when structural actions land
   void _pushUndo() {
     _undoStack.add(List<Wes2ExerciseRow>.from(_rows));
     if (_undoStack.length > 50) _undoStack.removeAt(0);
@@ -301,5 +300,62 @@ class Wes2SessionController extends ChangeNotifier {
     final flushed = List<Wes2ExerciseRow>.from(_flushedExercises);
     _flushedExercises.clear();
     return flushed;
+  }
+
+  // ── Structural mutations (Phase 13) ──────────────────────────────────────
+
+  /// Removes an exercise row by exerciseId. Pushes undo first.
+  /// No-op if exerciseId not found.
+  void deleteExercise(String exerciseId) {
+    final idx = _rows.indexWhere((r) => r.exerciseId == exerciseId);
+    if (idx == -1) return;
+    _pushUndo();
+    _rows = List<Wes2ExerciseRow>.from(_rows)..removeAt(idx);
+    if (_rows.isEmpty) _loadState = Wes2LoadState.empty;
+    notifyListeners();
+  }
+
+  /// Replaces an exercise row in-place, preserving circuitIndex and orderIndex.
+  /// Pushes undo first. No-op if oldExerciseId not found or newExerciseId
+  /// already exists (except when old == new).
+  void replaceExercise({
+    required String oldExerciseId,
+    required String newExerciseId,
+    required String newName,
+  }) {
+    final idx = _rows.indexWhere((r) => r.exerciseId == oldExerciseId);
+    if (idx == -1) return;
+    if (newExerciseId != oldExerciseId &&
+        _rows.any((r) => r.exerciseId == newExerciseId)) {
+      return;
+    }
+    _pushUndo();
+    final old = _rows[idx];
+    final newRow = Wes2ExerciseRow(
+      exerciseId: newExerciseId,
+      name: newName,
+      circuitIndex: old.circuitIndex,
+      orderIndex: old.orderIndex,
+      setCount: old.setCount,
+      sets: const [],
+      source: Wes2RowSource.wes2Manual,
+    );
+    final newRows = List<Wes2ExerciseRow>.from(_rows);
+    newRows[idx] = newRow;
+    _rows = newRows;
+    notifyListeners();
+  }
+
+  /// Moves an exercise row to a different circuit. Pushes undo first.
+  /// No-op if exerciseId not found or already in targetCircuitIndex.
+  void moveExerciseToCircuit(String exerciseId, int targetCircuitIndex) {
+    final idx = _rows.indexWhere((r) => r.exerciseId == exerciseId);
+    if (idx == -1) return;
+    if (_rows[idx].circuitIndex == targetCircuitIndex) return;
+    _pushUndo();
+    final newRows = List<Wes2ExerciseRow>.from(_rows);
+    newRows[idx] = _rows[idx].copyWith(circuitIndex: targetCircuitIndex);
+    _rows = newRows;
+    notifyListeners();
   }
 }

@@ -410,7 +410,32 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
               IconButton(
                 icon: const Icon(Icons.refresh),
                 tooltip: 'Refresh',
-                onPressed: _loadDay,
+                onPressed: () {
+                  _saveDraftNow();
+                  _loadDay();
+                },
+              ),
+              PopupMenuButton<VoidCallback>(
+                icon: const Icon(Icons.more_vert),
+                onSelected: (fn) => fn(),
+                itemBuilder: (_) => [
+                  PopupMenuItem(
+                    value: _showTimerPlaceholder,
+                    child: const ListTile(
+                      dense: true,
+                      leading: Icon(Icons.timer_outlined),
+                      title: Text('Timer'),
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: _showTemplatesPlaceholder,
+                    child: const ListTile(
+                      dense: true,
+                      leading: Icon(Icons.layers_outlined),
+                      title: Text('Templates'),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -418,7 +443,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             children: [
               Wes2DayHeader(
                 date: controller.selectedDate,
-                onSelectDate: null, // Phase 5+
+                onSelectDate: _onSelectDate,
+                onPrevDay: _onPrevDay,
+                onNextDay: _onNextDay,
               ),
               const Divider(height: 1),
               Expanded(child: _buildBody(context, controller)),
@@ -481,20 +508,40 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         int? prevCi;
         for (final row in rows) {
           if (prevCi == null || row.circuitIndex != prevCi) {
+            final ci = row.circuitIndex;
             items.add(
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                child: Text(
-                  'Circuit ${row.circuitIndex + 1}',
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.primary,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12,
-                  ),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                child: Row(
+                  children: [
+                    Text(
+                      'Circuit ${ci + 1}',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.primary,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
+                    const Spacer(),
+                    TextButton.icon(
+                      icon: const Icon(Icons.add, size: 14),
+                      label: const Text(
+                        'Add Exercise',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                      onPressed: () => _onAddExerciseToCircuit(ci),
+                      style: TextButton.styleFrom(
+                        foregroundColor: Theme.of(context).colorScheme.primary,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 4, vertical: 2),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             );
-            prevCi = row.circuitIndex;
+            prevCi = ci;
           }
           items.add(Wes2ExerciseCard(
             row: row,
@@ -502,6 +549,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             onToggleMarkedDone: (isDone) =>
                 _onToggleMarkedDone(row.exerciseId, isDone),
             onAddSet: () => _onAddSet(row.exerciseId),
+            onSettings: () => _showExerciseSettingsDialog(row),
+            onDelete: () => _onDeleteExercise(row),
+            onReplace: () => _onReplaceExercise(row),
+            onMoveToCircuit: () => _onMoveExerciseToCircuit(row),
+            onNotes: () => _showNotesPlaceholder(),
           ));
         }
 
@@ -519,43 +571,49 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     }
   }
 
-  // ── Add Exercise (Phase 11) ───────────────────────────────────────────────
+  // ── Add Exercise / Add Circuit (Phase 13) ────────────────────────────────
 
-  // ── Add Circuit (Phase 12b) ───────────────────────────────────────────────
-
-  Future<void> _onAddCircuit() async {
-    if (_controller.loadState != Wes2LoadState.loaded) return;
-
-    final nextCircuitIndex = _controller.rows.fold(
-          -1,
-          (int m, Wes2ExerciseRow r) => r.circuitIndex > m ? r.circuitIndex : m,
-        ) +
-        1;
-
-    final excludedIds = _controller.rows.map((r) => r.exerciseId).toSet();
-    final result =
-        await showModalBottomSheet<({String exerciseId, String name})>(
+  /// Opens the picker and returns the selection including chosen circuit,
+  /// or null if dismissed.
+  /// [excludedIds] defaults to all current row IDs when omitted.
+  /// [titleOverride] replaces the default "Add Exercise to Circuit N" header.
+  Future<({String exerciseId, String name, int circuitIndex})?>
+      _openExercisePicker({
+    required List<int> availableCircuits,
+    required int initialCircuitIndex,
+    Set<String>? excludedIds,
+    String? titleOverride,
+  }) {
+    final excluded =
+        excludedIds ?? _controller.rows.map((r) => r.exerciseId).toSet();
+    return showModalBottomSheet<
+        ({String exerciseId, String name, int circuitIndex})>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
       builder: (_) => Wes2ExercisePicker(
-        excludedIds: excludedIds,
+        excludedIds: excluded,
         actingUid: _controller.actingUid,
         activeBlockId: _controller.activeBlockId,
-        title: 'Add Exercise to Circuit ${nextCircuitIndex + 1}',
+        availableCircuits: availableCircuits,
+        initialCircuitIndex: initialCircuitIndex,
+        titleOverride: titleOverride,
       ),
     );
-    if (result == null) return;
+  }
 
+  /// Applies a picker result to the controller, local draft, and Firestore.
+  /// Immediate path: day loaded — persists via saveManualExercise now.
+  /// Queue path (loading/idle): deferred to consumeFlushedExercises in _loadDay.
+  void _addExerciseFromPicker(
+      ({String exerciseId, String name, int circuitIndex}) result) {
     final added = _controller.addExercise(
       result.exerciseId,
       result.name,
-      circuitIndex: nextCircuitIndex,
+      circuitIndex: result.circuitIndex,
     );
     if (!added) return;
-
     _saveDraftNow();
-
     if (_controller.loadState == Wes2LoadState.loaded) {
       final rowIdx =
           _controller.rows.indexWhere((r) => r.exerciseId == result.exerciseId);
@@ -570,41 +628,44 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     }
   }
 
+  /// Top "Add Exercise" button — defaults to Circuit 1.
+  /// Shows circuit selector inside picker when multiple circuits exist.
   Future<void> _onAddExercise() async {
-    final excludedIds = _controller.rows.map((r) => r.exerciseId).toSet();
-    final result =
-        await showModalBottomSheet<({String exerciseId, String name})>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      builder: (_) => Wes2ExercisePicker(
-        excludedIds: excludedIds,
-        actingUid: _controller.actingUid,
-        activeBlockId: _controller.activeBlockId,
-      ),
+    final circuits =
+        _controller.rows.map((r) => r.circuitIndex).toSet().toList()..sort();
+    final result = await _openExercisePicker(
+      availableCircuits: circuits,
+      initialCircuitIndex: 0,
     );
     if (result == null) return;
+    _addExerciseFromPicker(result);
+  }
 
-    final added = _controller.addExercise(result.exerciseId, result.name);
-    if (!added) return; // duplicate guard
+  /// Per-circuit header "Add Exercise" button — pre-selects that circuit.
+  Future<void> _onAddExerciseToCircuit(int targetCircuitIndex) async {
+    final circuits =
+        _controller.rows.map((r) => r.circuitIndex).toSet().toList()..sort();
+    final result = await _openExercisePicker(
+      availableCircuits: circuits,
+      initialCircuitIndex: targetCircuitIndex,
+    );
+    if (result == null) return;
+    _addExerciseFromPicker(result);
+  }
 
-    _saveDraftNow();
-
-    // Immediate path: day was loaded/empty — row is in _rows now.
-    // Queue path (loading/idle): Firestore handled via consumeFlushedExercises
-    // after setRows completes in _loadDay.
-    if (_controller.loadState == Wes2LoadState.loaded) {
-      final rowIdx =
-          _controller.rows.indexWhere((r) => r.exerciseId == result.exerciseId);
-      if (rowIdx != -1) {
-        // ignore: discarded_futures
-        _saveManualExerciseSilently(
-          uid: _controller.actingUid,
-          date: _controller.selectedDate,
-          row: _controller.rows[rowIdx],
-        );
-      }
-    }
+  /// Bottom "Add Circuit" button — pre-selects a new circuit index.
+  /// Passes existing circuits + new one so the user may redirect to any.
+  Future<void> _onAddCircuit() async {
+    if (_controller.loadState != Wes2LoadState.loaded) return;
+    final existing =
+        _controller.rows.map((r) => r.circuitIndex).toSet().toList()..sort();
+    final nextCircuitIndex = existing.isEmpty ? 0 : existing.last + 1;
+    final result = await _openExercisePicker(
+      availableCircuits: [...existing, nextCircuitIndex],
+      initialCircuitIndex: nextCircuitIndex,
+    );
+    if (result == null) return;
+    _addExerciseFromPicker(result);
   }
 
   Future<void> _saveManualExerciseSilently({
@@ -620,6 +681,290 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       );
     } catch (_) {
       // Silent failure; local draft preserves the row for next reopen.
+    }
+  }
+
+  // ── Date navigation (Phase 13) ────────────────────────────────────────────
+
+  void _onPrevDay() {
+    _saveDraftNow();
+    _controller
+        .changeDate(_controller.selectedDate.subtract(const Duration(days: 1)));
+    _loadDay();
+  }
+
+  void _onNextDay() {
+    _saveDraftNow();
+    _controller
+        .changeDate(_controller.selectedDate.add(const Duration(days: 1)));
+    _loadDay();
+  }
+
+  Future<void> _onSelectDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _controller.selectedDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(now.year, now.month, now.day + 365),
+    );
+    if (picked == null || !mounted) return;
+    _saveDraftNow();
+    _controller.changeDate(picked);
+    _loadDay();
+  }
+
+  // ── Snackbar / confirm helpers (Phase 13) ─────────────────────────────────
+
+  void _showSnackBar(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<bool> _showConfirmDialog({
+    required String title,
+    required String content,
+  }) async {
+    if (!mounted) return false;
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: Text(content),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Confirm'),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
+  Future<int?> _showCircuitPickerDialog(List<int> circuits) async {
+    if (!mounted) return null;
+    return showDialog<int>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Move to Circuit'),
+        children: circuits
+            .map((ci) => SimpleDialogOption(
+                  onPressed: () => Navigator.of(ctx).pop(ci),
+                  child: Text('Circuit ${ci + 1}'),
+                ))
+            .toList(),
+      ),
+    );
+  }
+
+  // ── Placeholder dialogs (Phase 13) ────────────────────────────────────────
+
+  void _showExerciseSettingsDialog(Wes2ExerciseRow row) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(row.name),
+        content: const Text('Exercise settings coming soon.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showNotesPlaceholder() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Notes'),
+        content: const Text('Exercise notes coming soon.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showTimerPlaceholder() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Timer'),
+        content: const Text('Rest timer coming soon.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showTemplatesPlaceholder() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Templates'),
+        content: const Text('Template loading coming soon.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Structural exercise actions (Phase 13) ────────────────────────────────
+
+  Future<void> _onDeleteExercise(Wes2ExerciseRow row) async {
+    if (row.source == Wes2RowSource.bb3Planned) {
+      _showSnackBar(
+          'BB3 planned exercises cannot be removed here. Use the Block Builder.');
+      return;
+    }
+    final confirmed = await _showConfirmDialog(
+      title: 'Delete Exercise',
+      content: 'Remove "${row.name}" from today\'s workout?',
+    );
+    if (!confirmed) return;
+    _controller.deleteExercise(row.exerciseId);
+    _saveDraftNow();
+    // ignore: discarded_futures
+    _deleteExerciseSilently(
+      uid: _controller.actingUid,
+      date: _controller.selectedDate,
+      exerciseId: row.exerciseId,
+    );
+  }
+
+  Future<void> _onReplaceExercise(Wes2ExerciseRow row) async {
+    if (row.source == Wes2RowSource.bb3Planned) {
+      _showSnackBar(
+          'BB3 planned exercises cannot be replaced here. Use the Block Builder.');
+      return;
+    }
+    final excludedIds = _controller.rows
+        .map((r) => r.exerciseId)
+        .where((id) => id != row.exerciseId)
+        .toSet();
+    final circuits =
+        _controller.rows.map((r) => r.circuitIndex).toSet().toList()..sort();
+    final result = await _openExercisePicker(
+      availableCircuits: circuits,
+      initialCircuitIndex: row.circuitIndex,
+      excludedIds: excludedIds,
+      titleOverride: 'Replace "${row.name}"',
+    );
+    if (result == null) return;
+    _controller.replaceExercise(
+      oldExerciseId: row.exerciseId,
+      newExerciseId: result.exerciseId,
+      newName: result.name,
+    );
+    _saveDraftNow();
+    // ignore: discarded_futures
+    _replaceExerciseSilently(
+      uid: _controller.actingUid,
+      date: _controller.selectedDate,
+      oldExerciseId: row.exerciseId,
+      newExerciseId: result.exerciseId,
+      newName: result.name,
+    );
+  }
+
+  Future<void> _onMoveExerciseToCircuit(Wes2ExerciseRow row) async {
+    if (row.source == Wes2RowSource.bb3Planned) {
+      _showSnackBar(
+          'BB3 planned exercises cannot be moved here. Use the Block Builder.');
+      return;
+    }
+    final circuits =
+        _controller.rows.map((r) => r.circuitIndex).toSet().toList()..sort();
+    final available = circuits.where((ci) => ci != row.circuitIndex).toList();
+    if (available.isEmpty) {
+      _showSnackBar('Only one circuit — add another circuit first.');
+      return;
+    }
+    final targetCi = await _showCircuitPickerDialog(available);
+    if (targetCi == null) return;
+    _controller.moveExerciseToCircuit(row.exerciseId, targetCi);
+    _saveDraftNow();
+    // ignore: discarded_futures
+    _moveExerciseToCircuitSilently(
+      uid: _controller.actingUid,
+      date: _controller.selectedDate,
+      exerciseId: row.exerciseId,
+      targetCircuitIndex: targetCi,
+    );
+  }
+
+  // ── Silent Firestore wrappers (Phase 13) ──────────────────────────────────
+
+  Future<void> _deleteExerciseSilently({
+    required String uid,
+    required DateTime date,
+    required String exerciseId,
+  }) async {
+    try {
+      await _repository.deleteExercise(
+        uid: uid,
+        date: date,
+        exerciseId: exerciseId,
+      );
+    } catch (_) {
+      // Silent failure; row already removed from local state and draft.
+    }
+  }
+
+  Future<void> _replaceExerciseSilently({
+    required String uid,
+    required DateTime date,
+    required String oldExerciseId,
+    required String newExerciseId,
+    required String newName,
+  }) async {
+    try {
+      await _repository.replaceExercise(
+        uid: uid,
+        date: date,
+        oldExerciseId: oldExerciseId,
+        newExerciseId: newExerciseId,
+        newName: newName,
+      );
+    } catch (_) {
+      // Silent failure; local draft preserves updated row.
+    }
+  }
+
+  Future<void> _moveExerciseToCircuitSilently({
+    required String uid,
+    required DateTime date,
+    required String exerciseId,
+    required int targetCircuitIndex,
+  }) async {
+    try {
+      await _repository.moveExerciseToCircuit(
+        uid: uid,
+        date: date,
+        exerciseId: exerciseId,
+        targetCircuitIndex: targetCircuitIndex,
+      );
+    } catch (_) {
+      // Silent failure; local draft preserves circuit assignment.
     }
   }
 }

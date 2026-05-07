@@ -23,6 +23,11 @@ class Wes2ExerciseCard extends StatelessWidget {
   ) onFieldUnfocused;
   final void Function(bool isDone) onToggleMarkedDone;
   final void Function() onAddSet;
+  final VoidCallback? onSettings;
+  final VoidCallback? onDelete;
+  final VoidCallback? onReplace;
+  final VoidCallback? onMoveToCircuit;
+  final VoidCallback? onNotes;
 
   const Wes2ExerciseCard({
     super.key,
@@ -30,6 +35,11 @@ class Wes2ExerciseCard extends StatelessWidget {
     required this.onFieldUnfocused,
     required this.onToggleMarkedDone,
     required this.onAddSet,
+    this.onSettings,
+    this.onDelete,
+    this.onReplace,
+    this.onMoveToCircuit,
+    this.onNotes,
   });
 
   @override
@@ -115,19 +125,55 @@ class Wes2ExerciseCard extends StatelessWidget {
             // Active — reuses existing ExerciseVideoButton; returns
             // SizedBox.shrink() when no asset exists for this exerciseId.
             ExerciseVideoButton(exerciseId: row.exerciseId),
-            // Settings cog — inactive until exerciseSettings loading is wired.
             IconButton(
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints.tightFor(width: 32, height: 32),
               icon: const Icon(Icons.settings, size: 20, color: Colors.grey),
-              onPressed: null,
+              onPressed: onSettings,
             ),
-            // Exercise menu — inactive until delete/replace actions are wired.
-            IconButton(
+            PopupMenuButton<VoidCallback?>(
               padding: EdgeInsets.zero,
-              constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+              constraints: const BoxConstraints.tightFor(width: 32),
               icon: const Icon(Icons.more_vert, size: 18),
-              onPressed: null,
+              onSelected: (fn) => fn?.call(),
+              itemBuilder: (_) => [
+                PopupMenuItem(
+                  value: onNotes,
+                  child: const ListTile(
+                    dense: true,
+                    leading: Icon(Icons.notes),
+                    title: Text('Notes'),
+                  ),
+                ),
+                PopupMenuItem(
+                  value: onReplace,
+                  child: const ListTile(
+                    dense: true,
+                    leading: Icon(Icons.swap_horiz),
+                    title: Text('Replace Exercise'),
+                  ),
+                ),
+                PopupMenuItem(
+                  value: onMoveToCircuit,
+                  child: const ListTile(
+                    dense: true,
+                    leading: Icon(Icons.move_down),
+                    title: Text('Move to Circuit'),
+                  ),
+                ),
+                PopupMenuItem(
+                  value: onDelete,
+                  child: ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.delete_outline,
+                        color: Colors.redAccent),
+                    title: const Text(
+                      'Delete Exercise',
+                      style: TextStyle(color: Colors.redAccent),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ],
         ),

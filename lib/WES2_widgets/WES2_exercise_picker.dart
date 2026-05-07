@@ -14,14 +14,18 @@ class Wes2ExercisePicker extends StatefulWidget {
   final Set<String> excludedIds;
   final String actingUid;
   final String? activeBlockId;
-  final String title;
+  final List<int> availableCircuits;
+  final int initialCircuitIndex;
+  final String? titleOverride;
 
   const Wes2ExercisePicker({
     super.key,
     required this.excludedIds,
     required this.actingUid,
     required this.activeBlockId,
-    this.title = 'Add Exercise',
+    this.availableCircuits = const [],
+    this.initialCircuitIndex = 0,
+    this.titleOverride,
   });
 
   @override
@@ -54,11 +58,13 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
   bool _showPlannedOnly = false;
   String _query = '';
   String _fetchError = '';
+  late int _selectedCircuitIndex;
   final Set<String> _expandedCategories = {..._categoryOrder, 'Other'};
 
   @override
   void initState() {
     super.initState();
+    _selectedCircuitIndex = widget.initialCircuitIndex;
     _fetchExercises();
     _fetchPlannedIds();
   }
@@ -181,7 +187,8 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
             child: Row(
               children: [
                 Text(
-                  widget.title,
+                  widget.titleOverride ??
+                      'Add Exercise to Circuit ${_selectedCircuitIndex + 1}',
                   style: const TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
@@ -193,6 +200,7 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
             ),
           ),
           const SizedBox(height: 8),
+          if (widget.availableCircuits.length > 1) _buildCircuitSelector(),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: TextField(
@@ -212,6 +220,25 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
           const SizedBox(height: 4),
           Expanded(child: _buildList(scrollCtrl)),
         ],
+      ),
+    );
+  }
+
+  Widget _buildCircuitSelector() {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: Row(
+        children: widget.availableCircuits.map((ci) {
+          return Padding(
+            padding: const EdgeInsets.only(right: 6),
+            child: ChoiceChip(
+              label: Text('Circuit ${ci + 1}'),
+              selected: _selectedCircuitIndex == ci,
+              onSelected: (_) => setState(() => _selectedCircuitIndex = ci),
+            ),
+          );
+        }).toList(),
       ),
     );
   }
@@ -326,7 +353,11 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
     return ListTile(
       title: Text(name, style: const TextStyle(fontSize: 14)),
       dense: true,
-      onTap: () => Navigator.of(context).pop((exerciseId: doc.id, name: name)),
+      onTap: () => Navigator.of(context).pop((
+        exerciseId: doc.id,
+        name: name,
+        circuitIndex: _selectedCircuitIndex,
+      )),
     );
   }
 }
