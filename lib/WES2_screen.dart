@@ -300,8 +300,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         row: row,
         isDone: isDone,
       );
-    } catch (_) {
-      // Silent failure for Phase 9.
+    } catch (e, st) {
+      debugPrint('[WES2] setMarkedDone FAILED: $e\n$st');
     }
   }
 

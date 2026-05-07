@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'WES2_models.dart';
 
 // Abstract interface — Phase 3 adds FirestoreWes2Repository below.
@@ -377,6 +378,11 @@ class FirestoreWes2Repository implements Wes2Repository {
     required Wes2ExerciseRow row,
     required bool isDone,
   }) async {
+    debugPrint(
+      '[WES2] setMarkedDone called — uid=${uid.isEmpty ? "EMPTY" : uid}, '
+      'date=${_dateDocId(date)}, exerciseId=${row.exerciseId}, isDone=$isDone',
+    );
+
     final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
@@ -401,6 +407,10 @@ class FirestoreWes2Repository implements Wes2Repository {
       final exerciseId = row.exerciseId;
       final exIdx = exercises.indexWhere((m) => m['exerciseId'] == exerciseId);
       final wpIdx = wesPlanned.indexWhere((m) => m['exerciseId'] == exerciseId);
+
+      debugPrint(
+        '[WES2] setMarkedDone branch — exIdx=$exIdx, wpIdx=$wpIdx',
+      );
 
       if (exIdx != -1) {
         // Surgical patch of top-level isMarkedDone — preserves all other fields/sets.
@@ -429,5 +439,9 @@ class FirestoreWes2Repository implements Wes2Repository {
         SetOptions(merge: true),
       );
     });
+
+    debugPrint(
+      '[WES2] setMarkedDone transaction committed — ${row.exerciseId} isDone=$isDone',
+    );
   }
 }
