@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'user_context.dart';
 import 'WES2_controller.dart';
+import 'WES2_models.dart';
+import 'WES2_plan_service.dart';
 import 'WES2_repository.dart';
 import 'WES2_widgets/WES2_day_header.dart';
 import 'WES2_widgets/WES2_empty_state.dart';
@@ -22,6 +24,7 @@ class Wes2Screen extends StatefulWidget {
 class _Wes2ScreenState extends State<Wes2Screen> {
   late final Wes2SessionController _controller;
   final Wes2Repository _repository = FirestoreWes2Repository();
+  final Wes2PlanService _planService = FirestoreWes2PlanService();
   bool _loadStarted = false;
 
   @override
@@ -41,6 +44,8 @@ class _Wes2ScreenState extends State<Wes2Screen> {
       actorUid: uc.actorUid,
       actingUid: uc.currentUid,
       isCoach: uc.isCoach,
+      activeBlockId: uc.activeBlockId,
+      blockStartDate: uc.blockStartDate,
     );
     if (!_loadStarted) {
       _loadStarted = true;
@@ -54,22 +59,75 @@ class _Wes2ScreenState extends State<Wes2Screen> {
     super.dispose();
   }
 
-  /// Load the current day from Firestore. Safe to call again for manual refresh.
-  /// beginLoad() increments the epoch; stale completions are discarded via
-  /// the epoch check inside setRows/setLoadError.
+  /// Load completed workout + BB3 planned rows for the current date, then merge.
+  /// beginLoad() increments the epoch; stale completions are discarded.
   Future<void> _loadDay() async {
     final epoch = _controller.beginLoad();
     try {
-      final rows = await _repository.loadDay(
+      // Phase 3: completed workout document (exercises[] + wesPlannedExercises[])
+      final completedRows = await _repository.loadDay(
         uid: _controller.actingUid,
         date: _controller.selectedDate,
       );
+
+      // Phase 4: BB3 planned day — skip if block context is absent or if
+      // selectedDate is before blockStartDate (no negative week/day paths).
+      var bb3Rows = const <Wes2ExerciseRow>[];
+      final blockId = _controller.activeBlockId;
+      final blockStart = _controller.blockStartDate;
+      if (blockId != null &&
+          blockId.isNotEmpty &&
+          blockStart != null &&
+          !_isBeforeBlockStart(_controller.selectedDate, blockStart)) {
+        final wd = _weekDayFromDate(blockStart, _controller.selectedDate);
+        bb3Rows = await _planService.loadPlannedDay(
+          uid: _controller.actingUid,
+          blockId: blockId,
+          weekIndex: wd.weekIndex,
+          dayIndex: wd.dayIndex,
+        );
+      }
+
       if (!mounted) return;
-      _controller.setRows(rows, epoch);
+      _controller.setRows(_mergeRows(completedRows, bb3Rows), epoch);
     } catch (e) {
       if (!mounted) return;
       _controller.setLoadError(e.toString(), epoch);
     }
+  }
+
+  /// Returns true if [date] (midnight-normalised) is strictly before
+  /// [blockStart] (midnight-normalised). Prevents negative week/day indices.
+  static bool _isBeforeBlockStart(DateTime date, DateTime blockStart) {
+    final d = DateTime(date.year, date.month, date.day);
+    final b = DateTime(blockStart.year, blockStart.month, blockStart.day);
+    return d.isBefore(b);
+  }
+
+  /// Converts blockStart + selected date to BB3 weekIndex / dayIndex.
+  /// Matches BB3PlannedExerciseService.dateToWeekDay logic; no import needed.
+  static ({int weekIndex, int dayIndex}) _weekDayFromDate(
+    DateTime blockStart,
+    DateTime date,
+  ) {
+    final base = DateTime(blockStart.year, blockStart.month, blockStart.day);
+    final sel = DateTime(date.year, date.month, date.day);
+    final days = sel.difference(base).inDays;
+    return (weekIndex: days ~/ 7, dayIndex: days % 7);
+  }
+
+  /// Merges completed + WES2-planned rows (Phase 3) with BB3 rows (Phase 4).
+  /// Priority: completedServer → wes2Manual → bb3Planned.
+  /// Deduplication by exerciseId via putIfAbsent. Sorted by orderIndex.
+  static List<Wes2ExerciseRow> _mergeRows(
+    List<Wes2ExerciseRow> completedRows,
+    List<Wes2ExerciseRow> bb3Rows,
+  ) {
+    final seen = <String, Wes2ExerciseRow>{};
+    for (final r in completedRows) { seen.putIfAbsent(r.exerciseId, () => r); }
+    for (final r in bb3Rows) { seen.putIfAbsent(r.exerciseId, () => r); }
+    return seen.values.toList()
+      ..sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
   }
 
   @override
@@ -97,7 +155,7 @@ class _Wes2ScreenState extends State<Wes2Screen> {
             children: [
               Wes2DayHeader(
                 date: controller.selectedDate,
-                onSelectDate: null, // Phase 4+
+                onSelectDate: null, // Phase 5+
               ),
               const Divider(height: 1),
               Expanded(child: _buildBody(controller)),

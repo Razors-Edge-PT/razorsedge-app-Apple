@@ -15,6 +15,8 @@ class Wes2SessionController extends ChangeNotifier {
   List<Wes2ExerciseRow> _rows = [];
   final List<List<Wes2ExerciseRow>> _undoStack = [];
   bool _identityInitialized = false;
+  String? _activeBlockId;
+  DateTime? _blockStartDate;
   int _loadEpoch = 0;
   String? _loadErrorMessage;
 
@@ -35,6 +37,8 @@ class Wes2SessionController extends ChangeNotifier {
   List<Wes2ExerciseRow> get rows => List.unmodifiable(_rows);
   bool get canUndo => _undoStack.isNotEmpty;
   int get loadEpoch => _loadEpoch;
+  String? get activeBlockId => _activeBlockId;
+  DateTime? get blockStartDate => _blockStartDate;
   String? get loadErrorMessage => _loadErrorMessage;
 
   // ── Identity ─────────────────────────────────────────────────────────────
@@ -43,12 +47,16 @@ class Wes2SessionController extends ChangeNotifier {
     required String actorUid,
     required String actingUid,
     required bool isCoach,
+    String? activeBlockId,
+    DateTime? blockStartDate,
   }) {
     if (_identityInitialized) return;
     _identityInitialized = true;
     _actorUid = actorUid;
     _actingUid = actingUid;
     _isCoach = isCoach;
+    _activeBlockId = activeBlockId;
+    _blockStartDate = blockStartDate;
     // Load is triggered by the screen via beginLoad() after this returns.
   }
 
