@@ -9,6 +9,7 @@ import 'WES2_widgets/WES2_day_header.dart';
 import 'WES2_widgets/WES2_empty_state.dart';
 import 'WES2_widgets/WES2_day_actions_row.dart';
 import 'WES2_widgets/WES2_exercise_card.dart';
+import 'WES2_local_store.dart';
 
 /// WES2 beta route shell.
 /// Receives an optional [initialDate]; defaults to today when omitted.
@@ -22,15 +23,17 @@ class Wes2Screen extends StatefulWidget {
   State<Wes2Screen> createState() => _Wes2ScreenState();
 }
 
-class _Wes2ScreenState extends State<Wes2Screen> {
+class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   late final Wes2SessionController _controller;
   final Wes2Repository _repository = FirestoreWes2Repository();
   final Wes2PlanService _planService = FirestoreWes2PlanService();
+  final Wes2LocalStore _localStore = IsarWes2LocalStore();
   bool _loadStarted = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     final raw = widget.initialDate ?? DateTime.now();
     _controller = Wes2SessionController(raw);
   }
@@ -56,8 +59,29 @@ class _Wes2ScreenState extends State<Wes2Screen> {
 
   @override
   void dispose() {
+    _saveDraftNow();
+    WidgetsBinding.instance.removeObserver(this);
     _controller.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      _saveDraftNow();
+    }
+  }
+
+  /// Fire-and-forget draft save. Returns void so it can be called from
+  /// dispose/didChangeAppLifecycleState without an unawaited-future lint.
+  void _saveDraftNow() {
+    if (_controller.actingUid.isEmpty) return;
+    // ignore: discarded_futures
+    _localStore.saveDraft(
+      uid: _controller.actingUid,
+      date: _controller.selectedDate,
+      rows: _controller.rows.toList(),
+    );
   }
 
   /// Load completed workout + BB3 planned rows for the current date, then merge.
@@ -89,8 +113,16 @@ class _Wes2ScreenState extends State<Wes2Screen> {
         );
       }
 
+      // Phase 7: overlay local draft actuals onto server/BB3 merged structure.
+      final draft = await _localStore.loadDraft(
+        uid: _controller.actingUid,
+        date: _controller.selectedDate,
+      );
       if (!mounted) return;
-      _controller.setRows(_mergeRows(completedRows, bb3Rows), epoch);
+      _controller.setRows(
+        _applyDraftActuals(_mergeRows(completedRows, bb3Rows), draft),
+        epoch,
+      );
     } catch (e) {
       if (!mounted) return;
       _controller.setLoadError(e.toString(), epoch);
@@ -133,6 +165,55 @@ class _Wes2ScreenState extends State<Wes2Screen> {
     }
     return seen.values.toList()
       ..sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
+  }
+
+  /// Overlays local draft actualValues onto the server/BB3 merged row list.
+  /// Server/BB3 is structural authority: row presence, names, circuitIndex,
+  /// orderIndex, source, and hintValues are always preserved from [merged].
+  /// Draft rows not present in [merged] are dropped (orphan guard).
+  /// draft actualValues and isMarkedDone are the only things restored.
+  static List<Wes2ExerciseRow> _applyDraftActuals(
+    List<Wes2ExerciseRow> merged,
+    List<Wes2ExerciseRow>? draft,
+  ) {
+    if (draft == null || draft.isEmpty) return merged;
+    final draftMap = <String, Wes2ExerciseRow>{
+      for (final r in draft) r.exerciseId: r,
+    };
+    return merged.map((row) {
+      final d = draftMap[row.exerciseId];
+      if (d == null) return row;
+      // If draft has more sets with actual values than setCount, expand count.
+      final draftActualCount = d.sets.where((s) => s.hasAnyActual).length;
+      final effectiveCount =
+          draftActualCount > row.setCount ? draftActualCount : row.setCount;
+      final overlaidSets = List.generate(effectiveCount, (i) {
+        final serverSet =
+            i < row.sets.length ? row.sets[i] : Wes2SetState(setIndex: i);
+        final draftSet = i < d.sets.length ? d.sets[i] : null;
+        if (draftSet == null) return serverSet;
+        // Overlay only draft actualValues; server/BB3 hintValues are untouched.
+        return serverSet.copyWith(
+          weight: draftSet.weight.hasActual
+              ? serverSet.weight.withActual(draftSet.weight.actualValue)
+              : serverSet.weight,
+          reps: draftSet.reps.hasActual
+              ? serverSet.reps.withActual(draftSet.reps.actualValue)
+              : serverSet.reps,
+          rir: draftSet.rir.hasActual
+              ? serverSet.rir.withActual(draftSet.rir.actualValue)
+              : serverSet.rir,
+          velocity: draftSet.velocity.hasActual
+              ? serverSet.velocity.withActual(draftSet.velocity.actualValue)
+              : serverSet.velocity,
+        );
+      });
+      return row.copyWith(
+        sets: overlaidSets,
+        setCount: effectiveCount,
+        isMarkedDone: d.isMarkedDone,
+      );
+    }).toList();
   }
 
   @override

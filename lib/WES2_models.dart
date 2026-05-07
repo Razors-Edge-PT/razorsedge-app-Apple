@@ -56,6 +56,23 @@ class Wes2FieldState<T> {
         dirty: dirty,
         lastEditedAt: lastEditedAt,
       );
+
+  Map<String, dynamic> toJson() => {
+        'actual': actualValue,
+        'hint': hintValue,
+      };
+
+  static Wes2FieldState<double> doubleFromJson(Map<String, dynamic> map) =>
+      Wes2FieldState<double>(
+        actualValue: (map['actual'] as num?)?.toDouble(),
+        hintValue: (map['hint'] as num?)?.toDouble(),
+      );
+
+  static Wes2FieldState<int> intFromJson(Map<String, dynamic> map) =>
+      Wes2FieldState<int>(
+        actualValue: (map['actual'] as num?)?.toInt(),
+        hintValue: (map['hint'] as num?)?.toInt(),
+      );
 }
 
 /// One set within an exercise row.
@@ -100,6 +117,30 @@ class Wes2SetState {
       planNote: planNote ?? this.planNote,
     );
   }
+
+  Map<String, dynamic> toJson() => {
+        'setIndex': setIndex,
+        'weight': weight.toJson(),
+        'reps': reps.toJson(),
+        'rir': rir.toJson(),
+        'velocity': velocity.toJson(),
+      };
+
+  static Wes2SetState fromJson(Map<String, dynamic> map) => Wes2SetState(
+        setIndex: map['setIndex'] as int,
+        weight: Wes2FieldState.doubleFromJson(
+          map['weight'] as Map<String, dynamic>,
+        ),
+        reps: Wes2FieldState.intFromJson(
+          map['reps'] as Map<String, dynamic>,
+        ),
+        rir: Wes2FieldState.doubleFromJson(
+          map['rir'] as Map<String, dynamic>,
+        ),
+        velocity: Wes2FieldState.doubleFromJson(
+          map['velocity'] as Map<String, dynamic>,
+        ),
+      );
 }
 
 /// One exercise row for a given day.
@@ -160,6 +201,37 @@ class Wes2ExerciseRow {
       source: source ?? this.source,
       isMarkedDone: isMarkedDone ?? this.isMarkedDone,
       isExpanded: isExpanded ?? this.isExpanded,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'exerciseId': exerciseId,
+        'name': name,
+        'circuitIndex': circuitIndex,
+        'orderIndex': orderIndex,
+        'setCount': setCount,
+        'source': source.name,
+        'isMarkedDone': isMarkedDone,
+        'sets': sets.map((s) => s.toJson()).toList(),
+      };
+
+  static Wes2ExerciseRow fromJson(Map<String, dynamic> map) {
+    final sourceStr = map['source'] as String? ?? 'localDraft';
+    final src = Wes2RowSource.values.firstWhere(
+      (e) => e.name == sourceStr,
+      orElse: () => Wes2RowSource.localDraft,
+    );
+    return Wes2ExerciseRow(
+      exerciseId: map['exerciseId'] as String,
+      name: map['name'] as String,
+      circuitIndex: map['circuitIndex'] as int,
+      orderIndex: map['orderIndex'] as int,
+      setCount: map['setCount'] as int,
+      source: src,
+      isMarkedDone: map['isMarkedDone'] as bool? ?? false,
+      sets: (map['sets'] as List<dynamic>)
+          .map((s) => Wes2SetState.fromJson(s as Map<String, dynamic>))
+          .toList(),
     );
   }
 }
