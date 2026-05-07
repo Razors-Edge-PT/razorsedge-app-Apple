@@ -194,4 +194,15 @@ class Wes2SessionController extends ChangeNotifier {
         );
     }
   }
+
+  // ── Done state (Phase 9) ──────────────────────────────────────────────────
+
+  void toggleMarkedDone(String exerciseId, bool isDone) {
+    final idx = _rows.indexWhere((r) => r.exerciseId == exerciseId);
+    if (idx == -1) return;
+    final newRows = List<Wes2ExerciseRow>.from(_rows);
+    newRows[idx] = _rows[idx].copyWith(isMarkedDone: isDone);
+    _rows = newRows;
+    notifyListeners();
+  }
 }

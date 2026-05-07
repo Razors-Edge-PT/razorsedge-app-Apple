@@ -272,6 +272,39 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     }
   }
 
+  void _onToggleMarkedDone(String exerciseId, bool isDone) {
+    _controller.toggleMarkedDone(exerciseId, isDone);
+    final rowIdx =
+        _controller.rows.indexWhere((r) => r.exerciseId == exerciseId);
+    if (rowIdx == -1) return;
+    final row = _controller.rows[rowIdx];
+    // ignore: discarded_futures
+    _setMarkedDoneSilently(
+      uid: _controller.actingUid,
+      date: _controller.selectedDate,
+      row: row,
+      isDone: isDone,
+    );
+  }
+
+  Future<void> _setMarkedDoneSilently({
+    required String uid,
+    required DateTime date,
+    required Wes2ExerciseRow row,
+    required bool isDone,
+  }) async {
+    try {
+      await _repository.setMarkedDone(
+        uid: uid,
+        date: date,
+        row: row,
+        isDone: isDone,
+      );
+    } catch (_) {
+      // Silent failure for Phase 9.
+    }
+  }
+
   /// Parses [text] into the correct Dart type for [fieldKey].
   /// Returns null if [text] cannot be parsed (invalid non-empty input).
   static dynamic _parseFieldValue(Wes2FieldKey fieldKey, String text) {
@@ -358,6 +391,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
           items.add(Wes2ExerciseCard(
             row: row,
             onFieldUnfocused: _onFieldUnfocused,
+            onToggleMarkedDone: (isDone) =>
+                _onToggleMarkedDone(row.exerciseId, isDone),
           ));
         }
 

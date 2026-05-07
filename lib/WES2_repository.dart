@@ -37,10 +37,12 @@ abstract class Wes2Repository {
   });
 
   /// Write isMarkedDone onto the exercises[] row.
+  /// [row] supplies full row context for create/promote paths (BB3-planned rows
+  /// that are not yet in exercises[] must be materialized using actual values only).
   Future<void> setMarkedDone({
     required String uid,
     required DateTime date,
-    required String exerciseId,
+    required Wes2ExerciseRow row,
     required bool isDone,
   });
 }
@@ -372,8 +374,60 @@ class FirestoreWes2Repository implements Wes2Repository {
   Future<void> setMarkedDone({
     required String uid,
     required DateTime date,
-    required String exerciseId,
+    required Wes2ExerciseRow row,
     required bool isDone,
-  }) =>
-      throw UnimplementedError('setMarkedDone not implemented yet');
+  }) async {
+    final docRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('workouts')
+        .doc(_dateDocId(date));
+
+    await FirebaseFirestore.instance.runTransaction((txn) async {
+      final snap = await txn.get(docRef);
+      final data = snap.exists
+          ? (snap.data() ?? <String, dynamic>{})
+          : <String, dynamic>{};
+
+      final exercises = (data['exercises'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+      final wesPlanned = (data['wesPlannedExercises'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+
+      final exerciseId = row.exerciseId;
+      final exIdx = exercises.indexWhere((m) => m['exerciseId'] == exerciseId);
+      final wpIdx = wesPlanned.indexWhere((m) => m['exerciseId'] == exerciseId);
+
+      if (exIdx != -1) {
+        // Surgical patch of top-level isMarkedDone — preserves all other fields/sets.
+        exercises[exIdx] = Map<String, dynamic>.from(exercises[exIdx])
+          ..['isMarkedDone'] = isDone;
+      } else if (wpIdx != -1) {
+        // Promote wesPlanned row to exercises[] with isMarkedDone set.
+        // Actual values only — _buildRowMap never writes hintValues.
+        exercises.add(_buildRowMap(row)..['isMarkedDone'] = isDone);
+        wesPlanned.removeAt(wpIdx);
+      } else if (isDone) {
+        // BB3-planned or new row — create in exercises[] using actual values only.
+        exercises.add(_buildRowMap(row)..['isMarkedDone'] = isDone);
+      }
+      // isDone == false and row not found → no-op (nothing to un-mark).
+
+      txn.set(
+        docRef,
+        {
+          'userId': uid,
+          'date': _dateDocId(date),
+          'lastEditedAt': FieldValue.serverTimestamp(),
+          'exercises': exercises,
+          'wesPlannedExercises': wesPlanned,
+        },
+        SetOptions(merge: true),
+      );
+    });
+  }
 }

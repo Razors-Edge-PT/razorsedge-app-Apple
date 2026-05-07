@@ -21,11 +21,13 @@ class Wes2ExerciseCard extends StatelessWidget {
     Wes2FieldKey fieldKey,
     String rawText,
   ) onFieldUnfocused;
+  final void Function(bool isDone) onToggleMarkedDone;
 
   const Wes2ExerciseCard({
     super.key,
     required this.row,
     required this.onFieldUnfocused,
+    required this.onToggleMarkedDone,
   });
 
   @override
@@ -55,6 +57,7 @@ class Wes2ExerciseCard extends StatelessWidget {
       ),
       margin: EdgeInsets.zero,
       child: ExpansionTile(
+        key: ValueKey('${row.exerciseId}_done_$isDone'),
         initiallyExpanded: !isDone,
         tilePadding: const EdgeInsets.symmetric(horizontal: 8),
         backgroundColor: isDone ? doneBg : normalBg,
@@ -180,7 +183,7 @@ class Wes2ExerciseCard extends StatelessWidget {
                           horizontal: 6, vertical: 6),
                       visualDensity: VisualDensity.compact,
                     ),
-                    onPressed: null,
+                    onPressed: () => onToggleMarkedDone(true),
                     icon: const Icon(Icons.check_circle_outline, size: 14),
                     label: const Text(
                       'Completed?',
@@ -192,7 +195,7 @@ class Wes2ExerciseCard extends StatelessWidget {
                 // "Mark as not done" — inactive; shown when exercise is done.
                 if (isDone) ...[
                   TextButton(
-                    onPressed: null,
+                    onPressed: () => onToggleMarkedDone(false),
                     child: const Text(
                       'Mark as not done',
                       style: TextStyle(fontSize: 12, color: Colors.white54),
