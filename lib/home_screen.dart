@@ -13,6 +13,7 @@ import 'coach_home_screen.dart';
 import 'approve_requests_screen.dart';
 import 'Camp_BB2.dart';
 import 'bb3_week_planner.dart';
+import 'WES2_screen.dart';
 import 'update_exercises.dart';
 import 'core_exercises.dart';
 import 'profile_page.dart';
@@ -2918,6 +2919,58 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                             left: 50,
                                             child: Text(
                                               'BB3\nPlanner',
+                                              textAlign: TextAlign.center,
+                                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                                height: 1.3,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+
+                              SizedBox(
+                                width: kFeatureCardWidth,
+                                child: GestureDetector(
+                                  onTap: () {
+                                    final userContext = UserContext.of(context, listen: false);
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                          value: userContext,
+                                          child: const Wes2Screen(),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  child: Card(
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(12),
+                                      child: Stack(
+                                        children: [
+                                          Positioned(
+                                            top: 0,
+                                            left: 0,
+                                            child: Icon(
+                                              Icons.bolt,
+                                              size: 48,
+                                              color: Theme.of(context).colorScheme.secondary,
+                                            ),
+                                          ),
+                                          Positioned(
+                                            bottom: 0,
+                                            right: 0,
+                                            left: 50,
+                                            child: Text(
+                                              'WES2\nBeta',
                                               textAlign: TextAlign.center,
                                               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                                 height: 1.3,
