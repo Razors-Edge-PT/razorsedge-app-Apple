@@ -7,6 +7,7 @@ import 'WES2_plan_service.dart';
 import 'WES2_repository.dart';
 import 'WES2_widgets/WES2_day_header.dart';
 import 'WES2_widgets/WES2_empty_state.dart';
+import 'WES2_widgets/WES2_day_actions_row.dart';
 import 'WES2_widgets/WES2_exercise_card.dart';
 
 /// WES2 beta route shell.
@@ -124,8 +125,12 @@ class _Wes2ScreenState extends State<Wes2Screen> {
     List<Wes2ExerciseRow> bb3Rows,
   ) {
     final seen = <String, Wes2ExerciseRow>{};
-    for (final r in completedRows) { seen.putIfAbsent(r.exerciseId, () => r); }
-    for (final r in bb3Rows) { seen.putIfAbsent(r.exerciseId, () => r); }
+    for (final r in completedRows) {
+      seen.putIfAbsent(r.exerciseId, () => r);
+    }
+    for (final r in bb3Rows) {
+      seen.putIfAbsent(r.exerciseId, () => r);
+    }
     return seen.values.toList()
       ..sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
   }
@@ -158,7 +163,7 @@ class _Wes2ScreenState extends State<Wes2Screen> {
                 onSelectDate: null, // Phase 5+
               ),
               const Divider(height: 1),
-              Expanded(child: _buildBody(controller)),
+              Expanded(child: _buildBody(context, controller)),
             ],
           ),
         ),
@@ -166,7 +171,7 @@ class _Wes2ScreenState extends State<Wes2Screen> {
     );
   }
 
-  Widget _buildBody(Wes2SessionController controller) {
+  Widget _buildBody(BuildContext context, Wes2SessionController controller) {
     switch (controller.loadState) {
       case Wes2LoadState.idle:
       case Wes2LoadState.loading:
@@ -174,9 +179,41 @@ class _Wes2ScreenState extends State<Wes2Screen> {
       case Wes2LoadState.empty:
         return const Wes2EmptyState();
       case Wes2LoadState.loaded:
-        return ListView.builder(
-          itemCount: controller.rows.length,
-          itemBuilder: (_, i) => Wes2ExerciseCard(row: controller.rows[i]),
+        final rows = controller.rows;
+        final setsLogged =
+            rows.expand((r) => r.sets).where((s) => s.hasAnyActual).length;
+
+        // Build flat item list: circuit headers inserted when circuitIndex changes.
+        final items = <Widget>[];
+        int? prevCi;
+        for (final row in rows) {
+          if (prevCi == null || row.circuitIndex != prevCi) {
+            items.add(
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                child: Text(
+                  'Circuit ${row.circuitIndex + 1}',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.primary,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            );
+            prevCi = row.circuitIndex;
+          }
+          items.add(Wes2ExerciseCard(row: row));
+        }
+
+        return Column(
+          children: [
+            const Wes2TopActionsBar(),
+            Expanded(
+              child: ListView(children: items),
+            ),
+            Wes2BottomActionsRow(setsLogged: setsLogged),
+          ],
         );
       case Wes2LoadState.error:
         return Center(
