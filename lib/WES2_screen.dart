@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'user_context.dart';
 import 'WES2_controller.dart';
+import 'WES2_repository.dart';
 import 'WES2_widgets/WES2_day_header.dart';
 import 'WES2_widgets/WES2_empty_state.dart';
 import 'WES2_widgets/WES2_exercise_card.dart';
@@ -20,6 +21,8 @@ class Wes2Screen extends StatefulWidget {
 
 class _Wes2ScreenState extends State<Wes2Screen> {
   late final Wes2SessionController _controller;
+  final Wes2Repository _repository = FirestoreWes2Repository();
+  bool _loadStarted = false;
 
   @override
   void initState() {
@@ -31,7 +34,7 @@ class _Wes2ScreenState extends State<Wes2Screen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // listen: false — we read identity once; UserContext.currentUid is the
+    // listen: false — identity is read once; UserContext.currentUid is the
     // acting athlete UID, never FirebaseAuth.currentUser.uid directly.
     final uc = UserContext.of(context, listen: false);
     _controller.initIdentity(
@@ -39,12 +42,34 @@ class _Wes2ScreenState extends State<Wes2Screen> {
       actingUid: uc.currentUid,
       isCoach: uc.isCoach,
     );
+    if (!_loadStarted) {
+      _loadStarted = true;
+      _loadDay();
+    }
   }
 
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  /// Load the current day from Firestore. Safe to call again for manual refresh.
+  /// beginLoad() increments the epoch; stale completions are discarded via
+  /// the epoch check inside setRows/setLoadError.
+  Future<void> _loadDay() async {
+    final epoch = _controller.beginLoad();
+    try {
+      final rows = await _repository.loadDay(
+        uid: _controller.actingUid,
+        date: _controller.selectedDate,
+      );
+      if (!mounted) return;
+      _controller.setRows(rows, epoch);
+    } catch (e) {
+      if (!mounted) return;
+      _controller.setLoadError(e.toString(), epoch);
+    }
   }
 
   @override
@@ -64,7 +89,7 @@ class _Wes2ScreenState extends State<Wes2Screen> {
               IconButton(
                 icon: const Icon(Icons.refresh),
                 tooltip: 'Refresh',
-                onPressed: null, // Phase 2+
+                onPressed: _loadDay,
               ),
             ],
           ),
@@ -72,7 +97,7 @@ class _Wes2ScreenState extends State<Wes2Screen> {
             children: [
               Wes2DayHeader(
                 date: controller.selectedDate,
-                onSelectDate: null, // Phase 2+
+                onSelectDate: null, // Phase 4+
               ),
               const Divider(height: 1),
               Expanded(child: _buildBody(controller)),
@@ -94,6 +119,17 @@ class _Wes2ScreenState extends State<Wes2Screen> {
         return ListView.builder(
           itemCount: controller.rows.length,
           itemBuilder: (_, i) => Wes2ExerciseCard(row: controller.rows[i]),
+        );
+      case Wes2LoadState.error:
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              'Could not load workout.\n${controller.loadErrorMessage ?? ''}',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.red, fontSize: 14),
+            ),
+          ),
         );
     }
   }
