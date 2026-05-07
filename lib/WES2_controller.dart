@@ -205,4 +205,34 @@ class Wes2SessionController extends ChangeNotifier {
     _rows = newRows;
     notifyListeners();
   }
+
+  // ── Add Set (Phase 10) ────────────────────────────────────────────────────
+
+  /// Appends one blank set to the exercise in memory.
+  /// newSetIndex = max(setCount, highest stored setIndex + 1) so sparse
+  /// in-memory sets from prior updateSetField calls are never overwritten.
+  /// setCount is incremented to newSetIndex + 1 and never shrinks.
+  void addSet(String exerciseId) {
+    final rowIdx = _rows.indexWhere((r) => r.exerciseId == exerciseId);
+    if (rowIdx == -1) return;
+    final row = _rows[rowIdx];
+
+    final highestStored = row.sets.fold(
+      -1,
+      (int m, Wes2SetState s) => s.setIndex > m ? s.setIndex : m,
+    );
+    final newSetIndex =
+        highestStored + 1 > row.setCount ? highestStored + 1 : row.setCount;
+    final newSetCount = newSetIndex + 1;
+
+    final sets = List<Wes2SetState>.from(row.sets);
+    while (sets.length <= newSetIndex) {
+      sets.add(Wes2SetState(setIndex: sets.length));
+    }
+
+    final newRows = List<Wes2ExerciseRow>.from(_rows);
+    newRows[rowIdx] = row.copyWith(sets: sets, setCount: newSetCount);
+    _rows = newRows;
+    notifyListeners();
+  }
 }

@@ -183,10 +183,21 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     return merged.map((row) {
       final d = draftMap[row.exerciseId];
       if (d == null) return row;
-      // If draft has more sets with actual values than setCount, expand count.
-      final draftActualCount = d.sets.where((s) => s.hasAnyActual).length;
-      final effectiveCount =
-          draftActualCount > row.setCount ? draftActualCount : row.setCount;
+      // Highest setIndex in draft that carries any actual value.
+      // Using index rather than count handles sparse/higher-index edited sets
+      // (e.g. set at index 4 typed without Add Set — count=1 but span=5).
+      final highestDraftActualIdx = d.sets.fold(
+        -1,
+        (int m, Wes2SetState s) =>
+            s.hasAnyActual && s.setIndex > m ? s.setIndex : m,
+      );
+      // effectiveCount = max of server setCount, draft setCount (preserves
+      // blank added sets), and span required to reach the highest actual.
+      final effectiveCount = [
+        row.setCount,
+        d.setCount,
+        highestDraftActualIdx + 1,
+      ].reduce((a, b) => a > b ? a : b);
       final overlaidSets = List.generate(effectiveCount, (i) {
         final serverSet =
             i < row.sets.length ? row.sets[i] : Wes2SetState(setIndex: i);
@@ -305,6 +316,53 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     }
   }
 
+  // ── Add Set (Phase 10) ────────────────────────────────────────────────────
+
+  void _onAddSet(String exerciseId) {
+    _controller.addSet(exerciseId);
+    // Persist new setCount to local draft immediately so blank added sets
+    // survive fast reopen, especially for BB3-planned rows where no Firestore
+    // write occurs until the user types an actual value.
+    _saveDraftNow();
+
+    final rowIdx =
+        _controller.rows.indexWhere((r) => r.exerciseId == exerciseId);
+    if (rowIdx == -1) return;
+    final row = _controller.rows[rowIdx];
+
+    // BB3-planned rows with no actuals are not yet materialised in the workout
+    // document — skip Firestore until the first actual value is typed.
+    if (row.source == Wes2RowSource.bb3Planned && !row.hasAnyExecutionValue) {
+      return;
+    }
+
+    // ignore: discarded_futures
+    _saveSetCountSilently(
+      uid: _controller.actingUid,
+      date: _controller.selectedDate,
+      row: row,
+      setCount: row.setCount,
+    );
+  }
+
+  Future<void> _saveSetCountSilently({
+    required String uid,
+    required DateTime date,
+    required Wes2ExerciseRow row,
+    required int setCount,
+  }) async {
+    try {
+      await _repository.saveSetCount(
+        uid: uid,
+        date: date,
+        row: row,
+        setCount: setCount,
+      );
+    } catch (_) {
+      // Silent failure; local draft preserves setCount for next reopen.
+    }
+  }
+
   /// Parses [text] into the correct Dart type for [fieldKey].
   /// Returns null if [text] cannot be parsed (invalid non-empty input).
   static dynamic _parseFieldValue(Wes2FieldKey fieldKey, String text) {
@@ -393,6 +451,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             onFieldUnfocused: _onFieldUnfocused,
             onToggleMarkedDone: (isDone) =>
                 _onToggleMarkedDone(row.exerciseId, isDone),
+            onAddSet: () => _onAddSet(row.exerciseId),
           ));
         }
 

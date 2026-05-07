@@ -46,6 +46,18 @@ abstract class Wes2Repository {
     required Wes2ExerciseRow row,
     required bool isDone,
   });
+
+  /// Persist a new setCount for an existing row.
+  /// Updates setCount only if [setCount] is higher than the stored value.
+  /// Only modifies rows already present in exercises[] or wesPlannedExercises[].
+  /// No-op if the row is not yet materialized in the workout document
+  /// (e.g. BB3-planned rows with no actuals yet).
+  Future<void> saveSetCount({
+    required String uid,
+    required DateTime date,
+    required Wes2ExerciseRow row,
+    required int setCount,
+  });
 }
 
 /// Concrete Firestore implementation.
@@ -443,5 +455,73 @@ class FirestoreWes2Repository implements Wes2Repository {
     debugPrint(
       '[WES2] setMarkedDone transaction committed — ${row.exerciseId} isDone=$isDone',
     );
+  }
+
+  // ── saveSetCount (Phase 10) ───────────────────────────────────────────────
+
+  /// Updates setCount on an existing exercises[] or wesPlannedExercises[] row.
+  /// setCount is only ever increased. If the row is not yet present in the
+  /// workout document (BB3-planned with no actuals), this is a no-op — the
+  /// caller must not pass unmaterialised rows.
+  @override
+  Future<void> saveSetCount({
+    required String uid,
+    required DateTime date,
+    required Wes2ExerciseRow row,
+    required int setCount,
+  }) async {
+    final docRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('workouts')
+        .doc(_dateDocId(date));
+
+    await FirebaseFirestore.instance.runTransaction((txn) async {
+      final snap = await txn.get(docRef);
+      final data = snap.exists
+          ? (snap.data() ?? <String, dynamic>{})
+          : <String, dynamic>{};
+
+      final exercises = (data['exercises'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+      final wesPlanned = (data['wesPlannedExercises'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+
+      final exerciseId = row.exerciseId;
+      final exIdx = exercises.indexWhere((m) => m['exerciseId'] == exerciseId);
+      final wpIdx = wesPlanned.indexWhere((m) => m['exerciseId'] == exerciseId);
+
+      if (exIdx != -1) {
+        final existing = (exercises[exIdx]['setCount'] as num?)?.toInt() ?? 0;
+        if (setCount > existing) {
+          exercises[exIdx] = Map<String, dynamic>.from(exercises[exIdx])
+            ..['setCount'] = setCount;
+        }
+      } else if (wpIdx != -1) {
+        final existing = (wesPlanned[wpIdx]['setCount'] as num?)?.toInt() ?? 0;
+        if (setCount > existing) {
+          wesPlanned[wpIdx] = Map<String, dynamic>.from(wesPlanned[wpIdx])
+            ..['setCount'] = setCount;
+        }
+      }
+      // Row not in either list → no-op. Screen prevents this for BB3-planned
+      // rows that have no actuals yet.
+
+      txn.set(
+        docRef,
+        {
+          'userId': uid,
+          'date': _dateDocId(date),
+          'lastEditedAt': FieldValue.serverTimestamp(),
+          'exercises': exercises,
+          'wesPlannedExercises': wesPlanned,
+        },
+        SetOptions(merge: true),
+      );
+    });
   }
 }

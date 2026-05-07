@@ -22,12 +22,14 @@ class Wes2ExerciseCard extends StatelessWidget {
     String rawText,
   ) onFieldUnfocused;
   final void Function(bool isDone) onToggleMarkedDone;
+  final void Function() onAddSet;
 
   const Wes2ExerciseCard({
     super.key,
     required this.row,
     required this.onFieldUnfocused,
     required this.onToggleMarkedDone,
+    required this.onAddSet,
   });
 
   @override
@@ -203,10 +205,9 @@ class Wes2ExerciseCard extends StatelessWidget {
                   ),
                   const SizedBox(width: 8),
                 ],
-                // Add set — inactive until write path is implemented.
                 IconButton(
                   icon: const Icon(Icons.add),
-                  onPressed: null,
+                  onPressed: onAddSet,
                 ),
               ],
             ),
