@@ -519,13 +519,17 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   // ── Add Exercise (Phase 11) ───────────────────────────────────────────────
 
   Future<void> _onAddExercise() async {
-    final disabledIds = _controller.rows.map((r) => r.exerciseId).toSet();
+    final excludedIds = _controller.rows.map((r) => r.exerciseId).toSet();
     final result =
         await showModalBottomSheet<({String exerciseId, String name})>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
-      builder: (_) => Wes2ExercisePicker(disabledIds: disabledIds),
+      builder: (_) => Wes2ExercisePicker(
+        excludedIds: excludedIds,
+        actingUid: _controller.actingUid,
+        activeBlockId: _controller.activeBlockId,
+      ),
     );
     if (result == null) return;
 
