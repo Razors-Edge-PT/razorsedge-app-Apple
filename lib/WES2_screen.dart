@@ -9,6 +9,7 @@ import 'WES2_widgets/WES2_day_header.dart';
 import 'WES2_widgets/WES2_empty_state.dart';
 import 'WES2_widgets/WES2_day_actions_row.dart';
 import 'WES2_widgets/WES2_exercise_card.dart';
+import 'WES2_widgets/WES2_exercise_picker.dart';
 import 'WES2_local_store.dart';
 
 /// WES2 beta route shell.
@@ -123,6 +124,20 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         _applyDraftActuals(_mergeRows(completedRows, bb3Rows), draft),
         epoch,
       );
+      // Persist any exercises queued during loading, deduplicated against
+      // freshly loaded server/BB3 data inside setRows/_flushPendingAdds.
+      final flushed = _controller.consumeFlushedExercises();
+      if (flushed.isNotEmpty) {
+        _saveDraftNow();
+        for (final row in flushed) {
+          // ignore: discarded_futures
+          _saveManualExerciseSilently(
+            uid: _controller.actingUid,
+            date: _controller.selectedDate,
+            row: row,
+          );
+        }
+      }
     } catch (e) {
       if (!mounted) return;
       _controller.setLoadError(e.toString(), epoch);
@@ -415,6 +430,41 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   }
 
   Widget _buildBody(BuildContext context, Wes2SessionController controller) {
+    // Error state: full-screen message, no action bar.
+    if (controller.loadState == Wes2LoadState.error) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            'Could not load workout.\n${controller.loadErrorMessage ?? ''}',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.red, fontSize: 14),
+          ),
+        ),
+      );
+    }
+    // All non-error states show the top action bar so Add Exercise is always
+    // reachable — including during loading (queues the add until data arrives).
+    return Column(
+      children: [
+        Wes2TopActionsBar(onAddExercise: _onAddExercise),
+        if (controller.hasPendingExerciseAdds &&
+            (controller.loadState == Wes2LoadState.loading ||
+                controller.loadState == Wes2LoadState.idle))
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: Text(
+              'Adding exercises when loaded…',
+              style: TextStyle(fontSize: 12, color: Colors.white54),
+            ),
+          ),
+        Expanded(child: _buildContentArea(context, controller)),
+      ],
+    );
+  }
+
+  Widget _buildContentArea(
+      BuildContext context, Wes2SessionController controller) {
     switch (controller.loadState) {
       case Wes2LoadState.idle:
       case Wes2LoadState.loading:
@@ -457,24 +507,63 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
         return Column(
           children: [
-            const Wes2TopActionsBar(),
-            Expanded(
-              child: ListView(children: items),
-            ),
+            Expanded(child: ListView(children: items)),
             Wes2BottomActionsRow(setsLogged: setsLogged),
           ],
         );
       case Wes2LoadState.error:
-        return Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              'Could not load workout.\n${controller.loadErrorMessage ?? ''}',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.red, fontSize: 14),
-            ),
-          ),
+        return const SizedBox.shrink(); // unreachable: handled in _buildBody
+    }
+  }
+
+  // ── Add Exercise (Phase 11) ───────────────────────────────────────────────
+
+  Future<void> _onAddExercise() async {
+    final disabledIds = _controller.rows.map((r) => r.exerciseId).toSet();
+    final result =
+        await showModalBottomSheet<({String exerciseId, String name})>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => Wes2ExercisePicker(disabledIds: disabledIds),
+    );
+    if (result == null) return;
+
+    final added = _controller.addExercise(result.exerciseId, result.name);
+    if (!added) return; // duplicate guard
+
+    _saveDraftNow();
+
+    // Immediate path: day was loaded/empty — row is in _rows now.
+    // Queue path (loading/idle): Firestore handled via consumeFlushedExercises
+    // after setRows completes in _loadDay.
+    if (_controller.loadState == Wes2LoadState.loaded) {
+      final rowIdx =
+          _controller.rows.indexWhere((r) => r.exerciseId == result.exerciseId);
+      if (rowIdx != -1) {
+        // ignore: discarded_futures
+        _saveManualExerciseSilently(
+          uid: _controller.actingUid,
+          date: _controller.selectedDate,
+          row: _controller.rows[rowIdx],
         );
+      }
+    }
+  }
+
+  Future<void> _saveManualExerciseSilently({
+    required String uid,
+    required DateTime date,
+    required Wes2ExerciseRow row,
+  }) async {
+    try {
+      await _repository.saveManualExercise(
+        uid: uid,
+        date: date,
+        row: row,
+      );
+    } catch (_) {
+      // Silent failure; local draft preserves the row for next reopen.
     }
   }
 }

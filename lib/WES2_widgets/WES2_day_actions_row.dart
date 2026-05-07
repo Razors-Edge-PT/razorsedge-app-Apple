@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 
 /// Top action bar with "Add Exercise" button.
-/// Inactive in Phase 5 — exercise picker not yet implemented.
 class Wes2TopActionsBar extends StatelessWidget {
-  const Wes2TopActionsBar({super.key});
+  final void Function() onAddExercise;
+
+  const Wes2TopActionsBar({super.key, required this.onAddExercise});
 
   @override
   Widget build(BuildContext context) {
@@ -24,7 +25,7 @@ class Wes2TopActionsBar extends StatelessWidget {
                 foregroundColor: Theme.of(context).colorScheme.onPrimary,
                 padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 8),
               ),
-              onPressed: null, // inactive — exercise picker not yet implemented
+              onPressed: onAddExercise,
             ),
           ),
         ],

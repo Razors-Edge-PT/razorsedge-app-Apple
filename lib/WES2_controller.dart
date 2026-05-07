@@ -19,6 +19,8 @@ class Wes2SessionController extends ChangeNotifier {
   DateTime? _blockStartDate;
   int _loadEpoch = 0;
   String? _loadErrorMessage;
+  final List<({String exerciseId, String name})> _pendingExerciseAdds = [];
+  final List<Wes2ExerciseRow> _flushedExercises = [];
 
   Wes2SessionController(DateTime initialDate)
       : _selectedDate = DateTime(
@@ -40,6 +42,7 @@ class Wes2SessionController extends ChangeNotifier {
   String? get activeBlockId => _activeBlockId;
   DateTime? get blockStartDate => _blockStartDate;
   String? get loadErrorMessage => _loadErrorMessage;
+  bool get hasPendingExerciseAdds => _pendingExerciseAdds.isNotEmpty;
 
   // ── Identity ─────────────────────────────────────────────────────────────
 
@@ -80,6 +83,7 @@ class Wes2SessionController extends ChangeNotifier {
     _rows = rows;
     _loadState = rows.isEmpty ? Wes2LoadState.empty : Wes2LoadState.loaded;
     _loadErrorMessage = null;
+    _flushPendingAdds();
     notifyListeners();
   }
 
@@ -100,6 +104,8 @@ class Wes2SessionController extends ChangeNotifier {
     _selectedDate = DateTime(date.year, date.month, date.day);
     _rows = [];
     _undoStack.clear();
+    _pendingExerciseAdds.clear();
+    _flushedExercises.clear();
     _loadEpoch++;
     _loadState = Wes2LoadState.idle;
     _loadErrorMessage = null;
@@ -234,5 +240,65 @@ class Wes2SessionController extends ChangeNotifier {
     newRows[rowIdx] = row.copyWith(sets: sets, setCount: newSetCount);
     _rows = newRows;
     notifyListeners();
+  }
+
+  // ── Add Exercise (Phase 11) ───────────────────────────────────────────────
+
+  /// Adds a new blank wes2Manual exercise row in memory.
+  /// Returns false if [exerciseId] is already present — caller skips silently.
+  /// If the day is still loading, queues the add for [setRows] to flush.
+  bool addExercise(String exerciseId, String name) {
+    if (_rows.any((r) => r.exerciseId == exerciseId)) return false;
+    if (_loadState == Wes2LoadState.loading ||
+        _loadState == Wes2LoadState.idle) {
+      if (!_pendingExerciseAdds.any((p) => p.exerciseId == exerciseId)) {
+        _pendingExerciseAdds.add((exerciseId: exerciseId, name: name));
+        notifyListeners();
+      }
+      return true;
+    }
+    _doAddExercise(exerciseId, name);
+    notifyListeners();
+    return true;
+  }
+
+  Wes2ExerciseRow _doAddExercise(String exerciseId, String name) {
+    final nextOrder = _rows.isEmpty
+        ? 0
+        : _rows.map((r) => r.orderIndex).reduce((a, b) => a > b ? a : b) + 1;
+    final newRow = Wes2ExerciseRow(
+      exerciseId: exerciseId,
+      name: name,
+      circuitIndex: 0,
+      orderIndex: nextOrder,
+      setCount: 3,
+      sets: const [],
+      source: Wes2RowSource.wes2Manual,
+    );
+    _rows = [..._rows, newRow];
+    // Empty-state day transitions to loaded once a row is added.
+    if (_loadState == Wes2LoadState.empty) {
+      _loadState = Wes2LoadState.loaded;
+    }
+    return newRow;
+  }
+
+  void _flushPendingAdds() {
+    if (_pendingExerciseAdds.isEmpty) return;
+    final pending =
+        List<({String exerciseId, String name})>.from(_pendingExerciseAdds);
+    _pendingExerciseAdds.clear();
+    for (final p in pending) {
+      if (_rows.any((r) => r.exerciseId == p.exerciseId)) continue;
+      _flushedExercises.add(_doAddExercise(p.exerciseId, p.name));
+    }
+  }
+
+  /// Returns and clears the list of rows applied from the pending queue.
+  /// Screen calls this after setRows to persist flushed exercises to Firestore.
+  List<Wes2ExerciseRow> consumeFlushedExercises() {
+    final flushed = List<Wes2ExerciseRow>.from(_flushedExercises);
+    _flushedExercises.clear();
+    return flushed;
   }
 }

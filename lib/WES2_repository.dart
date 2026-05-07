@@ -1,5 +1,4 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/foundation.dart';
 import 'WES2_models.dart';
 
 // Abstract interface — Phase 3 adds FirestoreWes2Repository below.
@@ -57,6 +56,15 @@ abstract class Wes2Repository {
     required DateTime date,
     required Wes2ExerciseRow row,
     required int setCount,
+  });
+
+  /// Append a manually added blank exercise row to wesPlannedExercises[].
+  /// No-op if exerciseId already exists in exercises[] or wesPlannedExercises[].
+  /// Does NOT write isMarkedDone, hint values, or BB3 planned fields.
+  Future<void> saveManualExercise({
+    required String uid,
+    required DateTime date,
+    required Wes2ExerciseRow row,
   });
 }
 
@@ -365,6 +373,20 @@ class FirestoreWes2Repository implements Wes2Repository {
     };
   }
 
+  /// Builds a minimal Firestore map for a wesPlannedExercises[] row.
+  /// Intentionally omits isMarkedDone (lives only on exercises[]) and all
+  /// hint/model values (never persisted to Firestore).
+  static Map<String, dynamic> _buildWesPlannedRowMap(Wes2ExerciseRow row) {
+    return {
+      'exerciseId': row.exerciseId,
+      'name': row.name,
+      'circuitIndex': row.circuitIndex,
+      'orderIndex': row.orderIndex,
+      'setCount': row.setCount,
+      'sets': <Map<String, dynamic>>[],
+    };
+  }
+
   // ── Write stubs (future phases) ───────────────────────────────────────────
 
   @override
@@ -390,11 +412,6 @@ class FirestoreWes2Repository implements Wes2Repository {
     required Wes2ExerciseRow row,
     required bool isDone,
   }) async {
-    debugPrint(
-      '[WES2] setMarkedDone called — uid=${uid.isEmpty ? "EMPTY" : uid}, '
-      'date=${_dateDocId(date)}, exerciseId=${row.exerciseId}, isDone=$isDone',
-    );
-
     final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
@@ -419,10 +436,6 @@ class FirestoreWes2Repository implements Wes2Repository {
       final exerciseId = row.exerciseId;
       final exIdx = exercises.indexWhere((m) => m['exerciseId'] == exerciseId);
       final wpIdx = wesPlanned.indexWhere((m) => m['exerciseId'] == exerciseId);
-
-      debugPrint(
-        '[WES2] setMarkedDone branch — exIdx=$exIdx, wpIdx=$wpIdx',
-      );
 
       if (exIdx != -1) {
         // Surgical patch of top-level isMarkedDone — preserves all other fields/sets.
@@ -451,10 +464,6 @@ class FirestoreWes2Repository implements Wes2Repository {
         SetOptions(merge: true),
       );
     });
-
-    debugPrint(
-      '[WES2] setMarkedDone transaction committed — ${row.exerciseId} isDone=$isDone',
-    );
   }
 
   // ── saveSetCount (Phase 10) ───────────────────────────────────────────────
@@ -510,6 +519,62 @@ class FirestoreWes2Repository implements Wes2Repository {
       }
       // Row not in either list → no-op. Screen prevents this for BB3-planned
       // rows that have no actuals yet.
+
+      txn.set(
+        docRef,
+        {
+          'userId': uid,
+          'date': _dateDocId(date),
+          'lastEditedAt': FieldValue.serverTimestamp(),
+          'exercises': exercises,
+          'wesPlannedExercises': wesPlanned,
+        },
+        SetOptions(merge: true),
+      );
+    });
+  }
+
+  // ── saveManualExercise (Phase 11) ─────────────────────────────────────────
+
+  /// Appends a manually added blank exercise row to wesPlannedExercises[].
+  /// Server-side duplicate guard: no-op if exerciseId already in exercises[]
+  /// or wesPlannedExercises[]. isMarkedDone is not written here — it lives
+  /// only on exercises[] rows.
+  @override
+  Future<void> saveManualExercise({
+    required String uid,
+    required DateTime date,
+    required Wes2ExerciseRow row,
+  }) async {
+    final docRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('workouts')
+        .doc(_dateDocId(date));
+
+    await FirebaseFirestore.instance.runTransaction((txn) async {
+      final snap = await txn.get(docRef);
+      final data = snap.exists
+          ? (snap.data() ?? <String, dynamic>{})
+          : <String, dynamic>{};
+
+      final exercises = (data['exercises'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+      final wesPlanned = (data['wesPlannedExercises'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+
+      final exerciseId = row.exerciseId;
+      final alreadyExists =
+          exercises.any((m) => m['exerciseId'] == exerciseId) ||
+              wesPlanned.any((m) => m['exerciseId'] == exerciseId);
+
+      if (alreadyExists) return; // server-side duplicate guard
+
+      wesPlanned.add(_buildWesPlannedRowMap(row));
 
       txn.set(
         docRef,
