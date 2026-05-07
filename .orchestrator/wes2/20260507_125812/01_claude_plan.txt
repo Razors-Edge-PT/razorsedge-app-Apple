@@ -1,0 +1,248 @@
+Here is the proposed WES2 implementation plan.
+
+---
+
+## WES2 Implementation Plan â€” v1 Beta Route
+
+### 1. File Map (WES2_ names only)
+
+**Core screens / controllers**
+| File | Purpose |
+|---|---|
+| `lib/WES2_screen.dart` | Route shell, date header, day navigation, swipe, lifecycle |
+| `lib/WES2_session_controller.dart` | Selected date, rows, set states, dirty flags, epoch guards, undo stack |
+
+**Models**
+| File | Purpose |
+|---|---|
+| `lib/WES2_models.dart` | `Wes2ExerciseRow`, `Wes2SetState`, `Wes2FieldState<T>`, `Wes2RowSource` enum, hint-priority logic |
+
+**Services**
+| File | Purpose |
+|---|---|
+| `lib/WES2_repository.dart` | Firestore reads/writes for `/users/{uid}/workouts/{date}` â€” granular field saves + structural saves |
+| `lib/WES2_plan_service.dart` | BB3 planned day load + `exerciseSettings` load; BB3 delete/replace/reorder writeback |
+| `lib/WES2_hint_service.dart` | Wraps PMU + ProgressionEngine + BB3 overrides â†’ computes `hintValue` per field |
+| `lib/WES2_local_store.dart` | Isar snapshots, drafts, offline queue, expanded/collapsed state, scroll positions |
+| `lib/WES2_sync_service.dart` | Firestore listener; field-border collaborator indicator; offline conflict detection |
+| `lib/WES2_undo_service.dart` | In-memory undo stack; action snapshot DTOs |
+| `lib/WES2_template_service.dart` | Load template â†’ replace day; save workout â†’ new template |
+
+**Widgets directory: `lib/WES2_widgets/`**
+| File | Purpose |
+|---|---|
+| `WES2_day_header.dart` | Date label, swipe, select-date calendar, 3-dot day menu |
+| `WES2_exercise_card.dart` | Collapsible card, Done pill, video icon, 3-dot menu |
+| `WES2_set_row.dart` | Weight/reps/RIR/velocity/E1RM cells with hint display |
+| `WES2_field_tile.dart` | Single field cell: `Wes2FieldState` â†’ controller, hint text, border |
+| `WES2_timed_field.dart` | Timer display replacing reps cell for timed exercises |
+| `WES2_notes_icons.dart` | Plan note icon (yellow) + execution note icon; note dialog |
+| `WES2_settings_dialog.dart` | ExerciseSettings in-session editor |
+| `WES2_exercise_picker.dart` | Multi-circuit picker with circuit dropdown, checked state, dedup |
+| `WES2_summary_panel.dart` | Total exercises / sets / time |
+| `WES2_floating_timer.dart` | Day-level stopwatch overlay |
+
+**Tests: `test/wes2/`**
+| File | Purpose |
+|---|---|
+| `WES2_models_test.dart` | Field-state priority, hint override order, `Wes2RowSource` transitions |
+| `WES2_repository_test.dart` | Merge/transaction save logic, setCount, wesPlannedExercises â†” exercises[] promotion |
+| `WES2_hint_service_test.dart` | PMU/progression wrapper correctness, instant recalc, set 2+ derivation |
+| `WES2_sync_service_test.dart` | Listener apply, field-level last-write-wins, offline conflict detection |
+| `WES2_session_controller_test.dart` | Undo stack, epoch guards, duplicate prevention, circuit renumber |
+
+---
+
+### 2. Exact Repo Anchors to Inspect (before each phase)
+
+| Anchor | Why |
+|---|---|
+| `lib/home_screen.dart` lines ~2583 & ~3025 | WES launch calls (`WorkoutPage()`); Quick Access card structure for WES2 card insertion |
+| `lib/workout_entry_screen.dart` | Behavior/widget reference (read-only) â€” hint display, Done flow, save-on-unfocus pattern |
+| `lib/bb3_models.dart` | `BB3Set` nullable fields (weight, reps, rir, velocity, notes) â€” drives `Wes2FieldState.hintValue` population |
+| `lib/bb3_hint_service.dart` | PMU/ProgressionEngine call signature for `WES2_hint_service.dart` to replicate |
+| `lib/bb3_planned_exercise_service.dart` | Firestore planned day paths + writeback logic for BB3 structural updates |
+| `lib/periodization_model_utils.dart` | E1RM math, DUP/Linear instance logic, bodyweight conversions â€” called from `WES2_hint_service.dart` |
+| `lib/progression_engine.dart` | Target weight/reps/RIR computation â€” called from `WES2_hint_service.dart` |
+| `lib/user_context.dart` lines 1â€“60 | `currentUid` / `actingAsUid` / `isCoach` â€” every Firestore path must use these |
+| `lib/local_cache/isar_claude_bullet_snapshot.dart` | `ClaudeBulletSnapshot` schema â€” model for WES2 Isar snapshot design |
+| `lib/local_cache/isar_wes_init.dart` | WES init snapshot pattern |
+| `lib/workout_model.dart` | `Workout`, `Exercise` Firestore shape â€” WES2 repository must match |
+| `lib/templates.dart` + `lib/template_model.dart` | Template load/save Firestore paths and circuit model |
+
+---
+
+### 3. Phase Order
+
+| Phase | Deliverables | Risk gate |
+|---|---|---|
+| **P0 â€” Shell + models** | `WES2_screen.dart`, `WES2_models.dart`, `WES2_session_controller.dart` (static/mock rows), home-screen Quick Access card | Low â€” no Firestore writes |
+| **P1 â€” Firestore load** | `WES2_repository.dart` read path: completed workout + `wesPlannedExercises`; `WES2_plan_service.dart` BB3 planned day + `exerciseSettings` read | Review before proceeding |
+| **P2 â€” Row/set rendering** | `WES2_exercise_card.dart`, `WES2_set_row.dart`, `WES2_field_tile.dart`; `Wes2FieldState` visual priority; "Wait for it..." â†’ empty-state string | Low |
+| **P3 â€” Save + Isar draft** | `WES2_repository.dart` write path (merge/transaction); `WES2_local_store.dart` (Isar day draft, offline queue, fast reopen); save-on-unfocus + save-on-exit | **Review before proceeding** |
+| **P4 â€” Hint engine** | `WES2_hint_service.dart`; instant recalc on every field change; BB3 hint priority; set 2+ derivation | Review before proceeding |
+| **P5 â€” Structural operations** | Circuits, drag/drop, reorder, orderIndex normalization; exercise add/delete/replace; `WES2_undo_service.dart`; BB3 writeback for structural changes | Review |
+| **P6 â€” Templates + settings** | `WES2_template_service.dart`; `WES2_settings_dialog.dart`; exercise refresh + global refresh | Low |
+| **P7 â€” Notes, velocity, timed, timer, summary** | `WES2_notes_icons.dart`, `WES2_timed_field.dart`, `WES2_floating_timer.dart`, `WES2_summary_panel.dart`, velocity field; Done state pill | Low |
+| **P8 â€” Multi-device + offline** | `WES2_sync_service.dart`; Firestore listener; collaborator border; offline conflict prompt | **Review before proceeding** |
+| **P9 â€” Acceptance matrix** | All tests in `test/wes2/`; `flutter analyze`; smoke check against acceptance criteria in Â§16 | Gate for handoff |
+
+---
+
+### 4. Firestore Read/Write and Merge/Transaction Strategy
+
+**Read paths**
+- `/users/{uid}/workouts/{yyyy-MM-dd}` â†’ completed `exercises[]` + `wesPlannedExercises[]`
+- `/planned_blocks/{uid}/blocks/{blockId}/weeks/week_{n}/days/day_{n}` â†’ BB3 planned day
+- `/planned_blocks/{uid}/blocks/{blockId}` â†’ `.exerciseSettings` map
+
+**Write paths and safety**
+
+*Field unfocus save (granular)*: Because Firestore arrays cannot be field-patched safely, `WES2_repository.dart` uses a **Firestore transaction** on unfocus:
+1. Read latest server document snapshot within the transaction.
+2. Locate the target exercise row by `exerciseId` (not index).
+3. Apply only the changed `fieldKey` at `setIndex` â€” preserve all other fields from the server snapshot.
+4. Rewrite the corrected array and commit.
+
+This prevents Device B's reps from being wiped by Device A's concurrent weight write (Â§12.4).
+
+*Structural saves (reorder, template load, replace)*: Write full normalized day state atomically in a single `set()` with `merge: false` on the workout document, but only after reading and reconciling the latest server state + local dirty state. Gate behind epoch guard to prevent stale async loaders from committing.
+
+*BB3 structural writeback*: `WES2_plan_service.dart` writes `/planned_blocks/{uid}/blocks/{blockId}/weeks/week_{n}/days/day_{n}` for delete/replace/reorder of BB3-sourced exercises only. These use `update()` on specific fields within the day document, not full overwrites.
+
+*ExerciseSettings*: `update({'exerciseSettings.${exerciseId}': newSettings})` on the block document. Requires internet; never queued.
+
+**Epoch guard**: `WES2_session_controller.dart` increments a `_epoch` counter on every date change. Every async loader captures the epoch at start and checks it before committing results â€” stale loaders for previous dates silently discard their results.
+
+---
+
+### 5. Isar / Local Draft / Fast-Reopen / Offline Queue Strategy
+
+`WES2_local_store.dart` owns all Isar interactions. New Isar collections (modelled after `ClaudeBulletSnapshot`):
+
+| Collection | Key | Content |
+|---|---|---|
+| `Wes2DayDraft` | `uid + date` | Full serialized day state as JSON: rows, setStates, `Wes2FieldState` payloads, `dirty: bool`, `lastLocalEditAt` |
+| `Wes2ExpandedState` | `uid + date + exerciseId` | `expanded: bool` (device-local, never synced) |
+| `Wes2ScrollPosition` | `uid + date` | Last scroll offset + `lastEditedExerciseId` + `lastEditedSetIndex` |
+| `Wes2OfflineQueue` | `uid + date + queuedAt` | Serialized save payload + retry metadata |
+| `Wes2ConflictMeta` | `uid + date` | Last known server `lastEditedAt` timestamp; used for offline conflict detection |
+
+**Fast reopen**: On page open, `WES2_local_store.dart` returns the `Wes2DayDraft` instantly â†’ `WES2_session_controller.dart` paints with it. Server load runs concurrently. If server data is newer than draft, merge server data preserving locally-dirty fields (by comparing `lastLocalEditAt` vs server `lastEditedAt`).
+
+**Offline queue**: If no internet on unfocus, save to `Wes2OfflineQueue`. On reconnect, process queue in order. Before committing each queued item, compare `Wes2ConflictMeta.lastKnownServerTimestamp` with current server `lastEditedAt` â€” if server is newer (edited online while offline), show whole-workout conflict prompt.
+
+**Coach/athlete isolation**: Every Isar key includes `uid` = `UserContext.currentUid` (i.e. `actingAsUid`). Switching athlete clears/ignores prior athlete's local store keys.
+
+---
+
+### 6. Multi-Device Listener Strategy
+
+`WES2_sync_service.dart` opens a `StreamSubscription` on `/users/{uid}/workouts/{date}` when WES2 page is active.
+
+**Listener apply rules**:
+- On each snapshot: extract `exercises[]` and `wesPlannedExercises[]` from server.
+- For each exercise row (matched by `exerciseId`), for each set, for each field: if the local `Wes2FieldState.dirty == false` for that field, accept the server value. If `dirty == true` (user is editing or has unfocused since load), keep local value.
+- Never apply hint recalculations from server â€” hints are always recomputed locally.
+- Structural changes (row added/deleted/reordered on another device) are applied only if local state for that row is clean.
+
+**Collaborator field border**: A lightweight Firestore presence document at `/users/{uid}/workouts/{date}/_presence/{deviceId}` stores `{focusedExerciseId, focusedSetIndex, focusedField, lastSeenAt}` with a TTL. `WES2_sync_service.dart` listens to `_presence` sub-documents. If another device's `lastSeenAt` is within 30s, the matching `WES2_field_tile.dart` shows a 1px colored border. This never blocks typing.
+
+**No inter-device hint streaming**: Hints are pure local computations. The listener only carries `actualValue` fields.
+
+---
+
+### 7. BB3 Structural Sync/Update Strategy
+
+`WES2_plan_service.dart` handles all BB3 writeback. Rules:
+
+| WES2 action | BB3 row source | BB3 writeback |
+|---|---|---|
+| Delete exercise | `bb3Planned` | Remove that exercise from BB3 planned day array |
+| Delete exercise | `wes2Manual` / `templateLoaded` | No BB3 writeback |
+| Replace exercise | `bb3Planned` | Replace in BB3 planned day with new exerciseId |
+| Reorder within circuit | `bb3Planned` | Update `orderIndex` in BB3 planned day |
+| Move between circuits | `bb3Planned` | Update `circuitIndex` + `orderIndex` in BB3 planned day |
+| Load template (any source) | replaces day | Clear entire BB3 planned day; template rows become `templateLoaded` |
+| WES2-only exercise completes | `wes2Manual` | No BB3 writeback (BB3 reads completed workout doc directly) |
+
+All BB3 writes use `update()` on the day document, patching only the `exercises` array (or specific fields) after normalizing `circuitIndex` and `orderIndex` across all affected rows.
+
+Undo queues the inverse BB3 writeback but does not immediately fire it â€” the next save trigger applies the corrected state.
+
+---
+
+### 8. Hint/Progression Integration Strategy
+
+`WES2_hint_service.dart` is a thin orchestration wrapper around the existing read-only `periodization_model_utils.dart` (PMU) and `progression_engine.dart`. It is **never** modified; WES2 calls it with synthetic inputs matching the pattern established in `bb3_hint_service.dart`.
+
+**Hint priority chain** (per `Wes2FieldState.hintValue`):
+1. `actualValue` present â†’ show actual, no hint display needed.
+2. BB3 explicit planned override (field non-null in `BB3Set`) â†’ hint from BB3.
+3. PMU/ProgressionEngine model hint â†’ derived from `exerciseSettings`, top-set history, block week/instance context.
+4. Empty.
+
+**Computation trigger**: Every field `onChanged` in `WES2_field_tile.dart` calls `WES2_session_controller.recomputeHints(exerciseId)` synchronously (no debounce, no Firestore). The controller updates sibling `Wes2FieldState.hintValue` values and calls `setState` only on the affected exercise card â€” not the full page. Typed field text is never touched during recomputation.
+
+**Set 2+ hints**: Derived from Set 1 target/actual + fatigue/dropoff factor + RIR plan â€” replicating the existing WES set-cascade logic read from `workout_entry_screen.dart` as behavior reference.
+
+**Instance index computation**: Resolved by `WES2_plan_service.dart` at load time â€” DUP By Week uses `weeklyInstanceIndex` (position within current week, keyed by `weeklyFrequency`); DUP By Exposure uses global completed exposure count from history.
+
+---
+
+### 9. Home-Screen Quick Access Wiring Plan
+
+**One edit to `lib/home_screen.dart`** only:
+
+1. Add import: `import 'WES2_screen.dart';` at the top of `home_screen.dart`.
+2. Locate the Quick Access card area (around line 2583 â€” the first `WorkoutPage()` launch call with no `initialDate`).
+3. Insert a new WES2 Quick Access card in the same row/section. The card navigates using a direct `MaterialPageRoute`:
+
+```dart
+Navigator.push(context, MaterialPageRoute(
+  builder: (_) => const WES2Screen(initialDate: null), // null â†’ defaults to today
+));
+```
+
+The `WES2Screen` constructor resolves `null` initialDate to `DateTime.now()` internally.
+
+**Calendar picker taps are untouched**: The calendar-triggered `WorkoutPage(initialDate: selectedDay)` call at line ~3025 remains unchanged â€” it still opens the original WES.
+
+**Label**: The Quick Access card is labelled "WES2" to make it clearly a beta entry point distinct from the existing Workout Entry.
+
+---
+
+### 10. Tests / Analyzer Strategy
+
+**Static analysis**: After each phase, run `flutter analyze` scoped to `lib/WES2_*.dart lib/WES2_widgets/` and `test/wes2/`. Fix all warnings/errors before advancing. Existing files must not gain new analyzer errors.
+
+**Unit tests** (`test/wes2/`):
+- `WES2_models_test.dart`: `Wes2FieldState` priority chain, `Wes2RowSource` promotion rules (blank â†’ `wesPlannedExercises[]`, valued â†’ `exercises[]`), duplicate exerciseId guard.
+- `WES2_repository_test.dart`: Transaction merge logic with mock Firestore â€” verify Device A's weight + Device B's reps both survive; verify `wesPlannedExercises` â†” `exercises[]` promotion at correct threshold.
+- `WES2_hint_service_test.dart`: BB3 override beats model hint; model hint appears when BB3 null; clearing actual restores hint; DUP By Week instance 2/3 correct; set 2+ derivation from set 1 change.
+- `WES2_sync_service_test.dart`: Listener applies non-dirty fields; dirty fields kept local; offline conflict detection triggers on newer server timestamp.
+- `WES2_session_controller_test.dart`: Epoch guard prevents stale loaders; undo stack restores exercise + circuit/order; duplicate exerciseId rejected from all add paths.
+
+**Acceptance matrix smoke check** (P9): Manual walkthrough of Â§16.1â€“16.6 with a real Firebase project in staging before handoff.
+
+---
+
+### 11. Risks and How the Plan Avoids Touching Blocked Files
+
+| Risk | Mitigation |
+|---|---|
+| **`workout_entry_screen.dart` accidental edit** | WES2 is a fully separate file tree. The only cross-reference is read-only behavioral inspection. No import of WES2 into WES1 or vice versa. |
+| **`main.dart` route wiring** | Spec and hard restrictions both prohibit v1 main.dart edits. WES2 is reached only via the `home_screen.dart` Quick Access `MaterialPageRoute` â€” no named route registration needed. |
+| **`periodization_model_utils.dart` / `progression_engine.dart` modification** | `WES2_hint_service.dart` calls these as read-only dependencies using the same synthetic-input pattern as `bb3_hint_service.dart`. No edits to either file. |
+| **`pubspec.yaml` / assets** | Isar is already a dependency (existing `isar_claude_bullet_snapshot.dart` proves it). No new packages or assets needed in v1. |
+| **BB3 files (`bb3_*.dart`)** | `WES2_plan_service.dart` reads BB3 planned day and writes to BB3 planned day paths via Firestore SDK directly â€” no imports of or edits to the BB3 dart files. |
+| **Firestore schema breaking change** | WES2 v1 is additive only: `setCount` and `orderIndex` fields added to existing array rows; `wesPlannedExercises[]` already exists. No subcollection normalization, no schema migration. |
+| **Isar model collision** | WES2 Isar collections (`Wes2DayDraft`, etc.) are new classes in `WES2_local_store.dart`. They do not modify `ClaudeBulletSnapshot` or any existing `isar_*.dart` model. |
+| **Coach/athlete UID leakage** | Every Firestore path and Isar cache key uses `UserContext.currentUid` (`actingAsUid`). `FirebaseAuth.currentUser.uid` is never used directly in WES2. This is enforced at the `WES2_repository.dart` layer. |
+| **Circular calendar-picker regression** | Calendar-picker navigation in `home_screen.dart` at line ~3025 is never touched; it continues to open `WorkoutPage`. WES2 Quick Access card is a separate widget inserted nearby. |
+| **Stale async loaders overwriting correct date** | Epoch guard in `WES2_session_controller.dart` invalidates all in-flight loaders on date change. |
+| **`bb3_*.dart` files accidentally edited** | `WES2_plan_service.dart` owns all BB3 path logic and is the only file that writes to BB3 Firestore paths â€” no other WES2 file touches BB3 paths directly. |
+
+---
+
+**Plan ends here. No files have been edited.**
