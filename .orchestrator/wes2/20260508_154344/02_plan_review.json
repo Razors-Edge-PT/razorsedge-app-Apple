@@ -1,0 +1,20 @@
+{
+  "approved": false,
+  "reason": "This continuation plan restarts WES2 at a template implementation layer and does not clearly continue from phase 18 in a scoped way. It also proposes file inspection and implementation outside the allowed write scope, including lib/WES2_screen.dart, lib/WES2_controller.dart, lib/WES2_models.dart, lib/template_model.dart, lib/templates.dart, lib/WES2_plan_service.dart, and lib/WES2_repository.dart, none of which are in the permitted write list. The plan also introduces a new picker UI and service wiring without anchoring them to the approved WES2 file boundaries, which risks scope drift from the current phase.",
+  "required_changes": [
+    "Limit the continuation plan to the allowed write scope only: lib/WES2_*.dart, lib/WES2_widgets/WES2_*.dart, test/wes2/WES2_*.dart, docs/wes2/**, .orchestrator/wes2/**, and lib/home_screen.dart only for the WES2 Quick Access card/import.",
+    "Remove any implementation steps that require modifying or depending on non-allowed files such as lib/WES2_screen.dart, lib/WES2_controller.dart, lib/WES2_models.dart, lib/template_model.dart, lib/templates.dart, lib/WES2_plan_service.dart, and lib/WES2_repository.dart unless they are actually within lib/WES2_*.dart and explicitly named accordingly.",
+    "Rewrite the plan so it continues from phase 18 without restarting WES2 architecture work; reference only the next incremental phase goals and avoid re-litigating template system foundations.",
+    "If template support is in scope for phase 18, confine changes to WES2-specific files and explicitly state how they interact with the existing WES2 architecture rather than proposing broad controller/repository refactors.",
+    "Add explicit analysis/test steps only for WES2-specific files under the allowed path set.",
+    "Cite the supporting spec section when requesting any correction in future revisions, especially \u00a79.7 Templates, \u00a79.8 Save workout to templates, \u00a74.1 Duplicate exercise prevention, and \u00a710.1 Overflow."
+  ],
+  "scope_risks": [
+    "Template flow touches non-allowed files and likely exceeds the current continuation boundary.",
+    "The plan appears to depend on a WES2_screen/WES2_controller architecture that is not confirmed to be within writable scope.",
+    "Potential hidden restart of WES2 rather than a strict phase-18 continuation.",
+    "Risk of scope creep into template picker UI, service DI wiring, and persistence plumbing beyond the approved file set.",
+    "Any row-text UI work must avoid RenderFlex overflow; the plan mentions ellipsis guards but does not prove all long Row text paths are constrained.",
+    "The plan must not introduce ListTile inside PopupMenuItem; ensure any menu/picker UI follows this blocker rule."
+  ]
+}
