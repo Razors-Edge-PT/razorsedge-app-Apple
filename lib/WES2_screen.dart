@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'user_context.dart';
@@ -11,6 +13,8 @@ import 'WES2_widgets/WES2_day_actions_row.dart';
 import 'WES2_widgets/WES2_exercise_card.dart';
 import 'WES2_widgets/WES2_exercise_picker.dart';
 import 'WES2_local_store.dart';
+
+enum _Wes2AppBarMenuAction { timer, templates }
 
 /// WES2 beta route shell.
 /// Receives an optional [initialDate]; defaults to today when omitted.
@@ -30,6 +34,13 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   final Wes2PlanService _planService = FirestoreWes2PlanService();
   final Wes2LocalStore _localStore = IsarWes2LocalStore();
   bool _loadStarted = false;
+
+  // ── Day timer state (Phase 17) ─────────────────────────────────────────────
+  bool _timerVisible = false;
+  bool _timerRunning = false;
+  int _elapsedSeconds = 0;
+  DateTime? _timerStartedAt;
+  Timer? _timerTicker;
 
   @override
   void initState() {
@@ -60,6 +71,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _timerTicker?.cancel();
     _saveDraftNow();
     WidgetsBinding.instance.removeObserver(this);
     _controller.dispose();
@@ -70,6 +82,16 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
       _saveDraftNow();
+    } else if (state == AppLifecycleState.resumed) {
+      // Resync timer elapsed from the anchored start time after backgrounding.
+      if (_timerRunning && _timerStartedAt != null) {
+        _syncTimerElapsed();
+        if (_elapsedSeconds >= 3600) {
+          _stopTimer();
+        } else if (mounted) {
+          setState(() {});
+        }
+      }
     }
   }
 
@@ -83,6 +105,75 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       date: _controller.selectedDate,
       rows: _controller.rows.toList(),
     );
+  }
+
+  // ── Timer (Phase 17) ──────────────────────────────────────────────────────
+
+  void _toggleTimerVisible() => setState(() => _timerVisible = !_timerVisible);
+
+  void _startTimer() {
+    if (_timerRunning) return;
+    _timerTicker?.cancel();
+    setState(() {
+      _timerRunning = true;
+      // Anchor virtual start so that elapsed is preserved across stop/start.
+      _timerStartedAt =
+          DateTime.now().subtract(Duration(seconds: _elapsedSeconds));
+    });
+    _timerTicker =
+        Timer.periodic(const Duration(seconds: 1), (_) => _tickTimer());
+  }
+
+  void _stopTimer() {
+    _timerTicker?.cancel();
+    _timerTicker = null;
+    setState(() {
+      // Freeze elapsed from start time before clearing the anchor.
+      _syncTimerElapsed();
+      _timerRunning = false;
+      _timerStartedAt = null;
+    });
+  }
+
+  void _resetTimer() {
+    _timerTicker?.cancel();
+    _timerTicker = null;
+    setState(() {
+      _timerRunning = false;
+      _elapsedSeconds = 0;
+      _timerStartedAt = null;
+    });
+  }
+
+  // Close stops the timer so there is no runaway timer while hidden.
+  void _closeTimer() {
+    _stopTimer();
+    setState(() => _timerVisible = false);
+  }
+
+  void _tickTimer() {
+    if (!mounted) return;
+    _syncTimerElapsed();
+    if (_elapsedSeconds >= 3600) {
+      _stopTimer();
+    } else {
+      setState(() {});
+    }
+  }
+
+  void _syncTimerElapsed() {
+    if (_timerStartedAt == null) return;
+    final elapsed = DateTime.now().difference(_timerStartedAt!).inSeconds;
+    _elapsedSeconds = elapsed.clamp(0, 3600);
+  }
+
+  String _formatDuration(int seconds) {
+    final h = seconds ~/ 3600;
+    final m = (seconds % 3600) ~/ 60;
+    final s = seconds % 60;
+    final mm = m.toString().padLeft(2, '0');
+    final ss = s.toString().padLeft(2, '0');
+    return h > 0 ? '$h:$mm:$ss' : '$mm:$ss';
   }
 
   /// Load completed workout + BB3 planned rows for the current date, then merge.
@@ -419,40 +510,67 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
                   _loadDay();
                 },
               ),
-              PopupMenuButton<VoidCallback>(
+              PopupMenuButton<_Wes2AppBarMenuAction>(
                 icon: const Icon(Icons.more_vert),
-                onSelected: (fn) => fn(),
+                onSelected: (action) {
+                  switch (action) {
+                    case _Wes2AppBarMenuAction.timer:
+                      _toggleTimerVisible();
+                      break;
+                    case _Wes2AppBarMenuAction.templates:
+                      _showTemplatesPlaceholder();
+                      break;
+                  }
+                },
                 itemBuilder: (_) => [
-                  PopupMenuItem(
-                    value: _showTimerPlaceholder,
-                    child: const ListTile(
-                      dense: true,
-                      leading: Icon(Icons.timer_outlined),
-                      title: Text('Timer'),
+                  const PopupMenuItem(
+                    value: _Wes2AppBarMenuAction.timer,
+                    height: 40,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.timer_outlined, size: 18),
+                        SizedBox(width: 10),
+                        Text('Timer'),
+                      ],
                     ),
                   ),
-                  PopupMenuItem(
-                    value: _showTemplatesPlaceholder,
-                    child: const ListTile(
-                      dense: true,
-                      leading: Icon(Icons.layers_outlined),
-                      title: Text('Templates'),
+                  const PopupMenuItem(
+                    value: _Wes2AppBarMenuAction.templates,
+                    height: 40,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.layers_outlined, size: 18),
+                        SizedBox(width: 10),
+                        Text('Templates'),
+                      ],
                     ),
                   ),
                 ],
               ),
             ],
           ),
-          body: Column(
+          body: Stack(
             children: [
-              Wes2DayHeader(
-                date: controller.selectedDate,
-                onSelectDate: _onSelectDate,
-                onPrevDay: _onPrevDay,
-                onNextDay: _onNextDay,
+              Column(
+                children: [
+                  Wes2DayHeader(
+                    date: controller.selectedDate,
+                    onSelectDate: _onSelectDate,
+                    onPrevDay: _onPrevDay,
+                    onNextDay: _onNextDay,
+                  ),
+                  const Divider(height: 1),
+                  Expanded(child: _buildBody(context, controller)),
+                ],
               ),
-              const Divider(height: 1),
-              Expanded(child: _buildBody(context, controller)),
+              if (_timerVisible)
+                Positioned(
+                  right: 12,
+                  bottom: 12,
+                  child: _buildFloatingTimer(),
+                ),
             ],
           ),
         ),
@@ -507,6 +625,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             Wes2BottomActionsRow(
               setsLogged: 0,
               onAddCircuit: _onAddCircuit,
+              onSummary: _showWorkoutSummary,
             ),
           ],
         );
@@ -574,6 +693,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         items.add(Wes2BottomActionsRow(
           setsLogged: setsLogged,
           onAddCircuit: _onAddCircuit,
+          onSummary: _showWorkoutSummary,
         ));
         return ListView(children: items);
       case Wes2LoadState.error:
@@ -812,22 +932,6 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
   void _showNotesPlaceholder() {
     _showSnackBar('Use the note icon beside each set to add notes.');
-  }
-
-  void _showTimerPlaceholder() {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Timer'),
-        content: const Text('Rest timer coming soon.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
-    );
   }
 
   void _showTemplatesPlaceholder() {
@@ -1196,5 +1300,234 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     } catch (_) {
       // Silent failure; local draft preserves the note for next reopen.
     }
+  }
+
+  // ── Floating timer widget (Phase 17) ──────────────────────────────────────
+
+  Widget _buildFloatingTimer() {
+    return Card(
+      elevation: 8,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.all(Radius.circular(8)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 8, 10, 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _formatDuration(_elapsedSeconds),
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.5,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                IconButton(
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints.tightFor(width: 24, height: 24),
+                  icon: const Icon(Icons.close, size: 16),
+                  tooltip: 'Close timer',
+                  onPressed: _closeTimer,
+                ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextButton(
+                  onPressed: _timerRunning ? _stopTimer : _startTimer,
+                  style: TextButton.styleFrom(
+                    foregroundColor: _timerRunning
+                        ? Colors.redAccent
+                        : Colors.greenAccent,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 4),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  child: Text(
+                    _timerRunning ? 'Stop' : 'Start',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ),
+                const SizedBox(width: 2),
+                TextButton(
+                  onPressed: _timerRunning ? null : _resetTimer,
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 4),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  child: const Text('Reset', style: TextStyle(fontSize: 13)),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Workout summary (Phase 17) ────────────────────────────────────────────
+
+  void _showWorkoutSummary() {
+    final rows = _controller.rows;
+    final date = _controller.selectedDate;
+    final dateStr =
+        '${date.year.toString().padLeft(4, '0')}-'
+        '${date.month.toString().padLeft(2, '0')}-'
+        '${date.day.toString().padLeft(2, '0')}';
+
+    final totalExercises = rows.length;
+    final totalSets = rows.fold(0, (int s, r) => s + r.setCount);
+    final setsLogged =
+        rows.expand((r) => r.sets).where((s) => s.hasAnyActual).length;
+    double totalVolume = 0;
+    for (final row in rows) {
+      for (final set in row.sets) {
+        final w = set.weight.actualValue;
+        final r = set.reps.actualValue;
+        if (w != null && r != null) totalVolume += w * r;
+      }
+    }
+
+    // Per-circuit exercise breakdown.
+    final circuitMap = <int, List<Wes2ExerciseRow>>{};
+    for (final row in rows) {
+      circuitMap.putIfAbsent(row.circuitIndex, () => []).add(row);
+    }
+    final sortedCircuits = circuitMap.keys.toList()..sort();
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (ctx) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.5,
+        maxChildSize: 0.9,
+        minChildSize: 0.25,
+        builder: (_, scrollCtrl) => ListView(
+          controller: scrollCtrl,
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 40),
+          children: [
+            Text(
+              'Workout Summary',
+              style: Theme.of(ctx).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 2),
+            Text(
+              dateStr,
+              style: const TextStyle(fontSize: 12, color: Colors.white54),
+            ),
+            const Divider(height: 20),
+            _summaryStatRow('Exercises', '$totalExercises'),
+            _summaryStatRow('Total sets', '$totalSets'),
+            _summaryStatRow('Sets logged', '$setsLogged'),
+            if (totalVolume > 0)
+              _summaryStatRow(
+                'Total volume',
+                '${totalVolume.toStringAsFixed(0)} kg·reps',
+              ),
+            if (_elapsedSeconds > 0)
+              _summaryStatRow(
+                'Session time',
+                _formatDuration(_elapsedSeconds),
+              ),
+            if (rows.isEmpty)
+              const Padding(
+                padding: EdgeInsets.only(top: 12),
+                child: Text(
+                  'No exercises logged yet.',
+                  style: TextStyle(color: Colors.white54),
+                ),
+              ),
+            if (rows.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              for (final ci in sortedCircuits) ...[
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Text(
+                    'Circuit ${ci + 1}',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                for (final row in circuitMap[ci]!)
+                  _summaryExerciseRow(row),
+                const SizedBox(height: 8),
+              ],
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _summaryStatRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(fontSize: 13, color: Colors.white70),
+            ),
+          ),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _summaryExerciseRow(Wes2ExerciseRow row) {
+    final loggedSets = row.sets.where((s) => s.hasAnyActual).length;
+    double vol = 0;
+    for (final s in row.sets) {
+      final w = s.weight.actualValue;
+      final r = s.reps.actualValue;
+      if (w != null && r != null) vol += w * r;
+    }
+    final volStr = vol > 0 ? ' · ${vol.toStringAsFixed(0)}' : '';
+    return Padding(
+      padding: const EdgeInsets.only(left: 8, bottom: 3),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              row.name,
+              style: const TextStyle(fontSize: 12),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '$loggedSets/${row.setCount} sets$volStr',
+            style: const TextStyle(fontSize: 11, color: Colors.white54),
+          ),
+        ],
+      ),
+    );
   }
 }

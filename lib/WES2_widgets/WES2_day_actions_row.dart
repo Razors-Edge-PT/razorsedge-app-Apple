@@ -34,16 +34,18 @@ class Wes2TopActionsBar extends StatelessWidget {
   }
 }
 
-/// Bottom action row: read-only summary label + "Add Circuit" button + 55px spacer.
+/// Bottom action row: Summary · sets logged · Add Circuit + 55px spacer.
 class Wes2BottomActionsRow extends StatelessWidget {
   /// Total sets with any actual (logged) value across all exercise rows.
   final int setsLogged;
   final void Function() onAddCircuit;
+  final VoidCallback? onSummary;
 
   const Wes2BottomActionsRow({
     super.key,
     required this.setsLogged,
     required this.onAddCircuit,
+    this.onSummary,
   });
 
   @override
@@ -55,13 +57,33 @@ class Wes2BottomActionsRow extends StatelessWidget {
           padding: const EdgeInsets.only(top: 12, left: 8, right: 8, bottom: 0),
           child: Row(
             children: [
-              Text(
-                setsLogged > 0
-                    ? '$setsLogged set${setsLogged == 1 ? '' : 's'} logged'
-                    : 'No sets logged yet',
-                style: const TextStyle(fontSize: 12, color: Colors.white54),
+              if (onSummary != null) ...[
+                TextButton(
+                  onPressed: onSummary,
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 6, vertical: 2),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  child: const Text(
+                    'Summary',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                ),
+                const SizedBox(width: 4),
+              ],
+              Expanded(
+                child: Text(
+                  setsLogged > 0
+                      ? '$setsLogged set${setsLogged == 1 ? '' : 's'} logged'
+                      : 'No sets logged yet',
+                  style: const TextStyle(fontSize: 12, color: Colors.white54),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
               ),
-              const Spacer(),
               ElevatedButton.icon(
                 icon: Icon(
                   Icons.add,
