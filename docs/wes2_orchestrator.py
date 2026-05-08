@@ -252,28 +252,60 @@ COMPACT_SPEC_BRIEF = textwrap.dedent("""\
     - WES2 must use Isar for local draft/fast reopen/offline.
     - Every path must use UserContext.currentUid / selected athlete UID, not raw FirebaseAuth.
 
-    WRITE SCOPE:
-    Allowed writes:
-      lib/WES2_*.dart
-      lib/WES2_widgets/WES2_*.dart
-      test/wes2/WES2_*.dart
+    WRITE SCOPE — READ THIS CAREFULLY BEFORE REVIEWING:
+
+    ALLOWED WRITES — the rule is: any file whose name starts with WES2_ is allowed.
+    The pattern lib/WES2_*.dart means ANY file in lib/ whose filename begins with WES2_.
+    The pattern lib/WES2_widgets/WES2_*.dart means ANY file in lib/WES2_widgets/ whose
+    filename begins with WES2_.
+
+    Currently known WES2 files (ALL of these are fully allowed to be read AND written):
+      lib/WES2_screen.dart
+      lib/WES2_controller.dart
+      lib/WES2_models.dart
+      lib/WES2_repository.dart          <-- ALLOWED. Do NOT reject edits to this file.
+      lib/WES2_plan_service.dart
+      lib/WES2_local_store.dart
+      lib/WES2_template_service.dart
+      lib/WES2_sync_service.dart
+      lib/WES2_hint_service.dart
+      lib/WES2_widgets/WES2_day_actions_row.dart
+      lib/WES2_widgets/WES2_day_header.dart
+      lib/WES2_widgets/WES2_empty_state.dart
+      lib/WES2_widgets/WES2_exercise_card.dart
+      lib/WES2_widgets/WES2_exercise_picker.dart
+      lib/WES2_widgets/WES2_field_cell.dart
+      lib/WES2_widgets/WES2_set_row.dart
+      test/wes2/WES2_*.dart  (any test file starting with WES2_)
       docs/wes2/**
       .orchestrator/wes2/**
       docs/wes2_orchestrator.py
-    Blocked writes:
-      lib/workout_entry_screen.dart, lib/main.dart, lib/bb3_*.dart,
-      lib/periodization_model_utils.dart, lib/progression_engine.dart,
-      pubspec.yaml, assets/**, *.g.dart, *.freezed.dart,
-      .claude/settings.local.json, lib/templates.dart, lib/template_model.dart
+
+    New files are also allowed if their filename starts with WES2_ and they live in
+    lib/, lib/WES2_widgets/, or test/wes2/.
+
+    BLOCKED WRITES — reject ONLY if the plan writes one of these:
+      lib/workout_entry_screen.dart
+      lib/main.dart
+      lib/bb3_*.dart  (any file starting with bb3_)
+      lib/periodization_model_utils.dart
+      lib/progression_engine.dart
+      pubspec.yaml
+      assets/**
+      *.g.dart  (generated)
+      *.freezed.dart  (generated)
+      .claude/settings.local.json
+      lib/templates.dart
+      lib/template_model.dart
 
     Read-only reference (Claude may read but NOT edit):
       lib/templates.dart, lib/template_model.dart, lib/workout_entry_screen.dart,
       lib/bb3_*.dart, lib/periodization_model_utils.dart, lib/progression_engine.dart
 
-    IMPORTANT REVIEWER NOTE:
-    Do NOT reject a plan merely because it proposes to READ a blocked/reference file.
-    Only reject if the plan or implementation proposes to WRITE a blocked file.
-    WES2-scoped files like lib/WES2_screen.dart ARE allowed writes.
+    CRITICAL REVIEWER REMINDER:
+    lib/WES2_repository.dart IS in the allowed write scope. Do NOT reject it.
+    Any lib/WES2_*.dart file is allowed. The WES2_ prefix is the only test.
+    Do NOT reject a plan for reading a reference file — only for writing a blocked file.
 """)
 
 
@@ -567,7 +599,7 @@ def call_openai_reviewer(
     Raises RuntimeError on unrecoverable failure.
 
     Uses Responses API because:
-    - client.responses.create supports gpt-4o-mini and newer models natively.
+    - client.responses.create supports gpt-5.4-mini and newer models natively.
     - resp.output_text gives a clean single string, no choices[0] indexing needed.
     - The system instruction is passed as the 'instructions' parameter.
     """
@@ -591,14 +623,50 @@ def call_openai_reviewer(
           "corrections": ["optional list of required corrections if rejected"]
         }
 
-        CRITICAL RULES:
-        - Do NOT reject a plan merely because it proposes to READ a reference file like
-          lib/templates.dart, lib/bb3_*.dart, or lib/periodization_model_utils.dart.
-          Reading reference files for schema/context is ALLOWED.
-        - Only reject if the plan or implementation WRITES to a blocked file.
-        - WES2-scoped files like lib/WES2_screen.dart ARE in the allowed write scope.
-        - spec_references_used must be non-empty if you reject or require corrections.
-        - Approve only if the plan/implementation correctly follows the WES2 spec and scope rules.
+        ====================================================================
+        WRITE SCOPE — YOU MUST APPLY THIS RULE BEFORE REJECTING ANYTHING:
+        ====================================================================
+
+        ALLOWED WRITES — the rule is simple: any file whose filename starts with WES2_ is allowed.
+
+        These files are ALL fully allowed to be written. Do NOT reject any of them:
+          lib/WES2_screen.dart
+          lib/WES2_controller.dart
+          lib/WES2_models.dart
+          lib/WES2_repository.dart       <-- ALLOWED. Never reject edits to this file.
+          lib/WES2_plan_service.dart
+          lib/WES2_local_store.dart
+          lib/WES2_template_service.dart
+          lib/WES2_sync_service.dart
+          lib/WES2_hint_service.dart
+          lib/WES2_widgets/WES2_day_actions_row.dart
+          lib/WES2_widgets/WES2_day_header.dart
+          lib/WES2_widgets/WES2_empty_state.dart
+          lib/WES2_widgets/WES2_exercise_card.dart
+          lib/WES2_widgets/WES2_exercise_picker.dart
+          lib/WES2_widgets/WES2_field_cell.dart
+          lib/WES2_widgets/WES2_set_row.dart
+
+        Any NEW file is also allowed if its name starts with WES2_ and it lives in
+        lib/, lib/WES2_widgets/, or test/wes2/.
+
+        BLOCKED WRITES — only reject for these:
+          lib/workout_entry_screen.dart, lib/main.dart, lib/bb3_*.dart,
+          lib/periodization_model_utils.dart, lib/progression_engine.dart,
+          pubspec.yaml, assets/**, *.g.dart, *.freezed.dart,
+          .claude/settings.local.json, lib/templates.dart, lib/template_model.dart
+
+        READING reference files (lib/templates.dart, lib/bb3_*.dart, etc.) is ALLOWED.
+        Only reject for WRITING a blocked file, never for reading one.
+
+        ====================================================================
+        BEFORE YOU REJECT — ask yourself:
+        1. Does the filename start with WES2_? If yes → it is ALLOWED. Do not reject.
+        2. Is it in the blocked list above? If no → it is not your reason to reject.
+        ====================================================================
+
+        spec_references_used must be non-empty whenever you reject or require corrections.
+        Approve if the plan/implementation follows WES2 spec and stays within allowed scope.
     """)
 
     last_raw = ""
