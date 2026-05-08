@@ -1,0 +1,19 @@
+{
+  "approved": false,
+  "reason": "The plan is scoped to phase 18 template work, but it proposes writing outside the allowed WES2 template scope and omits required phase-18 continuity protections. Specifically, it plans to edit lib/WES2_screen.dart and lib/WES2_controller.dart (allowed), but also implies repository/template-array persistence behavior without anchoring to existing allowed write files or explicitly preserving the phase 18 state machine/undo continuity. More importantly, it does not explicitly state that it continues from phase 18 without restarting WES2, and it introduces a new save-to-template flow without proving it respects the WES2 contract on no broad rewrites or unintended persistence changes. Per spec topics 1.1 Non-goals, 1.2 Locked Implementation Decisions for WES2 v1, 4.1 Exercise uniqueness, 9.7 Templates, and 9.9 Undo, the plan must explicitly preserve existing WES2 session state, undo stack, and duplicate guards while loading templates.",
+  "required_changes": [
+    "Explicitly state the plan continues from phase 18 and only extends existing WES2 template work; do not reframe it as a restart or broad WES2 bootstrap.",
+    "Add an explicit guarantee that template load/save preserves existing WES2 session state, including undo stack continuity, expanded/collapsed state, last edit/scroll persistence, and current date session behavior (spec topics 5.1, 5.4, 9.9, 12.1).",
+    "State that template loading and save-to-template flows enforce duplicate exerciseId prevention across the date and preserve the first valid row when duplicates are encountered (spec topics 1.2 Duplicate exercise rule, 4.1 Exercise uniqueness).",
+    "Clarify that the plan will not modify any blocked files or non-WES2 architecture files, and that any persistence changes remain within allowed WES2 files only (allowed writes list; spec topic 1.1 Non-goals).",
+    "For the template load flow, explicitly include the required replacement semantics for current day data, BB3 planned-day handling, and undo behavior as described in spec topic 9.7 Templates and 9.9 Undo.",
+    "Remove any implication that template save/load can rewrite unrelated data models or restart WES2 architecture; keep the scope narrowly on the permitted WES2 files and template UI/service/controller additions."
+  ],
+  "scope_risks": [
+    "Template load replacing current rows could accidentally clobber undo/state metadata if the undo frame does not include all session fields.",
+    "Duplicate exercise handling during template import could reintroduce same-exerciseId rows across circuits if dedup is not enforced before save.",
+    "Save-to-template persistence could drift into blocked schema logic if it reuses non-WES2 template model code beyond read-only inspection.",
+    "Replacing the placeholder with a bottom sheet picker may create overflow/layout regressions if text constraints are not handled with Expanded/Flexible and ellipsis.",
+    "Template load may inadvertently append to existing planned rows instead of replacing them, violating the template replacement and BB3 clearing rules."
+  ]
+}

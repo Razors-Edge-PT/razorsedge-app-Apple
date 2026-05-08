@@ -1,0 +1,144 @@
+---
+
+## WES2 Phase 18 Continuation Plan: Templates
+
+### 1. Phase target
+
+Implement the full template load and save-to-template flows. Replace `_showTemplatesPlaceholder()` with working template picker, wire `WES2_template_service.dart` concrete implementation, add controller state for template-loaded day, and show the "Save workout to templates" affordance.
+
+---
+
+### 2. Files / anchors to inspect
+
+| File | Purpose |
+|---|---|
+| `lib/WES2_template_service.dart` | Stub interface â€” **rewrite** |
+| `lib/WES2_controller.dart` | Add `loadTemplateRows()`, `wasLoadedFromTemplate` flag |
+| `lib/WES2_screen.dart:521` | Replace `_showTemplatesPlaceholder()` |
+| `lib/WES2_screen.dart:13â€“17` | `_Wes2AppBarMenuAction` enum (no change needed) |
+| `lib/WES2_models.dart:4â€“10` | Confirm `Wes2RowSource.templateLoaded` present (it is) |
+| `lib/WES2_widgets/WES2_template_picker.dart` | **New** bottom-sheet widget |
+
+**Read-only reference (must not be edited):**
+- `lib/template_model.dart` â€” Firestore shape (`users/{uid}/templates/{docId}`, `exercises[]` map format, `blockId`, `blockAssignment`)
+- `lib/templates.dart` â€” block-grouping logic reference only
+
+---
+
+### 3. Implementation steps
+
+**Step A â€” Concrete `FirestoreWes2TemplateService` in `WES2_template_service.dart`**
+
+- Keep the existing abstract class; add a `FirestoreWes2TemplateService implements Wes2TemplateService` in the same file.
+- `loadTemplate()`: reads `users/{uid}/templates/{templateId}` â†’ converts each exercises-map entry into a `Wes2ExerciseRow` (source = `Wes2RowSource.templateLoaded`, `setCount` from map, `sets: []` â€” blank rows, no actual values).  Backward-compat: handle both string-only and map format, matching `Template.fromFirestore` logic (read-only reference).
+- `saveWorkoutAsTemplate()`: writes a new doc to `users/{uid}/templates` collection using the same map shape as `template_model.dart`. Maps `Wes2ExerciseRow` â†’ `{'exerciseId', 'name', 'circuitIndex', 'orderIndex', 'setCount'}`. Includes `blockId`, `blockAssignment` from passed params.
+- No offline queue for save (spec Â§1.2 ExerciseSettings rule: ExerciseSettings require internet; same principle applies here â€” template save requires internet, fail gracefully with snackbar).
+
+**Step B â€” `Wes2SessionController` additions in `WES2_controller.dart`**
+
+- Add `bool _wasLoadedFromTemplate = false` and `String? _loadedTemplateName`.
+- Add `bool get wasLoadedFromTemplate => _wasLoadedFromTemplate`.
+- Add `String? get loadedTemplateName => _loadedTemplateName`.
+- Add `void loadTemplateRows(List<Wes2ExerciseRow> rows, String templateName)`:
+  - Push current `_rows` snapshot to `_undoStack` (undoable).
+  - Replace `_rows` with de-duped incoming rows (dedup by exerciseId, keep first by orderIndex).
+  - Re-number `orderIndex` sequentially across circuits.
+  - Set `_wasLoadedFromTemplate = true`, `_loadedTemplateName = templateName`.
+  - Call `notifyListeners()`.
+- Undo must restore `_wasLoadedFromTemplate` and `_loadedTemplateName` to their pre-load values â€” wrap both in the undo snapshot as a `_Wes2UndoFrame` (or existing equivalent struct).
+
+**Step C â€” `WES2_widgets/WES2_template_picker.dart` (new file)**
+
+- `showWes2TemplatePicker(BuildContext, uid, activeBlockId)` â†’ `Future<({String id, String name, String? blockId, String? blockAssignment})?>`
+- Fetches `users/{uid}/templates` ordered by `blockAssignment`.
+- Groups into: current block (matching `activeBlockId`) shown first, others collapsed.
+- Each item: exercise-name chips (3 max, then "+N more") + template name.
+- All text in Row must use `Flexible`/`Expanded` + `maxLines: 1` + `TextOverflow.ellipsis` â€” **overflow blocker**.
+- Do **not** use `ListTile` inside `PopupMenuItem` (spec rule). This widget is a bottom sheet, not a popup menu, so standard `InkWell` rows are fine.
+- Returns selected template metadata or null on dismiss.
+
+**Step D â€” Wire template load in `WES2_screen.dart`**
+
+Replace `_showTemplatesPlaceholder()` with `_onTemplatesAction()`:
+
+1. Call `showWes2TemplatePicker(...)` â€” await result.
+2. If null (dismissed) â†’ return.
+3. If current `_controller.rows` is non-empty: show confirmation "Load template? Current exercises will be replaced." with Undo available after.
+4. Fetch rows via `_templateService.loadTemplate(uid, templateId)`.
+5. Guard duplicates (already handled inside `loadTemplateRows`).
+6. Call `_controller.loadTemplateRows(rows, templateName)`.
+7. Save all template rows to `wesPlannedExercises[]` via `_repository` (same path as manual add â€” spec 3.3 blank rows â†’ `wesPlannedExercises[]`).
+8. If replacing existing exercises â†’ show undo snackbar: "Template loaded, undo?". If loading into empty day â†’ no snackbar (spec 9.7).
+9. If any previously present rows were BB3-sourced, clear the BB3 planned day at `/planned_blocks/{uid}/blocks/{blockId}/weeks/week_{N}/days/day_{N}` (spec 9.7 "clear entire BB3 planned day").
+10. Call `_saveDraftNow()`.
+
+**Step E â€” "Save workout to templates" label in `WES2_screen.dart`**
+
+- Condition (spec 9.8): `!_controller.wasLoadedFromTemplate && _controller.rows.isNotEmpty && _controller.rows.every((r) => r.isMarkedDone)`.
+- Render as a subtle `TextButton` / text label near the bottom of the exercise list (below last card, above FAB/add-circuit area).
+- Tap â†’ `_onSaveWorkoutAsTemplate()`:
+  1. Show dialog with `TextField` for template name, default empty.
+  2. On confirm: call `_templateService.saveWorkoutAsTemplate(uid, blockId, name, rows)`.
+  3. Snackbar: "Workout saved as template."
+  4. Do not re-save workout data (spec 9.8: "Language must not imply workout values are unsaved").
+- Label text must be in `Flexible` if inside a `Row` â€” **overflow guard**.
+
+---
+
+### 4. Spec rules to follow (by section/topic)
+
+| Topic | Spec reference |
+|---|---|
+| Blank template rows â†’ `wesPlannedExercises[]` | Â§3.3, Â§1.2 |
+| No actual values stored from template | Â§3.5 Example 1, Â§1.2 |
+| `templateLoaded` source flag | Â§4.3 |
+| Dedup by exerciseId across all add/template paths | Â§4.1, Â§1.2 |
+| Load replaces, not appends | Â§9.7 |
+| Undo snackbar if replacing existing exercises | Â§9.7 |
+| Clear BB3 planned day if replacing BB3 rows | Â§9.7 |
+| Template-loaded blank rows do not update BB3 | Â§9.7 |
+| BB3 shows template label if any template exercise completes | Â§9.7 |
+| "Save to templates" only for manually-built all-done day | Â§9.8 |
+| Template load is undoable | Â§9.9 |
+| No `ListTile` inside `PopupMenuItem` | Hard rule |
+| All Row text: `Expanded`/`Flexible` + `maxLines` + ellipsis | Overflow hard rule |
+
+---
+
+### 5. Analyzer command
+
+```
+flutter analyze lib/WES2_template_service.dart lib/WES2_controller.dart lib/WES2_screen.dart lib/WES2_models.dart lib/WES2_widgets/WES2_template_picker.dart
+```
+
+---
+
+### 6. Risks and overflow guards
+
+| Risk | Mitigation |
+|---|---|
+| Template exercises already in day (dedup) | `loadTemplateRows` de-dupes by exerciseId before replacing â€” keeps first row by orderIndex |
+| BB3 clear path: wrong week/day index | Read current controller `activeBlockId`, `blockStartDate`, `selectedDate` to derive `week_{N}/day_{N}` before clearing â€” same logic as existing BB3 write-back paths |
+| Undo after template load restoring wrong `wasLoadedFromTemplate` state | Include both `_rows`, `_wasLoadedFromTemplate`, `_loadedTemplateName` in the undo frame |
+| `wesPlannedExercises[]` array grow unbounded on repeated template loads | `_repository` save for template load must **set** (replace) the array, not append â€” use the same merge/set logic used for manual add |
+| Template picker exercise-name overflow | Every exercise chip/row text wrapped in `Flexible` + `maxLines: 1` + `TextOverflow.ellipsis` |
+| "Save to templates" label overflow in bottom row | Wrap in `Flexible`; never bare `Text` in unconstrained `Row` |
+| Network failure on `saveWorkoutAsTemplate` | Catch and show snackbar error; do not queue offline (internet required) |
+
+---
+
+### 7. Read-only vs. writable file distinction
+
+**WRITABLE (WES2 scope):**
+- `lib/WES2_template_service.dart` â€” replace stub, add concrete class
+- `lib/WES2_controller.dart` â€” add template load method + state flags
+- `lib/WES2_screen.dart` â€” replace placeholder, add save-to-template UI
+- `lib/WES2_models.dart` â€” no change expected unless template name field needed on session metadata
+- `lib/WES2_widgets/WES2_template_picker.dart` â€” **new file**
+
+**READ-ONLY reference (inspected for schema/behavior, never edited):**
+- `lib/template_model.dart` â€” Firestore map shape only
+- `lib/templates.dart` â€” block-grouping display logic reference only
+- `lib/WES2_repository.dart` â€” existing save patterns (no edit)
+- `lib/WES2_local_store.dart` â€” Isar draft save (no edit)
+- `lib/WES2_plan_service.dart` â€” BB3 planned day path/format (no edit)
