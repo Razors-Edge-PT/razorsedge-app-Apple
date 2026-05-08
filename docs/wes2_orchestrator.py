@@ -333,7 +333,19 @@ def relevant_spec_excerpt(spec: str, phase_no: int, max_chars: int = 8500) -> st
 
 
 def phase_guidance(phase_no: int) -> str:
-        if phase_no == 18:
+    if phase_no == 17:
+        return """
+Phase 17 target:
+- Day-level floating timer and Workout Summary.
+- Timer AppBar overflow item should open/toggle floating timer.
+- Templates remains placeholder.
+- Summary should be accessible from the bottom/Add Circuit row if feasible because the spec places Summary there.
+- Do not implement timed-exercise reps-as-seconds.
+- Do not persist timer to Firestore/Isar.
+- Do not touch hints/PMU/progression/templates/settings.
+""".strip()
+
+    if phase_no == 18:
         return """
 Phase 18 target:
 - Templates only.
@@ -408,71 +420,35 @@ The Phase 18 plan must explicitly mention:
 - current-day-only BB3 clear limits,
 - overflow safeguards.
 """.strip()
+
     if phase_no == 19:
         return """
-Phase 19 target: Settings Cog Dialog.
-- Use block-level exerciseSettings only; do not write plannedExerciseDetails.
+Phase 19 target:
+- Settings cog dialog.
+- Must use exerciseSettings only; do not write plannedExerciseDetails.
 - Requires activeBlockId guard.
 - Internet-required; no offline queue.
-- Save only planned_blocks/{uid}/blocks/{blockId}.exerciseSettings[exerciseId].
 - Do not implement hint recalculation beyond reload/refresh trigger.
-- Do not modify BP/BB3/PMU/progression files.
 """.strip()
+
     if phase_no == 20:
         return """
-Phase 20 target: BB3 Structural Handoff.
-- Carefully read planned day WES2 plan service/write path before modifying.
-- Keep writes inside WES2 files only.
-- Update BB3 planned day only through WES2 service methods and verified paths.
-- Do not mutate PMU/progression/current WES.
-- Preserve WES2 actual values; planned values remain hints/intent only.
+Phase 20 target:
+- BB3 structural handoff for BB3-sourced delete/replace/move/reorder.
+- Read planned day write path carefully.
+- Do not mutate BB3 until path and row shape are verified.
 """.strip()
+
     if phase_no == 21:
         return """
-Phase 21 target: Hint Engine Integration.
-- Hints are planned/model intent only and must never overwrite typed actual values.
-- BB3 planned overrides appear as hints only.
-- This phase is high-risk and will not auto-commit unless --auto-commit-hints is set.
-- Reviewer must be extra strict on spec references.
+Phase 21 target:
+- Hint engine integration.
+- Must respect BB3 planned overrides as hints only, never actual values.
+- Do not overwrite typed WES2 values.
 """.strip()
-    if phase_no == 22:
-        return """
-Phase 22 target: final WES2 spec compliance polish/static QA.
-- No broad rewrites.
-- Fix spec gaps, analyzer issues, overflow risks, and acceptance-test mismatches only.
-""".strip()
+
     return "Continue the next smallest safe WES2 phase from the approved plan."
 
-
-def has_spec_refs(review: dict[str, Any]) -> bool:
-    if review.get("approved"):
-        return True
-    refs = review.get("spec_references_used") or review.get("spec_references")
-    return isinstance(refs, list) and any(str(x).strip() for x in refs)
-
-
-def require_spec_refs_review(prompt: str, *, model: str, log_dir: Path, log_name_prefix: str, max_output_tokens: int = 2600) -> dict[str, Any]:
-    first = openai_json(prompt, model=model, max_output_tokens=max_output_tokens)
-    if first.get("approved") or has_spec_refs(first):
-        return first
-    repair_prompt = f"""
-You returned a rejection without required spec references.
-
-Revise your JSON response only. Do not change the approval decision unless you made a mistake.
-Every rejection/correction must include a non-empty "spec_references_used" array naming the WES2 spec topic/section(s) that support the correction.
-
-Previous JSON:
-{json.dumps(first, indent=2)}
-
-Original review prompt:
-{prompt[-12000:]}
-"""
-    repaired = openai_json(repair_prompt, model=model, max_output_tokens=max_output_tokens)
-    write_log(log_dir, f"{log_name_prefix}_spec_ref_repair.json", json.dumps(repaired, indent=2))
-    if not repaired.get("approved") and not has_spec_refs(repaired):
-        repaired["approved"] = False
-        repaired["reason"] = (str(repaired.get("reason", "")) + "\nReviewer rejected but failed to provide required spec references after repair attempt.").strip()
-    return repaired
 
 
 def initial_plan_prompt(spec_brief: str, phase_no: int, prior_feedback: str = "") -> str:
