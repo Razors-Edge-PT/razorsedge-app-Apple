@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import '../WES2_plan_service.dart';
 
 class Wes2ExerciseSettingsDialog extends StatefulWidget {
@@ -75,6 +75,19 @@ class _Wes2ExerciseSettingsDialogState
   String get _weekKey => 'week${widget.weekIndex + 1}';
 
   bool get _isDupSignature => _periodizationModel == 'DUP, Signature';
+
+  int get _weeklyInstanceDisplay {
+    final count = _sessionCount;
+    if (count <= 0) return 1;
+    return (widget.dayIndex % count) + 1;
+  }
+
+  int get _globalInstanceDisplay {
+    final count = _sessionCount;
+    if (count <= 0) return widget.dayIndex + 1;
+    return (widget.weekIndex * count) + _weeklyInstanceDisplay;
+  }
+
 
   int get _sessionCount {
     final wf = int.tryParse(_weeklyFrequencyCtrl.text.trim());
@@ -268,7 +281,10 @@ class _Wes2ExerciseSettingsDialogState
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      titlePadding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 18),
+      titlePadding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
+      contentPadding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+      actionsPadding: const EdgeInsets.fromLTRB(14, 4, 14, 10),
       title: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -277,17 +293,19 @@ class _Wes2ExerciseSettingsDialogState
             widget.exerciseName,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 16),
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 2),
           Text(
-            'Week ${widget.weekIndex + 1} · Session ${widget.dayIndex + 1}',
+            'Week ${widget.weekIndex + 1} · Session $_weeklyInstanceDisplay of $_sessionCount',
             style: const TextStyle(fontSize: 12, color: Colors.white54),
           ),
         ],
       ),
-      contentPadding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
-      content: _buildContent(),
+      content: SizedBox(
+        width: MediaQuery.of(context).size.width * 0.94,
+        child: _buildContent(),
+      ),
       actions: _buildActions(),
     );
   }
@@ -299,198 +317,293 @@ class _Wes2ExerciseSettingsDialogState
         child: Center(child: CircularProgressIndicator()),
       );
     }
+
     if (_loadError != null) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 16),
         child: Text(_loadError!, style: const TextStyle(color: Colors.red)),
       );
     }
-    return SizedBox(
-      width: double.maxFinite,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxHeight: 440),
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (_saveError != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: Text(
-                    _saveError!,
-                    style:
-                        const TextStyle(color: Colors.red, fontSize: 12),
-                  ),
+
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.72,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_saveError != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text(
+                  _saveError!,
+                  style: const TextStyle(color: Colors.red, fontSize: 12),
                 ),
-              _sectionLabel('Scheduling'),
-              _buildTextField(
-                controller: _weeklyFrequencyCtrl,
-                label: 'Weekly Frequency (sessions/week)',
-                keyboardType: TextInputType.number,
               ),
-              const SizedBox(height: 8),
-              _buildDropdown(
-                label: 'Periodization Model',
-                value: _periodizationModel,
-                items: const [
-                  'DUP, By Exposure',
-                  'DUP, Signature',
-                  'DUP, By Week',
-                  'Linear, Classic',
-                  'Linear, by Exposure',
-                ],
-                onChanged: (v) {
-                  final wasSignature = _isDupSignature;
-                  _periodizationModel = v;
-                  if (_isDupSignature != wasSignature) {
-                    _populateRepTargets(_existingSettings);
-                  }
+            _settingsRow(
+              left: _buildTextField(
+                controller: _incrementsPrimaryCtrl,
+                label: 'Primary Increment',
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+              ),
+              right: _buildTextField(
+                controller: _weeklyFrequencyCtrl,
+                label: 'Weekly Frequency',
+                keyboardType: TextInputType.number,
+                onChanged: (_) {
+                  _syncSessionControllersToFrequency();
                   setState(() {});
                 },
               ),
-              const SizedBox(height: 16),
-              _sectionLabel('Progression'),
-              _buildDropdown(
-                label: 'Progression Model',
-                value: _progressionModel,
-                items: const [
-                  'Linear Weight Increase',
-                  'Add Reps',
-                  'Smart Progression',
-                ],
-                onChanged: (v) => setState(() => _progressionModel = v),
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildTextField(
-                      controller: _incrementsPrimaryCtrl,
-                      label: 'Primary Increment',
-                      keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _buildTextField(
-                      controller: _incrementsSecondaryCtrl,
-                      label: 'Secondary',
-                      keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              _sectionLabel('Rep Targets — Week ${widget.weekIndex + 1}'),
-              _buildRepTargetsSection(),
-              const SizedBox(height: 16),
-              _sectionLabel('RIR Plan — Week ${widget.weekIndex + 1}'),
-              _buildDropdown(
-                label: 'RIR Model',
-                value: _rirModel,
-                items: const [
-                  'Linear-Taper',
-                  'Wave RIR undulation',
-                  'Session RIR Undulation',
-                  'Static RIR',
-                ],
-                onChanged: (v) => setState(() => _rirModel = v),
-              ),
-              const SizedBox(height: 8),
-              _buildRirPlanSection(),
-              const SizedBox(height: 4),
-            ],
-          ),
+            ),
+            const SizedBox(height: 8),
+            _buildDropdown(
+              label: 'Periodisation Reps Model',
+              value: _periodizationModel,
+              items: const [
+                'DUP, By Exposure',
+                'DUP, Signature',
+                'DUP, By Week',
+                'Linear, Classic',
+                'Linear, by Exposure',
+              ],
+              onChanged: (v) {
+                final wasSignature = _isDupSignature;
+                _periodizationModel = v;
+                if (_isDupSignature != wasSignature) {
+                  _populateRepTargets(_existingSettings);
+                } else {
+                  _syncSessionControllersToFrequency();
+                }
+                setState(() {});
+              },
+            ),
+            const SizedBox(height: 8),
+            _buildRepTargetsSection(),
+            const SizedBox(height: 10),
+            _buildDropdown(
+              label: 'Periodisation RIR Model',
+              value: _rirModel,
+              items: const [
+                'Linear-Taper',
+                'Wave RIR undulation',
+                'Session RIR Undulation',
+                'Static RIR',
+              ],
+              onChanged: (v) => setState(() => _rirModel = v),
+            ),
+            const SizedBox(height: 8),
+            _buildRirPlanSection(),
+            const SizedBox(height: 10),
+            _buildDropdown(
+              label: 'Progression Model',
+              value: _progressionModel,
+              items: const [
+                'Linear Weight Increase',
+                'Add Reps',
+                'Smart Progression',
+                'None',
+              ],
+              onChanged: (v) => setState(() => _progressionModel = v),
+            ),
+            const SizedBox(height: 10),
+            _buildIndexFooter(),
+            const SizedBox(height: 8),
+          ],
         ),
       ),
     );
   }
 
   Widget _buildRepTargetsSection() {
+    _syncSessionControllersToFrequency();
+
     if (_isDupSignature) {
-      return Row(
-        children: [
-          Expanded(
-            child: _buildTextField(
-              controller:
-                  _repTargetCtrls['min'] ??= TextEditingController(),
-              label: 'Min Reps',
-              keyboardType: TextInputType.number,
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _buildTextField(
-              controller:
-                  _repTargetCtrls['max'] ??= TextEditingController(),
-              label: 'Max Reps',
-              keyboardType: TextInputType.number,
-            ),
-          ),
-        ],
+      return _settingsRow(
+        left: _buildTextField(
+          controller: _repTargetCtrls['min'] ??= TextEditingController(),
+          label: 'Min Reps',
+          keyboardType: TextInputType.number,
+        ),
+        right: _buildTextField(
+          controller: _repTargetCtrls['max'] ??= TextEditingController(),
+          label: 'Max Reps',
+          keyboardType: TextInputType.number,
+        ),
       );
     }
 
-    if (_repTargetCtrls.isEmpty) {
+    final entries = _repTargetCtrls.entries.toList()
+      ..sort((a, b) {
+        final ai = int.tryParse(a.key.replaceAll('instance', '')) ?? 0;
+        final bi = int.tryParse(b.key.replaceAll('instance', '')) ?? 0;
+        return ai.compareTo(bi);
+      });
+
+    if (entries.isEmpty) {
       return const Text(
-        'Set weekly frequency to populate targets.',
+        'Set weekly frequency to populate rep targets.',
         style: TextStyle(fontSize: 12, color: Colors.white54),
       );
     }
 
     return Column(
-      children: _repTargetCtrls.entries.map((e) {
-        final idx =
-            int.tryParse(e.key.replaceAll('instance', '')) ?? 0;
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 6),
-          child: _buildTextField(
-            controller: e.value,
-            label: 'Session $idx  (e.g. 8 x 3)',
+      children: [
+        for (int i = 0; i < entries.length; i += 2) ...[
+          _settingsRow(
+            left: _buildTextField(
+              controller: entries[i].value,
+              label:
+                  'Reps Session ${entries[i].key.replaceAll('instance', '')}',
+            ),
+            right: i + 1 < entries.length
+                ? _buildTextField(
+                    controller: entries[i + 1].value,
+                    label:
+                        'Reps Session ${entries[i + 1].key.replaceAll('instance', '')}',
+                  )
+                : const SizedBox.shrink(),
           ),
-        );
-      }).toList(),
+          if (i + 2 < entries.length) const SizedBox(height: 8),
+        ],
+      ],
     );
   }
 
   Widget _buildRirPlanSection() {
-    if (_rirPlanCtrls.isEmpty) {
+    _syncSessionControllersToFrequency();
+
+    final entries = _rirPlanCtrls.entries.toList()
+      ..sort((a, b) {
+        final ai = int.tryParse(a.key.replaceAll('session', '')) ?? 0;
+        final bi = int.tryParse(b.key.replaceAll('session', '')) ?? 0;
+        return ai.compareTo(bi);
+      });
+
+    if (entries.isEmpty) {
       return const Text(
-        'Set weekly frequency to populate RIR plan.',
+        'Set weekly frequency to populate RIR targets.',
         style: TextStyle(fontSize: 12, color: Colors.white54),
       );
     }
 
     return Column(
-      children: _rirPlanCtrls.entries.map((e) {
-        final idx =
-            int.tryParse(e.key.replaceAll('session', '')) ?? 0;
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 6),
-          child: _buildTextField(
-            controller: e.value,
-            label: 'Session $idx RIR',
-            keyboardType:
-                const TextInputType.numberWithOptions(decimal: true),
+      children: [
+        for (int i = 0; i < entries.length; i += 2) ...[
+          _settingsRow(
+            left: _buildTextField(
+              controller: entries[i].value,
+              label:
+                  'RIR Session ${entries[i].key.replaceAll('session', '')}',
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+            ),
+            right: i + 1 < entries.length
+                ? _buildTextField(
+                    controller: entries[i + 1].value,
+                    label:
+                        'RIR Session ${entries[i + 1].key.replaceAll('session', '')}',
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                  )
+                : const SizedBox.shrink(),
           ),
-        );
-      }).toList(),
+          if (i + 2 < entries.length) const SizedBox(height: 8),
+        ],
+      ],
     );
   }
 
-  Widget _sectionLabel(String text) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-          color: Theme.of(context).colorScheme.primary,
-        ),
+  void _syncSessionControllersToFrequency() {
+    final count = _sessionCount.clamp(1, 14).toInt();
+
+    if (_isDupSignature) {
+      _repTargetCtrls.putIfAbsent('min', () => TextEditingController());
+      _repTargetCtrls.putIfAbsent('max', () => TextEditingController());
+
+      final removeKeys = _repTargetCtrls.keys
+          .where((k) => k != 'min' && k != 'max')
+          .toList();
+      for (final k in removeKeys) {
+        _repTargetCtrls.remove(k)?.dispose();
+      }
+    } else {
+      final wanted = <String>{
+        for (int i = 1; i <= count; i++) 'instance$i',
+      };
+
+      for (int i = 1; i <= count; i++) {
+        _repTargetCtrls.putIfAbsent(
+          'instance$i',
+          () => TextEditingController(),
+        );
+      }
+
+      final removeKeys =
+          _repTargetCtrls.keys.where((k) => !wanted.contains(k)).toList();
+      for (final k in removeKeys) {
+        _repTargetCtrls.remove(k)?.dispose();
+      }
+    }
+
+    final wantedRir = <String>{
+      for (int i = 1; i <= count; i++) 'session$i',
+    };
+
+    for (int i = 1; i <= count; i++) {
+      _rirPlanCtrls.putIfAbsent(
+        'session$i',
+        () => TextEditingController(),
+      );
+    }
+
+    final removeRirKeys =
+        _rirPlanCtrls.keys.where((k) => !wantedRir.contains(k)).toList();
+    for (final k in removeRirKeys) {
+      _rirPlanCtrls.remove(k)?.dispose();
+    }
+  }
+
+  Widget _settingsRow({
+    required Widget left,
+    required Widget right,
+  }) {
+    return Row(
+      children: [
+        Expanded(child: left),
+        const SizedBox(width: 8),
+        Expanded(child: right),
+      ],
+    );
+  }
+
+  Widget _buildIndexFooter() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.white24),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Current global rep target instance: $_globalInstanceDisplay',
+            style: const TextStyle(fontSize: 12, color: Colors.white70),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 3),
+          Text(
+            'Current weekly rep target instance: $_weeklyInstanceDisplay of $_sessionCount',
+            style: const TextStyle(fontSize: 12, color: Colors.white70),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
       ),
     );
   }
@@ -501,29 +614,37 @@ class _Wes2ExerciseSettingsDialogState
     required List<String> items,
     required void Function(String?) onChanged,
   }) {
-    return DropdownButtonFormField<String>(
-      initialValue: value,
-      isExpanded: true,
-      decoration: InputDecoration(
-        labelText: label,
-        isDense: true,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        border: const OutlineInputBorder(),
-      ),
-      items: items
-          .map(
-            (s) => DropdownMenuItem(
-              value: s,
-              child: Text(
-                s,
-                style: const TextStyle(fontSize: 13),
-                overflow: TextOverflow.ellipsis,
+    return SizedBox(
+      height: 48,
+      child: DropdownButtonFormField<String>(
+        initialValue: value,
+        isExpanded: true,
+        decoration: InputDecoration(
+          labelText: label,
+          floatingLabelBehavior: FloatingLabelBehavior.always,
+          isDense: true,
+          filled: true,
+          fillColor:
+              Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+        ),
+        items: items
+            .map(
+              (s) => DropdownMenuItem(
+                value: s,
+                child: Text(
+                  s,
+                  style: const TextStyle(fontSize: 13),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
               ),
-            ),
-          )
-          .toList(),
-      onChanged: onChanged,
+            )
+            .toList(),
+        onChanged: onChanged,
+      ),
     );
   }
 
@@ -531,17 +652,26 @@ class _Wes2ExerciseSettingsDialogState
     required TextEditingController controller,
     required String label,
     TextInputType? keyboardType,
+    ValueChanged<String>? onChanged,
   }) {
-    return TextField(
-      controller: controller,
-      keyboardType: keyboardType,
-      style: const TextStyle(fontSize: 14),
-      decoration: InputDecoration(
-        labelText: label,
-        isDense: true,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        border: const OutlineInputBorder(),
+    return SizedBox(
+      height: 48,
+      child: TextField(
+        controller: controller,
+        keyboardType: keyboardType,
+        onChanged: onChanged,
+        style: const TextStyle(fontSize: 14),
+        decoration: InputDecoration(
+          labelText: label,
+          floatingLabelBehavior: FloatingLabelBehavior.always,
+          isDense: true,
+          filled: true,
+          fillColor:
+              Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+        ),
       ),
     );
   }
@@ -573,3 +703,5 @@ class _Wes2ExerciseSettingsDialogState
     ];
   }
 }
+
+
