@@ -1,0 +1,189 @@
+        You are Claude Code implementing Phase 18 (Templates) of the WES2 Flutter app.
+
+        WES2 SPECIFICATION BRIEF (authoritative — see full spec for detail):
+
+ROLES:
+- WES2 = execution/logging surface. Athletes enter actual values here.
+- BB3 = planning surface. BB3 stores planned set hints/overrides and structure.
+- Planned values = intent. Show as hint text in WES2 only. NEVER populate controllers.
+- Completed values = reality. User-entered values in WES2 are authoritative.
+
+CORE RULES:
+- BB3 planned values are hints only. Priority: WES2 typed > BB3 override > model hint > empty.
+- Duplicate exerciseIds on the same date are NEVER allowed.
+- Blank WES2-added rows persist in wesPlannedExercises[].
+- Completed rows live in exercises[] only.
+- isMarkedDone lives in exercises[] only.
+- ExerciseSettings writes only to planned_blocks/{uid}/blocks/{blockId}.exerciseSettings.
+- NEVER write to plannedExerciseDetails.
+- ExerciseSettings save requires internet; do NOT queue offline.
+- BB3 structural updates (delete/replace/reorder) write back to BB3 planned day path only.
+- WES2 must use Isar for local draft/fast reopen/offline.
+- Every path must use UserContext.currentUid / selected athlete UID, not raw FirebaseAuth.
+
+WRITE SCOPE:
+Allowed writes:
+  lib/WES2_*.dart
+  lib/WES2_widgets/WES2_*.dart
+  test/wes2/WES2_*.dart
+  docs/wes2/**
+  .orchestrator/wes2/**
+  docs/wes2_orchestrator.py
+Blocked writes:
+  lib/workout_entry_screen.dart, lib/main.dart, lib/bb3_*.dart,
+  lib/periodization_model_utils.dart, lib/progression_engine.dart,
+  pubspec.yaml, assets/**, *.g.dart, *.freezed.dart,
+  .claude/settings.local.json, lib/templates.dart, lib/template_model.dart
+
+Read-only reference (Claude may read but NOT edit):
+  lib/templates.dart, lib/template_model.dart, lib/workout_entry_screen.dart,
+  lib/bb3_*.dart, lib/periodization_model_utils.dart, lib/progression_engine.dart
+
+IMPORTANT REVIEWER NOTE:
+Do NOT reject a plan merely because it proposes to READ a blocked/reference file.
+Only reject if the plan or implementation proposes to WRITE a blocked file.
+WES2-scoped files like lib/WES2_screen.dart ARE allowed writes.
+
+
+        PHASE-SPECIFIC GUIDANCE:
+        Phase 18 — Templates:
+IMPORTANT: This is a continuation from the current WES2 repo state, not a restart.
+Write only WES2-scoped files (lib/WES2_*.dart, lib/WES2_widgets/WES2_*.dart,
+test/wes2/WES2_*.dart, docs/wes2/**, .orchestrator/wes2/**).
+
+REQUIRED BEHAVIORS:
+- Template loading REPLACES the current WES2 day/session rows (not appends).
+- If replacing existing rows, show a snackbar with Undo. If day is empty, no snackbar.
+- If the current WES2 day contains BB3-sourced planned rows and the user explicitly
+  loads a template that replaces that day, clear ONLY the current selected BB3 planned
+  day (current blockId/weekIndex/dayIndex) after verifying the WES2-visible write shape.
+  Do NOT touch completed workout docs or non-current BB3 days.
+  If the BB3 current-day write shape is uncertain, print BLOCKED rather than guessing.
+- After loading, blank template rows persist in wesPlannedExercises[].
+  Do NOT move them to exercises[] — they are pending/planned, not completed.
+- Completed/logged values flow into exercises[] only through normal WES2 save/done pathways.
+- "Save workout to templates" stores structure only (exerciseId, name, circuitIndex,
+  orderIndex, setCount). Never store actual logged values (weight, reps, rir, etc.).
+- Template picker/dialog/bottom sheet MUST be overflow-safe at 360px width.
+- Deduplicate exerciseIds: same exerciseId must not appear twice on the same date,
+  even across different circuits. Silently skip duplicates on load.
+- Snapshot undo state BEFORE replacing current rows.
+- Preserve: selected date/session behavior, local draft/fast reopen behavior,
+  Add Exercise/Add Circuit/Add Set/Remove Set/Delete/Replace/Move/Done behaviors.
+- Read lib/templates.dart and lib/template_model.dart for schema ONLY.
+  Do NOT edit these files.
+- BB3 clearing (if needed) must only clear the current selected BB3 planned day.
+  Do NOT touch completed workout docs or other BB3 days.
+- If the BB3 current-day write shape is uncertain, print BLOCKED rather than guessing.
+
+
+        LAYOUT RULES (treat RenderFlex overflow as a blocker):
+- Avoid RenderFlex overflows.
+- Long text inside Row must use Expanded or Flexible.
+- Use maxLines and TextOverflow.ellipsis on all text widgets.
+- Avoid unconstrained Row children.
+- Do NOT use ListTile inside PopupMenuItem.
+- Test mentally at narrow 360px phone width.
+
+
+        RELEVANT SPEC EXCERPT:
+        Exercises already in the selected circuit appear checked and cannot be unchecked/removed from picker. Use 3-dot menu delete instead.
+9.7 Templates
+Loading template replaces current WES2 day, not append.
+If replacing existing exercises, show snackbar with Undo. If loading into empty/unplanned day, no snackbar.
+If replacing BB3 planned exercises, clear entire BB3 planned day.
+Template preserves its circuit structure and order.
+After loading a template, user can still add exercises/circuits normally.
+---
+Implement hint service and instant recalculation.
+Implement circuits, orderIndex, drag/drop, add/delete/replace, undo.
+Implement templates load/replace and save-to-template.
+Implement settings dialog and refresh actions.
+Implement notes, velocity, timed exercises, summary, timer, Done state.
+Implement multi-device Firestore listener and field-border collaborator indicator.
+Implement offline conflict prompt and final acceptance tests.
+---
+BB3 velocity appears as hint and returns after actual velocity is cleared.
+BB3 planned notes and WES2 execution notes are distinct.
+Loading template replaces day and preserves circuits.
+Template-loaded untouched rows persist but do not affect BB3.
+Manual workout can be saved to template only when appropriate; does not imply workout data is unsaved.
+Summary label opens summary and shows total exercises, sets, time.
+16.6 UI robustness tests
+---
+If replacing BB3 planned exercises, clear entire BB3 planned day.
+Template preserves its circuit structure and order.
+After loading a template, user can still add exercises/circuits normally.
+Template-loaded blank rows persist in WES2 on that date but do not affect BB3.
+Completed template exercises appear in BB3 as completed.
+If any template exercise is completed, BB3 should show the template label for that date so the user can see which template/day was performed.
+9.8 Save workout to templates
+---
+Completed template exercises appear in BB3 as completed.
+If any template exercise is completed, BB3 should show the template label for that date so the user can see which template/day was performed.
+9.8 Save workout to templates
+If user builds a workout manually from an empty/unplanned day, and each exercise is completed and marked completed/done according to the WES2 flow, show a subtle label: "Save workout to templates".
+Do not show this if the day began by loading a template.
+Language must not imply workout values are unsaved; this is only for creating a reusable template.
+Tapping opens dialog with Template Name field (e.g. Day 5).
+---
+If any template exercise is completed, BB3 should show the template label for that date so the user can see which template/day was performed.
+9.8 Save workout to templates
+If user builds a workout manually from an empty/unplanned day, and each exercise is completed and marked completed/done according to the WES2 flow, show a subtle label: "Save workout to templates".
+Do not show this if the day began by loading a template.
+Language must not imply workout values are unsaved; this is only for creating a reusable template.
+Tapping opens dialog with Template Name field (e.g. Day 5).
+Saving creates a new template in the user’s templates for the current block, preserving circuit structure/order.
+---
+9.8 Save workout to templates
+If user builds a workout manually from an empty/unplanned day, and each exercise is completed and marked completed/done according to the WES2 flow, show a subtle label: "Save workout to templates".
+Do not show this if the day began by loading a template.
+Language must not imply workout values are unsaved; this is only for creating a reusable template.
+Tapping opens dialog with Template Name field (e.g. Day 5).
+Saving creates a new template in the user’s templates for the current block, preserving circuit structure/order.
+Do not require this action for normal workout saving.
+---
+Result
+At bottom/add-circuit row, show label:
+Save workout to templates
+When tapped, dialog asks:
+Template name
+User enters:
+Day 5
+
+
+PREVIOUS REVIEWER FEEDBACK (you MUST address all corrections):
+Review JSON:
+{
+  "approved": false,
+  "reason": "The plan has a critical spec violation: it proposes writing to lib/WES2_plan_service.dart and lib/WES2_repository.dart, but the stated WES2 write scope only allows lib/WES2_*.dart and lib/WES2_widgets/WES2_*.dart, plus tests/docs/orchestrator files. It also introduces a clearing approach that may not preserve required BB3 safety guarantees unless the current-day write shape is handled exactly as specified.",
+  "spec_references_used": [
+    "WRITE SCOPE: Allowed writes are lib/WES2_*.dart, lib/WES2_widgets/WES2_*.dart, test/wes2/WES2_*.dart, docs/wes2/**, .orchestrator/wes2/**, docs/wes2_orchestrator.py",
+    "PHASE-SPECIFIC REQUIREMENTS: Write only WES2-scoped files (lib/WES2_*.dart, lib/WES2_widgets/WES2_*.dart, test/wes2/WES2_*.dart, docs/wes2/**, .orchestrator/wes2/**).",
+    "BB3 clearing (if needed) must only clear the current selected BB3 planned day. Do NOT touch completed workout docs or other BB3 days. If the BB3 current-day write shape is uncertain, print BLOCKED rather than guessing."
+  ],
+  "corrections": [
+    "Move any repository/plan-service changes into allowed WES2-scoped files only, or confirm those files are already WES2-scoped in the repo before modifying them.",
+    "Do not write to non-WES2-scoped files such as lib/WES2_plan_service.dart or lib/WES2_repository.dart unless they are confirmed to be within the allowed WES2 write scope in this repo state.",
+    "If implementing BB3 clearing, ensure the exact current-day write shape is verified from the allowed read-only references and use BLOCKED if uncertain rather than assuming the update shape."
+  ]
+}
+
+You MUST address all corrections before resubmitting.
+
+
+        TASK:
+        Write a detailed implementation plan for Phase 18 (Templates).
+
+        The plan must:
+        1. List each WES2 file you will CREATE or MODIFY (must all be in allowed write scope).
+        2. Describe exactly what each file will contain or change.
+        3. Confirm which reference files you will READ (not edit) for schema context.
+        4. Confirm you will NOT edit any blocked files.
+        5. Address the phase-specific guidance requirements point by point.
+        6. Note any BLOCKED conditions where human intervention is needed.
+
+        If you are uncertain about a BB3 write shape or schema that would require editing a blocked file,
+        write BLOCKED and explain why, rather than guessing.
+
+        Output the plan as plain text. Be specific and thorough.

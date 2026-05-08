@@ -1,0 +1,14 @@
+{
+  "approved": false,
+  "reason": "The plan has a critical spec violation: it proposes writing to lib/WES2_plan_service.dart and lib/WES2_repository.dart, but the stated WES2 write scope only allows lib/WES2_*.dart and lib/WES2_widgets/WES2_*.dart, plus tests/docs/orchestrator files. It also introduces a clearing approach that may not preserve required BB3 safety guarantees unless the current-day write shape is handled exactly as specified.",
+  "spec_references_used": [
+    "WRITE SCOPE: Allowed writes are lib/WES2_*.dart, lib/WES2_widgets/WES2_*.dart, test/wes2/WES2_*.dart, docs/wes2/**, .orchestrator/wes2/**, docs/wes2_orchestrator.py",
+    "PHASE-SPECIFIC REQUIREMENTS: Write only WES2-scoped files (lib/WES2_*.dart, lib/WES2_widgets/WES2_*.dart, test/wes2/WES2_*.dart, docs/wes2/**, .orchestrator/wes2/**).",
+    "BB3 clearing (if needed) must only clear the current selected BB3 planned day. Do NOT touch completed workout docs or other BB3 days. If the BB3 current-day write shape is uncertain, print BLOCKED rather than guessing."
+  ],
+  "corrections": [
+    "Move any repository/plan-service changes into allowed WES2-scoped files only, or confirm those files are already WES2-scoped in the repo before modifying them.",
+    "Do not write to non-WES2-scoped files such as lib/WES2_plan_service.dart or lib/WES2_repository.dart unless they are confirmed to be within the allowed WES2 write scope in this repo state.",
+    "If implementing BB3 clearing, ensure the exact current-day write shape is verified from the allowed read-only references and use BLOCKED if uncertain rather than assuming the update shape."
+  ]
+}

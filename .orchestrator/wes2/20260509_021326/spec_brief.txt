@@ -1,0 +1,43 @@
+WES2 SPECIFICATION BRIEF (authoritative — see full spec for detail):
+
+ROLES:
+- WES2 = execution/logging surface. Athletes enter actual values here.
+- BB3 = planning surface. BB3 stores planned set hints/overrides and structure.
+- Planned values = intent. Show as hint text in WES2 only. NEVER populate controllers.
+- Completed values = reality. User-entered values in WES2 are authoritative.
+
+CORE RULES:
+- BB3 planned values are hints only. Priority: WES2 typed > BB3 override > model hint > empty.
+- Duplicate exerciseIds on the same date are NEVER allowed.
+- Blank WES2-added rows persist in wesPlannedExercises[].
+- Completed rows live in exercises[] only.
+- isMarkedDone lives in exercises[] only.
+- ExerciseSettings writes only to planned_blocks/{uid}/blocks/{blockId}.exerciseSettings.
+- NEVER write to plannedExerciseDetails.
+- ExerciseSettings save requires internet; do NOT queue offline.
+- BB3 structural updates (delete/replace/reorder) write back to BB3 planned day path only.
+- WES2 must use Isar for local draft/fast reopen/offline.
+- Every path must use UserContext.currentUid / selected athlete UID, not raw FirebaseAuth.
+
+WRITE SCOPE:
+Allowed writes:
+  lib/WES2_*.dart
+  lib/WES2_widgets/WES2_*.dart
+  test/wes2/WES2_*.dart
+  docs/wes2/**
+  .orchestrator/wes2/**
+  docs/wes2_orchestrator.py
+Blocked writes:
+  lib/workout_entry_screen.dart, lib/main.dart, lib/bb3_*.dart,
+  lib/periodization_model_utils.dart, lib/progression_engine.dart,
+  pubspec.yaml, assets/**, *.g.dart, *.freezed.dart,
+  .claude/settings.local.json, lib/templates.dart, lib/template_model.dart
+
+Read-only reference (Claude may read but NOT edit):
+  lib/templates.dart, lib/template_model.dart, lib/workout_entry_screen.dart,
+  lib/bb3_*.dart, lib/periodization_model_utils.dart, lib/progression_engine.dart
+
+IMPORTANT REVIEWER NOTE:
+Do NOT reject a plan merely because it proposes to READ a blocked/reference file.
+Only reject if the plan or implementation proposes to WRITE a blocked file.
+WES2-scoped files like lib/WES2_screen.dart ARE allowed writes.
