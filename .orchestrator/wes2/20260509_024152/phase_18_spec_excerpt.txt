@@ -1,0 +1,63 @@
+Exercises already in the selected circuit appear checked and cannot be unchecked/removed from picker. Use 3-dot menu delete instead.
+9.7 Templates
+Loading template replaces current WES2 day, not append.
+If replacing existing exercises, show snackbar with Undo. If loading into empty/unplanned day, no snackbar.
+If replacing BB3 planned exercises, clear entire BB3 planned day.
+Template preserves its circuit structure and order.
+After loading a template, user can still add exercises/circuits normally.
+---
+Implement hint service and instant recalculation.
+Implement circuits, orderIndex, drag/drop, add/delete/replace, undo.
+Implement templates load/replace and save-to-template.
+Implement settings dialog and refresh actions.
+Implement notes, velocity, timed exercises, summary, timer, Done state.
+Implement multi-device Firestore listener and field-border collaborator indicator.
+Implement offline conflict prompt and final acceptance tests.
+---
+BB3 velocity appears as hint and returns after actual velocity is cleared.
+BB3 planned notes and WES2 execution notes are distinct.
+Loading template replaces day and preserves circuits.
+Template-loaded untouched rows persist but do not affect BB3.
+Manual workout can be saved to template only when appropriate; does not imply workout data is unsaved.
+Summary label opens summary and shows total exercises, sets, time.
+16.6 UI robustness tests
+---
+If replacing BB3 planned exercises, clear entire BB3 planned day.
+Template preserves its circuit structure and order.
+After loading a template, user can still add exercises/circuits normally.
+Template-loaded blank rows persist in WES2 on that date but do not affect BB3.
+Completed template exercises appear in BB3 as completed.
+If any template exercise is completed, BB3 should show the template label for that date so the user can see which template/day was performed.
+9.8 Save workout to templates
+---
+Completed template exercises appear in BB3 as completed.
+If any template exercise is completed, BB3 should show the template label for that date so the user can see which template/day was performed.
+9.8 Save workout to templates
+If user builds a workout manually from an empty/unplanned day, and each exercise is completed and marked completed/done according to the WES2 flow, show a subtle label: "Save workout to templates".
+Do not show this if the day began by loading a template.
+Language must not imply workout values are unsaved; this is only for creating a reusable template.
+Tapping opens dialog with Template Name field (e.g. Day 5).
+---
+If any template exercise is completed, BB3 should show the template label for that date so the user can see which template/day was performed.
+9.8 Save workout to templates
+If user builds a workout manually from an empty/unplanned day, and each exercise is completed and marked completed/done according to the WES2 flow, show a subtle label: "Save workout to templates".
+Do not show this if the day began by loading a template.
+Language must not imply workout values are unsaved; this is only for creating a reusable template.
+Tapping opens dialog with Template Name field (e.g. Day 5).
+Saving creates a new template in the user’s templates for the current block, preserving circuit structure/order.
+---
+9.8 Save workout to templates
+If user builds a workout manually from an empty/unplanned day, and each exercise is completed and marked completed/done according to the WES2 flow, show a subtle label: "Save workout to templates".
+Do not show this if the day began by loading a template.
+Language must not imply workout values are unsaved; this is only for creating a reusable template.
+Tapping opens dialog with Template Name field (e.g. Day 5).
+Saving creates a new template in the user’s templates for the current block, preserving circuit structure/order.
+Do not require this action for normal workout saving.
+---
+Result
+At bottom/add-circuit row, show label:
+Save workout to templates
+When tapped, dialog asks:
+Template name
+User enters:
+Day 5

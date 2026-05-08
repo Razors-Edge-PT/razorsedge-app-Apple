@@ -1,0 +1,75 @@
+WES2 SPECIFICATION BRIEF (authoritative — see full spec for detail):
+
+ROLES:
+- WES2 = execution/logging surface. Athletes enter actual values here.
+- BB3 = planning surface. BB3 stores planned set hints/overrides and structure.
+- Planned values = intent. Show as hint text in WES2 only. NEVER populate controllers.
+- Completed values = reality. User-entered values in WES2 are authoritative.
+
+CORE RULES:
+- BB3 planned values are hints only. Priority: WES2 typed > BB3 override > model hint > empty.
+- Duplicate exerciseIds on the same date are NEVER allowed.
+- Blank WES2-added rows persist in wesPlannedExercises[].
+- Completed rows live in exercises[] only.
+- isMarkedDone lives in exercises[] only.
+- ExerciseSettings writes only to planned_blocks/{uid}/blocks/{blockId}.exerciseSettings.
+- NEVER write to plannedExerciseDetails.
+- ExerciseSettings save requires internet; do NOT queue offline.
+- BB3 structural updates (delete/replace/reorder) write back to BB3 planned day path only.
+- WES2 must use Isar for local draft/fast reopen/offline.
+- Every path must use UserContext.currentUid / selected athlete UID, not raw FirebaseAuth.
+
+WRITE SCOPE — READ THIS CAREFULLY BEFORE REVIEWING:
+
+ALLOWED WRITES — the rule is: any file whose name starts with WES2_ is allowed.
+The pattern lib/WES2_*.dart means ANY file in lib/ whose filename begins with WES2_.
+The pattern lib/WES2_widgets/WES2_*.dart means ANY file in lib/WES2_widgets/ whose
+filename begins with WES2_.
+
+Currently known WES2 files (ALL of these are fully allowed to be read AND written):
+  lib/WES2_screen.dart
+  lib/WES2_controller.dart
+  lib/WES2_models.dart
+  lib/WES2_repository.dart          <-- ALLOWED. Do NOT reject edits to this file.
+  lib/WES2_plan_service.dart
+  lib/WES2_local_store.dart
+  lib/WES2_template_service.dart
+  lib/WES2_sync_service.dart
+  lib/WES2_hint_service.dart
+  lib/WES2_widgets/WES2_day_actions_row.dart
+  lib/WES2_widgets/WES2_day_header.dart
+  lib/WES2_widgets/WES2_empty_state.dart
+  lib/WES2_widgets/WES2_exercise_card.dart
+  lib/WES2_widgets/WES2_exercise_picker.dart
+  lib/WES2_widgets/WES2_field_cell.dart
+  lib/WES2_widgets/WES2_set_row.dart
+  test/wes2/WES2_*.dart  (any test file starting with WES2_)
+  docs/wes2/**
+  .orchestrator/wes2/**
+  docs/wes2_orchestrator.py
+
+New files are also allowed if their filename starts with WES2_ and they live in
+lib/, lib/WES2_widgets/, or test/wes2/.
+
+BLOCKED WRITES — reject ONLY if the plan writes one of these:
+  lib/workout_entry_screen.dart
+  lib/main.dart
+  lib/bb3_*.dart  (any file starting with bb3_)
+  lib/periodization_model_utils.dart
+  lib/progression_engine.dart
+  pubspec.yaml
+  assets/**
+  *.g.dart  (generated)
+  *.freezed.dart  (generated)
+  .claude/settings.local.json
+  lib/templates.dart
+  lib/template_model.dart
+
+Read-only reference (Claude may read but NOT edit):
+  lib/templates.dart, lib/template_model.dart, lib/workout_entry_screen.dart,
+  lib/bb3_*.dart, lib/periodization_model_utils.dart, lib/progression_engine.dart
+
+CRITICAL REVIEWER REMINDER:
+lib/WES2_repository.dart IS in the allowed write scope. Do NOT reject it.
+Any lib/WES2_*.dart file is allowed. The WES2_ prefix is the only test.
+Do NOT reject a plan for reading a reference file — only for writing a blocked file.

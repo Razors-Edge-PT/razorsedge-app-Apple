@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 docs/wes2_orchestrator.py
 
@@ -565,10 +565,12 @@ def run_claude(prompt: str, claude_cmd: str, log_dir: Path, label: str, timeout_
             cmd_parts,
             input=prompt,
             capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout_seconds,
         )
-        output = result.stdout
+        output = result.stdout or ""
         if result.stderr:
             output += "\n[STDERR]\n" + result.stderr
     except subprocess.TimeoutExpired:
@@ -1501,3 +1503,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

@@ -1,0 +1,14 @@
+{
+  "approved": false,
+  "reason": "The plan misses a critical Phase 18 requirement: if replacing BB3 planned exercises, the current selected BB3 planned day must be cleared, but the plan explicitly leaves this BLOCKED and therefore incomplete. It also relies on a save-to-templates label gate that is not fully aligned with the spec\u2019s condition that the action should appear for manually built, completed days and not for template-loaded days.",
+  "spec_references_used": [
+    "Phase 18 \u2014 Templates: \"If the current WES2 day contains BB3-sourced planned rows and the user explicitly loads a template that replaces that day, clear ONLY the current selected BB3 planned day... If the BB3 current-day write shape is uncertain, print BLOCKED rather than guessing.\"",
+    "Relevant spec excerpt / 9.7 Templates: \"If replacing BB3 planned exercises, clear entire BB3 planned day.\"",
+    "9.8 Save workout to templates: \"If user builds a workout manually from an empty/unplanned day, and each exercise is completed and marked completed/done ... show a subtle label: 'Save workout to templates'. Do not show this if the day began by loading a template.\""
+  ],
+  "corrections": [
+    "Implement the BB3 current-day clear using the approved WES2 scope if the write shape can be confirmed; do not leave the required clearing unresolved in the final plan.",
+    "Ensure the save-to-templates label is shown only for manual empty/unplanned starts that end fully completed/done, and hidden for template-loaded days.",
+    "Keep all changes within WES2-scoped files and do not introduce any blocked file writes."
+  ]
+}

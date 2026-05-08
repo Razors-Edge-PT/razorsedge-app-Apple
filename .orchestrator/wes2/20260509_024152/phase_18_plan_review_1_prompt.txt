@@ -1,0 +1,423 @@
+        You are reviewing an implementation plan for Phase 18 (Templates) of the WES2 Flutter app.
+
+        WES2 SPECIFICATION BRIEF (authoritative — see full spec for detail):
+
+ROLES:
+- WES2 = execution/logging surface. Athletes enter actual values here.
+- BB3 = planning surface. BB3 stores planned set hints/overrides and structure.
+- Planned values = intent. Show as hint text in WES2 only. NEVER populate controllers.
+- Completed values = reality. User-entered values in WES2 are authoritative.
+
+CORE RULES:
+- BB3 planned values are hints only. Priority: WES2 typed > BB3 override > model hint > empty.
+- Duplicate exerciseIds on the same date are NEVER allowed.
+- Blank WES2-added rows persist in wesPlannedExercises[].
+- Completed rows live in exercises[] only.
+- isMarkedDone lives in exercises[] only.
+- ExerciseSettings writes only to planned_blocks/{uid}/blocks/{blockId}.exerciseSettings.
+- NEVER write to plannedExerciseDetails.
+- ExerciseSettings save requires internet; do NOT queue offline.
+- BB3 structural updates (delete/replace/reorder) write back to BB3 planned day path only.
+- WES2 must use Isar for local draft/fast reopen/offline.
+- Every path must use UserContext.currentUid / selected athlete UID, not raw FirebaseAuth.
+
+WRITE SCOPE — READ THIS CAREFULLY BEFORE REVIEWING:
+
+ALLOWED WRITES — the rule is: any file whose name starts with WES2_ is allowed.
+The pattern lib/WES2_*.dart means ANY file in lib/ whose filename begins with WES2_.
+The pattern lib/WES2_widgets/WES2_*.dart means ANY file in lib/WES2_widgets/ whose
+filename begins with WES2_.
+
+Currently known WES2 files (ALL of these are fully allowed to be read AND written):
+  lib/WES2_screen.dart
+  lib/WES2_controller.dart
+  lib/WES2_models.dart
+  lib/WES2_repository.dart          <-- ALLOWED. Do NOT reject edits to this file.
+  lib/WES2_plan_service.dart
+  lib/WES2_local_store.dart
+  lib/WES2_template_service.dart
+  lib/WES2_sync_service.dart
+  lib/WES2_hint_service.dart
+  lib/WES2_widgets/WES2_day_actions_row.dart
+  lib/WES2_widgets/WES2_day_header.dart
+  lib/WES2_widgets/WES2_empty_state.dart
+  lib/WES2_widgets/WES2_exercise_card.dart
+  lib/WES2_widgets/WES2_exercise_picker.dart
+  lib/WES2_widgets/WES2_field_cell.dart
+  lib/WES2_widgets/WES2_set_row.dart
+  test/wes2/WES2_*.dart  (any test file starting with WES2_)
+  docs/wes2/**
+  .orchestrator/wes2/**
+  docs/wes2_orchestrator.py
+
+New files are also allowed if their filename starts with WES2_ and they live in
+lib/, lib/WES2_widgets/, or test/wes2/.
+
+BLOCKED WRITES — reject ONLY if the plan writes one of these:
+  lib/workout_entry_screen.dart
+  lib/main.dart
+  lib/bb3_*.dart  (any file starting with bb3_)
+  lib/periodization_model_utils.dart
+  lib/progression_engine.dart
+  pubspec.yaml
+  assets/**
+  *.g.dart  (generated)
+  *.freezed.dart  (generated)
+  .claude/settings.local.json
+  lib/templates.dart
+  lib/template_model.dart
+
+Read-only reference (Claude may read but NOT edit):
+  lib/templates.dart, lib/template_model.dart, lib/workout_entry_screen.dart,
+  lib/bb3_*.dart, lib/periodization_model_utils.dart, lib/progression_engine.dart
+
+CRITICAL REVIEWER REMINDER:
+lib/WES2_repository.dart IS in the allowed write scope. Do NOT reject it.
+Any lib/WES2_*.dart file is allowed. The WES2_ prefix is the only test.
+Do NOT reject a plan for reading a reference file — only for writing a blocked file.
+
+
+        PHASE-SPECIFIC REQUIREMENTS:
+        Phase 18 — Templates:
+IMPORTANT: This is a continuation from the current WES2 repo state, not a restart.
+Write only WES2-scoped files (lib/WES2_*.dart, lib/WES2_widgets/WES2_*.dart,
+test/wes2/WES2_*.dart, docs/wes2/**, .orchestrator/wes2/**).
+
+REQUIRED BEHAVIORS:
+- Template loading REPLACES the current WES2 day/session rows (not appends).
+- If replacing existing rows, show a snackbar with Undo. If day is empty, no snackbar.
+- If the current WES2 day contains BB3-sourced planned rows and the user explicitly
+  loads a template that replaces that day, clear ONLY the current selected BB3 planned
+  day (current blockId/weekIndex/dayIndex) after verifying the WES2-visible write shape.
+  Do NOT touch completed workout docs or non-current BB3 days.
+  If the BB3 current-day write shape is uncertain, print BLOCKED rather than guessing.
+- After loading, blank template rows persist in wesPlannedExercises[].
+  Do NOT move them to exercises[] — they are pending/planned, not completed.
+- Completed/logged values flow into exercises[] only through normal WES2 save/done pathways.
+- "Save workout to templates" stores structure only (exerciseId, name, circuitIndex,
+  orderIndex, setCount). Never store actual logged values (weight, reps, rir, etc.).
+- Template picker/dialog/bottom sheet MUST be overflow-safe at 360px width.
+- Deduplicate exerciseIds: same exerciseId must not appear twice on the same date,
+  even across different circuits. Silently skip duplicates on load.
+- Snapshot undo state BEFORE replacing current rows.
+- Preserve: selected date/session behavior, local draft/fast reopen behavior,
+  Add Exercise/Add Circuit/Add Set/Remove Set/Delete/Replace/Move/Done behaviors.
+- Read lib/templates.dart and lib/template_model.dart for schema ONLY.
+  Do NOT edit these files.
+- BB3 clearing (if needed) must only clear the current selected BB3 planned day.
+  Do NOT touch completed workout docs or other BB3 days.
+- If the BB3 current-day write shape is uncertain, print BLOCKED rather than guessing.
+
+
+        LAYOUT RULES (treat RenderFlex overflow as a blocker):
+- Avoid RenderFlex overflows.
+- Long text inside Row must use Expanded or Flexible.
+- Use maxLines and TextOverflow.ellipsis on all text widgets.
+- Avoid unconstrained Row children.
+- Do NOT use ListTile inside PopupMenuItem.
+- Test mentally at narrow 360px phone width.
+
+
+        RELEVANT SPEC EXCERPT:
+        Exercises already in the selected circuit appear checked and cannot be unchecked/removed from picker. Use 3-dot menu delete instead.
+9.7 Templates
+Loading template replaces current WES2 day, not append.
+If replacing existing exercises, show snackbar with Undo. If loading into empty/unplanned day, no snackbar.
+If replacing BB3 planned exercises, clear entire BB3 planned day.
+Template preserves its circuit structure and order.
+After loading a template, user can still add exercises/circuits normally.
+---
+Implement hint service and instant recalculation.
+Implement circuits, orderIndex, drag/drop, add/delete/replace, undo.
+Implement templates load/replace and save-to-template.
+Implement settings dialog and refresh actions.
+Implement notes, velocity, timed exercises, summary, timer, Done state.
+Implement multi-device Firestore listener and field-border collaborator indicator.
+Implement offline conflict prompt and final acceptance tests.
+---
+BB3 velocity appears as hint and returns after actual velocity is cleared.
+BB3 planned notes and WES2 execution notes are distinct.
+Loading template replaces day and preserves circuits.
+Template-loaded untouched rows persist but do not affect BB3.
+Manual workout can be saved to template only when appropriate; does not imply workout data is unsaved.
+Summary label opens summary and shows total exercises, sets, time.
+16.6 UI robustness tests
+---
+If replacing BB3 planned exercises, clear entire BB3 planned day.
+Template preserves its circuit structure and order.
+After loading a template, user can still add exercises/circuits normally.
+Template-loaded blank rows persist in WES2 on that date but do not affect BB3.
+Completed template exercises appear in BB3 as completed.
+If any template exercise is completed, BB3 should show the template label for that date so the user can see which template/day was performed.
+9.8 Save workout to templates
+---
+Completed template exercises appear in BB3 as completed.
+If any template exercise is completed, BB3 should show the template label for that date so the user can see which template/day was performed.
+9.8 Save workout to templates
+If user builds a workout manually from an empty/unplanned day, and each exercise is completed and marked completed/done according to the WES2 flow, show a subtle label: "Save workout to templates".
+Do not show this if the day began by loading a template.
+Language must not imply workout values are unsaved; this is only for creating a reusable template.
+Tapping opens dialog with Template Name field (e.g. Day 5).
+---
+If any template exercise is completed, BB3 should show the template label for that date so the user can see which template/day was performed.
+9.8 Save workout to templates
+If user builds a workout manually from an empty/unplanned day, and each exercise is completed and marked completed/done according to the WES2 flow, show a subtle label: "Save workout to templates".
+Do not show this if the day began by loading a template.
+Language must not imply workout values are unsaved; this is only for creating a reusable template.
+Tapping opens dialog with Template Name field (e.g. Day 5).
+Saving creates a new template in the user’s templates for the current block, preserving circuit structure/order.
+---
+9.8 Save workout to templates
+If user builds a workout manually from an empty/unplanned day, and each exercise is completed and marked completed/done according to the WES2 flow, show a subtle label: "Save workout to templates".
+Do not show this if the day began by loading a template.
+Language must not imply workout values are unsaved; this is only for creating a reusable template.
+Tapping opens dialog with Template Name field (e.g. Day 5).
+Saving creates a new template in the user’s templates for the current block, preserving circuit structure/order.
+Do not require this action for normal workout saving.
+---
+Result
+At bottom/add-circuit row, show label:
+Save workout to templates
+When tapped, dialog asks:
+Template name
+User enters:
+Day 5
+
+        IMPLEMENTATION PLAN TO REVIEW:
+        I now have everything I need. Here is the full implementation plan:
+
+---
+
+# Phase 18 â€” Templates: Implementation Plan
+
+## 1. Files to CREATE
+
+### `lib/WES2_widgets/WES2_template_picker.dart` (new)
+
+A bottom-sheet function `showWes2TemplatePicker(BuildContext, String uid) â†’ Future<Template?>`.
+
+- Displays a `DraggableScrollableSheet` (maxChildSize 0.85) via `showModalBottomSheet`.
+- Fetches `users/{uid}/templates` collection from Firestore (single read, no listener needed).
+- Groups results: active-block templates first, other blocks next, no-block templates last.
+- Each item is a simple `InkWell` row â€” title with `maxLines: 1, overflow: TextOverflow.ellipsis`, optional subtitle (day/block label). No `ListTile` inside `PopupMenuItem`.
+- Empty state: single centered "No templates saved" text.
+- All Row children are `Expanded` or `Flexible`. No unconstrained text. Safe at 360px width.
+- Returns the tapped `Template` object, or null on dismiss.
+
+**Import:** `package:cloud_firestore/cloud_firestore.dart`, `template_model.dart`.
+
+---
+
+## 2. Files to MODIFY
+
+### `lib/WES2_template_service.dart`
+
+**Replace** the Phase-1 stub with a full `FirestoreWes2TemplateService` class implementing the existing abstract `Wes2TemplateService` interface. No changes to the abstract methods.
+
+**`loadTemplate` implementation:**
+- Fetches `users/{uid}/templates/{templateId}` from Firestore.
+- If doc does not exist â†’ returns `[]`.
+- Parses `exercises` list using the same pattern as `Template.fromFirestore`:
+  - Expects each entry to be a `Map<String, dynamic>` with `name` (String), `circuitIndex` (int, default 0), and optionally `exerciseId`, `orderIndex`, `setCount`.
+  - **Silent skip rule:** if an entry has no `exerciseId` key (legacy templates created without WES2), skip it â€” exerciseId is the mandatory row identity key in WES2.
+  - `setCount` defaults to 3 if absent.
+  - `orderIndex` defaults to list index if absent.
+  - Sets `source = Wes2RowSource.templateLoaded`.
+  - Creates `Wes2SetState(setIndex: i)` blank entries up to `setCount` â€” no actual values, no hint values. These are structure-only rows.
+- Returns `List<Wes2ExerciseRow>`.
+
+**`saveWorkoutAsTemplate` implementation:**
+- Auto-generates a doc ID in `users/{uid}/templates/`.
+- Stores: `name` (templateName), `blockId`, `createdAt: FieldValue.serverTimestamp()`.
+- `exercises` array: one map per row with `{ exerciseId, name, circuitIndex, orderIndex, setCount }` only. **Never** stores weight, reps, rir, velocity, executionNote, or any actual value.
+- Does NOT store `blockAssignment` (requires block metadata lookup, out of scope for Phase 18).
+
+---
+
+### `lib/WES2_controller.dart`
+
+**Add one new field:**
+```dart
+bool _loadedFromTemplate = false;
+```
+
+**Add two new getters:**
+```dart
+bool get loadedFromTemplate => _loadedFromTemplate;
+
+bool get showSaveToTemplatesLabel {
+  if (_loadedFromTemplate) return false;
+  if (_rows.isEmpty) return false;
+  return _rows.every((r) => r.isMarkedDone);
+}
+```
+
+**Modify `changeDate()`:** add `_loadedFromTemplate = false;` alongside the existing resets.
+
+**Add `applyTemplateRows(List<Wes2ExerciseRow> templateRows) â†’ bool` method:**
+
+- Calls `_pushUndo()` first (snapshot before replace â€” this drives the undo snackbar).
+- Collects `completedRows` = rows with `source == Wes2RowSource.completedServer` (preserved verbatim).
+- Builds `completedIds` set from those rows.
+- Deduplicates `templateRows`: for each, if `exerciseId` is in `completedIds` or already seen, silently skip.
+- Sets `_rows = [...completedRows, ...deduped]`.
+- Sets `_loadedFromTemplate = true`.
+- Updates `_loadState` accordingly (empty or loaded).
+- Calls `notifyListeners()`.
+- **Returns** `hadExistingRows` (whether `_rows` was non-empty before replace) â€” the screen uses this to decide whether to show the undo snackbar.
+
+No changes to any existing method signatures or behaviors.
+
+---
+
+### `lib/WES2_repository.dart`
+
+**Add to abstract interface:**
+```dart
+Future<void> replaceWesPlannedWithTemplateRows({
+  required String uid,
+  required DateTime date,
+  required List<Wes2ExerciseRow> templateRows,
+});
+```
+
+**Add concrete implementation** in `FirestoreWes2Repository`:
+
+- Same Firestore transaction pattern as existing methods, writing to `users/{uid}/workouts/{dateDocId}`.
+- Reads current `exercises[]` â€” kept entirely untouched.
+- Builds new `wesPlannedExercises[]` from `templateRows` via `_buildWesPlannedRowMap()` (already exists).
+- Server-side duplicate guard: skip any templateRow whose `exerciseId` appears in `exercises[]`.
+- Writes with `SetOptions(merge: true)`, same shape as all other write methods.
+- No new Firestore paths. No BB3 writes (see BLOCKED section below).
+
+---
+
+### `lib/WES2_screen.dart`
+
+**Wire `_templateService`:** Add `final Wes2TemplateService _templateService = FirestoreWes2TemplateService();` to `_Wes2ScreenState` if not already present. (Current grep shows no existing instance.)
+
+**Replace** the `_showTemplatesPlaceholder()` call at line ~520 with `_loadTemplate()`.
+
+**Remove** the `_showTemplatesPlaceholder()` method (~lines 937-943).
+
+**Add `_loadTemplate()` async method:**
+1. Calls `showWes2TemplatePicker(context, _controller.actingUid)`.
+2. If null returned â†’ return early (user dismissed).
+3. Calls `_templateService.loadTemplate(uid: ..., templateId: template.id)` inside a try/catch; on error shows a snackbar and returns.
+4. Calls `_controller.applyTemplateRows(templateRows)` â†’ captures `hadRows`.
+5. Calls `_silentlySave(...)` (existing pattern) wrapping `_repository.replaceWesPlannedWithTemplateRows(...)`.
+6. If `hadRows == true`: shows undo snackbar using the existing undo snackbar pattern already in the screen (other structural operations already use this pattern). Undo action calls `_controller.undo()` and re-saves the reverted `wesPlannedExercises[]` to Firestore.
+
+**Add `_showSaveAsTemplateDialog()` async method:**
+1. Shows `AlertDialog` with a `TextField` (label "Template name", default text "Day").
+2. On confirm: trims name; if empty â†’ no-op.
+3. Calls `_silentlySave(...)` wrapping `_templateService.saveWorkoutAsTemplate(uid: ..., blockId: _controller.activeBlockId ?? '', templateName: name, rows: _controller.rows.toList())`.
+4. Shows a brief confirmation snackbar: `Saved as "$name"`.
+
+**In `build`:** Pass `showSaveToTemplates: _controller.showSaveToTemplatesLabel` and `onSaveToTemplates: _showSaveAsTemplateDialog` to `Wes2BottomActionsRow`.
+
+---
+
+### `lib/WES2_widgets/WES2_day_actions_row.dart`
+
+**Modify `Wes2BottomActionsRow`:**
+
+Add two optional parameters:
+```dart
+final bool showSaveToTemplates;        // default false
+final VoidCallback? onSaveToTemplates;
+```
+
+Add inside the existing `Column`, after the actions `Row` and before `SizedBox(height: 55)`:
+```dart
+if (showSaveToTemplates && onSaveToTemplates != null)
+  Padding(
+    padding: const EdgeInsets.only(top: 4, left: 8),
+    child: TextButton(
+      onPressed: onSaveToTemplates,
+      style: TextButton.styleFrom(
+        foregroundColor: Colors.white38,
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        minimumSize: Size.zero,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      child: const Text(
+        'Save workout to templates',
+        style: TextStyle(fontSize: 11),
+        overflow: TextOverflow.ellipsis,
+        maxLines: 1,
+      ),
+    ),
+  ),
+```
+
+All existing callers pass only the original parameters â€” the new ones default to `false`/`null`, so no existing call sites break.
+
+---
+
+## 3. Reference Files Read (NOT edited)
+
+- `lib/templates.dart` â€” confirmed Firestore path (`users/{uid}/templates/{docId}`), exercise map schema (`name`, `circuitIndex`, optional `exerciseId`/`orderIndex`/`setCount`), and template grouping logic.
+- `lib/template_model.dart` â€” `Template` class: `id, name, day, blockId, blockAssignment, exercises: List<Map>`, `fromFirestore` backward-compat parsing.
+
+---
+
+## 4. Blocked Files â€” Will NOT edit
+
+`lib/workout_entry_screen.dart`, `lib/main.dart`, `lib/bb3_*.dart`, `lib/templates.dart`, `lib/template_model.dart`, `lib/periodization_model_utils.dart`, `lib/progression_engine.dart`, `pubspec.yaml`, `assets/**`, `*.g.dart`, `*.freezed.dart`, `.claude/settings.local.json`.
+
+---
+
+## 5. Phase-Specific Guidance â€” Point by Point
+
+| Requirement | Status | Where handled |
+|---|---|---|
+| Template loading replaces day rows (not appends) | âœ“ | `applyTemplateRows` replaces non-completed rows |
+| Undo snackbar if existing rows replaced; no snackbar if empty | âœ“ | `applyTemplateRows` returns `hadExistingRows`; screen branches on it |
+| Blank template rows persist in `wesPlannedExercises[]` | âœ“ | `replaceWesPlannedWithTemplateRows` writes to `wesPlannedExercises[]`; template rows have no actual values and are never written to `exercises[]` |
+| "Save to templates" stores structure only (no weight/reps/etc.) | âœ“ | `saveWorkoutAsTemplate` stores `exerciseId, name, circuitIndex, orderIndex, setCount` only |
+| Template picker overflow-safe at 360px | âœ“ | `WES2_template_picker.dart`: all text in `Expanded`/`Flexible`, `maxLines: 1`, `overflow: ellipsis`; no `ListTile` inside `PopupMenuItem` |
+| Deduplicate exerciseIds on load | âœ“ | `applyTemplateRows` and `replaceWesPlannedWithTemplateRows` both deduplicate; silently skip |
+| Snapshot undo state BEFORE replacing | âœ“ | `applyTemplateRows` calls `_pushUndo()` as first action |
+| Do not show "save to templates" if day loaded from template | âœ“ | `_loadedFromTemplate` flag; `showSaveToTemplatesLabel` returns false when set |
+| Show "save to templates" only when all rows isMarkedDone | âœ“ | `showSaveToTemplatesLabel` uses `.every((r) => r.isMarkedDone)` |
+| Language must not imply workout values are unsaved | âœ“ | Dialog title "Save as Template"; label text matches spec verbatim |
+| Preserve all existing WES2 behaviors | âœ“ | Template load is a net-new action; no existing method signatures changed |
+| Reset `_loadedFromTemplate` on date change | âœ“ | `changeDate()` resets the flag |
+
+---
+
+## 6. BB3 CLEARING â€” BLOCKED
+
+**The spec says:** "If replacing BB3 planned exercises, clear entire BB3 planned day."
+
+**Assessment: BLOCKED.**
+
+After reading `WES2_repository.dart` in full: every write method targets only `users/{uid}/workouts/{dateDocId}`. There are **no existing BB3 (planned\_blocks) write paths anywhere in the WES2 codebase**. The structural operations added in Phases 13-14 (deleteExercise, replaceExercise, moveExerciseToCircuit) all write only to the WES2 workout doc.
+
+The BB3 planned day path (likely something under `planned_blocks/{uid}/blocks/{blockId}/...`) is defined in `bb3_*.dart` files. Additionally, `Wes2SessionController` tracks `_activeBlockId` but does **not** track `weekIndex` or `dayIndex`, which are required to address the specific BB3 day sub-document. `WES2_plan_service.dart` reads BB3 to hydrate WES2, but the reverse write direction (WES2 clearing a BB3 planned day) has never been established.
+
+**What IS safe and WILL be implemented:** The WES2 workout document's `wesPlannedExercises[]` will be replaced with template rows (the WES2-owned array). BB3-sourced rows are evicted from the in-memory display. The WES2 workout document will be correct.
+
+**What requires human confirmation before implementation:**
+1. The exact Firestore path for the BB3 planned day (the `planned_blocks` sub-document that holds the day's planned exercises).
+2. The field name(s) to clear on that document.
+3. Whether `weekIndex` and `dayIndex` context is already plumbed through `WES2_plan_service` to the screen, or needs to be threaded through.
+
+Once those are confirmed, a `clearBb3PlannedDay(uid, blockId, weekIndex, dayIndex)` method can be added to `WES2_repository.dart` (which is in the allowed write scope) and called from `_loadTemplate()` after template rows are applied.
+
+
+        Review the plan against the spec and write scope rules.
+        Approve if the plan correctly addresses all phase requirements and stays in scope.
+        Reject if it misses critical requirements, proposes writing blocked files, or violates spec.
+
+        Remember: Reading reference files (lib/templates.dart, lib/bb3_*.dart, etc.) is ALLOWED.
+        Only reject for WRITING blocked files or violating spec behavior rules.
+
+        Return ONLY valid JSON with no other text:
+        {
+          "approved": true or false,
+          "reason": "explanation",
+          "spec_references_used": ["list of spec sections/rules cited"],
+          "corrections": ["required corrections if rejected"]
+        }
