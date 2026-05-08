@@ -117,6 +117,8 @@ class Wes2SessionController extends ChangeNotifier {
   void undo() {
     if (_undoStack.isEmpty) return;
     _rows = _undoStack.removeLast();
+    // Restore load state to match the recovered row count.
+    _loadState = _rows.isEmpty ? Wes2LoadState.empty : Wes2LoadState.loaded;
     notifyListeners();
   }
 
@@ -220,6 +222,7 @@ class Wes2SessionController extends ChangeNotifier {
   void addSet(String exerciseId) {
     final rowIdx = _rows.indexWhere((r) => r.exerciseId == exerciseId);
     if (rowIdx == -1) return;
+    _pushUndo();
     final row = _rows[rowIdx];
 
     final highestStored = row.sets.fold(
@@ -263,6 +266,7 @@ class Wes2SessionController extends ChangeNotifier {
 
   Wes2ExerciseRow _doAddExercise(String exerciseId, String name,
       {int circuitIndex = 0}) {
+    _pushUndo();
     final nextOrder = _rows.isEmpty
         ? 0
         : _rows.map((r) => r.orderIndex).reduce((a, b) => a > b ? a : b) + 1;

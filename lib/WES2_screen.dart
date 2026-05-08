@@ -339,6 +339,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     // survive fast reopen, especially for BB3-planned rows where no Firestore
     // write occurs until the user types an actual value.
     _saveDraftNow();
+    _showUndoSnackBar('Set added');
 
     final rowIdx =
         _controller.rows.indexWhere((r) => r.exerciseId == exerciseId);
@@ -405,7 +406,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
               IconButton(
                 icon: const Icon(Icons.undo),
                 tooltip: 'Undo',
-                onPressed: controller.canUndo ? controller.undo : null,
+                onPressed: controller.canUndo ? _performUndo : null,
               ),
               IconButton(
                 icon: const Icon(Icons.refresh),
@@ -619,6 +620,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     );
     if (!added) return;
     _saveDraftNow();
+    _showUndoSnackBar('Exercise added');
     if (_controller.loadState == Wes2LoadState.loaded) {
       final rowIdx =
           _controller.rows.indexWhere((r) => r.exerciseId == result.exerciseId);
@@ -717,6 +719,25 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     _saveDraftNow();
     _controller.changeDate(picked);
     _loadDay();
+  }
+
+  // ── Undo (Phase 15) ──────────────────────────────────────────────────────
+
+  void _performUndo() {
+    _controller.undo();
+    _saveDraftNow();
+  }
+
+  void _showUndoSnackBar(String label) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(label),
+          action: SnackBarAction(label: 'Undo', onPressed: _performUndo),
+        ),
+      );
   }
 
   // ── Snackbar / confirm helpers (Phase 13) ─────────────────────────────────
@@ -848,6 +869,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     if (!confirmed) return;
     _controller.deleteExercise(row.exerciseId);
     _saveDraftNow();
+    _showUndoSnackBar('Exercise deleted');
     // ignore: discarded_futures
     _deleteExerciseSilently(
       uid: _controller.actingUid,
@@ -881,6 +903,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       newName: result.name,
     );
     _saveDraftNow();
+    _showUndoSnackBar('Exercise replaced');
     // ignore: discarded_futures
     _replaceExerciseSilently(
       uid: _controller.actingUid,
@@ -908,6 +931,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     if (targetCi == null) return;
     _controller.moveExerciseToCircuit(row.exerciseId, targetCi);
     _saveDraftNow();
+    _showUndoSnackBar('Exercise moved to Circuit ${targetCi + 1}');
     // ignore: discarded_futures
     _moveExerciseToCircuitSilently(
       uid: _controller.actingUid,
@@ -998,6 +1022,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       if (!confirmed || !mounted) return;
       _controller.deleteExercise(currentRow.exerciseId);
       _saveDraftNow();
+      _showUndoSnackBar('Exercise deleted');
       // ignore: discarded_futures
       _deleteExerciseSilently(
         uid: _controller.actingUid,
@@ -1024,6 +1049,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
     _controller.removeSet(currentRow.exerciseId, setIndex);
     _saveDraftNow();
+    _showUndoSnackBar('Set removed');
     // ignore: discarded_futures
     _removeSetSilently(
       uid: _controller.actingUid,

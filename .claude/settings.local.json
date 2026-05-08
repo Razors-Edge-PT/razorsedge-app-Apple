@@ -33,7 +33,8 @@
       "PowerShell(cmd /c \"dir /a /b C:\\\\Users\\\\OEM\\\\AppData\\\\Local\\\\Pub\\\\Cache\\\\hosted\\\\pub.dev\\\\build_runner-2.14.1\\\\lib\\\\src\\\\bootstrap\")",
       "PowerShell(cmd /c \"dir /a /b C:\\\\Users\\\\OEM\\\\AppData\\\\Local\\\\Pub\\\\Cache\\\\hosted\\\\pub.dev\\\\isar_community-3.3.2\\\\lib\")",
       "Bash(grep -v \"avoid_print\\\\|unused_import\\\\|unused_field\\\\|uri_does_not_exist.*docs\\\\\\\\\")",
-      "Bash(dart format *)"
+      "Bash(dart format *)",
+      "Bash(findstr /i \"WES2\\\\|error\")"
     ]
   }
 }
