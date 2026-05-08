@@ -660,7 +660,12 @@ class FirestoreWes2Repository implements Wes2Repository {
     });
   }
 
-  // ── replaceExercise (Phase 13) ────────────────────────────────────────────
+  // ── replaceExercise (Phase 13b) ───────────────────────────────────────────
+  // Old row is removed from BOTH arrays regardless of which it was in.
+  // New blank row is always appended to wesPlannedExercises[] — never
+  // exercises[], which is reserved for rows with actual logged values.
+  // The existing saveFieldPatch promote-path will move it to exercises[] when
+  // the user enters the first actual value.
 
   @override
   Future<void> replaceExercise({
@@ -690,32 +695,44 @@ class FirestoreWes2Repository implements Wes2Repository {
           .map((m) => Map<String, dynamic>.from(m))
           .toList();
 
+      // Find old row in whichever array it lives in.
       final exIdx =
           exercises.indexWhere((m) => m['exerciseId'] == oldExerciseId);
       final wpIdx =
           wesPlanned.indexWhere((m) => m['exerciseId'] == oldExerciseId);
 
-      if (exIdx != -1) {
-        final old = exercises[exIdx];
-        exercises[exIdx] = {
-          'exerciseId': newExerciseId,
-          'name': newName,
-          'circuitIndex': old['circuitIndex'],
-          'orderIndex': old['orderIndex'],
-          'setCount': old['setCount'],
-          'sets': <Map<String, dynamic>>[],
-        };
-      } else if (wpIdx != -1) {
-        final old = wesPlanned[wpIdx];
-        wesPlanned[wpIdx] = {
-          'exerciseId': newExerciseId,
-          'name': newName,
-          'circuitIndex': old['circuitIndex'],
-          'orderIndex': old['orderIndex'],
-          'setCount': old['setCount'],
-          'sets': <Map<String, dynamic>>[],
-        };
-      }
+      // No-op if old row is not materialised in either array.
+      if (exIdx == -1 && wpIdx == -1) return;
+
+      // Preserve placement/count metadata from whichever array holds the row.
+      final oldMap = exIdx != -1 ? exercises[exIdx] : wesPlanned[wpIdx];
+      final circuitIndex = (oldMap['circuitIndex'] as num?)?.toInt() ?? 0;
+      final orderIndex = (oldMap['orderIndex'] as num?)?.toInt() ?? 0;
+      final setCount = (oldMap['setCount'] as num?)?.toInt() ?? 3;
+
+      // No-op if newExerciseId already exists in either array under a
+      // different row (same-id replace is harmless but still clears sets).
+      final duplicateNewExists =
+          exercises.any((m) => m['exerciseId'] == newExerciseId &&
+              m['exerciseId'] != oldExerciseId) ||
+          wesPlanned.any((m) => m['exerciseId'] == newExerciseId &&
+              m['exerciseId'] != oldExerciseId);
+      if (duplicateNewExists) return;
+
+      // Remove old row from BOTH arrays.
+      exercises.removeWhere((m) => m['exerciseId'] == oldExerciseId);
+      wesPlanned.removeWhere((m) => m['exerciseId'] == oldExerciseId);
+
+      // Append blank replacement row to wesPlannedExercises[] only.
+      // exercises[] must only contain rows with actual logged values.
+      wesPlanned.add({
+        'exerciseId': newExerciseId,
+        'name': newName,
+        'circuitIndex': circuitIndex,
+        'orderIndex': orderIndex,
+        'setCount': setCount,
+        'sets': <Map<String, dynamic>>[],
+      });
 
       txn.set(
         docRef,

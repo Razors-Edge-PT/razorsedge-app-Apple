@@ -497,7 +497,15 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       case Wes2LoadState.loading:
         return const Center(child: Wes2WaitForIt());
       case Wes2LoadState.empty:
-        return const Wes2EmptyState();
+        return ListView(
+          children: [
+            const Wes2EmptyState(),
+            Wes2BottomActionsRow(
+              setsLogged: 0,
+              onAddCircuit: _onAddCircuit,
+            ),
+          ],
+        );
       case Wes2LoadState.loaded:
         final rows = controller.rows;
         final setsLogged =
@@ -557,15 +565,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
           ));
         }
 
-        return Column(
-          children: [
-            Expanded(child: ListView(children: items)),
-            Wes2BottomActionsRow(
-              setsLogged: setsLogged,
-              onAddCircuit: _onAddCircuit,
-            ),
-          ],
-        );
+        items.add(Wes2BottomActionsRow(
+          setsLogged: setsLogged,
+          onAddCircuit: _onAddCircuit,
+        ));
+        return ListView(children: items);
       case Wes2LoadState.error:
         return const SizedBox.shrink(); // unreachable: handled in _buildBody
     }

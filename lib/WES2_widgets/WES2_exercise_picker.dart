@@ -186,15 +186,10 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Row(
               children: [
-                Text(
-                  widget.titleOverride ??
-                      'Add Exercise to Circuit ${_selectedCircuitIndex + 1}',
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
+                Expanded(
+                  child: _buildPickerTitle(),
                 ),
-                const Spacer(),
+                const SizedBox(width: 8),
                 _buildPlannedToggle(),
               ],
             ),
@@ -222,6 +217,52 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
         ],
       ),
     );
+  }
+
+  Widget _buildPickerTitle() {
+    final titleOverride = widget.titleOverride;
+    final isReplace = titleOverride != null &&
+        titleOverride.trim().toLowerCase().startsWith('replace');
+
+    if (isReplace) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            'Replace',
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+          ),
+          Text(
+            _cleanReplaceExerciseName(titleOverride),
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+          ),
+        ],
+      );
+    }
+
+    return Text(
+      titleOverride ??
+          'Add Exercise to Circuit ${_selectedCircuitIndex + 1}',
+      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+      overflow: TextOverflow.ellipsis,
+      maxLines: 1,
+    );
+  }
+
+  String _cleanReplaceExerciseName(String rawTitle) {
+    var s = rawTitle.trim();
+    if (s.toLowerCase().startsWith('replace')) {
+      s = s.substring('replace'.length).trim();
+    }
+    if (s.startsWith('"') && s.endsWith('"') && s.length >= 2) {
+      s = s.substring(1, s.length - 1);
+    }
+    return s.isEmpty ? 'exercise' : s;
   }
 
   Widget _buildCircuitSelector() {

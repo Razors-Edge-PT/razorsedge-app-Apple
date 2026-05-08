@@ -9,6 +9,40 @@ import 'WES2_set_row.dart';
 const _kBb3AccentColor = Color(0xFF455A64); // blueGrey.shade700
 const _kBb3LabelColor = Color(0xFF78909C); // blueGrey.shade400
 
+enum _ExerciseCardMenuAction { notes, replace, moveToCircuit, delete }
+
+PopupMenuItem<_ExerciseCardMenuAction> _menuItem({
+  required _ExerciseCardMenuAction value,
+  required IconData icon,
+  required String label,
+  bool enabled = true,
+  bool destructive = false,
+}) {
+  final color = destructive ? Colors.redAccent : null;
+  return PopupMenuItem<_ExerciseCardMenuAction>(
+    value: value,
+    enabled: enabled,
+    height: 40,
+    child: SizedBox(
+      width: 190,
+      child: Row(
+        mainAxisSize: MainAxisSize.max,
+        children: [
+          Icon(icon, size: 18, color: color),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              label,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: color),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 /// WES2 exercise card — visually matches WES CompactDark card style.
 /// Uses ExpansionTile for in-session expand/collapse (no state persisted to
 /// controller in Phase 5). Fields are read-only display cells; no write
@@ -131,47 +165,50 @@ class Wes2ExerciseCard extends StatelessWidget {
               icon: const Icon(Icons.settings, size: 20, color: Colors.grey),
               onPressed: onSettings,
             ),
-            PopupMenuButton<VoidCallback?>(
+            PopupMenuButton<_ExerciseCardMenuAction>(
               padding: EdgeInsets.zero,
-              constraints: const BoxConstraints.tightFor(width: 32),
               icon: const Icon(Icons.more_vert, size: 18),
-              onSelected: (fn) => fn?.call(),
+              onSelected: (action) {
+                switch (action) {
+                  case _ExerciseCardMenuAction.notes:
+                    onNotes?.call();
+                    break;
+                  case _ExerciseCardMenuAction.replace:
+                    onReplace?.call();
+                    break;
+                  case _ExerciseCardMenuAction.moveToCircuit:
+                    onMoveToCircuit?.call();
+                    break;
+                  case _ExerciseCardMenuAction.delete:
+                    onDelete?.call();
+                    break;
+                }
+              },
               itemBuilder: (_) => [
-                PopupMenuItem(
-                  value: onNotes,
-                  child: const ListTile(
-                    dense: true,
-                    leading: Icon(Icons.notes),
-                    title: Text('Notes'),
-                  ),
+                _menuItem(
+                  value: _ExerciseCardMenuAction.notes,
+                  icon: Icons.notes,
+                  label: 'Notes',
+                  enabled: onNotes != null,
                 ),
-                PopupMenuItem(
-                  value: onReplace,
-                  child: const ListTile(
-                    dense: true,
-                    leading: Icon(Icons.swap_horiz),
-                    title: Text('Replace Exercise'),
-                  ),
+                _menuItem(
+                  value: _ExerciseCardMenuAction.replace,
+                  icon: Icons.swap_horiz,
+                  label: 'Replace Exercise',
+                  enabled: onReplace != null,
                 ),
-                PopupMenuItem(
-                  value: onMoveToCircuit,
-                  child: const ListTile(
-                    dense: true,
-                    leading: Icon(Icons.move_down),
-                    title: Text('Move to Circuit'),
-                  ),
+                _menuItem(
+                  value: _ExerciseCardMenuAction.moveToCircuit,
+                  icon: Icons.move_down,
+                  label: 'Move to Circuit',
+                  enabled: onMoveToCircuit != null,
                 ),
-                PopupMenuItem(
-                  value: onDelete,
-                  child: ListTile(
-                    dense: true,
-                    leading: const Icon(Icons.delete_outline,
-                        color: Colors.redAccent),
-                    title: const Text(
-                      'Delete Exercise',
-                      style: TextStyle(color: Colors.redAccent),
-                    ),
-                  ),
+                _menuItem(
+                  value: _ExerciseCardMenuAction.delete,
+                  icon: Icons.delete_outline,
+                  label: 'Delete Exercise',
+                  enabled: onDelete != null,
+                  destructive: true,
                 ),
               ],
             ),
