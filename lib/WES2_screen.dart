@@ -769,7 +769,6 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     );
     if (!added) return;
     _saveDraftNow();
-    _showUndoSnackBar('Exercise added');
     if (_controller.loadState == Wes2LoadState.loaded) {
       final rowIdx =
           _controller.rows.indexWhere((r) => r.exerciseId == result.exerciseId);
@@ -1035,6 +1034,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
           'BB3 planned exercises cannot be removed here. Use the Block Builder.');
       return;
     }
+    final hadActuals = row.hasAnyExecutionValue;
     final confirmed = await _showConfirmDialog(
       title: 'Delete Exercise',
       content: 'Remove "${row.name}" from today\'s workout?',
@@ -1042,7 +1042,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     if (!confirmed) return;
     _controller.deleteExercise(row.exerciseId);
     _saveDraftNow();
-    _showUndoSnackBar('Exercise deleted');
+    if (hadActuals) _showUndoSnackBar('Exercise deleted');
     // ignore: discarded_futures
     _deleteExerciseSilently(
       uid: _controller.actingUid,
@@ -1195,7 +1195,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       if (!confirmed || !mounted) return;
       _controller.deleteExercise(currentRow.exerciseId);
       _saveDraftNow();
-      _showUndoSnackBar('Exercise deleted');
+      if (currentRow.hasAnyExecutionValue) _showUndoSnackBar('Exercise deleted');
       // ignore: discarded_futures
       _deleteExerciseSilently(
         uid: _controller.actingUid,
@@ -1222,7 +1222,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
     _controller.removeSet(currentRow.exerciseId, setIndex);
     _saveDraftNow();
-    _showUndoSnackBar('Set removed');
+    if (targetSet.hasAnyActual) _showUndoSnackBar('Set removed');
     // ignore: discarded_futures
     _removeSetSilently(
       uid: _controller.actingUid,
@@ -1518,7 +1518,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     }
 
     if (hadAnyRows && mounted) {
-      _showUndoSnackBar('Template loaded');
+      _showUndoSnackBar('Exercises replaced by template');
     }
   }
 

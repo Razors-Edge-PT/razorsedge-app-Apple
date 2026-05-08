@@ -241,7 +241,7 @@ class _Wes2TemplatePickerState extends State<Wes2TemplatePicker> {
 
     return ListView(
       controller: scrollCtrl,
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.fromLTRB(0, 4, 0, 80),
       children: sections,
     );
   }
