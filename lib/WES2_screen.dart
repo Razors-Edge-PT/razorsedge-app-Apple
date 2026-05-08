@@ -15,6 +15,7 @@ import 'WES2_widgets/WES2_exercise_picker.dart';
 import 'WES2_local_store.dart';
 import 'WES2_template_service.dart';
 import 'WES2_widgets/WES2_template_picker.dart';
+import 'WES2_widgets/WES2_exercise_settings_dialog.dart';
 
 enum _Wes2AppBarMenuAction { timer, templates, deleteAll }
 
@@ -936,20 +937,32 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     );
   }
 
-  // ── Placeholder dialogs (Phase 13) ────────────────────────────────────────
+  // ── Exercise settings dialog (Phase 19) ──────────────────────────────────
 
   void _showExerciseSettingsDialog(Wes2ExerciseRow row) {
+    final blockId = _controller.activeBlockId;
+    final blockStart = _controller.blockStartDate;
+    if (blockId == null ||
+        blockId.isEmpty ||
+        blockStart == null) {
+      _showSnackBar('No active block — settings require a training block.');
+      return;
+    }
+    if (_isBeforeBlockStart(_controller.selectedDate, blockStart)) {
+      _showSnackBar('This date is before the active block start.');
+      return;
+    }
+    final wd = _weekDayFromDate(blockStart, _controller.selectedDate);
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(row.name),
-        content: const Text('Exercise settings coming soon.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Close'),
-          ),
-        ],
+      builder: (_) => Wes2ExerciseSettingsDialog(
+        uid: _controller.actingUid,
+        blockId: blockId,
+        exerciseId: row.exerciseId,
+        exerciseName: row.name,
+        weekIndex: wd.weekIndex,
+        dayIndex: wd.dayIndex,
+        planService: _planService,
       ),
     );
   }

@@ -173,8 +173,20 @@ class FirestoreWes2PlanService implements Wes2PlanService {
   Future<Map<String, dynamic>> loadExerciseSettings({
     required String uid,
     required String blockId,
-  }) =>
-      throw UnimplementedError('loadExerciseSettings not implemented until Phase 9');
+  }) async {
+    final snap = await FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(uid)
+        .collection('blocks')
+        .doc(blockId)
+        .get();
+    if (!snap.exists) return const {};
+    final data = snap.data();
+    if (data == null) return const {};
+    final settings = data['exerciseSettings'];
+    if (settings is! Map) return const {};
+    return Map<String, dynamic>.from(settings);
+  }
 
   @override
   Future<void> updatePlannedDay({
@@ -215,6 +227,15 @@ class FirestoreWes2PlanService implements Wes2PlanService {
     required String blockId,
     required String exerciseId,
     required Map<String, dynamic> settings,
-  }) =>
-      throw UnimplementedError('saveExerciseSettings not implemented until Phase 9');
+  }) async {
+    final docRef = FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(uid)
+        .collection('blocks')
+        .doc(blockId);
+    await docRef.set(
+      {'exerciseSettings.$exerciseId': settings},
+      SetOptions(merge: true),
+    );
+  }
 }
