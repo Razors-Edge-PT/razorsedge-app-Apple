@@ -67,6 +67,16 @@ abstract class Wes2Repository {
     required Wes2ExerciseRow row,
   });
 
+  /// Remove one set from exercises[] or wesPlannedExercises[], compact
+  /// remaining sets, and decrement setCount.
+  /// No-op if the row has only one set — screen routes that to deleteExercise.
+  Future<void> removeSet({
+    required String uid,
+    required DateTime date,
+    required String exerciseId,
+    required int setIndex,
+  });
+
   /// Remove an exercise from both exercises[] and wesPlannedExercises[].
   Future<void> deleteExercise({
     required String uid,
@@ -600,6 +610,93 @@ class FirestoreWes2Repository implements Wes2Repository {
       if (alreadyExists) return; // server-side duplicate guard
 
       wesPlanned.add(_buildWesPlannedRowMap(row));
+
+      txn.set(
+        docRef,
+        {
+          'userId': uid,
+          'date': _dateDocId(date),
+          'lastEditedAt': FieldValue.serverTimestamp(),
+          'exercises': exercises,
+          'wesPlannedExercises': wesPlanned,
+        },
+        SetOptions(merge: true),
+      );
+    });
+  }
+
+  // ── removeSet (Phase 14) ──────────────────────────────────────────────────
+
+  @override
+  Future<void> removeSet({
+    required String uid,
+    required DateTime date,
+    required String exerciseId,
+    required int setIndex,
+  }) async {
+    final docRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('workouts')
+        .doc(_dateDocId(date));
+
+    await FirebaseFirestore.instance.runTransaction((txn) async {
+      final snap = await txn.get(docRef);
+      if (!snap.exists) return;
+      final data = snap.data() ?? <String, dynamic>{};
+
+      final exercises = (data['exercises'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+      final wesPlanned = (data['wesPlannedExercises'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+
+      final exIdx =
+          exercises.indexWhere((m) => m['exerciseId'] == exerciseId);
+      final wpIdx =
+          wesPlanned.indexWhere((m) => m['exerciseId'] == exerciseId);
+
+      if (exIdx == -1 && wpIdx == -1) return;
+
+      final rowList = exIdx != -1 ? exercises : wesPlanned;
+      final rowPos = exIdx != -1 ? exIdx : wpIdx;
+      final rowMap = Map<String, dynamic>.from(rowList[rowPos]);
+
+      final storedSetCount = (rowMap['setCount'] as num?)?.toInt() ?? 0;
+      if (storedSetCount <= 1) return; // screen handles delete exercise
+
+      final rawSets = (rowMap['sets'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+
+      // Remove by stored setIndex field; fall back to array position for
+      // legacy set maps that lack the field.
+      List<Map<String, dynamic>> retained;
+      if (rawSets.any((m) => m.containsKey('setIndex'))) {
+        retained = rawSets
+            .where((m) => (m['setIndex'] as num?)?.toInt() != setIndex)
+            .toList()
+          ..sort((a, b) => ((a['setIndex'] as num?)?.toInt() ?? 0)
+              .compareTo((b['setIndex'] as num?)?.toInt() ?? 0));
+      } else {
+        retained = List<Map<String, dynamic>>.from(rawSets);
+        if (setIndex < retained.length) retained.removeAt(setIndex);
+      }
+
+      // Compact: reassign setIndex = array position; preserve all other keys.
+      final compacted = retained.asMap().entries.map((e) {
+        final m = Map<String, dynamic>.from(e.value);
+        m['setIndex'] = e.key;
+        return m;
+      }).toList();
+
+      rowMap['sets'] = compacted;
+      rowMap['setCount'] = storedSetCount - 1;
+      rowList[rowPos] = rowMap;
 
       txn.set(
         docRef,

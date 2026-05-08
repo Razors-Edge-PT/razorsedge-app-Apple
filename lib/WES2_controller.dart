@@ -302,6 +302,49 @@ class Wes2SessionController extends ChangeNotifier {
     return flushed;
   }
 
+  // ── Remove Set (Phase 14) ────────────────────────────────────────────────
+
+  /// Removes the set at [setIndex] and compacts remaining sets so their
+  /// setIndex equals their new position. No-op if the row has only one set —
+  /// the screen routes that case to deleteExercise after confirmation.
+  void removeSet(String exerciseId, int setIndex) {
+    final rowIdx = _rows.indexWhere((r) => r.exerciseId == exerciseId);
+    if (rowIdx == -1) return;
+    final row = _rows[rowIdx];
+    if (row.setCount <= 1) return;
+    if (setIndex < 0 || setIndex >= row.setCount) return;
+
+    _pushUndo();
+
+    // Drop the target set; sort survivors by original setIndex; reindex to 0-based.
+    final kept = row.sets
+        .where((s) => s.setIndex != setIndex)
+        .toList()
+      ..sort((a, b) => a.setIndex.compareTo(b.setIndex));
+
+    final compacted = List<Wes2SetState>.generate(kept.length, (i) {
+      final s = kept[i];
+      // Construct with updated setIndex; copyWith intentionally omits setIndex.
+      return Wes2SetState(
+        setIndex: i,
+        weight: s.weight,
+        reps: s.reps,
+        rir: s.rir,
+        velocity: s.velocity,
+        executionNote: s.executionNote,
+        planNote: s.planNote,
+      );
+    });
+
+    final newRows = List<Wes2ExerciseRow>.from(_rows);
+    newRows[rowIdx] = row.copyWith(
+      sets: compacted,
+      setCount: row.setCount - 1,
+    );
+    _rows = newRows;
+    notifyListeners();
+  }
+
   // ── Structural mutations (Phase 13) ──────────────────────────────────────
 
   /// Removes an exercise row by exerciseId. Pushes undo first.

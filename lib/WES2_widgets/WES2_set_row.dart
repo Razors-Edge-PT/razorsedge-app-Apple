@@ -65,6 +65,7 @@ class Wes2SetRow extends StatefulWidget {
   final bool showVelocity;
   final void Function(Wes2FieldKey fieldKey, String rawText) onFieldChanged;
   final void Function(Wes2FieldKey fieldKey, String rawText) onFieldUnfocused;
+  final VoidCallback? onRemoveSet;
 
   const Wes2SetRow({
     super.key,
@@ -72,6 +73,7 @@ class Wes2SetRow extends StatefulWidget {
     required this.showVelocity,
     required this.onFieldChanged,
     required this.onFieldUnfocused,
+    this.onRemoveSet,
   });
 
   @override
@@ -358,6 +360,28 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
               hintText: velocityHint,
               width: 45,
               decimal: true,
+            ),
+          ],
+          if (widget.onRemoveSet != null) ...[
+            const SizedBox(width: 6),
+            SizedBox(
+              width: 28,
+              height: 36,
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: IconButton(
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints.tightFor(width: 28, height: 28),
+                  icon: const Icon(
+                    Icons.remove_circle_outline,
+                    size: 16,
+                    color: Colors.white38,
+                  ),
+                  tooltip: 'Remove set',
+                  onPressed: widget.onRemoveSet,
+                ),
+              ),
             ),
           ],
         ],

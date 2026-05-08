@@ -562,6 +562,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             onReplace: () => _onReplaceExercise(row),
             onMoveToCircuit: () => _onMoveExerciseToCircuit(row),
             onNotes: () => _showNotesPlaceholder(),
+            onRemoveSet: (setIndex) => _onRemoveSet(row, setIndex),
           ));
         }
 
@@ -969,6 +970,84 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       );
     } catch (_) {
       // Silent failure; local draft preserves circuit assignment.
+    }
+  }
+
+  // ── Remove Set (Phase 14) ─────────────────────────────────────────────────
+
+  Future<void> _onRemoveSet(Wes2ExerciseRow row, int setIndex) async {
+    // Always re-fetch by exerciseId so we have the latest in-memory state.
+    final currentRow = _controller.rows.firstWhere(
+      (r) => r.exerciseId == row.exerciseId,
+      orElse: () => row,
+    );
+
+    if (currentRow.source == Wes2RowSource.bb3Planned) {
+      _showSnackBar(
+          'Removing sets from BB3 planned exercises will be added in a later phase.');
+      return;
+    }
+
+    // One-set removal routes to exercise deletion.
+    if (currentRow.setCount <= 1) {
+      final confirmed = await _showConfirmDialog(
+        title: 'Delete Exercise',
+        content:
+            'This is the only set. Removing it will delete "${currentRow.name}". Continue?',
+      );
+      if (!confirmed || !mounted) return;
+      _controller.deleteExercise(currentRow.exerciseId);
+      _saveDraftNow();
+      // ignore: discarded_futures
+      _deleteExerciseSilently(
+        uid: _controller.actingUid,
+        date: _controller.selectedDate,
+        exerciseId: currentRow.exerciseId,
+      );
+      return;
+    }
+
+    // Find the target set in current in-memory state.
+    final targetSet = currentRow.sets.firstWhere(
+      (s) => s.setIndex == setIndex,
+      orElse: () => Wes2SetState(setIndex: setIndex),
+    );
+
+    // Confirm only when the set carries actual logged values.
+    if (targetSet.hasAnyActual) {
+      final confirmed = await _showConfirmDialog(
+        title: 'Remove Set',
+        content: 'Removing this set will remove its logged values. Continue?',
+      );
+      if (!confirmed || !mounted) return;
+    }
+
+    _controller.removeSet(currentRow.exerciseId, setIndex);
+    _saveDraftNow();
+    // ignore: discarded_futures
+    _removeSetSilently(
+      uid: _controller.actingUid,
+      date: _controller.selectedDate,
+      exerciseId: currentRow.exerciseId,
+      setIndex: setIndex,
+    );
+  }
+
+  Future<void> _removeSetSilently({
+    required String uid,
+    required DateTime date,
+    required String exerciseId,
+    required int setIndex,
+  }) async {
+    try {
+      await _repository.removeSet(
+        uid: uid,
+        date: date,
+        exerciseId: exerciseId,
+        setIndex: setIndex,
+      );
+    } catch (_) {
+      // Silent failure; local draft preserves current set state.
     }
   }
 }
