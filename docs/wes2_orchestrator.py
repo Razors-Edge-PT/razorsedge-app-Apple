@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""
+r"""
 WES2 spec-grounded reviewer/implementer orchestrator.
 
 Purpose:
 - Claude Code implements WES2 in small phases.
 - OpenAI reviews each phase against a compact WES2 spec brief + relevant excerpts.
-- Prevents sending the full spec every call, avoiding TPM blowups.
-- Enforces WES2 write scope.
+- The script avoids sending the full spec on every review call, reducing TPM failures.
+- The script enforces a WES2-only write scope.
 
 Run from repo root.
 
 Example:
-python .\wes2_orchestrator.py --spec ".\docs\wes2\WES2_Product_Spec_and_Implementation_Contract_v1_revised_with_examples.docx" --max-phases 3 --start-phase 18
+python .\docs\wes2_orchestrator.py --spec ".\docs\wes2\WES2_Product_Spec_and_Implementation_Contract_v1_revised_with_examples.docx" --start-phase 18 --max-phases 1
 """
 
 from __future__ import annotations
@@ -35,6 +35,10 @@ except Exception:
     OpenAI = None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Write-scope policy
+# ─────────────────────────────────────────────────────────────────────────────
+
 ALLOWED_PREFIXES = [
     "docs/wes2/",
     ".orchestrator/wes2/",
@@ -47,6 +51,8 @@ ALLOWED_GLOBS = [
 ]
 
 ALLOWED_EXACT = [
+    # Only for the original WES2 quick-access card/import. Later phases normally
+    # should not need this, but the allow-list keeps the script reusable.
     "lib/home_screen.dart",
 ]
 
@@ -68,23 +74,62 @@ BLOCKED_GLOBS = [
 PHASE_MAP = {
     17: {
         "name": "Day Timer + Workout Summary",
-        "keywords": ["timer", "summary", "workout summary", "floating timer", "sets logged", "Add Circuit"],
+        "keywords": [
+            "timer",
+            "summary",
+            "workout summary",
+            "floating timer",
+            "sets logged",
+            "Add Circuit",
+            "session time",
+        ],
     },
     18: {
         "name": "Templates",
-        "keywords": ["template", "templates", "save as template", "load template"],
+        "keywords": [
+            "template",
+            "templates",
+            "save as template",
+            "load template",
+            "template-loaded",
+            "templateLoaded",
+        ],
     },
     19: {
         "name": "Settings Cog Dialog",
-        "keywords": ["settings", "exerciseSettings", "increments", "weekly frequency", "periodization", "RIR", "progression"],
+        "keywords": [
+            "settings",
+            "exerciseSettings",
+            "increments",
+            "weekly frequency",
+            "periodization",
+            "RIR",
+            "progression",
+        ],
     },
     20: {
         "name": "BB3 Structural Handoff",
-        "keywords": ["BB3", "planned day", "delete", "replace", "move", "structural", "updatePlannedDay"],
+        "keywords": [
+            "BB3",
+            "planned day",
+            "delete",
+            "replace",
+            "move",
+            "structural",
+            "updatePlannedDay",
+        ],
     },
     21: {
         "name": "Hint Engine Integration",
-        "keywords": ["hint", "hints", "E1RM", "PMU", "progression", "ProgressionEngine"],
+        "keywords": [
+            "hint",
+            "hints",
+            "E1RM",
+            "PMU",
+            "progression",
+            "ProgressionEngine",
+            "planned override",
+        ],
     },
 }
 
@@ -157,7 +202,10 @@ def ensure_clean_or_confirm() -> None:
     if r.code != 0:
         die("Could not read git status.")
     if r.out.strip():
-        die("Working tree is not clean. Commit/stash current work first so scope enforcement is safe.")
+        die(
+            "Working tree is not clean. Commit/stash current work first so scope enforcement is safe.\n\n"
+            "Run: git status --short"
+        )
 
 
 def changed_files() -> list[str]:
@@ -278,13 +326,32 @@ def scope_text() -> str:
     return """
 Allowed writes:
 - lib/WES2_*.dart
+  Examples explicitly allowed:
+  - lib/WES2_screen.dart
+  - lib/WES2_controller.dart
+  - lib/WES2_models.dart
+  - lib/WES2_repository.dart
+  - lib/WES2_plan_service.dart
+  - lib/WES2_local_store.dart
+  - lib/WES2_template_service.dart
+  - lib/WES2_sync_service.dart
 - lib/WES2_widgets/WES2_*.dart
+  Examples explicitly allowed:
+  - lib/WES2_widgets/WES2_day_actions_row.dart
+  - lib/WES2_widgets/WES2_set_row.dart
+  - lib/WES2_widgets/WES2_exercise_card.dart
+  - lib/WES2_widgets/WES2_exercise_picker.dart
 - test/wes2/WES2_*.dart
 - docs/wes2/**
 - .orchestrator/wes2/**
 - lib/home_screen.dart ONLY for adding/updating the WES2 Quick Access card/import
 
-Blocked:
+Read-only inspection:
+- Existing non-WES2 files may be read for schema/reference only when needed.
+- Reading lib/templates.dart, lib/template_model.dart, BB3 files, current WES, PMU, or progression files is allowed when necessary for schema/behaviour reference.
+- Writing to those files is NOT allowed unless they match the allowed write scope above.
+
+Blocked writes:
 - lib/workout_entry_screen.dart
 - lib/main.dart
 - lib/bb3_*.dart
@@ -295,6 +362,12 @@ Blocked:
 - generated files
 - .claude/settings.local.json
 
+Important distinction:
+- Allowed write scope controls what Claude may modify.
+- Read-only inspection of existing files is allowed when necessary to understand schema or behaviour.
+- The reviewer must not reject a plan merely because it proposes reading a blocked/reference file.
+- The reviewer must reject if the plan proposes editing a blocked/reference file.
+
 Do not rename, move, delete, or modify asset files or asset references.
 Do not use broad scans.
 Do not use ListTile inside PopupMenuItem.
@@ -302,6 +375,10 @@ Avoid Flutter RenderFlex overflow: long Row text must use Expanded/Flexible, max
 Treat any RenderFlex overflow as a blocker.
 """.strip()
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Spec compression/excerpts
+# ─────────────────────────────────────────────────────────────────────────────
 
 def build_spec_brief(spec: str) -> str:
     keep_patterns = [
@@ -374,17 +451,19 @@ Phase 17 target:
         return """
 Phase 18 target:
 - Templates.
-- Inspect existing template files before implementation.
-- Do not guess schema.
-- Preserve WES2 existing workout/current WES boundaries.
-- Loading a template should not corrupt BB3 planned data unless spec path and write shape are understood.
+- Read existing template/schema reference files only as needed; do not edit them.
+- Do not guess template schema.
+- Keep all writes inside WES2-specific files.
+- Loading a template should not corrupt BB3 planned data unless the spec path and write shape are understood and the write target is a WES2-allowed file/method.
+- Preserve duplicate exercise prevention by exerciseId.
+- Avoid broad controller/repository rewrites.
 """.strip()
 
     if phase_no == 19:
         return """
 Phase 19 target:
 - Settings cog dialog.
-- Must use exerciseSettings only; do not write plannedExerciseDetails.
+- Must use block-level exerciseSettings only; do not write plannedExerciseDetails.
 - Requires activeBlockId guard.
 - Internet-required; no offline queue.
 - Do not implement hint recalculation beyond reload/refresh trigger.
@@ -409,6 +488,10 @@ Phase 21 target:
     return "Continue the next smallest safe WES2 phase from the approved plan."
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Prompts
+# ─────────────────────────────────────────────────────────────────────────────
+
 def initial_plan_prompt(spec_brief: str, start_phase: int) -> str:
     return f"""
 You are Claude Code implementing WES2 for the GOODLIFT Flutter/Firebase app.
@@ -429,6 +512,7 @@ Required plan:
 4. Spec rules you will follow by section/topic name.
 5. Analyzer command.
 6. Risks and overflow guards.
+7. Explicitly distinguish READ-only reference files from writable WES2 files.
 
 COMPACT SPEC BRIEF:
 {spec_brief}
@@ -452,6 +536,12 @@ The plan must continue from phase {start_phase}, not restart WES2.
 
 Must enforce:
 {scope_text()}
+
+Critical reviewer interpretation:
+- lib/WES2_screen.dart, lib/WES2_controller.dart, lib/WES2_models.dart, lib/WES2_repository.dart, lib/WES2_plan_service.dart, lib/WES2_local_store.dart, lib/WES2_template_service.dart, and lib/WES2_sync_service.dart are allowed write targets because they match lib/WES2_*.dart.
+- lib/WES2_widgets/WES2_*.dart files are allowed write targets.
+- Do NOT reject the plan for READ-only inspection of reference/schema files such as lib/templates.dart or lib/template_model.dart.
+- Reject only if the plan proposes WRITING to blocked/reference files.
 
 Reviewer rule:
 If you request a correction, cite/spec-reference the spec topic or section name that supports it.
@@ -478,7 +568,8 @@ Phase-specific guidance:
 
 Hard restrictions:
 - Do not edit blocked files.
-- If a change requires a blocked file, print BLOCKED with exact reason.
+- If a change requires editing a blocked file, print BLOCKED with exact reason.
+- Read-only inspection of reference/schema files is allowed when needed.
 - Do not touch hints/PMU/progression unless this is explicitly the hint phase.
 - Do not rename, move, delete, or modify asset files or asset references.
 - Avoid RenderFlex overflows.
@@ -526,10 +617,16 @@ Return JSON only:
 Approve only if:
 - changes stay within allowed WES2 write scope,
 - no blocked file was edited,
+- read-only inspection of reference files is not a scope violation; only writes are scope violations,
 - implementation follows the relevant spec excerpt,
 - analyzer output is acceptable or only unrelated pre-existing warnings,
 - no RenderFlex/overflow-prone layout was introduced,
 - the phase remains small and reviewable.
+
+Critical reviewer interpretation:
+- lib/WES2_screen.dart, lib/WES2_controller.dart, lib/WES2_models.dart, lib/WES2_repository.dart, lib/WES2_plan_service.dart, lib/WES2_local_store.dart, lib/WES2_template_service.dart, and lib/WES2_sync_service.dart are allowed write targets because they match lib/WES2_*.dart.
+- lib/WES2_widgets/WES2_*.dart files are allowed write targets.
+- Do not flag read-only inspection of non-WES2 reference files as a violation.
 
 Reviewer rule:
 If you request a correction, include the spec topic/section in spec_references_used and explain the correction.
@@ -579,8 +676,8 @@ def run_analyzer() -> str:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--spec", required=True)
-    ap.add_argument("--max-phases", type=int, default=3)
-    ap.add_argument("--start-phase", type=int, default=17)
+    ap.add_argument("--max-phases", type=int, default=1)
+    ap.add_argument("--start-phase", type=int, default=18)
     ap.add_argument("--claude-cmd", default=os.environ.get("CLAUDE_CMD", "claude -p"))
     ap.add_argument("--openai-model", default=os.environ.get("OPENAI_REVIEW_MODEL"))
     ap.add_argument("--revert-out-of-scope", action=argparse.BooleanOptionalAction, default=True)
@@ -617,7 +714,6 @@ def main() -> None:
     for offset in range(args.max_phases):
         phase_no = args.start_phase + offset
         spec_excerpt = relevant_spec_excerpt(spec, phase_no)
-
         write_log(log_dir, f"phase_{phase_no:02d}_spec_excerpt.txt", spec_excerpt)
 
         print(f"\n→ Claude implementing phase {phase_no}: {PHASE_MAP.get(phase_no, {}).get('name', 'next phase')}...")
