@@ -333,18 +333,80 @@ def relevant_spec_excerpt(spec: str, phase_no: int, max_chars: int = 8500) -> st
 
 
 def phase_guidance(phase_no: int) -> str:
-    if phase_no == 18:
+        if phase_no == 18:
         return """
-Phase 18 target: Templates.
-- Continue current WES2 repo state; do not restart architecture.
-- Read existing template files/schema if needed, but do not edit them.
-- Implement only WES2-scoped template load/save UI/service/controller changes.
-- Preserve selected date/session behaviour, local draft behaviour, undo stack continuity, and duplicate exerciseId prevention.
-- Loading a template must snapshot undo before replacing current WES2 rows.
-- Template load must dedupe duplicate exerciseIds.
-- Save-to-template must not store actual logged values.
-- Template load/save must not write unrelated data.
-- No hints, PMU, progression, settings, timer, or BB3 structural writes unless explicitly required by spec and within WES2 allowed files.
+Phase 18 target:
+- Templates only.
+- This is a continuation from the current WES2 repo state, not a WES2 restart.
+- Implement the next smallest safe template phase inside WES2-specific files only.
+
+Allowed writes for this phase:
+- lib/WES2_*.dart
+- lib/WES2_widgets/WES2_*.dart
+- test/wes2/WES2_*.dart if tests are added
+
+Read-only reference inspection allowed:
+- lib/templates.dart
+- lib/template_model.dart
+- existing template-related files
+These may be read for schema/reference only. Do not edit them.
+
+Required Phase 18 template contract:
+1. Template-loaded blank rows:
+   - On load, blank template-loaded rows persist in wesPlannedExercises[].
+   - Do not imply template-loaded rows are permanently constrained to wesPlannedExercises[].
+   - Later completed/logged values must still flow into exercises[] through the existing WES2 save/done pathways.
+   - Do not store actual logged values inside saved templates.
+
+2. Duplicate exerciseId prevention:
+   - Template load must silently dedupe duplicate exerciseIds across the current date.
+   - The same exerciseId must not appear twice across circuits.
+   - If duplicate template rows are encountered, keep the first valid row in template/global order and skip later duplicates.
+   - Do not broad-scan the repo to enforce this.
+
+3. Template load replacement semantics:
+   - Loading a template replaces the current WES2 day/session rows according to the WES2 template contract.
+   - Snapshot undo before replacing current WES2 rows.
+   - Preserve current selected date/session behaviour.
+   - Preserve local draft/fast reopen behaviour.
+   - Preserve expanded/collapsed and scroll/edit-anchor behaviour if already present.
+   - Do not reset or break Add Exercise/Add Circuit/Add Set/Remove Set/Delete/Replace/Move/Done behaviour.
+
+4. BB3 planned-day handling:
+   - If the current WES2 day contains BB3-sourced rows and the template is explicitly replacing that day, BB3 clearing may be planned only for the current selected BB3 planned day.
+   - BB3 clearing must be tightly limited to the current blockId/weekIndex/dayIndex.
+   - It must not touch non-current BB3 days.
+   - It must not touch completed workout documents.
+   - It must not modify BB3 files.
+   - If the BB3 current-day write shape is not fully verified from WES2 services, print BLOCKED rather than guessing.
+
+5. Save workout as template:
+   - Save structure only: exerciseId, name, circuitIndex, orderIndex, setCount, and template metadata as supported by existing schema.
+   - Do not save actual values, hints, execution notes, plan notes, isMarkedDone, or completed workout reality.
+   - Eligibility must follow spec. If eligibility is uncertain, gate conservatively or print BLOCKED.
+
+6. UI/layout:
+   - Template picker/dialog/bottom sheet must use WES2-specific widgets/files only.
+   - All long text in Rows must be wrapped in Expanded/Flexible.
+   - Use maxLines and TextOverflow.ellipsis.
+   - Do not use ListTile inside PopupMenuItem.
+   - RenderFlex overflow is a blocker.
+
+7. Non-goals:
+   - Do not implement hints/PMU/progression.
+   - Do not implement settings dialog.
+   - Do not implement BB3 structural handoff beyond the tightly scoped template replacement clear described above.
+   - Do not edit current WES, BB3 files, PMU, progression, assets, pubspec, generated files, or .claude/settings.local.json.
+
+The Phase 18 plan must explicitly mention:
+- continuation from current repo state,
+- WES2-only write scope,
+- read-only reference inspection only,
+- template-loaded blank rows start in wesPlannedExercises[] but can later flow to exercises[] through normal save,
+- duplicate exerciseId dedupe,
+- undo snapshot before replacement,
+- current-day-only BB3 clear limits,
+- overflow safeguards.
 """.strip()
     if phase_no == 19:
         return """
