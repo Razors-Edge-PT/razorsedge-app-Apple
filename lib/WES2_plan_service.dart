@@ -133,6 +133,7 @@ class FirestoreWes2PlanService implements Wes2PlanService {
       reps: _toIntHint(s['reps']),
       rir: _toDoubleHint(s['rir']),
       velocity: _toDoubleHint(s['velocity']),
+      planNote: (s['note'] as String?) ?? (s['planNote'] as String?),
     );
   }
 
@@ -142,6 +143,10 @@ class FirestoreWes2PlanService implements Wes2PlanService {
       weight: _toDoubleHint(raw['weight']),
       reps: _toIntHint(raw['reps']),
       rir: _toDoubleHint(raw['rir']),
+      // Legacy flat format: exercise-level note applies to set 0 only.
+      planNote: i == 0
+          ? (raw['note'] as String?) ?? (raw['planNote'] as String?)
+          : null,
     );
   }
 

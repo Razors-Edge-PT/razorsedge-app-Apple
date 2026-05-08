@@ -66,6 +66,8 @@ class Wes2SetRow extends StatefulWidget {
   final void Function(Wes2FieldKey fieldKey, String rawText) onFieldChanged;
   final void Function(Wes2FieldKey fieldKey, String rawText) onFieldUnfocused;
   final VoidCallback? onRemoveSet;
+  final VoidCallback? onNoteTap;
+  final bool isPlanNoteRead;
 
   const Wes2SetRow({
     super.key,
@@ -74,6 +76,8 @@ class Wes2SetRow extends StatefulWidget {
     required this.onFieldChanged,
     required this.onFieldUnfocused,
     this.onRemoveSet,
+    this.onNoteTap,
+    this.isPlanNoteRead = false,
   });
 
   @override
@@ -210,6 +214,21 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
     _rirFocus.dispose();
     _velocityFocus.dispose();
     super.dispose();
+  }
+
+  Color _noteIconColor() {
+    final s = widget.set;
+    if (s.executionNote != null) return Colors.lightBlueAccent;
+    if (s.planNote != null) return widget.isPlanNoteRead ? Colors.white30 : Colors.amber;
+    return Colors.white12;
+  }
+
+  String _noteTooltip() {
+    final s = widget.set;
+    if (s.executionNote != null && s.planNote != null) return 'Notes (plan + execution)';
+    if (s.executionNote != null) return 'Execution note';
+    if (s.planNote != null) return 'Plan note';
+    return 'Add note';
   }
 
   static const _kFieldStyle = TextStyle(color: Colors.white, fontSize: 12);
@@ -384,6 +403,26 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
               ),
             ),
           ],
+          const SizedBox(width: 4),
+          SizedBox(
+            width: 24,
+            height: 36,
+            child: Align(
+              alignment: Alignment.center,
+              child: IconButton(
+                padding: EdgeInsets.zero,
+                constraints:
+                    const BoxConstraints.tightFor(width: 24, height: 24),
+                icon: Icon(
+                  Icons.sticky_note_2,
+                  size: 16,
+                  color: _noteIconColor(),
+                ),
+                tooltip: _noteTooltip(),
+                onPressed: widget.onNoteTap,
+              ),
+            ),
+          ),
         ],
       ),
     );

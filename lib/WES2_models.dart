@@ -124,6 +124,8 @@ class Wes2SetState {
         'reps': reps.toJson(),
         'rir': rir.toJson(),
         'velocity': velocity.toJson(),
+        if (executionNote != null) 'executionNote': executionNote,
+        if (planNote != null) 'planNote': planNote,
       };
 
   static Wes2SetState fromJson(Map<String, dynamic> map) => Wes2SetState(
@@ -140,6 +142,8 @@ class Wes2SetState {
         velocity: Wes2FieldState.doubleFromJson(
           map['velocity'] as Map<String, dynamic>,
         ),
+        executionNote: map['executionNote'] as String?,
+        planNote: map['planNote'] as String?,
       );
 }
 

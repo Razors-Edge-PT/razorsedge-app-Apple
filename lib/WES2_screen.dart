@@ -218,7 +218,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             i < row.sets.length ? row.sets[i] : Wes2SetState(setIndex: i);
         final draftSet = i < d.sets.length ? d.sets[i] : null;
         if (draftSet == null) return serverSet;
-        // Overlay only draft actualValues; server/BB3 hintValues are untouched.
+        // Overlay draft actualValues and executionNote.
+        // server/BB3 hintValues and planNote are preserved from serverSet.
+        // executionNote: non-null draft value wins; null draft defers to server.
         return serverSet.copyWith(
           weight: draftSet.weight.hasActual
               ? serverSet.weight.withActual(draftSet.weight.actualValue)
@@ -232,6 +234,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
           velocity: draftSet.velocity.hasActual
               ? serverSet.velocity.withActual(draftSet.velocity.actualValue)
               : serverSet.velocity,
+          executionNote: draftSet.executionNote,
         );
       });
       return row.copyWith(
@@ -564,6 +567,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             onMoveToCircuit: () => _onMoveExerciseToCircuit(row),
             onNotes: () => _showNotesPlaceholder(),
             onRemoveSet: (setIndex) => _onRemoveSet(row, setIndex),
+            onNoteTap: (setIndex) => _onOpenSetNoteDialog(row, setIndex),
           ));
         }
 
@@ -807,19 +811,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   }
 
   void _showNotesPlaceholder() {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Notes'),
-        content: const Text('Exercise notes coming soon.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
-    );
+    _showSnackBar('Use the note icon beside each set to add notes.');
   }
 
   void _showTimerPlaceholder() {
@@ -1074,6 +1066,135 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       );
     } catch (_) {
       // Silent failure; local draft preserves current set state.
+    }
+  }
+
+  // ── Set notes (Phase 16) ──────────────────────────────────────────────────
+
+  Future<void> _onOpenSetNoteDialog(Wes2ExerciseRow row, int setIndex) async {
+    // Always re-fetch from controller so we have the latest in-memory state.
+    final currentRow = _controller.rows.firstWhere(
+      (r) => r.exerciseId == row.exerciseId,
+      orElse: () => row,
+    );
+    final set = currentRow.sets.firstWhere(
+      (s) => s.setIndex == setIndex,
+      orElse: () => Wes2SetState(setIndex: setIndex),
+    );
+
+    if (set.planNote != null) {
+      _controller.markPlanNoteRead(currentRow.exerciseId, setIndex);
+    }
+
+    final noteCtrl = TextEditingController(text: set.executionNote ?? '');
+    try {
+      final saved = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          scrollable: true,
+          title: Text(
+            '${currentRow.name} — Set ${setIndex + 1} Notes',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          contentPadding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (set.planNote != null) ...[
+                const Text(
+                  'Plan note',
+                  style: TextStyle(fontSize: 11, color: Colors.white54),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  set.planNote!,
+                  style: const TextStyle(fontSize: 13),
+                  maxLines: 8,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const Divider(height: 20),
+              ],
+              const Text(
+                'Execution note',
+                style: TextStyle(fontSize: 11, color: Colors.white54),
+              ),
+              const SizedBox(height: 6),
+              TextField(
+                controller: noteCtrl,
+                maxLines: 4,
+                minLines: 2,
+                autofocus: set.planNote == null,
+                decoration: const InputDecoration(
+                  hintText: 'Add a note for this set…',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                  contentPadding:
+                      EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(noteCtrl.text),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      );
+
+      if (saved == null || !mounted) return;
+
+      // Yield one frame so the dialog route fully deactivates and removes its
+      // Overlay entry before notifyListeners() fires a Provider rebuild.
+      // Calling notifyListeners() while the Overlay still has dependents
+      // triggers the '_dependents.isEmpty' assertion in debug mode.
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+
+      final trimmed = saved.trim();
+      _controller.updateExecutionNote(
+        exerciseId: currentRow.exerciseId,
+        setIndex: setIndex,
+        rawText: trimmed,
+      );
+      _saveDraftNow();
+      // ignore: discarded_futures
+      _saveExecutionNoteSilently(
+        uid: _controller.actingUid,
+        date: _controller.selectedDate,
+        exerciseId: currentRow.exerciseId,
+        setIndex: setIndex,
+        note: trimmed.isEmpty ? null : trimmed,
+      );
+    } finally {
+      noteCtrl.dispose();
+    }
+  }
+
+  Future<void> _saveExecutionNoteSilently({
+    required String uid,
+    required DateTime date,
+    required String exerciseId,
+    required int setIndex,
+    required String? note,
+  }) async {
+    try {
+      await _repository.saveExecutionNote(
+        uid: uid,
+        date: date,
+        exerciseId: exerciseId,
+        setIndex: setIndex,
+        note: note,
+      );
+    } catch (_) {
+      // Silent failure; local draft preserves the note for next reopen.
     }
   }
 }

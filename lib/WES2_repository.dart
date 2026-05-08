@@ -101,6 +101,16 @@ abstract class Wes2Repository {
     required String exerciseId,
     required int targetCircuitIndex,
   });
+
+  /// Patch executionNote on one set. [note] null removes the key.
+  /// No-op if the row is not yet materialized in the workout document.
+  Future<void> saveExecutionNote({
+    required String uid,
+    required DateTime date,
+    required String exerciseId,
+    required int setIndex,
+    required String? note,
+  });
 }
 
 /// Concrete Firestore implementation.
@@ -200,6 +210,7 @@ class FirestoreWes2Repository implements Wes2Repository {
         reps: _parseInt(s['reps']),
         rir: _parseDouble(s['rir']),
         velocity: _parseDouble(s['velocity']),
+        executionNote: s['executionNote'] as String?,
       );
     });
   }
@@ -395,6 +406,7 @@ class FirestoreWes2Repository implements Wes2Repository {
       if (s.velocity.actualValue != null) {
         setMap['velocity'] = s.velocity.actualValue;
       }
+      if (s.executionNote != null) setMap['executionNote'] = s.executionNote!;
       sets.add(setMap);
     }
     return {
@@ -843,6 +855,119 @@ class FirestoreWes2Repository implements Wes2Repository {
         SetOptions(merge: true),
       );
     });
+  }
+
+  // ── saveExecutionNote (Phase 16) ─────────────────────────────────────────
+
+  @override
+  Future<void> saveExecutionNote({
+    required String uid,
+    required DateTime date,
+    required String exerciseId,
+    required int setIndex,
+    required String? note,
+  }) async {
+    final docRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('workouts')
+        .doc(_dateDocId(date));
+
+    await FirebaseFirestore.instance.runTransaction((txn) async {
+      final snap = await txn.get(docRef);
+      if (!snap.exists) return;
+      final data = snap.data() ?? <String, dynamic>{};
+
+      final exercises = (data['exercises'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+      final wesPlanned = (data['wesPlannedExercises'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+
+      final exIdx = exercises.indexWhere((m) => m['exerciseId'] == exerciseId);
+      final wpIdx =
+          wesPlanned.indexWhere((m) => m['exerciseId'] == exerciseId);
+
+      if (exIdx == -1 && wpIdx == -1) return; // unmaterialized row — no-op
+
+      if (exIdx != -1) {
+        exercises[exIdx] =
+            _patchStringFieldInRow(exercises[exIdx], setIndex, 'executionNote', note);
+      } else {
+        wesPlanned[wpIdx] =
+            _patchStringFieldInRow(wesPlanned[wpIdx], setIndex, 'executionNote', note);
+      }
+
+      txn.set(
+        docRef,
+        {
+          'userId': uid,
+          'date': _dateDocId(date),
+          'lastEditedAt': FieldValue.serverTimestamp(),
+          'exercises': exercises,
+          'wesPlannedExercises': wesPlanned,
+        },
+        SetOptions(merge: true),
+      );
+    });
+  }
+
+  /// Patches an arbitrary string field on one set inside an existing row map.
+  /// Locates the set by stored setIndex key (preferred) or array index (legacy).
+  /// Preserves all other fields. [value] null removes the key.
+  static Map<String, dynamic> _patchStringFieldInRow(
+    Map<String, dynamic> rowMap,
+    int setIndex,
+    String fieldKey,
+    String? value,
+  ) {
+    final result = Map<String, dynamic>.from(rowMap);
+    final rawSets = ((result['sets'] as List<dynamic>?) ?? [])
+        .map((s) => s is Map<String, dynamic>
+            ? Map<String, dynamic>.from(s)
+            : <String, dynamic>{})
+        .toList();
+
+    int? arrayPos;
+    for (int i = 0; i < rawSets.length; i++) {
+      final stored = (rawSets[i]['setIndex'] as num?)?.toInt();
+      if (stored != null) {
+        if (stored == setIndex) {
+          arrayPos = i;
+          break;
+        }
+      } else {
+        if (i == setIndex) {
+          arrayPos = i;
+          break;
+        }
+      }
+    }
+
+    if (arrayPos != null) {
+      final updated = Map<String, dynamic>.from(rawSets[arrayPos]);
+      if (value == null) {
+        updated.remove(fieldKey);
+      } else {
+        updated[fieldKey] = value;
+      }
+      rawSets[arrayPos] = updated;
+    } else if (value != null) {
+      while (rawSets.length <= setIndex) {
+        rawSets.add(<String, dynamic>{'setIndex': rawSets.length});
+      }
+      rawSets[setIndex] = Map<String, dynamic>.from(rawSets[setIndex])
+        ..[fieldKey] = value;
+    }
+
+    final existingCount = (result['setCount'] as num?)?.toInt() ?? 0;
+    result['setCount'] =
+        (setIndex + 1) > existingCount ? (setIndex + 1) : existingCount;
+    result['sets'] = rawSets;
+    return result;
   }
 
   // ── moveExerciseToCircuit (Phase 13) ──────────────────────────────────────

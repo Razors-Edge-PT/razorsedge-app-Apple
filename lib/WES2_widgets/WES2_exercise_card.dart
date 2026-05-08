@@ -63,6 +63,7 @@ class Wes2ExerciseCard extends StatelessWidget {
   final VoidCallback? onMoveToCircuit;
   final VoidCallback? onNotes;
   final void Function(int setIndex)? onRemoveSet;
+  final void Function(int setIndex)? onNoteTap;
 
   const Wes2ExerciseCard({
     super.key,
@@ -76,6 +77,7 @@ class Wes2ExerciseCard extends StatelessWidget {
     this.onMoveToCircuit,
     this.onNotes,
     this.onRemoveSet,
+    this.onNoteTap,
   });
 
   @override
@@ -252,6 +254,11 @@ class Wes2ExerciseCard extends StatelessWidget {
                       onRemoveSet: onRemoveSet == null
                           ? null
                           : () => onRemoveSet!(s.setIndex),
+                      onNoteTap: onNoteTap == null
+                          ? null
+                          : () => onNoteTap!(s.setIndex),
+                      isPlanNoteRead:
+                          wes2Ctrl.isPlanNoteRead(row.exerciseId, s.setIndex),
                     );
                   }),
                 ],

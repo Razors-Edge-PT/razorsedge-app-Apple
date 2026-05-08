@@ -21,6 +21,9 @@ class Wes2SessionController extends ChangeNotifier {
   String? _loadErrorMessage;
   final List<({String exerciseId, String name})> _pendingExerciseAdds = [];
   final List<Wes2ExerciseRow> _flushedExercises = [];
+  // Session-local set of plan-note keys that have been read.
+  // Key format: "$exerciseId:$setIndex". Cleared on date change.
+  final Set<String> _readPlanNotes = {};
 
   Wes2SessionController(DateTime initialDate)
       : _selectedDate = DateTime(
@@ -106,6 +109,7 @@ class Wes2SessionController extends ChangeNotifier {
     _undoStack.clear();
     _pendingExerciseAdds.clear();
     _flushedExercises.clear();
+    _readPlanNotes.clear();
     _loadEpoch++;
     _loadState = Wes2LoadState.idle;
     _loadErrorMessage = null;
@@ -403,6 +407,53 @@ class Wes2SessionController extends ChangeNotifier {
     final newRows = List<Wes2ExerciseRow>.from(_rows);
     newRows[idx] = _rows[idx].copyWith(circuitIndex: targetCircuitIndex);
     _rows = newRows;
+    notifyListeners();
+  }
+
+  // ── Notes (Phase 16) ──────────────────────────────────────────────────────
+
+  /// Updates executionNote for a set in local state. No _pushUndo — note edits
+  /// are not structural actions. Blank rawText clears the note (null).
+  void updateExecutionNote({
+    required String exerciseId,
+    required int setIndex,
+    required String rawText,
+  }) {
+    final text = rawText.trim();
+    final rowIdx = _rows.indexWhere((r) => r.exerciseId == exerciseId);
+    if (rowIdx == -1) return;
+    final row = _rows[rowIdx];
+    final sets = List<Wes2SetState>.from(row.sets);
+    while (sets.length <= setIndex) {
+      sets.add(Wes2SetState(setIndex: sets.length));
+    }
+    final s = sets[setIndex];
+    // Construct directly to allow clearing (null) without a copyWith sentinel.
+    sets[setIndex] = Wes2SetState(
+      setIndex: s.setIndex,
+      weight: s.weight,
+      reps: s.reps,
+      rir: s.rir,
+      velocity: s.velocity,
+      executionNote: text.isEmpty ? null : text,
+      planNote: s.planNote,
+    );
+    final newRows = List<Wes2ExerciseRow>.from(_rows);
+    newRows[rowIdx] = row.copyWith(sets: sets);
+    _rows = newRows;
+    notifyListeners();
+  }
+
+  /// Returns true if the plan note for this set has been read this session.
+  bool isPlanNoteRead(String exerciseId, int setIndex) =>
+      _readPlanNotes.contains('$exerciseId:$setIndex');
+
+  /// Marks the plan note for this set as read. Notifies listeners so the
+  /// note icon updates from amber to subdued immediately.
+  void markPlanNoteRead(String exerciseId, int setIndex) {
+    final key = '$exerciseId:$setIndex';
+    if (_readPlanNotes.contains(key)) return;
+    _readPlanNotes.add(key);
     notifyListeners();
   }
 }
