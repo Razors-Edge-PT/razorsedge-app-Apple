@@ -1,0 +1,601 @@
+1. Core Contract and Hard Boundaries
+1.1 Non-goals
+Do not rewrite progression formulas unless the spec explicitly says so.
+Do not migrate the existing planned_blocks hierarchy unless separately approved.
+Do not reintroduce hidden BB2 coupling.
+Do not treat BB3 planned values as WES2 actual values.
+Do not make hint snapshots authoritative server truth.
+Do not allow duplicate exerciseIds on the same date via any pathway.
+Do not let UI polish override data correctness.
+1.2 Locked Implementation Decisions for WES2 v1
+These decisions are already settled and must not be re-opened during implementation unless explicitly approved by Richard.
+Launch route
+WES2 must be added as a separate beta route first. The current WES route must remain untouched until WES2 is proven against the acceptance matrix.
+In the UI, this route should be labelled WES2.
+For v1, WES2 should be accessible only from the quick access area on the home screen by tapping the WES2 icon. Do not replace the existing Workout Entry Screen route yet.
+Completed workout Firestore shape
+WES2 v1 must continue using the existing completed workout document:
+/users/{uid}/workouts/{yyyy-MM-dd}
+Completed workout array fields
+Completed exercises must remain in exercises[].
+Blank WES2-added or template-loaded planned rows must remain in wesPlannedExercises[].
+Do not normalize completed workout data into subcollections in v1.
+Because Firestore arrays make direct field-level patching difficult, WES2 must use careful merge or transaction logic on unfocus saves so one device field edit does not wipe another device unrelated field edit.
+Isar scope
+Isar must be included from the start of WES2 v1.
+The first Isar implementation should be narrow and practical, covering:
+local day drafts
+fast reopen snapshots
+offline queued workout saves
+expanded/collapsed state
+last local edit/scroll position
+basic conflict metadata
+Do not defer Isar entirely to a later version, because offline save, fast reopen, and resume behavior are core WES2 requirements.
+Multi-device live editing
+WES2 v1 must include the listener architecture for multi-device editing.
+The listener should be field/user-entered-value focused only.
+Firestore listener updates should apply after another device saves on unfocus.
+Do not live-stream hint recalculations between devices.
+Hints are recomputed locally per device from the latest values, BB3 plan, exerciseSettings, and history.
+BB3 structural updates from WES2
+WES2 v1 must update BB3 planned days for structural changes to BB3-sourced exercises.
+This includes:
+delete BB3-sourced exercise
+replace BB3-sourced exercise
+reorder BB3-sourced exercise
+move BB3-sourced exercise between circuits
+These updates must write back to the BB3 planned day path:
+/planned_blocks/{uid}/blocks/{blockId}/weeks/week_{weekIndex}/days/day_{dayIndex}
+WES2-only exercises must not update BB3 structure unless/until they become completed according to the BB3 completion rules.
+ExerciseSettings dialog
+The WES2 exercise settings dialog is part of v1.
+It must support in-session edits for:
+increments
+weekly frequency
+rep periodization model
+microcycle rep targets
+RIR model
+current microcycle/session RIR planned targets
+progression model
+The dialog writes only to:
+/planned_blocks/{uid}/blocks/{blockId}.exerciseSettings[exerciseId]
+It must not write to plannedExerciseDetails.
+ExerciseSettings edits require internet and must not be queued offline.
+Current WES reference rule
+The current workout_entry_screen.dart may be used as:
+behavior reference
+visual reference
+source for small isolated helper/widget logic where safe
+It must not be copied as the WES2 architecture template.
+WES2 must remain modular, using the WES2-specific files/services defined in this spec.
+v1 feature scope
+Timed exercises, velocity, notes, templates, undo, Done state, exercise settings, BB3 handoff, Isar local persistence, and multi-device listener architecture are all part of WES2 v1.
+Implementation may be phased internally, but the WES2 beta is not considered handoff-ready until these features are implemented and pass the acceptance matrix.
+Duplicate exercise rule
+The same exerciseId may not appear more than once on the same date, even across different circuits.
+A different exercise variation is allowed only if it has a different exerciseId.
+All add/load/template/drag/merge pathways must enforce this silently and defensively.
+Blank WES2 planned rows
+When a user adds an exercise in WES2 or loads a template row and enters no execution values, the row must still persist immediately in:
+wesPlannedExercises[]
+This allows blank WES2-added/template-loaded rows to survive page exit/reopen without being treated as completed workout data.
+Blank WES2 planned rows do not affect BB3 unless they later become completed according to BB3 completion rules.
+
+--- SPEC BRIEF SECTION ---
+
+3. Firestore and Data Model Contract
+3.1 Planned day path
+/planned_blocks/{uid}/blocks/{blockId}/weeks/week_{weekIndex}/days/day_{dayIndex}
+This path stores BB3 day plans. Example row shape:
+{
+  circuitIndex: 0,
+  exerciseId: "AmfUWbF1DH3I7qPAdh5k",
+  name: "Bench Press, Barbell",
+  orderIndex: 0,
+  sets: [
+    { weight: 105, reps: 8, rir: 2 },
+    {},
+    {}
+  ]
+}
+All values from this location are planned overrides only. In WES2 they appear as hint/plan-note values, never as typed values.
+3.2 Block exerciseSettings path
+/planned_blocks/{uid}/blocks/{blockId}.exerciseSettings
+WES2 uses this block-level exerciseSettings map as the authoritative source for per-exercise model settings. Do not use plannedExerciseDetails for WES2 unless separately approved.
+exerciseSettings: {
+  exerciseId: {
+    defaultSets: 3,
+    increments: { primary: 2.5, secondary: 5 },
+    periodizationModel: "DUP, By Exposure",
+    progressionModel: "Smart Progression",
+    repTargets: { week1: { instance1: "5 x 3", instance2: "3 x 3" } },
+    rirModel: "Static RIR",
+    rirPlan: { week1: { session1: { set1: { reps: "5", rir: "2.0" } } } },
+    weeklyFrequency: 2,
+    modelSpecificRepTargets: { "Linear, Classic": [15, 20, 16, 18] }
+  }
+}
+3.3 Completed workout path
+/users/{uid}/workouts/{yyyy-MM-dd}
+Existing structure includes completed exercises and WES-only planned rows:
+{
+  date: "2026-04-27T00:00:00.000Z",
+  name: "Monday 27 April 2026",
+  userId: "{uid}",
+  lastEditedAt: Timestamp,
+  exercises: [
+    {
+      circuitIndex: 0,
+      orderIndex: 0,
+      exerciseId: "AmfUWbF1DH3I7qPAdh5k",
+      name: "Bench Press, Barbell",
+      setCount: 2,
+      isMarkedDone: true,
+      sets: [
+        { weight: 120, reps: 4, rir: 2 },
+        { weight: 117.5, reps: 3, rir: 2.5 }
+      ]
+    }
+  ],
+  wesPlannedExercises: [
+    {
+      circuitIndex: 0,
+      orderIndex: 1,
+      exerciseId: "ocNWJv7xLrlinGmjG6cV",
+      name: "Machine Row, Supported",
+      setCount: 3,
+      sets: [],
+      createdAt: Timestamp
+    }
+  ]
+}
+3.4 Exercise row shape
+Use the same structural shape for rows in both exercises[] and wesPlannedExercises[]:
+{
+  exerciseId: String,
+  name: String,
+  circuitIndex: int,
+  orderIndex: int,     // global day order, not local within circuit
+  setCount: int,
+  sets: List<Map<String, dynamic>>
+}
+Rows in exercises[] may additionally include:
+{
+  isMarkedDone: bool
+}
+setCount lives on both exercises[] and wesPlannedExercises[].
+orderIndex lives on both exercises[] and wesPlannedExercises[].
+isMarkedDone lives only on exercises[].
+sets[] stores actual entered fields only. Do not store model hints as actual values.
+Blank added sets persist via setCount even if sets[] has no value at that index.
+3.5 Value storage rules
+Use-case examples
+The examples below are concrete expected behaviours for this section and should be treated as acceptance-level scenarios.
+Example 1: BB3 planned values appear in WES2 as hints only
+Starting BB3 planned day
+Path:
+/planned_blocks/{uid}/blocks/{blockId}/weeks/week_5/days/day_2
+Data:
+{
+  workoutName: "Tue 5 May - Week 6",
+  exercises: [
+    {
+      exerciseId: "AmfUWbF1DH3I7qPAdh5k",
+      name: "Bench Press, Barbell",
+      circuitIndex: 0,
+      orderIndex: 0,
+      sets: [
+        { weight: 105, rir: 2 },
+        {},
+        {}
+      ]
+    },
+    {
+      exerciseId: "RdsGazgdH0xgpjek0n3u",
+      name: "Overhead Dumbbell Press, Unilateral",
+      circuitIndex: 0,
+      orderIndex: 1,
+      sets: [
+        { reps: 9 },
+        {},
+        {}
+      ]
+    }
+  ]
+}
+WES2 display
+Bench Press Set 1:
+Weight field: blank actual, hint 105
+Reps field: blank actual, model/progression hint
+RIR field: blank actual, hint 2
+Overhead Dumbbell Press Set 1:
+Weight field: blank actual, model/progression hint
+Reps field: blank actual, hint 9
+RIR field: blank actual, model/RIR hint
+Important rule
+BB3 values never populate controller text as completed values. They are only displayed as hints beneath/inside blank WES2 fields.
+Example 2: User enters WES2 value over BB3 hint
+Starting state
+Bench Press Set 1:
+Weight hint: 105
+Reps hint: 5
+RIR hint: 2
+User enters
+Weight actual: 107.5
+WES2 display
+Weight: 107.5 actual
+Reps: recalculated hint, e.g. 4-5
+RIR: hint 2
+Firestore save
+Path:
+/users/{uid}/workouts/2026-05-05
+Save:
+exercises: [
+  {
+    exerciseId: "AmfUWbF1DH3I7qPAdh5k",
+    name: "Bench Press, Barbell",
+    circuitIndex: 0,
+    orderIndex: 0,
+    setCount: 3,
+    sets: [
+      { weight: 107.5 }
+    ]
+  }
+]
+Do not save hint reps or hint RIR into Firestore completed values.
+Example 3: Clearing a user-entered value restores hint
+Starting state
+Weight actual: 107.5
+Weight hint underneath: 105
+User deletes 107.5
+WES2 should show:
+Weight actual: blank
+Weight hint: 105
+Save removes weight from the completed set map if no other completed values remain for that field.
+Example 11: WES2-added blank exercise persists
+User opens empty day and adds Machine Row
+No values entered.
+Save to:
+wesPlannedExercises: [
+  {
+    exerciseId: "ocNWJv7xLrlinGmjG6cV",
+    name: "Machine Row, Supported",
+    circuitIndex: 0,
+    orderIndex: 0,
+    setCount: 3,
+    sets: []
+  }
+]
+Reopen same date
+Machine Row appears again as blank planned WES2 row.
+It does
+
+--- SPEC BRIEF SECTION ---
+
+4. State Ownership and Identity Rules
+4.1 Exercise uniqueness
+An exercise may appear only once per date across all circuits.
+All add/load/template/drag/merge paths must silently guard against duplicates by exerciseId.
+If duplicate data is encountered from legacy/cache/server, WES2 should keep the first valid row in global order and discard/merge duplicates conservatively.
+4.2 Identity
+exercise identity = date + exerciseId
+set identity      = date + exerciseId + setIndex
+field identity    = date + exerciseId + setIndex + fieldKey
+Do not use row index as durable identity. Row order changes through drag/drop, circuit moves, and template replacement.
+4.3 Source flags
+Every in-memory WES2 row should track source metadata to decide sync behavior:
+enum Wes2RowSource {
+  bb3Planned,
+  wes2Manual,
+  templateLoaded,
+  completedServer,
+  localDraft
+}
+BB3-sourced structural edits update BB3 planned day where applicable.
+WES2-only rows do not update BB3 until completed according to BB3 completion rules.
+Completed rows are always saved as WES2 reality under /users/{uid}/workouts/{date}.
+Use-case examples
+The examples below are concrete expected behaviours for this section and should be treated as acceptance-level scenarios.
+Example 16: Duplicate exercise prevention
+Existing day
+Circuit 1: Bench Press
+User opens Add Exercise for Circuit 2.
+Bench Press should silently not appear in picker.
+If template load or draft merge tries to insert Bench Press again, WES2 dedupes and keeps only one instance for that date.
+Different exerciseId variation is allowed.
+Example 72: Isar user isolation
+Coach switches from Athlete A to Athlete B.
+Local cache keys must include:
+uid
+date
+blockId if relevant
+Athlete A local draft must never appear for Athlete B.
+
+--- SPEC BRIEF SECTION ---
+
+5. Opening, Loading, Fast Paint, Refresh, and Save Lifecycle
+5.1 Initial route behavior
+Open from homepage: selected date defaults to today.
+Open from calendar picker: selected date equals chosen date; past and future dates allowed.
+Swipe left/right on date/header area: navigate previous/next day.
+On date change, begin a new date session and prevent stale loaders from writing into the new page.
+5.2 Loading order
+Local Isar draft/snapshot for instant paint.
+Server completed workout day / WES2 planned rows.
+BB3 planned day.
+Block exerciseSettings.
+Top-set/history/bodyweight data required for hints.
+Initial hint recomputation.
+No full-page spinner.
+During load show "Wait for it..." where exercises will appear. Ellipsis animates like original WES.
+If empty after load: "No exercises planned yet, add some to get started".
+Partially completed workout reopen should feel instant and editable immediately.
+5.3 Add during load
+Add Exercise picker can open immediately even while day is loading.
+If user selects exercises before day is fully resolved, queue insertion.
+Show: "Adding those exercises, sit tight...".
+Apply queued adds only after existing day rows, BB3 rows, settings, and initial hints are resolved.
+5.4 Save triggers
+Save on field unfocus.
+Save on page exit.
+Save on app background.
+Save on app shutdown/best-effort lifecycle event.
+Save current corrected state after undo on next save trigger; background save after undo is allowed but must not block UI.
+Saving should be Google Sheets-like: edits become durable on unfocus, not only on a final Save button.
+5.5 Refresh behavior
+Use-case examples
+The examples below are concrete expected behaviours for this section and should be treated as acceptance-level scenarios.
+Example 59: Exercise-specific refresh
+User taps refresh for Bench Press only.
+Reload:
+exerciseSettings[BenchPress]
+top-set/history as needed
+BB3 planned overrides for that exercise
+Recompute Bench Press only.
+Other exercises do not reload/rebuild unless needed.
+Example 60: Global refresh
+User taps global refresh.
+Reload all current day data:
+completed workout
+wesPlannedExercises
+BB3 planned day
+exerciseSettings
+top-set history
+local pending draft
+Then recompute all hints.
+If local dirty state is newer/offline, do not overwrite it with older server state.
+Example 66: Blank day load
+Open date with no data.
+During load:
+Wait for it...
+After load:
+No exercises planned yet, add some to get started
+No spinner.
+Example 67: Future date logging
+Open future date.
+User adds exercises and enters values.
+Values save normally.
+Future date can become completed workout reality.
+No restriction.
+Example 68: Add Exercise while still loading
+User opens new day and immediately taps Add Exercise.
+Picker opens.
+User selects Leg Press while day still resolving.
+Show:
+Adding those exercises, sit tight...
+After load finishes, Leg Press is inserted safely.
+Example 87: Save on background
+User enters:
+Leg Press Set 2 reps: 12
+Does not unfocus, then backgrounds app.
+WES2 should force capture current controller text and save locally/server where possible.
+Example 88: App kill mid-session
+If app is killed before Firestore save completes, last local Isar snapshot should restore current typed values on reopen as much as possible.
+Server sync resumes when app reopens online.
+
+--- SPEC BRIEF SECTION ---
+
+9. Exercise, Set, Circuit, Template, Undo, and Delete/Replace Behavior
+9.1 Exercise menu
+3-dot menu lives beside exercise name in header row.
+Delete exercise appears here.
+Replace exercise appears here.
+Mark as not done appears only if isMarkedDone == true.
+No Mark as done menu option; Done can only be set through Completed? pill.
+9.2 Delete exercise
+Deletes from WES2 and BB3 if BB3-sourced.
+If no values exist, no confirmation required from 3-dot delete.
+If any entered values exist, confirmation required: "Delete exercise, are you sure?".
+Undo restores exercise, values, notes, videos/metadata, circuitIndex, orderIndex, setCount, and source flags.
+9.3 Replace exercise
+Opens exercise picker with current exercise checked/selected.
+When new exercise selected, old exercise is removed and new exercise inserted in same circuit/order position.
+If old exercise was BB3-sourced, update BB3 planned day too.
+If old exercise has values, confirmation required before destructive replace.
+Snackbar: "[old exercise] replaced with [new exercise], undo?".
+Undo restores original exercise and all original data.
+9.4 Sets
+Set order is fixed; sets are not draggable.
+Add set button (+) under final set appends a set.
+Added sets immediately receive normal hints based on previous-set/fatigue logic.
+No visible set cap; internal defensive cap around 100 allowed only to prevent corruption/infinite loops.
+Remove set button (-) appears right-aligned with set number.
+Deleting a middle set shifts lower sets up; values/notes/video shift with their set.
+Deleting a set with values requires confirmation.
+Deleting the only remaining set deletes the exercise and always requires confirmation, even if blank.
+Blank non-final set deletion does not require confirmation.
+9.5 Circuits
+Circuits are implicit from circuitIndex; no circuits[] metadata collection.
+Empty circuits do not persist.
+Deleting/moving the last exercise out of a circuit removes the circuit entirely.
+No direct delete-circuit action.
+Circuits are reorderable. Reordering renumbers circuitIndex and updates all global orderIndex values atomically.
+Exercises are draggable within a circuit and across circuits.
+Dragging an exercise into another circuit removes it from origin circuit and updates circuitIndex/orderIndex.
+If moved exercise was BB3-sourced, update BB3. If WES2-only, do not update BB3 unless completed.
+9.6 Exercise picker and add circuit
+Top-page Add Exercises defaults to Circuit 1.
+Add Circuit button opens picker for next circuit with clear label, e.g. "Add exercises to Circuit 2".
+Each circuit has a small Add Exercise to Circuit button at bottom.
+Picker label can be tapped to open dropdown: Circuit 1, Circuit 2, Circuit 3, etc.
+Changing dropdown changes selected destination circuit and checked exercises update to match that circuit.
+Exercises already present anywhere on that day should be silently excluded from available choices, except current exercise in replace flow.
+Exercises already in the selected circuit appear checked and cannot be unchecked/removed from picker. Use 3-dot menu delete instead.
+9.7 Templates
+Loading template replaces current WES2 day, not append.
+If replacing existing exercises, show snackbar with Undo. If loading into empty/unplanned day, no snackbar.
+If replacing BB3 planned exercises, clear entire BB3 planned day.
+Template preserves its circuit structure and order.
+After loading a template, user can still add exercises/circuits normally.
+Template-loaded blank rows persist in WES2 on that date but do not affect BB3.
+Completed template exercises appear in BB3 as completed.
+If any template exercise is completed, BB3 should show the template label for that date so the user can see which template/day was performed.
+9.8 Save workout to templates
+If user builds a workout manually from an empty/unplanned day, and each exercise is completed and marked completed/done according to the WES2 flow, show a subtle label: "Save workout to templates".
+Do not show this if the day began by loading a template.
+Language must not imply workout values are unsaved; this is only for creating a reusable template.
+Tapping opens dialog with Template Name field (e.g. Day 5).
+Saving creates a new template in the user’s templates for the current block, preserving circuit structure/order.
+Do not require this action for normal workout saving.
+9.9 Undo
+Multi-action undo stack per current page/session.
+Undo stack does not persist after leaving page/app.
+Undo button left of global refresh; disabled/grey when empty; white/tappable when actions exist.
+Snackbar Undo calls same undo function as undo arrow.
+Undoable actions: exercise add/delete/replace/reorder/move, set add/delete.
+Not undoable: typing values, hint recalculation, saves.
+Undo restores full previous object state including values, setCount, notes, videos/metadata, circuit/order, source flags, and BB3/WES2 sync state.
+Undo does not need to synchronously reverse Firestore; next save trigger writes current corrected state.
+Use-case examples
+The examples below are concrete expected behaviours for this section and should be treated as acceptance-level scenarios.
+Example 13: Template load into empty day
+Starting state
+No planned rows,
+
+--- SPEC BRIEF SECTION ---
+
+10. UI Specification and Screen Layout
+10.1 Overall layout
+Preserve the current WES visual feel: compact dark exercise cards, dense rows, small action icons.
+No large redesign unless required for correctness.
+Avoid overflow on small phones. Keep top-header action padding compact.
+Workout name should be minimal/hidden. Date and optional template label identify the day.
+10.2 Top/day header
+Date/day header visible.
+Select Date opens calendar picker and navigates to selected date.
+Swipe header/date area left/right changes day.
+Day-level 3-dot menu near Select Date area includes floating timer option.
+Global undo and global refresh are visible; undo left of refresh.
+10.3 Exercise card
+Exercises default expanded.
+Tapping exercise header toggles expand/collapse.
+Expanded/collapsed state persists locally on device.
+Collapsed header shows exercise name, actions, demo video icon if exists, green Done pill if marked, and menu. No top-set summary in collapsed state.
+No auto-jump between exercises after marking Done. User controls scroll.
+10.4 Done UI
+Completed? pill appears at bottom of exercise, left of add-set button, only when at least one set has weight + reps + RIR.
+Tapping Completed? sets isMarkedDone true, collapses exercise, and shows green Done pill in header near video icon.
+Editing values does not automatically clear Done.
+3-dot menu -> Mark as not done removes Done.
+If exercise not Done, Mark as not done is hidden.
+10.5 Last edit scroll/focus restoration
+Store local last edited position per device/date/workout.
+If reopening a partially completed workout on same device, scroll to last edited exercise/set position.
+If exact set/field still exists, optionally restore cursor into last edited field; keyboard auto-open is optional and should only be implemented if it does not feel jarring.
+If workout never edited locally, open at top.
+If another device edited later, still restore this device’s local scroll/edit position.
+If stored exercise/set no longer exists, open at top.
+10.6 Keyboard/input
+Numeric keypad for number fields.
+Decimal allowed for weight, RIR/RPE, velocity.
+Reps integer only, except timed exercises where reps field is timer/seconds.
+No auto-select existing values on focus.
+No keyboard Next workflow required.
+User can tap any field directly.
+Hint recalculation must not rewrite typed field/caret.
+Use-case examples
+The examples below are concrete expected behaviours for this section and should be treated as acceptance-level scenarios.
+Example 61: Page open with local scroll restore
+Device previously edited:
+Bench Press Set 3 RIR
+Reopen same date on same device.
+WES2 scrolls to Bench Press Set 3.
+Optionally restores focus/caret into RIR field.
+If that set no longer exists, open at top.
+Example 62: Page open from another device
+Workout was edited on phone.
+Tablet opens workout for first time.
+Tablet has no local scroll position.
+Open at top.
+Example 63: Expanded/collapsed local state
+User collapses Bench Press on phone.
+Reopen on phone:
+Bench Press collapsed
+Open on tablet:
+Default expanded unless tablet has its own local state
+Expanded/collapsed is local only.
+
+--- SPEC BRIEF SECTION ---
+
+12. Multi-device, Offline, Local Persistence, and Conflict Policy
+12.1 Local persistence technology
+Use Isar for local persistence/snapshots. Do not choose Hive for WES2 unless separately approved.
+Isar should store day-scoped local drafts, hint snapshots for fast paint, expanded/collapsed state, last local edit position, queued offline workout saves, and last known server metadata required for conflict detection.
+Cache keys must include uid/actingAsUid and date. Never cross-contaminate coach/athlete users.
+Local hints are speed/resume hints only, not durable truth.
+12.2 Online simultaneous editing
+WES2 should behave like Google Sheets for simultaneous editing.
+Use Firestore listener(s) on the workout document/day for live user-entered value updates.
+Updates are broadcast to other devices on field unfocus/save only.
+Two users can edit different fields at the same time; both survive.
+If two users edit same field, last unfocus/write wins.
+If Device A edits set 1 weight and Device B edits set 1 reps, both updates coexist.
+If Device A edits set 1 and Device B edits set 2, both updates coexist.
+Live sync applies only to user-entered values and workflow flags. Do not live-stream hint recalculations between devices.
+Refresh button still reloads latest user-entered values and latest BB3 hints/settings.
+12.3 Collaborator editing indicator
+When another active user/device is editing a field, show subtle colored border around that field.
+Border only; no heavy collaborator UI required.
+This indicator is advisory. Last unfocus/write still wins.
+Presence/field-focus metadata may be stored in lightweight Firestore presence document or subfield with TTL/lastSeenAt, but must not introduce typing lag.
+12.4 Save granularity
+To support Google Sheets-like collaboration without lag, saves should be granular enough that one field update does not wipe unrelated fields from another device.
+WES2 v1 keeps the existing exercises[] and wesPlannedExercises[] array structure. Do not normalize completed workout data into subcollections in v1.
+Because arrays cannot be safely patched at arbitrary nested indexes without conflict risk, unfocus saves must use a safe transaction/merge strategy: read the latest server row, apply the local field patch by exerciseId + setIndex + fieldKey, preserve unrelated newer fields, then write back the corrected array.
+Avoid full-document overwrite on every field unfocus unless a merge layer guarantees unrelated fields survive.
+Structural changes such as reorder/template replace may write whole day state atomically, but should first account for current latest server state and local dirty state.
+12.5 Offline queued saves and rare conflict prompt
+If offline, save WES2 workout changes locally and queue sync.
+If the same workout was edited online on another device after this local offline edit, conflict resolution is whole-workout choice, not per-field manual merge.
+Prompt language should be user-friendly, e.g. "This workout was changed on another device while this device was offline. Which version do you want to keep?"
+Choices: Keep this device’s workout / Use latest online workout.
+This prompt appears only for unsynced offline conflict scenario.
+Normal online simultaneous edits do not prompt; they follow field/set-level last-write-wins.
+12.6 Last write wins
+Online normal field conflict: last field unfocus/write wins for that exact field.
+Set-level/exercise-level unrelated fields should merge, not wipe each other.
+Structural conflict: most recent structural save wins for the affected day/structure unless offline conflict prompt applies.
+Local scroll position and expanded/collapsed states are per-device only and never synced.
+Use-case examples
+The examples below are concrete expected behaviours for this section and should be treated as acceptance-level scenarios.
+Example 25: Local draft save
+User offline
+User enters:
+Bench Press set1 weight: 120
+Unfocus occurs.
+Result
+Save locally to Isar draft/offline queue.
+Show no disruptive error.
+When online returns, sync queued save to Firestore.
+Example 26: Offline conflict with newer server version
+Scenario
+Device A offline edits workout:
+Bench Press set1 weight: 120
+Device B online later edits same workout:
+Bench Press set1 weight: 125
+Server now has newer version.
+Device A reconnects with stale unsynced local draft.
+Prompt
+Show whole-workout choice:
+This workout was changed more recently on another device.
+Use this devi
