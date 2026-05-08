@@ -120,6 +120,13 @@ abstract class Wes2Repository {
     required DateTime date,
     required List<Wes2ExerciseRow> rows,
   });
+
+  /// Clear all exercises for the current day by setting both arrays to empty.
+  /// Uses merge: true so other doc fields are preserved.
+  Future<void> deleteAllExercisesForDay({
+    required String uid,
+    required DateTime date,
+  });
 }
 
 /// Concrete Firestore implementation.
@@ -1001,6 +1008,30 @@ class FirestoreWes2Repository implements Wes2Repository {
         'lastEditedAt': FieldValue.serverTimestamp(),
         'exercises': <Map<String, dynamic>>[],
         'wesPlannedExercises': wesPlannedMaps,
+      },
+      SetOptions(merge: true),
+    );
+  }
+
+  // ── deleteAllExercisesForDay (Phase 18b) ─────────────────────────────────
+
+  @override
+  Future<void> deleteAllExercisesForDay({
+    required String uid,
+    required DateTime date,
+  }) async {
+    final docRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('workouts')
+        .doc(_dateDocId(date));
+    await docRef.set(
+      {
+        'userId': uid,
+        'date': _dateDocId(date),
+        'lastEditedAt': FieldValue.serverTimestamp(),
+        'exercises': <Map<String, dynamic>>[],
+        'wesPlannedExercises': <Map<String, dynamic>>[],
       },
       SetOptions(merge: true),
     );

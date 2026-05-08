@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
 
-/// Top action bar with "Add Exercise" button.
+/// Top action bar with "Add Exercise" and optional "Load Template" buttons.
 class Wes2TopActionsBar extends StatelessWidget {
   final void Function() onAddExercise;
+  final VoidCallback? onLoadTemplate;
 
-  const Wes2TopActionsBar({super.key, required this.onAddExercise});
+  const Wes2TopActionsBar({
+    super.key,
+    required this.onAddExercise,
+    this.onLoadTemplate,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -12,13 +17,14 @@ class Wes2TopActionsBar extends StatelessWidget {
       padding: const EdgeInsets.only(left: 5, top: 4, right: 5, bottom: 4),
       child: Row(
         children: [
-          Flexible(
-            flex: 4,
+          Expanded(
             child: ElevatedButton.icon(
               icon: const Icon(Icons.add, size: 16),
               label: const Text(
                 'Add Exercise',
                 style: TextStyle(fontSize: 14),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Theme.of(context).colorScheme.primary,
@@ -26,6 +32,24 @@ class Wes2TopActionsBar extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 8),
               ),
               onPressed: onAddExercise,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.layers_outlined, size: 16),
+              label: const Text(
+                'Load Template',
+                style: TextStyle(fontSize: 14),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.secondary,
+                foregroundColor: Theme.of(context).colorScheme.onSecondary,
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 8),
+              ),
+              onPressed: onLoadTemplate,
             ),
           ),
         ],

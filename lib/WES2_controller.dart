@@ -484,4 +484,15 @@ class Wes2SessionController extends ChangeNotifier {
     _loadState = _rows.isEmpty ? Wes2LoadState.empty : Wes2LoadState.loaded;
     notifyListeners();
   }
+
+  /// Delete all exercise rows for the current day in one undo-able step.
+  void deleteAllExercises() {
+    if (_rows.isEmpty) return;
+    _pushUndo();
+    _rows = [];
+    _loadState = Wes2LoadState.empty;
+    _templateWasLoaded = false;
+    _originHadBb3Rows = false;
+    notifyListeners();
+  }
 }

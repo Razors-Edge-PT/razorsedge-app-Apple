@@ -16,7 +16,7 @@ import 'WES2_local_store.dart';
 import 'WES2_template_service.dart';
 import 'WES2_widgets/WES2_template_picker.dart';
 
-enum _Wes2AppBarMenuAction { timer, templates }
+enum _Wes2AppBarMenuAction { timer, templates, deleteAll }
 
 /// WES2 beta route shell.
 /// Receives an optional [initialDate]; defaults to today when omitted.
@@ -523,6 +523,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
                     case _Wes2AppBarMenuAction.templates:
                       _showTemplatePicker();
                       break;
+                    case _Wes2AppBarMenuAction.deleteAll:
+                      _onDeleteAllExercisesForDay();
+                      break;
                   }
                 },
                 itemBuilder: (_) => [
@@ -547,6 +550,20 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
                         Icon(Icons.layers_outlined, size: 18),
                         SizedBox(width: 10),
                         Text('Templates'),
+                      ],
+                    ),
+                  ),
+                  const PopupMenuItem(
+                    value: _Wes2AppBarMenuAction.deleteAll,
+                    height: 40,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.delete_outline, size: 18,
+                            color: Colors.redAccent),
+                        SizedBox(width: 10),
+                        Text('Delete Day',
+                            style: TextStyle(color: Colors.redAccent)),
                       ],
                     ),
                   ),
@@ -599,7 +616,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     // reachable — including during loading (queues the add until data arrives).
     return Column(
       children: [
-        Wes2TopActionsBar(onAddExercise: _onAddExercise),
+        Wes2TopActionsBar(
+            onAddExercise: _onAddExercise,
+            onLoadTemplate: _showTemplatePicker),
         if (controller.hasPendingExerciseAdds &&
             (controller.loadState == Wes2LoadState.loading ||
                 controller.loadState == Wes2LoadState.idle))
@@ -946,10 +965,66 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
-      builder: (_) => Wes2TemplatePicker(uid: _controller.actingUid),
+      builder: (_) => Wes2TemplatePicker(
+        uid: _controller.actingUid,
+        activeBlockId: _controller.activeBlockId,
+      ),
     );
     if (templateId == null || !mounted) return;
     await _onLoadTemplate(templateId);
+  }
+
+  // ── Delete Day (Phase 18b) ────────────────────────────────────────────────
+
+  Future<void> _onDeleteAllExercisesForDay() async {
+    if (_controller.rows.isEmpty) {
+      _showSnackBar('No exercises to delete.');
+      return;
+    }
+    final confirmed = await _showConfirmDialog(
+      title: 'Delete Day',
+      content: 'Delete all exercises for this day, are you sure?',
+    );
+    if (!confirmed || !mounted) return;
+
+    final hadBb3Rows =
+        _controller.rows.any((r) => r.source == Wes2RowSource.bb3Planned);
+
+    _controller.deleteAllExercises();
+    _saveDraftNow();
+    _showUndoSnackBar('All exercises deleted');
+
+    // ignore: discarded_futures
+    _deleteAllExercisesForDaySilently(
+      uid: _controller.actingUid,
+      date: _controller.selectedDate,
+    );
+
+    if (hadBb3Rows) {
+      final blockId = _controller.activeBlockId;
+      final blockStart = _controller.blockStartDate;
+      if (blockId != null && blockId.isNotEmpty && blockStart != null) {
+        final wd = _weekDayFromDate(blockStart, _controller.selectedDate);
+        // ignore: discarded_futures
+        _clearBb3PlannedDaySilently(
+          uid: _controller.actingUid,
+          blockId: blockId,
+          weekIndex: wd.weekIndex,
+          dayIndex: wd.dayIndex,
+        );
+      }
+    }
+  }
+
+  Future<void> _deleteAllExercisesForDaySilently({
+    required String uid,
+    required DateTime date,
+  }) async {
+    try {
+      await _repository.deleteAllExercisesForDay(uid: uid, date: date);
+    } catch (_) {
+      // Silent failure; local draft preserves empty state for next reopen.
+    }
   }
 
   // ── Structural exercise actions (Phase 13) ────────────────────────────────
