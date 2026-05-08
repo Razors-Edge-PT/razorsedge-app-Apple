@@ -36,16 +36,17 @@ class Wes2TopActionsBar extends StatelessWidget {
 
 /// Bottom action row: Summary · sets logged · Add Circuit + 55px spacer.
 class Wes2BottomActionsRow extends StatelessWidget {
-  /// Total sets with any actual (logged) value across all exercise rows.
   final int setsLogged;
   final void Function() onAddCircuit;
   final VoidCallback? onSummary;
+  final VoidCallback? onSaveAsTemplate;
 
   const Wes2BottomActionsRow({
     super.key,
     required this.setsLogged,
     required this.onAddCircuit,
     this.onSummary,
+    this.onSaveAsTemplate,
   });
 
   @override
@@ -104,6 +105,31 @@ class Wes2BottomActionsRow extends StatelessWidget {
             ],
           ),
         ),
+        if (onSaveAsTemplate != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 2, left: 8, right: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                TextButton.icon(
+                  icon: const Icon(Icons.bookmark_add_outlined, size: 14),
+                  label: const Text(
+                    'Save as Template',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  onPressed: onSaveAsTemplate,
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.white54,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 4),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+              ],
+            ),
+          ),
         const SizedBox(height: 55),
       ],
     );

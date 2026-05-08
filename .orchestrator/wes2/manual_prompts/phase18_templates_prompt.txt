@@ -1,0 +1,133 @@
+﻿Task: Implement WES2 Phase 18 Templates only. Do not run docs/wes2_orchestrator.py. Do not plan again. Do not edit blocked files. Inspect current repo first; repo state is truth.
+
+Context:
+- GOODLIFT Flutter/Firebase app, repo: C:\Projects\RE-test.
+- WES2 is modular beta execution/logging surface. BB3 is planner.
+- Current WES must remain untouched.
+- Planned values = hints/intent only. WES2 actual values = completed reality.
+- Do not write BB3/model hints as actuals.
+- Do not use FirebaseAuth directly; follow existing WES2/UserContext identity flow.
+- Earlier WES2 phases exist: load/merge completed + WES2 planned + BB3 planned rows, editable fields, save-on-unfocus, local draft, Add Exercise/Circuit/Set, Remove Set, Delete/Replace/Move, Done, Undo, Notes, Timer/Summary.
+- Implement Templates only; do not redo earlier phases.
+
+Allowed edits:
+- lib/WES2_*.dart
+- lib/WES2_widgets/WES2_*.dart
+- test/wes2/WES2_*.dart only if needed
+
+Read-only only:
+- lib/templates.dart
+- lib/template_model.dart
+- lib/template_generator.dart if present
+- lib/bb3_*.dart only if needed to confirm schema
+- current WES only if absolutely needed as reference
+
+Do not edit:
+- lib/workout_entry_screen.dart
+- lib/main.dart
+- lib/home_screen.dart
+- lib/bb3_*.dart
+- lib/periodization_model_utils.dart
+- lib/progression_engine.dart
+- pubspec.yaml
+- assets or asset references
+- generated files
+- lib/templates.dart
+- lib/template_model.dart
+- .claude/settings.local.json
+
+Before editing, inspect only these unless a direct compile/schema need appears:
+- lib/templates.dart
+- lib/template_model.dart
+- lib/template_generator.dart if present
+- lib/WES2_template_service.dart
+- lib/WES2_screen.dart
+- lib/WES2_controller.dart
+- lib/WES2_repository.dart
+- lib/WES2_plan_service.dart
+- lib/WES2_models.dart
+
+Phase 18 contract:
+- Spec basis: §9.7 Templates, §9.8 Save Workout to Templates.
+- AppBar overflow "Templates" opens template picker/bottom sheet.
+- Reuse existing template schema/path after inspecting template files. Do not guess.
+- Template load REPLACES current WES2 day, never appends.
+- Snapshot undo before replacement.
+- If replacing existing rows, show Snackbar with Undo after load.
+- If loading into empty/unplanned day, no snackbar.
+- Preserve circuit/order/setCount: exerciseId, name, circuitIndex, orderIndex, setCount.
+- Deduplicate exerciseIds defensively across whole day.
+- Template-loaded blank rows persist immediately to wesPlannedExercises[] only.
+- Never write blank template rows into exercises[] during template load.
+- Later actual values must use normal WES2 save/done path to exercises[].
+- Template-loaded blank rows do not affect BB3.
+- After load, user can still Add Exercise/Add Circuit normally.
+- Save local draft after load.
+
+BB3 clear rule:
+- If pre-replacement rows include source == Wes2RowSource.bb3Planned, clear ONLY current BB3 planned day.
+- Path: /planned_blocks/{uid}/blocks/{blockId}/weeks/week_{weekIndex}/days/day_{dayIndex}
+- Confirm shape from WES2_plan_service.dart/current WES2 load code.
+- Prefer existing/extended WES2PlanService.updatePlannedDay(...); do not edit BB3 files.
+- Clear only current day exercises/list. Do not touch completed workout docs or other BB3 days.
+- If shape genuinely uncertain, print exactly:
+  BLOCKED: BB3 current-day clear write shape uncertain
+  Then stop.
+- Do not leave this blocked if WES2_plan_service.dart clearly confirms the write shape.
+
+Save Workout to Templates:
+- Show only when ALL true:
+  - day not empty
+  - every row isMarkedDone == true
+  - day began as empty/unplanned manual build
+  - day did not begin by loading a template
+  - current rows are not BB3-sourced planned rows
+- Do not show for template-loaded days.
+- Do not show for BB3 planned days.
+- Prefer subtle label/action near bottom actions row.
+- AppBar overflow "Save as Template" acceptable only if strictly eligibility-gated.
+- Do not imply workout values are unsaved.
+- On tap: AlertDialog with template name TextField.
+- Save new template using existing schema.
+- Save structure only: template name, ordered exercises, exerciseId, name, circuitIndex, orderIndex, setCount, createdAt/server timestamp if schema uses it, blockId only if schema uses it.
+- Never save actual logged values: no weight/reps/RIR/velocity/execution notes as workout data.
+- Show success Snackbar.
+
+Likely implementation:
+- Complete FirestoreWes2TemplateService loadTemplate(...) and saveWorkoutAsTemplate(...).
+- Add controller method replaceWithTemplateRows(...) or equivalent:
+  - push undo
+  - clear rows
+  - insert templateLoaded rows preserving structure
+  - track day/template eligibility state needed for Save Workout to Templates
+- Add minimal WES2 template picker only if existing template UI cannot be safely reused.
+- Add repository support only if needed to replace current WES2 planned rows for date with template rows.
+- Use existing saveManualExercise/wesPlannedExercises logic where safe.
+- Add/extend WES2 plan service only if needed for BB3 current-day clear.
+- Avoid broad refactors.
+
+Layout rules:
+- Avoid RenderFlex overflow.
+- Long Row text => Expanded/Flexible + maxLines + TextOverflow.ellipsis.
+- Avoid unconstrained Row children.
+- Do not use ListTile inside PopupMenuItem.
+- Check narrow 360px mentally.
+
+Stop rules:
+- If template schema/path cannot be confirmed, print BLOCKED with exact missing schema/path and stop.
+- If BB3 clear shape cannot be confirmed, print BLOCKED as above and stop.
+- If blocked files would be required, stop and explain.
+- No schema migrations.
+- No orchestrator.
+- No git commit.
+
+Run targeted analyzer on touched WES2 files only, e.g.
+flutter analyze lib/WES2_screen.dart lib/WES2_controller.dart lib/WES2_template_service.dart lib/WES2_repository.dart lib/WES2_plan_service.dart lib/WES2_models.dart
+Also analyze any new picker file.
+
+Report:
+1. Files changed.
+2. Template load behaviour.
+3. Save Workout to Templates behaviour.
+4. Whether BB3 current-day clear was implemented or BLOCKED, and why.
+5. Analyzer command/result.

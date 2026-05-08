@@ -13,6 +13,8 @@ import 'WES2_widgets/WES2_day_actions_row.dart';
 import 'WES2_widgets/WES2_exercise_card.dart';
 import 'WES2_widgets/WES2_exercise_picker.dart';
 import 'WES2_local_store.dart';
+import 'WES2_template_service.dart';
+import 'WES2_widgets/WES2_template_picker.dart';
 
 enum _Wes2AppBarMenuAction { timer, templates }
 
@@ -33,6 +35,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   final Wes2Repository _repository = FirestoreWes2Repository();
   final Wes2PlanService _planService = FirestoreWes2PlanService();
   final Wes2LocalStore _localStore = IsarWes2LocalStore();
+  final Wes2TemplateService _templateService = FirestoreWes2TemplateService();
   bool _loadStarted = false;
 
   // ── Day timer state (Phase 17) ─────────────────────────────────────────────
@@ -518,7 +521,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
                       _toggleTimerVisible();
                       break;
                     case _Wes2AppBarMenuAction.templates:
-                      _showTemplatesPlaceholder();
+                      _showTemplatePicker();
                       break;
                   }
                 },
@@ -694,6 +697,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
           setsLogged: setsLogged,
           onAddCircuit: _onAddCircuit,
           onSummary: _showWorkoutSummary,
+          onSaveAsTemplate: controller.canSaveAsTemplate
+              ? _showSaveAsTemplateDialog
+              : null,
         ));
         return ListView(children: items);
       case Wes2LoadState.error:
@@ -934,20 +940,16 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     _showSnackBar('Use the note icon beside each set to add notes.');
   }
 
-  void _showTemplatesPlaceholder() {
-    showDialog<void>(
+  Future<void> _showTemplatePicker() async {
+    if (_controller.actingUid.isEmpty) return;
+    final templateId = await showModalBottomSheet<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Templates'),
-        content: const Text('Template loading coming soon.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => Wes2TemplatePicker(uid: _controller.actingUid),
     );
+    if (templateId == null || !mounted) return;
+    await _onLoadTemplate(templateId);
   }
 
   // ── Structural exercise actions (Phase 13) ────────────────────────────────
@@ -1377,6 +1379,161 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         ),
       ),
     );
+  }
+
+  // ── Template load (Phase 18) ──────────────────────────────────────────────
+
+  Future<void> _onLoadTemplate(String templateId) async {
+    List<Wes2ExerciseRow> templateRows;
+    try {
+      templateRows = await _templateService.loadTemplate(
+        uid: _controller.actingUid,
+        templateId: templateId,
+      );
+    } catch (_) {
+      _showSnackBar('Failed to load template.');
+      return;
+    }
+    if (templateRows.isEmpty) {
+      _showSnackBar('Template has no loadable exercises.');
+      return;
+    }
+    if (!mounted) return;
+
+    // Deduplicate defensively within the template rows.
+    final seen = <String>{};
+    final deduped = <Wes2ExerciseRow>[];
+    for (final row in templateRows) {
+      if (seen.add(row.exerciseId)) deduped.add(row);
+    }
+    final reindexed = List.generate(
+      deduped.length,
+      (i) => deduped[i].copyWith(orderIndex: i),
+    );
+
+    final hadAnyRows = _controller.rows.isNotEmpty;
+    final hadBb3Rows = _controller.rows
+        .any((r) => r.source == Wes2RowSource.bb3Planned);
+
+    _controller.replaceWithTemplateRows(reindexed);
+    _saveDraftNow();
+
+    // Persist: clear exercises[] + wesPlanned[], write template rows to wesPlanned.
+    // ignore: discarded_futures
+    _replaceWithTemplateRowsSilently(
+      uid: _controller.actingUid,
+      date: _controller.selectedDate,
+      rows: reindexed,
+    );
+
+    // Clear BB3 planned day if pre-replacement had BB3-sourced rows.
+    if (hadBb3Rows) {
+      final blockId = _controller.activeBlockId;
+      final blockStart = _controller.blockStartDate;
+      if (blockId != null && blockId.isNotEmpty && blockStart != null) {
+        final wd = _weekDayFromDate(blockStart, _controller.selectedDate);
+        // ignore: discarded_futures
+        _clearBb3PlannedDaySilently(
+          uid: _controller.actingUid,
+          blockId: blockId,
+          weekIndex: wd.weekIndex,
+          dayIndex: wd.dayIndex,
+        );
+      }
+    }
+
+    if (hadAnyRows && mounted) {
+      _showUndoSnackBar('Template loaded');
+    }
+  }
+
+  Future<void> _replaceWithTemplateRowsSilently({
+    required String uid,
+    required DateTime date,
+    required List<Wes2ExerciseRow> rows,
+  }) async {
+    try {
+      await _repository.replaceAllWithTemplateRows(
+        uid: uid,
+        date: date,
+        rows: rows,
+      );
+    } catch (_) {
+      // Silent failure; local draft preserves the template rows.
+    }
+  }
+
+  Future<void> _clearBb3PlannedDaySilently({
+    required String uid,
+    required String blockId,
+    required int weekIndex,
+    required int dayIndex,
+  }) async {
+    try {
+      await _planService.updatePlannedDay(
+        uid: uid,
+        blockId: blockId,
+        weekIndex: weekIndex,
+        dayIndex: dayIndex,
+        updatedRows: const [],
+      );
+    } catch (_) {
+      // Silent failure; BB3 clear is best-effort.
+    }
+  }
+
+  // ── Save Workout as Template (Phase 18) ──────────────────────────────────
+
+  Future<void> _showSaveAsTemplateDialog() async {
+    if (!mounted) return;
+    final nameCtrl = TextEditingController();
+    try {
+      final result = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Save as Template'),
+          content: TextField(
+            controller: nameCtrl,
+            autofocus: true,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => Navigator.of(ctx).pop(nameCtrl.text),
+            decoration: const InputDecoration(
+              hintText: 'Template name',
+              border: OutlineInputBorder(),
+              isDense: true,
+              contentPadding: EdgeInsets.symmetric(
+                  horizontal: 10, vertical: 8),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(nameCtrl.text),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      );
+      if (result == null || !mounted) return;
+      final name = result.trim();
+      if (name.isEmpty) return;
+      try {
+        await _templateService.saveWorkoutAsTemplate(
+          uid: _controller.actingUid,
+          blockId: _controller.activeBlockId,
+          templateName: name,
+          rows: _controller.rows.toList(),
+        );
+        if (mounted) _showSnackBar('Template saved.');
+      } catch (_) {
+        if (mounted) _showSnackBar('Failed to save template.');
+      }
+    } finally {
+      nameCtrl.dispose();
+    }
   }
 
   // ── Workout summary (Phase 17) ────────────────────────────────────────────

@@ -111,6 +111,15 @@ abstract class Wes2Repository {
     required int setIndex,
     required String? note,
   });
+
+  /// Replace the entire workout doc for [date] with template-loaded rows.
+  /// Clears exercises[] and writes [rows] to wesPlannedExercises[] as blank rows.
+  /// Preserves other doc fields (userId, date, etc.).
+  Future<void> replaceAllWithTemplateRows({
+    required String uid,
+    required DateTime date,
+    required List<Wes2ExerciseRow> rows,
+  });
 }
 
 /// Concrete Firestore implementation.
@@ -968,6 +977,33 @@ class FirestoreWes2Repository implements Wes2Repository {
         (setIndex + 1) > existingCount ? (setIndex + 1) : existingCount;
     result['sets'] = rawSets;
     return result;
+  }
+
+
+  // ── replaceAllWithTemplateRows (Phase 18) ──────────────────────────────
+
+  @override
+  Future<void> replaceAllWithTemplateRows({
+    required String uid,
+    required DateTime date,
+    required List<Wes2ExerciseRow> rows,
+  }) async {
+    final docRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('workouts')
+        .doc(_dateDocId(date));
+    final wesPlannedMaps = rows.map(_buildWesPlannedRowMap).toList();
+    await docRef.set(
+      {
+        'userId': uid,
+        'date': _dateDocId(date),
+        'lastEditedAt': FieldValue.serverTimestamp(),
+        'exercises': <Map<String, dynamic>>[],
+        'wesPlannedExercises': wesPlannedMaps,
+      },
+      SetOptions(merge: true),
+    );
   }
 
   // ── moveExerciseToCircuit (Phase 13) ──────────────────────────────────────

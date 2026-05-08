@@ -183,8 +183,31 @@ class FirestoreWes2PlanService implements Wes2PlanService {
     required int weekIndex,
     required int dayIndex,
     required List<Wes2ExerciseRow> updatedRows,
-  }) =>
-      throw UnimplementedError('updatePlannedDay not implemented until Phase 7');
+  }) async {
+    final dayRef = FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(uid)
+        .collection('blocks')
+        .doc(blockId)
+        .collection('weeks')
+        .doc('week_$weekIndex')
+        .collection('days')
+        .doc('day_$dayIndex');
+
+    final exercises = updatedRows
+        .map((r) => <String, dynamic>{
+              'exerciseId': r.exerciseId,
+              'name': r.name,
+              'circuitIndex': r.circuitIndex,
+              'orderIndex': r.orderIndex,
+            })
+        .toList();
+
+    await dayRef.set(
+      {'exercises': exercises},
+      SetOptions(merge: true),
+    );
+  }
 
   @override
   Future<void> saveExerciseSettings({

@@ -86,6 +86,7 @@ class Wes2SessionController extends ChangeNotifier {
     _rows = rows;
     _loadState = rows.isEmpty ? Wes2LoadState.empty : Wes2LoadState.loaded;
     _loadErrorMessage = null;
+    _originHadBb3Rows = rows.any((r) => r.source == Wes2RowSource.bb3Planned);
     _flushPendingAdds();
     notifyListeners();
   }
@@ -113,6 +114,8 @@ class Wes2SessionController extends ChangeNotifier {
     _loadEpoch++;
     _loadState = Wes2LoadState.idle;
     _loadErrorMessage = null;
+    _templateWasLoaded = false;
+    _originHadBb3Rows = false;
     notifyListeners();
   }
 
@@ -454,6 +457,31 @@ class Wes2SessionController extends ChangeNotifier {
     final key = '$exerciseId:$setIndex';
     if (_readPlanNotes.contains(key)) return;
     _readPlanNotes.add(key);
+    notifyListeners();
+  }
+  // ── Template tracking (Phase 18) ────────────────────────────────────────
+
+  bool _templateWasLoaded = false;
+  bool _originHadBb3Rows = false;
+
+  bool get templateWasLoaded => _templateWasLoaded;
+
+  /// True when all eligibility conditions for Save Workout to Templates hold.
+  bool get canSaveAsTemplate {
+    if (_rows.isEmpty) return false;
+    if (_templateWasLoaded) return false;
+    if (_originHadBb3Rows) return false;
+    if (!_rows.every((r) => r.isMarkedDone)) return false;
+    if (_rows.any((r) => r.source == Wes2RowSource.bb3Planned)) return false;
+    return true;
+  }
+
+  /// Replace all current rows with template rows in one undo-able step.
+  void replaceWithTemplateRows(List<Wes2ExerciseRow> templateRows) {
+    _pushUndo();
+    _rows = List<Wes2ExerciseRow>.from(templateRows);
+    _templateWasLoaded = true;
+    _loadState = _rows.isEmpty ? Wes2LoadState.empty : Wes2LoadState.loaded;
     notifyListeners();
   }
 }

@@ -1,22 +1,112 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'WES2_models.dart';
 
-// Stub interface. No Firestore/template imports in Phase 1.
-// Phase 8 will provide a concrete implementation.
 abstract class Wes2TemplateService {
-  /// Load a template's exercise rows by templateId, preserving circuit
-  /// structure and orderIndex.
+  /// Load template rows by templateId. Only rows with a non-empty exerciseId
+  /// are returned; array position becomes orderIndex.
   Future<List<Wes2ExerciseRow>> loadTemplate({
     required String uid,
     required String templateId,
   });
 
-  /// Save the current day's manually-built workout as a new reusable template.
-  /// Called only when every exercise is completed/marked Done and the day was
-  /// not originally loaded from a template.
+  /// Save a manually-built completed day as a new template.
+  /// [blockId] is null when no block is active.
   Future<void> saveWorkoutAsTemplate({
     required String uid,
-    required String blockId,
+    required String? blockId,
     required String templateName,
     required List<Wes2ExerciseRow> rows,
   });
+}
+
+class FirestoreWes2TemplateService implements Wes2TemplateService {
+  static const int _defaultSetCount = 3;
+
+  @override
+  Future<List<Wes2ExerciseRow>> loadTemplate({
+    required String uid,
+    required String templateId,
+  }) async {
+    final snap = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('templates')
+        .doc(templateId)
+        .get();
+
+    if (!snap.exists) return const [];
+    final data = snap.data();
+    if (data == null) return const [];
+
+    final rawExercises = (data['exercises'] as List<dynamic>?) ?? const [];
+    final result = <Wes2ExerciseRow>[];
+    final seen = <String>{};
+
+    for (int i = 0; i < rawExercises.length; i++) {
+      final raw = rawExercises[i];
+      if (raw is! Map<String, dynamic>) continue;
+
+      final exerciseId =
+          ((raw['exerciseId'] ?? raw['id']) as String? ?? '').trim();
+      if (exerciseId.isEmpty) continue;
+      if (seen.contains(exerciseId)) continue;
+      seen.add(exerciseId);
+
+      final rawName =
+          ((raw['name'] ?? raw['exercise']) as String? ?? '').trim();
+      final name = rawName.isNotEmpty ? rawName : exerciseId;
+      final circuitIndex = (raw['circuitIndex'] as num?)?.toInt() ?? 0;
+      final setCount =
+          (raw['setCount'] as num?)?.toInt() ?? _defaultSetCount;
+
+      result.add(Wes2ExerciseRow(
+        exerciseId: exerciseId,
+        name: name,
+        circuitIndex: circuitIndex,
+        orderIndex: i,
+        setCount: setCount,
+        sets: List.generate(setCount, (j) => Wes2SetState(setIndex: j)),
+        source: Wes2RowSource.templateLoaded,
+      ));
+    }
+
+    result.sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
+    // Re-normalise orderIndex to 0-based contiguous after sort+dedup.
+    return List.generate(
+      result.length,
+      (i) => result[i].copyWith(orderIndex: i),
+    );
+  }
+
+  @override
+  Future<void> saveWorkoutAsTemplate({
+    required String uid,
+    required String? blockId,
+    required String templateName,
+    required List<Wes2ExerciseRow> rows,
+  }) async {
+    // Structure only: exerciseId, name, circuitIndex.
+    // Never write actual logged values (weight/reps/RIR/velocity/notes).
+    final exercises = rows
+        .map((r) => <String, dynamic>{
+              'exerciseId': r.exerciseId,
+              'name': r.name,
+              'circuitIndex': r.circuitIndex,
+            })
+        .toList();
+
+    final payload = <String, dynamic>{
+      'name': templateName,
+      'exercises': exercises,
+      if (blockId != null && blockId.isNotEmpty) 'blockId': blockId,
+      'createdAt': FieldValue.serverTimestamp(),
+      'isKept': true,
+    };
+
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('templates')
+        .add(payload);
+  }
 }
