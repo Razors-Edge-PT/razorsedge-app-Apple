@@ -233,9 +233,33 @@ class FirestoreWes2PlanService implements Wes2PlanService {
         .doc(uid)
         .collection('blocks')
         .doc(blockId);
-    await docRef.set(
-      {'exerciseSettings.$exerciseId': settings},
-      SetOptions(merge: true),
-    );
+
+    await FirebaseFirestore.instance.runTransaction((txn) async {
+      final snap = await txn.get(docRef);
+      final data = snap.exists
+          ? (snap.data() ?? <String, dynamic>{})
+          : <String, dynamic>{};
+
+      final rawExerciseSettings = data['exerciseSettings'];
+      final exerciseSettings = rawExerciseSettings is Map
+          ? Map<String, dynamic>.from(rawExerciseSettings)
+          : <String, dynamic>{};
+
+      final rawExistingForExercise = exerciseSettings[exerciseId];
+      final existingForExercise = rawExistingForExercise is Map
+          ? Map<String, dynamic>.from(rawExistingForExercise)
+          : <String, dynamic>{};
+
+      exerciseSettings[exerciseId] = {
+        ...existingForExercise,
+        ...settings,
+      };
+
+      txn.set(
+        docRef,
+        {'exerciseSettings': exerciseSettings},
+        SetOptions(merge: true),
+      );
+    });
   }
 }
