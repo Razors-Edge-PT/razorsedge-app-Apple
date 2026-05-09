@@ -145,25 +145,39 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     }
 
     for (final list in _weightCtrl.values) {
-      for (final c in list) c.dispose();
+      for (final c in list) {
+        c.dispose();
+      }
     }
     for (final list in _repsCtrl.values) {
-      for (final c in list) c.dispose();
+      for (final c in list) {
+        c.dispose();
+      }
     }
     for (final list in _rirCtrl.values) {
-      for (final c in list) c.dispose();
+      for (final c in list) {
+        c.dispose();
+      }
     }
     for (final list in _notesCtrl.values) {
-      for (final c in list) c.dispose();
+      for (final c in list) {
+        c.dispose();
+      }
     }
     for (final list in _focusNodes.values) {
-      for (final fn in list) fn.dispose();
+      for (final fn in list) {
+        fn.dispose();
+      }
     }
     for (final list in _velocityCtrl.values) {
-      for (final c in list) c.dispose();
+      for (final c in list) {
+        c.dispose();
+      }
     }
     for (final list in _velocityFocusNodes.values) {
-      for (final fn in list) fn.dispose();
+      for (final fn in list) {
+        fn.dispose();
+      }
     }
     super.dispose();
   }
@@ -179,13 +193,27 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
         .where((id) => !keep.contains(id) && !_localExercises.containsKey(id))
         .toList();
     for (final id in toRemove) {
-      for (final c in _weightCtrl[id]!) c.dispose();
-      for (final c in _repsCtrl[id]!) c.dispose();
-      for (final c in _rirCtrl[id]!) c.dispose();
-      for (final c in _notesCtrl[id]!) c.dispose();
-      for (final fn in _focusNodes[id]!) fn.dispose();
-      for (final c in _velocityCtrl[id] ?? []) c.dispose();
-      for (final fn in _velocityFocusNodes[id] ?? []) fn.dispose();
+      for (final c in _weightCtrl[id]!) {
+        c.dispose();
+      }
+      for (final c in _repsCtrl[id]!) {
+        c.dispose();
+      }
+      for (final c in _rirCtrl[id]!) {
+        c.dispose();
+      }
+      for (final c in _notesCtrl[id]!) {
+        c.dispose();
+      }
+      for (final fn in _focusNodes[id]!) {
+        fn.dispose();
+      }
+      for (final c in _velocityCtrl[id] ?? []) {
+        c.dispose();
+      }
+      for (final fn in _velocityFocusNodes[id] ?? []) {
+        fn.dispose();
+      }
       _weightCtrl.remove(id);
       _repsCtrl.remove(id);
       _rirCtrl.remove(id);
@@ -399,13 +427,13 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
           decoration: BoxDecoration(
             border: Border.all(
               color: isDragOver
-                  ? theme.colorScheme.primary.withOpacity(0.6)
+                  ? theme.colorScheme.primary.withValues(alpha: 0.6)
                   : Colors.grey.shade300,
               width: isDragOver ? 2 : 1,
             ),
             borderRadius: BorderRadius.circular(8),
             color: isDragOver
-                ? theme.colorScheme.primary.withOpacity(0.04)
+                ? theme.colorScheme.primary.withValues(alpha: 0.04)
                 : theme.colorScheme.surface,
           ),
 
@@ -446,7 +474,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: theme.colorScheme.secondaryContainer.withOpacity(0.4),
+        color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.4),
         borderRadius: const BorderRadius.vertical(top: Radius.circular(7)),
       ),
       child: Row(
@@ -652,6 +680,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     );
   }
 
+  // ignore: unused_element
   Widget _buildCompletedRow(
     ThemeData theme,
     String exerciseId,
@@ -2059,13 +2088,27 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     setState(() {
       final id = ex.exerciseId;
       _orderedExIds.remove(id);
-      for (final c in _weightCtrl[id] ?? []) c.dispose();
-      for (final c in _repsCtrl[id] ?? []) c.dispose();
-      for (final c in _rirCtrl[id] ?? []) c.dispose();
-      for (final c in _notesCtrl[id] ?? []) c.dispose();
-      for (final fn in _focusNodes[id] ?? []) fn.dispose();
-      for (final c in _velocityCtrl[id] ?? []) c.dispose();
-      for (final fn in _velocityFocusNodes[id] ?? []) fn.dispose();
+      for (final c in _weightCtrl[id] ?? []) {
+        c.dispose();
+      }
+      for (final c in _repsCtrl[id] ?? []) {
+        c.dispose();
+      }
+      for (final c in _rirCtrl[id] ?? []) {
+        c.dispose();
+      }
+      for (final c in _notesCtrl[id] ?? []) {
+        c.dispose();
+      }
+      for (final fn in _focusNodes[id] ?? []) {
+        fn.dispose();
+      }
+      for (final c in _velocityCtrl[id] ?? []) {
+        c.dispose();
+      }
+      for (final fn in _velocityFocusNodes[id] ?? []) {
+        fn.dispose();
+      }
       _weightCtrl.remove(id);
       _repsCtrl.remove(id);
       _rirCtrl.remove(id);
@@ -2075,6 +2118,12 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
       _velocityFocusNodes.remove(id);
     });
     _saveIfDirty();
+    // ignore: discarded_futures
+    BB3PlannedExerciseService.removeExerciseFromWorkoutDoc(
+      uid: widget.uid,
+      date: widget.date,
+      exerciseId: ex.exerciseId,
+    );
   }
 
   // ── Note viewer ───────────────────────────────────────────────────────────

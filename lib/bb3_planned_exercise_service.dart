@@ -2,7 +2,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'bb3_models.dart';
 import 'local_cache/block_plan_cache.dart';
-import 'periodization_model_utils.dart';
 
 // ─── BB3PlannedExerciseService ────────────────────────────────────────────────
 //
@@ -280,6 +279,7 @@ class BB3PlannedExerciseService {
     required int dayIndex,
     required String exerciseId,
     required List<BB3Exercise> currentExercises,
+    required DateTime date,
   }) async {
     final updated = currentExercises
         .where((e) => e.exerciseId != exerciseId)
@@ -291,6 +291,70 @@ class BB3PlannedExerciseService {
       dayIndex: dayIndex,
       exercises: updated,
     );
+    await removeExerciseFromWorkoutDoc(
+      uid: uid,
+      date: date,
+      exerciseId: exerciseId,
+    );
+  }
+
+  /// Removes [exerciseId] from both exercises[] and wesPlannedExercises[] in the
+  /// workout document for [date].  No-op when the document does not exist or when
+  /// [exerciseId] is absent from both arrays.  Never deletes the whole document.
+  static Future<void> removeExerciseFromWorkoutDoc({
+    required String uid,
+    required DateTime date,
+    required String exerciseId,
+  }) async {
+    final dateKey = _dateFmt.format(date);
+    final workoutRef = _fs
+        .collection('users')
+        .doc(uid)
+        .collection('workouts')
+        .doc(dateKey);
+    try {
+      await _fs.runTransaction((tx) async {
+        final snap = await tx.get(workoutRef);
+        if (!snap.exists) return;
+
+        final data = snap.data() as Map<String, dynamic>;
+
+        final exercises = List<dynamic>.from(
+          (data['exercises'] as List<dynamic>?) ?? const [],
+        );
+        final wesPlanned = List<dynamic>.from(
+          (data['wesPlannedExercises'] as List<dynamic>?) ?? const [],
+        );
+
+        final filteredEx = exercises.where((m) {
+          if (m is! Map) return true;
+          final id = (m['exerciseId'] ?? m['id'] ?? '').toString();
+          return id != exerciseId;
+        }).toList();
+
+        final filteredWes = wesPlanned.where((m) {
+          if (m is! Map) return true;
+          final id = (m['exerciseId'] ?? m['id'] ?? '').toString();
+          return id != exerciseId;
+        }).toList();
+
+        final exChanged = filteredEx.length != exercises.length;
+        final wesChanged = filteredWes.length != wesPlanned.length;
+        if (!exChanged && !wesChanged) return;
+
+        tx.set(
+          workoutRef,
+          {
+            'exercises': filteredEx,
+            'wesPlannedExercises': filteredWes,
+            'lastEditedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+      });
+    } catch (_) {
+      // Workout doc cleanup is best-effort; planned day deletion is unaffected.
+    }
   }
 
   // ── Block settings ────────────────────────────────────────────────────────

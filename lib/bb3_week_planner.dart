@@ -224,7 +224,9 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
     debugPrint('[BB3 loadWeek start] epoch=$localEpoch weekStart=$localWeekStart block=$blockId fromServer=$fromServer');
 
     setState(() {
-      for (int d = 0; d < 7; d++) _loadingByDay[d] = true;
+      for (int d = 0; d < 7; d++) {
+        _loadingByDay[d] = true;
+      }
     });
 
     await Future.wait(List.generate(7, (d) async {
@@ -370,6 +372,7 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
 
   // ── Week navigation ───────────────────────────────────────────────────────
 
+  // ignore: unused_element
   void _prevWeek() {
     _pageController.previousPage(
       duration: const Duration(milliseconds: 300),
@@ -377,6 +380,7 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
     );
   }
 
+  // ignore: unused_element
   void _nextWeek() {
     _pageController.nextPage(
       duration: const Duration(milliseconds: 300),
