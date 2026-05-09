@@ -1,5 +1,14 @@
 import 'package:flutter/material.dart';
 import '../WES2_models.dart';
+import '../periodization_model_utils.dart';
+
+class _E1rmDisplay {
+  final String text;
+  final bool isActual; // true → white normal; false → grey
+  final bool isHint;   // true → grey italic (projected); false → grey plain (dash)
+
+  const _E1rmDisplay(this.text, {this.isActual = false, this.isHint = false});
+}
 
 const _kHeaderStyle = TextStyle(
   fontSize: 10.0,
@@ -216,6 +225,39 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
     super.dispose();
   }
 
+  _E1rmDisplay _resolveE1rmDisplay(Wes2SetState set) {
+    final actualWeight = set.weight.actualValue;
+    final actualReps = set.reps.actualValue;
+
+    if (actualWeight != null && actualReps != null) {
+      final rir = set.rir.actualValue ?? set.rir.hintValue ?? 0.0;
+      final e1rm = PeriodizationModelUtils.calculateE1RM(
+        actualWeight,
+        actualReps.toDouble(),
+        rir,
+      );
+      if (e1rm > 0) {
+        return _E1rmDisplay(e1rm.toStringAsFixed(1), isActual: true);
+      }
+    }
+
+    final hintWeight = set.weight.hintValue;
+    final hintReps = set.reps.hintValue;
+    if (hintWeight != null && hintReps != null) {
+      final rir = set.rir.hintValue ?? 0.0;
+      final e1rm = PeriodizationModelUtils.calculateE1RM(
+        hintWeight,
+        hintReps.toDouble(),
+        rir,
+      );
+      if (e1rm > 0) {
+        return _E1rmDisplay(e1rm.toStringAsFixed(1), isHint: true);
+      }
+    }
+
+    return const _E1rmDisplay('—');
+  }
+
   Color _noteIconColor() {
     final s = widget.set;
     if (s.executionNote != null) return Colors.lightBlueAccent;
@@ -339,34 +381,44 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             decimal: true,
           ),
           const SizedBox(width: 4),
-          // E1RM — static '—' placeholder; computed in a later phase
+          // E1RM — calculated from actuals (or hints when no actuals present)
           SizedBox(
             width: 55,
             height: 36,
             child: Align(
               alignment: Alignment.bottomLeft,
-              child: Container(
-                height: 36,
-                padding: const EdgeInsets.only(left: 2, bottom: 8),
-                decoration: const BoxDecoration(
-                  border: Border(
-                    bottom: BorderSide(color: Colors.white, width: 1),
-                  ),
-                ),
-                alignment: Alignment.bottomLeft,
-                child: const Text(
-                  '—',
-                  strutStyle: StrutStyle(
-                    fontSize: 12,
-                    height: 1.0,
-                    forceStrutHeight: true,
-                  ),
-                  style: TextStyle(
-                    fontSize: 12,
-                    height: 1.0,
-                    color: Colors.grey,
-                  ),
-                ),
+              child: Builder(
+                builder: (context) {
+                  final e1rm = _resolveE1rmDisplay(s);
+                  return Container(
+                    height: 36,
+                    padding: const EdgeInsets.only(left: 2, bottom: 8),
+                    decoration: const BoxDecoration(
+                      border: Border(
+                        bottom: BorderSide(color: Colors.white, width: 1),
+                      ),
+                    ),
+                    alignment: Alignment.bottomLeft,
+                    child: Text(
+                      e1rm.text,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      strutStyle: const StrutStyle(
+                        fontSize: 12,
+                        height: 1.0,
+                        forceStrutHeight: true,
+                      ),
+                      style: TextStyle(
+                        fontSize: 12,
+                        height: 1.0,
+                        color: e1rm.isActual ? Colors.white : Colors.grey,
+                        fontStyle: e1rm.isHint
+                            ? FontStyle.italic
+                            : FontStyle.normal,
+                      ),
+                    ),
+                  );
+                },
               ),
             ),
           ),

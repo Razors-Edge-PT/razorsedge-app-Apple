@@ -646,15 +646,26 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       child: Consumer<Wes2SessionController>(
         builder: (context, controller, _) => Scaffold(
           appBar: AppBar(
-            title: const Text('WES2 (Beta)'),
+            title: const Text(' '),
             actions: [
+              Padding(
+                padding: const EdgeInsets.only(left: 4, right: 4),
+                child: Image.asset(
+                  'assets/InApp/transparent_good_lift_logo_inApp.png',
+                  height: 44,
+                  fit: BoxFit.contain,
+                ),
+              ),
               IconButton(
                 icon: const Icon(Icons.undo),
                 tooltip: 'Undo',
                 onPressed: controller.canUndo ? _performUndo : null,
               ),
               IconButton(
-                icon: const Icon(Icons.auto_awesome),
+                icon: const Icon(
+                  Icons.auto_awesome,
+                  color: Colors.amberAccent,
+                ),
                 tooltip: 'Refresh',
                 onPressed: () {
                   _saveDraftNow();

@@ -45,31 +45,35 @@ class Wes2HintServiceImpl implements Wes2HintService {
     required String uid,
     required DateTime date,
   }) {
-    if (row.sets.isEmpty) return row;
-
     final base = DateTime(blockStartDate.year, blockStartDate.month, blockStartDate.day);
     final sel = DateTime(date.year, date.month, date.day);
     final days = sel.difference(base).inDays;
     final weekIndex = days ~/ 7;
     final sessionIndex = days % 7;
 
-    // Only compute hints for Set 1 (index 0) in Phase 21B.
-    final set0 = row.sets[0];
+    // Build a padded sets list that covers at least setCount slots.
+    // WES2-manual rows are created with setCount > 0 but sets: const [],
+    // so we must not bail out on sets.isEmpty.
+    final effectiveCount = row.setCount > 0 ? row.setCount : 3;
+    final padded = List<Wes2SetState>.generate(effectiveCount, (i) {
+      return i < row.sets.length ? row.sets[i] : Wes2SetState(setIndex: i);
+    });
 
+    // Only compute hints for Set 1 (index 0) in Phase 21B.
     final newSet0 = _computeSet1Hints(
       row: row,
-      set: set0,
+      set: padded[0],
       weekIndex: weekIndex,
       sessionIndex: sessionIndex,
       date: date,
       uid: uid,
     );
 
-    if (newSet0 == null) return row;
+    if (newSet0 == null && padded.length == row.sets.length) return row;
 
-    final newSets = List<Wes2SetState>.from(row.sets);
-    newSets[0] = newSet0;
-    return row.copyWith(sets: newSets);
+    final newSets = List<Wes2SetState>.from(padded);
+    if (newSet0 != null) newSets[0] = newSet0;
+    return row.copyWith(sets: newSets, setCount: effectiveCount);
   }
 
   @override
