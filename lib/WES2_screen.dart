@@ -12,6 +12,7 @@ import 'WES2_widgets/WES2_empty_state.dart';
 import 'WES2_widgets/WES2_day_actions_row.dart';
 import 'WES2_widgets/WES2_exercise_card.dart';
 import 'WES2_widgets/WES2_exercise_picker.dart';
+import 'WES2_hint_service.dart';
 import 'WES2_local_store.dart';
 import 'WES2_template_service.dart';
 import 'WES2_widgets/WES2_template_picker.dart';
@@ -38,6 +39,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   final Wes2LocalStore _localStore = IsarWes2LocalStore();
   final Wes2TemplateService _templateService = FirestoreWes2TemplateService();
   bool _loadStarted = false;
+  Map<String, dynamic> _cachedExerciseSettings = const {};
 
   // ── Day timer state (Phase 17) ─────────────────────────────────────────────
   bool _timerVisible = false;
@@ -66,6 +68,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       isCoach: uc.isCoach,
       activeBlockId: uc.activeBlockId,
       blockStartDate: uc.blockStartDate,
+      blockEndDate: uc.blockEndDate,
     );
     if (!_loadStarted) {
       _loadStarted = true;
@@ -219,6 +222,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         _hardened(_applyDraftActuals(_mergeRows(completedRows, bb3Rows), draft)),
         epoch,
       );
+      // Phase 21B: apply Set 1 model/default hints after rows settle.
+      // ignore: discarded_futures
+      _loadAndApplyHints();
       // Persist any exercises queued during loading, deduplicated against
       // freshly loaded server/BB3 data inside setRows/_flushPendingAdds.
       final flushed = _controller.consumeFlushedExercises();
@@ -236,6 +242,49 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     } catch (e) {
       if (!mounted) return;
       _controller.setLoadError(e.toString(), epoch);
+    }
+  }
+
+  /// Loads exerciseSettings once and applies Phase 21B Set 1 model/default
+  /// hints to every current row. Fire-and-forget; errors are logged only.
+  Future<void> _loadAndApplyHints() async {
+    final blockId = _controller.activeBlockId;
+    final blockStart = _controller.blockStartDate;
+    if (blockId == null || blockId.isEmpty || blockStart == null) return;
+
+    try {
+      if (_cachedExerciseSettings.isEmpty) {
+        _cachedExerciseSettings = await _planService.loadExerciseSettings(
+          uid: _controller.actingUid,
+          blockId: blockId,
+        );
+        _controller.setExerciseSettings(_cachedExerciseSettings);
+      }
+
+      if (!mounted) return;
+
+      final svc = Wes2HintServiceImpl(
+        exerciseSettings: _cachedExerciseSettings,
+        blockStartDate: blockStart,
+        blockEndDate: _controller.blockEndDate,
+        uid: _controller.actingUid,
+      );
+
+      final date = _controller.selectedDate;
+      final rows = _controller.rows.toList();
+
+      for (final row in rows) {
+        if (!mounted) return;
+        final hinted = svc.computeRowHints(
+          row: row,
+          blockId: blockId,
+          uid: _controller.actingUid,
+          date: date,
+        );
+        _controller.applyModelHints(row.exerciseId, hinted);
+      }
+    } catch (e) {
+      debugPrint('[WES2] Hint computation failed: $e');
     }
   }
 
@@ -605,7 +654,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
                 onPressed: controller.canUndo ? _performUndo : null,
               ),
               IconButton(
-                icon: const Icon(Icons.refresh),
+                icon: const Icon(Icons.auto_awesome),
                 tooltip: 'Refresh',
                 onPressed: () {
                   _saveDraftNow();

@@ -17,6 +17,8 @@ class Wes2SessionController extends ChangeNotifier {
   bool _identityInitialized = false;
   String? _activeBlockId;
   DateTime? _blockStartDate;
+  DateTime? _blockEndDate;
+  Map<String, dynamic> _exerciseSettings = const {};
   int _loadEpoch = 0;
   String? _loadErrorMessage;
   final List<({String exerciseId, String name})> _pendingExerciseAdds = [];
@@ -44,6 +46,7 @@ class Wes2SessionController extends ChangeNotifier {
   int get loadEpoch => _loadEpoch;
   String? get activeBlockId => _activeBlockId;
   DateTime? get blockStartDate => _blockStartDate;
+  DateTime? get blockEndDate => _blockEndDate;
   String? get loadErrorMessage => _loadErrorMessage;
   bool get hasPendingExerciseAdds => _pendingExerciseAdds.isNotEmpty;
 
@@ -55,6 +58,7 @@ class Wes2SessionController extends ChangeNotifier {
     required bool isCoach,
     String? activeBlockId,
     DateTime? blockStartDate,
+    DateTime? blockEndDate,
   }) {
     if (_identityInitialized) return;
     _identityInitialized = true;
@@ -63,7 +67,44 @@ class Wes2SessionController extends ChangeNotifier {
     _isCoach = isCoach;
     _activeBlockId = activeBlockId;
     _blockStartDate = blockStartDate;
+    _blockEndDate = blockEndDate;
     // Load is triggered by the screen via beginLoad() after this returns.
+  }
+
+  /// Store block-level exerciseSettings for use by the hint service.
+  void setExerciseSettings(Map<String, dynamic> settings) {
+    _exerciseSettings = settings;
+  }
+
+  Map<String, dynamic> get exerciseSettings => _exerciseSettings;
+
+  /// Apply model hints from a pre-computed hinted row onto the current row state.
+  /// Uses the CURRENT row (not a snapshot) to avoid overwriting actuals typed
+  /// between hint computation and application.
+  /// BB3-origin hints on the current row are preserved — they take priority.
+  void applyModelHints(String exerciseId, Wes2ExerciseRow hintedRow) {
+    final idx = _rows.indexWhere((r) => r.exerciseId == exerciseId);
+    if (idx == -1) return;
+    final current = _rows[idx];
+    final count = current.setCount;
+    bool changed = false;
+    final newSets = List<Wes2SetState>.generate(count, (i) {
+      final cs =
+          i < current.sets.length ? current.sets[i] : Wes2SetState(setIndex: i);
+      final hs = i < hintedRow.sets.length ? hintedRow.sets[i] : null;
+      if (hs == null) return cs;
+      final nw = cs.weight.withHint(hs.weight.hintValue, hs.weight.origin);
+      final nr = cs.reps.withHint(hs.reps.hintValue, hs.reps.origin);
+      final nrir = cs.rir.withHint(hs.rir.hintValue, hs.rir.origin);
+      if (nw == cs.weight && nr == cs.reps && nrir == cs.rir) return cs;
+      changed = true;
+      return cs.copyWith(weight: nw, reps: nr, rir: nrir);
+    });
+    if (!changed) return;
+    final newRows = List<Wes2ExerciseRow>.from(_rows);
+    newRows[idx] = current.copyWith(sets: newSets);
+    _rows = newRows;
+    notifyListeners();
   }
 
   // ── Load state management ─────────────────────────────────────────────────
