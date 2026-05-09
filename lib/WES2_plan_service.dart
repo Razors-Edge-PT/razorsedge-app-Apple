@@ -157,6 +157,7 @@ class FirestoreWes2PlanService implements Wes2PlanService {
     return Wes2FieldState<double>(
       hintValue: v.toDouble(),
       origin: FieldOrigin.bb3Hint,
+      hintOrigin: FieldOrigin.bb3Hint,
     );
   }
 
@@ -165,6 +166,7 @@ class FirestoreWes2PlanService implements Wes2PlanService {
     return Wes2FieldState<int>(
       hintValue: v.toInt(),
       origin: FieldOrigin.bb3Hint,
+      hintOrigin: FieldOrigin.bb3Hint,
     );
   }
 

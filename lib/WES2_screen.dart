@@ -40,6 +40,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   final Wes2TemplateService _templateService = FirestoreWes2TemplateService();
   bool _loadStarted = false;
   Map<String, dynamic> _cachedExerciseSettings = const {};
+  // IDs present in the BB3 planned day at last load. Keyed by exerciseId.
+  // Allows post-merge rows (source=completedServer) to still trigger BB3 sync.
+  Set<String> _bb3PlannedExerciseIds = const {};
 
   // ── Day timer state (Phase 17) ─────────────────────────────────────────────
   bool _timerVisible = false;
@@ -196,6 +199,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
       // Phase 4: BB3 planned day — skip if block context is absent or if
       // selectedDate is before blockStartDate (no negative week/day paths).
+      _bb3PlannedExerciseIds = const {}; // reset before each load
       var bb3Rows = const <Wes2ExerciseRow>[];
       final blockId = _controller.activeBlockId;
       final blockStart = _controller.blockStartDate;
@@ -210,6 +214,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
           weekIndex: wd.weekIndex,
           dayIndex: wd.dayIndex,
         );
+        _bb3PlannedExerciseIds = bb3Rows.map((r) => r.exerciseId).toSet();
       }
 
       // Phase 7: overlay local draft actuals onto server/BB3 merged structure.
@@ -1209,6 +1214,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
   Future<void> _onDeleteExercise(Wes2ExerciseRow row) async {
     final hadActuals = row.hasAnyExecutionValue;
+    // Capture before the async confirm gap. A row that reloaded as
+    // completedServer (actual values saved) still needs BB3 sync if it was
+    // originally BB3-planned on this date.
+    final wasBb3 = row.source == Wes2RowSource.bb3Planned ||
+        _bb3PlannedExerciseIds.contains(row.exerciseId);
     final confirmed = await _showConfirmDialog(
       title: 'Delete Exercise',
       content: 'Remove "${row.name}" from today\'s workout?',
@@ -1223,7 +1233,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       date: _controller.selectedDate,
       exerciseId: row.exerciseId,
     );
-    if (row.source == Wes2RowSource.bb3Planned) {
+    if (wasBb3) {
       // ignore: discarded_futures
       _syncBb3PlannedDayFromCurrentRowsSilently();
     }
@@ -1722,7 +1732,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     if (_isBeforeBlockStart(_controller.selectedDate, blockStart)) return;
     final wd = _weekDayFromDate(blockStart, _controller.selectedDate);
     final bb3Rows = _controller.rows
-        .where((r) => r.source == Wes2RowSource.bb3Planned)
+        .where((r) =>
+            r.source == Wes2RowSource.bb3Planned ||
+            _bb3PlannedExerciseIds.contains(r.exerciseId))
         .toList();
     try {
       await _planService.updatePlannedDay(
