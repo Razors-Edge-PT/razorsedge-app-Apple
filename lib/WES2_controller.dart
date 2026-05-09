@@ -392,7 +392,9 @@ class Wes2SessionController extends ChangeNotifier {
       orderIndex: old.orderIndex,
       setCount: old.setCount,
       sets: const [],
-      source: Wes2RowSource.wes2Manual,
+      source: old.source == Wes2RowSource.bb3Planned
+          ? Wes2RowSource.bb3Planned
+          : Wes2RowSource.wes2Manual,
     );
     final newRows = List<Wes2ExerciseRow>.from(_rows);
     newRows[idx] = newRow;

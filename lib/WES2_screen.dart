@@ -216,7 +216,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       );
       if (!mounted) return;
       _controller.setRows(
-        _applyDraftActuals(_mergeRows(completedRows, bb3Rows), draft),
+        _hardened(_applyDraftActuals(_mergeRows(completedRows, bb3Rows), draft)),
         epoch,
       );
       // Persist any exercises queued during loading, deduplicated against
@@ -338,6 +338,41 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         isMarkedDone: d.isMarkedDone,
       );
     }).toList();
+  }
+
+  /// Deduplicates rows by exerciseId (completedServer wins over planned/manual)
+  /// and normalizes any zero-setCount ghost rows. Applied at all row entry points.
+  static List<Wes2ExerciseRow> _hardened(List<Wes2ExerciseRow> rows) {
+    const sourcePriority = {
+      Wes2RowSource.completedServer: 0,
+      Wes2RowSource.wes2Manual: 1,
+      Wes2RowSource.templateLoaded: 1,
+      Wes2RowSource.localDraft: 1,
+      Wes2RowSource.bb3Planned: 2,
+    };
+    // Sort so higher-priority source is first — wins putIfAbsent-style dedupe.
+    final sorted = List<Wes2ExerciseRow>.from(rows)
+      ..sort((a, b) {
+        final pa = sourcePriority[a.source] ?? 1;
+        final pb = sourcePriority[b.source] ?? 1;
+        if (pa != pb) return pa.compareTo(pb);
+        return a.orderIndex.compareTo(b.orderIndex);
+      });
+    final seen = <String>{};
+    final deduped = <Wes2ExerciseRow>[];
+    for (final r in sorted) {
+      if (seen.add(r.exerciseId)) deduped.add(_normalizeSetCount(r));
+    }
+    deduped.sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
+    return deduped;
+  }
+
+  static Wes2ExerciseRow _normalizeSetCount(Wes2ExerciseRow row) {
+    if (row.setCount > 0) return row;
+    final fallback = row.source == Wes2RowSource.completedServer ? 1 : 3;
+    return row.copyWith(
+      setCount: row.sets.isNotEmpty ? row.sets.length : fallback,
+    );
   }
 
   /// Called when any set field loses focus. Parses the raw text and fires a
@@ -875,6 +910,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   void _performUndo() {
     _controller.undo();
     _saveDraftNow();
+    // Restore BB3 planned-day structure from the recovered row set.
+    // ignore: discarded_futures
+    _syncBb3PlannedDayFromCurrentRowsSilently();
   }
 
   void _showUndoSnackBar(String label) {
@@ -1042,11 +1080,6 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   // ── Structural exercise actions (Phase 13) ────────────────────────────────
 
   Future<void> _onDeleteExercise(Wes2ExerciseRow row) async {
-    if (row.source == Wes2RowSource.bb3Planned) {
-      _showSnackBar(
-          'BB3 planned exercises cannot be removed here. Use the Block Builder.');
-      return;
-    }
     final hadActuals = row.hasAnyExecutionValue;
     final confirmed = await _showConfirmDialog(
       title: 'Delete Exercise',
@@ -1062,14 +1095,13 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       date: _controller.selectedDate,
       exerciseId: row.exerciseId,
     );
+    if (row.source == Wes2RowSource.bb3Planned) {
+      // ignore: discarded_futures
+      _syncBb3PlannedDayFromCurrentRowsSilently();
+    }
   }
 
   Future<void> _onReplaceExercise(Wes2ExerciseRow row) async {
-    if (row.source == Wes2RowSource.bb3Planned) {
-      _showSnackBar(
-          'BB3 planned exercises cannot be replaced here. Use the Block Builder.');
-      return;
-    }
     final excludedIds = _controller.rows
         .map((r) => r.exerciseId)
         .where((id) => id != row.exerciseId)
@@ -1098,14 +1130,13 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       newExerciseId: result.exerciseId,
       newName: result.name,
     );
+    if (row.source == Wes2RowSource.bb3Planned) {
+      // ignore: discarded_futures
+      _syncBb3PlannedDayFromCurrentRowsSilently();
+    }
   }
 
   Future<void> _onMoveExerciseToCircuit(Wes2ExerciseRow row) async {
-    if (row.source == Wes2RowSource.bb3Planned) {
-      _showSnackBar(
-          'BB3 planned exercises cannot be moved here. Use the Block Builder.');
-      return;
-    }
     final circuits =
         _controller.rows.map((r) => r.circuitIndex).toSet().toList()..sort();
     final available = circuits.where((ci) => ci != row.circuitIndex).toList();
@@ -1125,6 +1156,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       exerciseId: row.exerciseId,
       targetCircuitIndex: targetCi,
     );
+    if (row.source == Wes2RowSource.bb3Planned) {
+      // ignore: discarded_futures
+      _syncBb3PlannedDayFromCurrentRowsSilently();
+    }
   }
 
   // ── Silent Firestore wrappers (Phase 13) ──────────────────────────────────
@@ -1488,15 +1523,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     }
     if (!mounted) return;
 
-    // Deduplicate defensively within the template rows.
-    final seen = <String>{};
-    final deduped = <Wes2ExerciseRow>[];
-    for (final row in templateRows) {
-      if (seen.add(row.exerciseId)) deduped.add(row);
-    }
+    // Deduplicate and normalize template rows before loading.
+    final hardened = _hardened(templateRows);
     final reindexed = List.generate(
-      deduped.length,
-      (i) => deduped[i].copyWith(orderIndex: i),
+      hardened.length,
+      (i) => hardened[i].copyWith(orderIndex: i),
     );
 
     final hadAnyRows = _controller.rows.isNotEmpty;
@@ -1548,6 +1579,33 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       );
     } catch (_) {
       // Silent failure; local draft preserves the template rows.
+    }
+  }
+
+  // ── BB3 planned-day sync (Phase 20) ──────────────────────────────────────
+
+  /// Syncs the current BB3-sourced rows back to the active BB3 planned-day
+  /// path. Called after structural edits on BB3-sourced rows and after undo.
+  /// Scoped strictly to the current blockId / weekIndex / dayIndex.
+  Future<void> _syncBb3PlannedDayFromCurrentRowsSilently() async {
+    final blockId = _controller.activeBlockId;
+    final blockStart = _controller.blockStartDate;
+    if (blockId == null || blockId.isEmpty || blockStart == null) return;
+    if (_isBeforeBlockStart(_controller.selectedDate, blockStart)) return;
+    final wd = _weekDayFromDate(blockStart, _controller.selectedDate);
+    final bb3Rows = _controller.rows
+        .where((r) => r.source == Wes2RowSource.bb3Planned)
+        .toList();
+    try {
+      await _planService.updatePlannedDay(
+        uid: _controller.actingUid,
+        blockId: blockId,
+        weekIndex: wd.weekIndex,
+        dayIndex: wd.dayIndex,
+        updatedRows: bb3Rows,
+      );
+    } catch (_) {
+      // Silent failure; local draft preserves structural state.
     }
   }
 

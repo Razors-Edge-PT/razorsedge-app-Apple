@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'WES2_models.dart';
+import 'local_cache/block_plan_cache.dart';
 
 // Abstract interface — unchanged from Phase 1.
 abstract class Wes2PlanService {
@@ -206,19 +207,55 @@ class FirestoreWes2PlanService implements Wes2PlanService {
         .collection('days')
         .doc('day_$dayIndex');
 
-    final exercises = updatedRows
-        .map((r) => <String, dynamic>{
-              'exerciseId': r.exerciseId,
-              'name': r.name,
-              'circuitIndex': r.circuitIndex,
-              'orderIndex': r.orderIndex,
-            })
-        .toList();
+    final exercises = updatedRows.map(_buildPlannedRowMap).toList();
 
     await dayRef.set(
       {'exercises': exercises},
       SetOptions(merge: true),
     );
+
+    // Mirror to BB3 Isar cache so BB3 doesn't rehydrate stale planned rows.
+    try {
+      await BlockPlanCache.putDay(
+        uid: uid,
+        blockId: blockId,
+        weekIndex: weekIndex,
+        dayIndex: dayIndex,
+        exercises: exercises,
+      );
+    } catch (_) {
+      // Cache miss is recoverable; Firestore is source of truth.
+    }
+  }
+
+  static Map<String, dynamic> _buildPlannedRowMap(Wes2ExerciseRow row) {
+    final sets = List<Map<String, dynamic>>.generate(row.setCount, (i) {
+      final s = i < row.sets.length ? row.sets[i] : Wes2SetState(setIndex: i);
+      return _buildPlannedSetMap(s);
+    });
+    return {
+      'exerciseId': row.exerciseId,
+      'name': row.name,
+      'circuitIndex': row.circuitIndex,
+      'orderIndex': row.orderIndex,
+      'sets': sets,
+    };
+  }
+
+  static Map<String, dynamic> _buildPlannedSetMap(Wes2SetState s) {
+    final map = <String, dynamic>{};
+    final w = s.weight.hintValue;
+    final r = s.reps.hintValue;
+    final rir = s.rir.hintValue;
+    final v = s.velocity.hintValue;
+    if (w != null) map['weight'] = w;
+    if (r != null) map['reps'] = r;
+    if (rir != null) map['rir'] = rir;
+    if (v != null) map['velocity'] = v;
+    if (s.planNote != null && s.planNote!.isNotEmpty) {
+      map['note'] = s.planNote;
+    }
+    return map;
   }
 
   @override
