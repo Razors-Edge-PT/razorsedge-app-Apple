@@ -343,11 +343,10 @@ class Wes2HintServiceImpl implements Wes2HintService {
   }
 
   /// True only when a BB3 hint explicitly provides a non-null value for this field.
-  /// Fields with origin=bb3Hint but hintValue=null arise when BB3 planned the
-  /// exercise but left this particular field blank.  They are not locked — model
-  /// hints may still fill them.
+  /// Uses [hintOrigin] (not [origin]) so the lock survives actual save/clear cycles —
+  /// [origin] reflects how the actual was set, not where the hint came from.
   static bool _isBb3Locked<T extends Object>(Wes2FieldState<T> f) =>
-      f.origin == FieldOrigin.bb3Hint && f.hintValue != null;
+      f.hintOrigin == FieldOrigin.bb3Hint && f.hintValue != null;
 
   /// Merges a model-derived [hint] into a double field.
   /// Explicit BB3 hint (non-null hintValue): unchanged.
@@ -380,13 +379,13 @@ class Wes2HintServiceImpl implements Wes2HintService {
 
   static double? _constraintWeight(Wes2SetState s) =>
       s.weight.actualValue ??
-      (s.weight.origin == FieldOrigin.bb3Hint ? s.weight.hintValue : null);
+      (s.weight.hintOrigin == FieldOrigin.bb3Hint ? s.weight.hintValue : null);
 
   static int? _constraintReps(Wes2SetState s) =>
       s.reps.actualValue ??
-      (s.reps.origin == FieldOrigin.bb3Hint ? s.reps.hintValue : null);
+      (s.reps.hintOrigin == FieldOrigin.bb3Hint ? s.reps.hintValue : null);
 
   static double? _constraintRir(Wes2SetState s) =>
       s.rir.actualValue ??
-      (s.rir.origin == FieldOrigin.bb3Hint ? s.rir.hintValue : null);
+      (s.rir.hintOrigin == FieldOrigin.bb3Hint ? s.rir.hintValue : null);
 }

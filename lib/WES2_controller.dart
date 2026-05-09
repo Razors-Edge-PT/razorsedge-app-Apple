@@ -114,9 +114,9 @@ class Wes2SessionController extends ChangeNotifier {
           i < current.sets.length ? current.sets[i] : Wes2SetState(setIndex: i);
       final hs = i < hintedRow.sets.length ? hintedRow.sets[i] : null;
       if (hs == null) return cs;
-      final nw = cs.weight.withHint(hs.weight.hintValue, hs.weight.origin);
-      final nr = cs.reps.withHint(hs.reps.hintValue, hs.reps.origin);
-      final nrir = cs.rir.withHint(hs.rir.hintValue, hs.rir.origin);
+      final nw = cs.weight.withHint(hs.weight.hintValue, hs.weight.hintOrigin);
+      final nr = cs.reps.withHint(hs.reps.hintValue, hs.reps.hintOrigin);
+      final nrir = cs.rir.withHint(hs.rir.hintValue, hs.rir.hintOrigin);
       if (nw == cs.weight && nr == cs.reps && nrir == cs.rir) return cs;
       changed = true;
       return cs.copyWith(weight: nw, reps: nr, rir: nrir);
@@ -276,34 +276,40 @@ class Wes2SessionController extends ChangeNotifier {
         weight: Wes2FieldState<double>(
           actualValue: cs.weight.actualValue,
           hintValue: bs.weight.hintValue,
+          hintOrigin: bs.weight.hintOrigin,
           origin: cs.weight.actualValue != null
               ? FieldOrigin.typed
-              : bs.weight.origin,
+              : bs.weight.hintOrigin,
           dirty: cs.weight.dirty,
           lastEditedAt: cs.weight.lastEditedAt,
         ),
         reps: Wes2FieldState<int>(
           actualValue: cs.reps.actualValue,
           hintValue: bs.reps.hintValue,
-          origin:
-              cs.reps.actualValue != null ? FieldOrigin.typed : bs.reps.origin,
+          hintOrigin: bs.reps.hintOrigin,
+          origin: cs.reps.actualValue != null
+              ? FieldOrigin.typed
+              : bs.reps.hintOrigin,
           dirty: cs.reps.dirty,
           lastEditedAt: cs.reps.lastEditedAt,
         ),
         rir: Wes2FieldState<double>(
           actualValue: cs.rir.actualValue,
           hintValue: bs.rir.hintValue,
-          origin:
-              cs.rir.actualValue != null ? FieldOrigin.typed : bs.rir.origin,
+          hintOrigin: bs.rir.hintOrigin,
+          origin: cs.rir.actualValue != null
+              ? FieldOrigin.typed
+              : bs.rir.hintOrigin,
           dirty: cs.rir.dirty,
           lastEditedAt: cs.rir.lastEditedAt,
         ),
         velocity: Wes2FieldState<double>(
           actualValue: cs.velocity.actualValue,
           hintValue: bs.velocity.hintValue,
+          hintOrigin: bs.velocity.hintOrigin,
           origin: cs.velocity.actualValue != null
               ? FieldOrigin.typed
-              : bs.velocity.origin,
+              : bs.velocity.hintOrigin,
           dirty: cs.velocity.dirty,
           lastEditedAt: cs.velocity.lastEditedAt,
         ),
@@ -330,9 +336,9 @@ class Wes2SessionController extends ChangeNotifier {
       final hs = i < hintedRow.sets.length ? hintedRow.sets[i] : null;
       if (hs == null) return cs;
       return cs.copyWith(
-        weight: cs.weight.withHint(hs.weight.hintValue, hs.weight.origin),
-        reps: cs.reps.withHint(hs.reps.hintValue, hs.reps.origin),
-        rir: cs.rir.withHint(hs.rir.hintValue, hs.rir.origin),
+        weight: cs.weight.withHint(hs.weight.hintValue, hs.weight.hintOrigin),
+        reps: cs.reps.withHint(hs.reps.hintValue, hs.reps.hintOrigin),
+        rir: cs.rir.withHint(hs.rir.hintValue, hs.rir.hintOrigin),
       );
     });
     final newRows = List<Wes2ExerciseRow>.from(_rows);

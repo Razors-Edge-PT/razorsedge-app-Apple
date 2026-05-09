@@ -26,6 +26,11 @@ class Wes2FieldState<T> {
   final T? actualValue;
   final T? hintValue;
   final FieldOrigin origin;
+  /// Tracks the provenance of [hintValue] independently of [origin].
+  /// [origin] encodes how the actual/current display value was set;
+  /// [hintOrigin] encodes where the hint came from (bb3Hint, modelHint, empty).
+  /// Preserved across actual save/clear cycles so BB3 constraints are never lost.
+  final FieldOrigin hintOrigin;
   final bool dirty;
   final DateTime? lastEditedAt;
 
@@ -33,6 +38,7 @@ class Wes2FieldState<T> {
     this.actualValue,
     this.hintValue,
     this.origin = FieldOrigin.empty,
+    this.hintOrigin = FieldOrigin.empty,
     this.dirty = false,
     this.lastEditedAt,
   });
@@ -43,18 +49,22 @@ class Wes2FieldState<T> {
   Wes2FieldState<T> withActual(T? value) => Wes2FieldState<T>(
         actualValue: value,
         hintValue: hintValue,
+        hintOrigin: hintOrigin,
         origin: value != null
             ? FieldOrigin.typed
-            : (hintValue != null ? FieldOrigin.bb3Hint : FieldOrigin.empty),
+            : (hintOrigin != FieldOrigin.empty ? hintOrigin : FieldOrigin.empty),
         dirty: true,
         lastEditedAt: DateTime.now(),
       );
 
-  Wes2FieldState<T> withHint(T? value, FieldOrigin hintOrigin) =>
+  Wes2FieldState<T> withHint(T? value, FieldOrigin newHintOrigin) =>
       Wes2FieldState<T>(
         actualValue: actualValue,
         hintValue: value,
-        origin: hasActual ? origin : hintOrigin,
+        hintOrigin: value != null ? newHintOrigin : FieldOrigin.empty,
+        origin: hasActual
+            ? origin
+            : (value != null ? newHintOrigin : FieldOrigin.empty),
         dirty: dirty,
         lastEditedAt: lastEditedAt,
       );
