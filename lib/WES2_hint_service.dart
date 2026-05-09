@@ -24,7 +24,7 @@ abstract class Wes2HintService {
 }
 
 /// Phase 21B/21C implementation: computes Set 1 model hints only.
-/// Set 2+ is a no-op; BB3 hints are never overwritten.
+/// Set 2+ is a no-op; explicit BB3 hint values are never overwritten.
 class Wes2HintServiceImpl implements Wes2HintService {
   final Map<String, dynamic> exerciseSettings;
   final DateTime blockStartDate;
@@ -59,8 +59,9 @@ class Wes2HintServiceImpl implements Wes2HintService {
       return i < row.sets.length ? row.sets[i] : Wes2SetState(setIndex: i);
     });
 
-    // Only compute hints for Set 1 (index 0) in Phase 21B.
-    final newSet0 = _computeSet1Hints(
+    // Only compute hints for Set 1 (index 0) in Phase 21B/21C.
+    final newSets = List<Wes2SetState>.from(padded);
+    newSets[0] = _computeSet1Hints(
       row: row,
       set: padded[0],
       weekIndex: weekIndex,
@@ -68,11 +69,6 @@ class Wes2HintServiceImpl implements Wes2HintService {
       date: date,
       uid: uid,
     );
-
-    if (newSet0 == null && padded.length == row.sets.length) return row;
-
-    final newSets = List<Wes2SetState>.from(padded);
-    if (newSet0 != null) newSets[0] = newSet0;
     return row.copyWith(sets: newSets, setCount: effectiveCount);
   }
 
@@ -84,21 +80,26 @@ class Wes2HintServiceImpl implements Wes2HintService {
     required DateTime date,
   }) {
     return rows
-        .map((r) => computeRowHints(
-              row: r,
-              blockId: blockId,
-              uid: uid,
-              date: date,
-            ))
+        .map((r) => computeRowHints(row: r, blockId: blockId, uid: uid, date: date))
         .toList();
   }
 
   // ── Private helpers ────────────────────────────────────────────────────────
 
-  /// Returns a replacement for [set] (setIndex 0) with model hints applied,
-  /// or null when no model hint could be derived.
-  /// BB3 hints already on any field are preserved.
-  Wes2SetState? _computeSet1Hints({
+  /// Computes Set 1 hints with full priority chain:
+  ///   1. Resolve actual/BB3 constraints for each field.
+  ///   2. Try BB3HintService (history path) — solves sibling hints around
+  ///      constraints while preserving the day's progression target E1RM.
+  ///   3. Closest-E1RM candidate selection when weight was re-derived under a
+  ///      reps or RIR constraint (prevents nearest-increment bias).
+  ///   4. Fill any fields still missing after step 2/3 from plan/default values.
+  ///
+  /// BB3 fields with an explicit non-null hintValue are treated as constraints.
+  /// BB3 fields with origin=bb3Hint but hintValue=null (BB3 had no planned value)
+  /// are NOT locked — model hints may still fill them.
+  ///
+  /// Always returns a set; never returns null.
+  Wes2SetState _computeSet1Hints({
     required Wes2ExerciseRow row,
     required Wes2SetState set,
     required int weekIndex,
@@ -108,61 +109,18 @@ class Wes2HintServiceImpl implements Wes2HintService {
   }) {
     final exSettings = exerciseSettings[row.exerciseId] as Map<String, dynamic>?;
 
-    // No-history path: savedWorkoutsList.isEmpty → use default weight + plan RIR/reps.
-    if (PeriodizationModelUtils.savedWorkoutsList.isEmpty) {
-      return _applyNoHistoryHints(
-        row: row,
-        set: set,
-        exSettings: exSettings,
-        weekIndex: weekIndex,
-        sessionIndex: sessionIndex,
-      );
-    }
+    // Per-field constraints: user actual > BB3 explicit hint (non-null) > null.
+    final constrainedWeight = _constraintWeight(set);
+    final constrainedReps   = _constraintReps(set);
+    final constrainedRir    = _constraintRir(set);
 
-    // History path: delegate to BB3HintService with BB3/actual constraints so
-    // sibling hints are solved around the same progression target E1RM.
-    final hint = BB3HintService.getHintsForSet(
-      exerciseId: row.exerciseId,
-      exerciseName: row.name,
-      fullExerciseSettings: exerciseSettings,
-      weekIndex: weekIndex,
-      sessionIndex: sessionIndex,
-      setIndex: 0,
-      blockStartDate: blockStartDate,
-      blockEndDate: blockEndDate,
-      selectedDate: date,
-      uid: uid,
-      userWeight: _constraintWeight(set),
-      userReps: _constraintReps(set),
-      userRir: _constraintRir(set),
-    );
-
-    if (hint.isEmpty) return null;
-
-    return _applyHintStrings(
-      set: set,
-      weightStr: hint.weightDisplay,
-      repsStr: hint.repsDisplay,
-      rirStr: hint.rirDisplay,
-    );
-  }
-
-  /// No-history fallback: use getSuggestedWeightFromRep for weight, plan for
-  /// reps/RIR. Avoids the rir=17.9 sentinel that BB3HintService would produce.
-  Wes2SetState _applyNoHistoryHints({
-    required Wes2ExerciseRow row,
-    required Wes2SetState set,
-    required Map<String, dynamic>? exSettings,
-    required int weekIndex,
-    required int sessionIndex,
-  }) {
-    final repTarget = BB3PlannedExerciseService.getRepTargetForSet(
+    // Plan-level values used as fallback when neither BB3 nor model fills a field.
+    final planReps = BB3PlannedExerciseService.getRepTargetForSet(
       exSettings: exSettings,
       weekIndex: weekIndex,
       sessionIndex: sessionIndex,
       setIndex: 0,
     );
-
     final planRir = BB3PlannedExerciseService.getRirFromPlan(
       exSettings: exSettings,
       weekIndex: weekIndex,
@@ -170,41 +128,116 @@ class Wes2HintServiceImpl implements Wes2HintService {
       setNumber: 1,
     );
 
-    final defaultWeight = PeriodizationModelUtils.getSuggestedWeightFromRep(
-      row.name,
-      repTarget,
-      planRir > 0 ? planRir : 2.0,
-    );
+    // Effective reps/RIR used to compute a default weight hint.
+    // Constraint wins over plan, plan wins over hard fallback.
+    final repsForWeight = constrainedReps ?? (planReps > 0 ? planReps : 8);
+    final rirForWeight  = constrainedRir  ?? (planRir  > 0 ? planRir  : 2.0);
 
-    return _applyModelHintToSet(
-      existing: set,
-      weightHint: defaultWeight > 0 ? defaultWeight : null,
-      repsHint: repTarget > 0 ? repTarget : null,
-      rirHint: planRir > 0 ? planRir : null,
-    );
-  }
-
-  /// Parses BB3HintService display strings into numeric hints and applies them.
-  Wes2SetState _applyHintStrings({
-    required Wes2SetState set,
-    required String weightStr,
-    required String repsStr,
-    required String rirStr,
-  }) {
     double? weightHint;
-    int? repsHint;
+    int?    repsHint;
     double? rirHint;
 
-    if (weightStr.isNotEmpty) {
-      // Weight display may be a range like "95–100"; take the lower bound.
-      final clean = weightStr.split('–').first.split('-').first.trim();
-      weightHint = double.tryParse(clean);
+    // ── History path ──────────────────────────────────────────────────────────
+    // BB3HintService wraps ProgressionEngine and solves all three fields around
+    // the provided constraints, preserving the day's target E1RM.
+    // When hint.isEmpty (engine failed), fall through to plan-based defaults.
+    if (PeriodizationModelUtils.savedWorkoutsList.isNotEmpty) {
+      final hint = BB3HintService.getHintsForSet(
+        exerciseId: row.exerciseId,
+        exerciseName: row.name,
+        fullExerciseSettings: exerciseSettings,
+        weekIndex: weekIndex,
+        sessionIndex: sessionIndex,
+        setIndex: 0,
+        blockStartDate: blockStartDate,
+        blockEndDate: blockEndDate,
+        selectedDate: date,
+        uid: uid,
+        userWeight: constrainedWeight,
+        userReps:   constrainedReps,
+        userRir:    constrainedRir,
+      );
+
+      bool weightFromHistory = false;
+      if (!hint.isEmpty) {
+        if (hint.weightDisplay.isNotEmpty) {
+          // Weight display may be a range like "95–100"; take the lower bound.
+          final clean = hint.weightDisplay.split('–').first.split('-').first.trim();
+          final parsed = double.tryParse(clean);
+          if (parsed != null) {
+            weightHint = parsed;
+            weightFromHistory = true;
+          }
+        }
+        if (hint.repsDisplay.isNotEmpty) {
+          repsHint = int.tryParse(hint.repsDisplay);
+        }
+        if (hint.rirDisplay.isNotEmpty) {
+          rirHint = double.tryParse(hint.rirDisplay);
+        }
+      }
+      // hint.isEmpty means BB3HintService could not compute; fall through below.
+
+      // ── Closest-E1RM weight candidate selection ───────────────────────────
+      // When weight was re-derived under a reps or RIR constraint,
+      // rounding to the nearest increment (by weight distance) does not
+      // guarantee the resulting E1RM is closest to the day's progression target.
+      // Get the unconstrained target E1RM, then generate floor/nearest/ceiling
+      // candidates and pick the one whose E1RM is closest to the target.
+      if (weightFromHistory && (constrainedReps != null || constrainedRir != null)) {
+        final targetE1rm = _getTargetE1rm(
+          row: row,
+          weekIndex: weekIndex,
+          sessionIndex: sessionIndex,
+          date: date,
+          uid: uid,
+        );
+        if (targetE1rm != null) {
+          final rawWeight = PeriodizationModelUtils.reverseCalculateWeight(
+            targetE1RM: targetE1rm,
+            reps: repsForWeight,
+            rir: rirForWeight,
+          );
+          final best = _closestE1rmWeight(
+            targetE1rm: targetE1rm,
+            rawWeight: rawWeight,
+            reps: repsForWeight,
+            rir: rirForWeight,
+            exerciseName: row.name,
+          );
+          if (best != null) weightHint = best;
+        }
+      }
     }
-    if (repsStr.isNotEmpty) {
-      repsHint = int.tryParse(repsStr);
+
+    // ── Plan/default fallback ─────────────────────────────────────────────────
+    // Fill any field that was not resolved by BB3HintService and is not locked
+    // by an explicit BB3 hint value.  Fields with origin=bb3Hint but
+    // hintValue=null are not locked — BB3 had no planned value for them.
+
+    if (weightHint == null &&
+        set.weight.actualValue == null &&
+        !_isBb3Locked(set.weight)) {
+      final defW = PeriodizationModelUtils.getSuggestedWeightFromRep(
+        row.name,
+        repsForWeight,
+        rirForWeight,
+      );
+      if (defW > 0) weightHint = defW;
     }
-    if (rirStr.isNotEmpty) {
-      rirHint = double.tryParse(rirStr);
+
+    if (repsHint == null &&
+        set.reps.actualValue == null &&
+        !_isBb3Locked(set.reps) &&
+        planReps > 0) {
+      repsHint = planReps;
+    }
+
+    if (rirHint == null &&
+        set.rir.actualValue == null &&
+        !_isBb3Locked(set.rir) &&
+        planRir > 0) {
+      rirHint = planRir;
     }
 
     return _applyModelHintToSet(
@@ -215,9 +248,87 @@ class Wes2HintServiceImpl implements Wes2HintService {
     );
   }
 
+  /// Gets the unconstrained progression target E1RM for the day.
+  /// Calls BB3HintService with no user overrides to obtain the baseline hints,
+  /// then derives E1RM from them.  Returns null when history is absent or the
+  /// engine cannot produce a valid result.
+  double? _getTargetE1rm({
+    required Wes2ExerciseRow row,
+    required int weekIndex,
+    required int sessionIndex,
+    required DateTime date,
+    required String uid,
+  }) {
+    if (PeriodizationModelUtils.savedWorkoutsList.isEmpty) return null;
+    final baseline = BB3HintService.getHintsForSet(
+      exerciseId: row.exerciseId,
+      exerciseName: row.name,
+      fullExerciseSettings: exerciseSettings,
+      weekIndex: weekIndex,
+      sessionIndex: sessionIndex,
+      setIndex: 0,
+      blockStartDate: blockStartDate,
+      blockEndDate: blockEndDate,
+      selectedDate: date,
+      uid: uid,
+      // No constraints — pure baseline to extract the day's target E1RM.
+    );
+    if (baseline.isEmpty) return null;
+    final cleanW = baseline.weightDisplay.split('–').first.split('-').first.trim();
+    final w = double.tryParse(cleanW);
+    final r = double.tryParse(baseline.repsDisplay);
+    final rir = double.tryParse(baseline.rirDisplay) ?? 0.0;
+    if (w == null || r == null || w <= 0 || r <= 0) return null;
+    return PeriodizationModelUtils.calculateE1RM(w, r, rir);
+  }
+
+  /// Picks the valid-increment weight whose E1RM is closest to [targetE1rm].
+  /// Evaluates the nearest rounded increment plus one step below and one above,
+  /// returning the candidate with the smallest absolute E1RM difference.
+  static double? _closestE1rmWeight({
+    required double targetE1rm,
+    required double rawWeight,
+    required int reps,
+    required double rir,
+    required String exerciseName,
+  }) {
+    if (targetE1rm <= 0 || rawWeight <= 0) return null;
+
+    final nearest = PeriodizationModelUtils.roundToNearestValidIncrement(
+      targetWeight: rawWeight,
+      exerciseName: exerciseName,
+    );
+
+    // Find the step size by rounding the next value just above nearest.
+    final nextUp = PeriodizationModelUtils.roundToNearestValidIncrement(
+      targetWeight: nearest + 0.01,
+      exerciseName: exerciseName,
+    );
+    final step = nextUp - nearest;
+    if (step <= 0) return nearest;
+
+    final candidates = <double>[
+      if (nearest - step > 0) nearest - step,
+      nearest,
+      nearest + step,
+    ];
+
+    double bestW = nearest;
+    double bestDiff = double.infinity;
+    for (final w in candidates) {
+      final e1rm = PeriodizationModelUtils.calculateE1RM(w, reps.toDouble(), rir);
+      final diff = (e1rm - targetE1rm).abs();
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestW = w;
+      }
+    }
+    return bestW;
+  }
+
   /// Applies model hints to a single set.
-  /// Priority: BB3 hint > model hint > empty.
-  /// Stale model hints are cleared when the recompute returns no hint.
+  /// Priority: explicit BB3 hint (non-null hintValue) > model hint > empty.
+  /// Stale model hints are cleared when recompute returns no hint.
   static Wes2SetState _applyModelHintToSet({
     required Wes2SetState existing,
     required double? weightHint,
@@ -231,12 +342,19 @@ class Wes2HintServiceImpl implements Wes2HintService {
     );
   }
 
+  /// True only when a BB3 hint explicitly provides a non-null value for this field.
+  /// Fields with origin=bb3Hint but hintValue=null arise when BB3 planned the
+  /// exercise but left this particular field blank.  They are not locked — model
+  /// hints may still fill them.
+  static bool _isBb3Locked<T extends Object>(Wes2FieldState<T> f) =>
+      f.origin == FieldOrigin.bb3Hint && f.hintValue != null;
+
   /// Merges a model-derived [hint] into a double field.
-  /// BB3 hint: unchanged. New hint: apply as modelHint.
-  /// Null hint on a stale modelHint field: clear to empty.
+  /// Explicit BB3 hint (non-null hintValue): unchanged.
+  /// New hint: apply as modelHint. Stale modelHint with null recompute: clear.
   static Wes2FieldState<double> _mergeDouble(
       Wes2FieldState<double> field, double? hint) {
-    if (field.origin == FieldOrigin.bb3Hint) return field;
+    if (_isBb3Locked(field)) return field;
     if (hint != null) return field.withHint(hint, FieldOrigin.modelHint);
     if (field.origin == FieldOrigin.modelHint) {
       return field.withHint(null, FieldOrigin.empty);
@@ -247,7 +365,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
   /// Merges a model-derived [hint] into an int field.
   static Wes2FieldState<int> _mergeInt(
       Wes2FieldState<int> field, int? hint) {
-    if (field.origin == FieldOrigin.bb3Hint) return field;
+    if (_isBb3Locked(field)) return field;
     if (hint != null && hint > 0) return field.withHint(hint, FieldOrigin.modelHint);
     if (field.origin == FieldOrigin.modelHint) {
       return field.withHint(null, FieldOrigin.empty);
@@ -256,7 +374,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
   }
 
   // ── Constraint helpers ─────────────────────────────────────────────────────
-  // Priority: user actual > BB3 explicit hint > null (no constraint).
+  // Priority: user actual > BB3 explicit hint (non-null hintValue) > null.
   // These are passed to BB3HintService so sibling fields are solved around the
   // same progression target E1RM with the constrained fields held fixed.
 

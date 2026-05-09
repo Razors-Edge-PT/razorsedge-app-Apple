@@ -22,6 +22,10 @@ class Wes2SessionController extends ChangeNotifier {
   Map<String, dynamic> _exerciseSettings = const {};
   Wes2HintService? _hintService;
   String? _hintBlockId;
+  // Per-exercise snapshot of rows immediately after initial hint application.
+  // Same-set recalculation rebuilds from this baseline so clearing actuals
+  // always restores the original loaded hints.
+  Map<String, Wes2ExerciseRow> _baselineHintRows = {};
   int _loadEpoch = 0;
   String? _loadErrorMessage;
   final List<({String exerciseId, String name})> _pendingExerciseAdds = [];
@@ -88,6 +92,13 @@ class Wes2SessionController extends ChangeNotifier {
     _hintBlockId = blockId;
   }
 
+  /// Snapshot the current rows as the hint baseline.
+  /// Called once after all initial applyModelHints() calls complete so that
+  /// same-set recalculation can restore original hints when actuals are cleared.
+  void captureBaselineHintRows() {
+    _baselineHintRows = {for (final r in _rows) r.exerciseId: r};
+  }
+
   /// Apply model hints from a pre-computed hinted row onto the current row state.
   /// Uses the CURRENT row (not a snapshot) to avoid overwriting actuals typed
   /// between hint computation and application.
@@ -135,6 +146,7 @@ class Wes2SessionController extends ChangeNotifier {
   void setRows(List<Wes2ExerciseRow> rows, int epoch) {
     if (epoch != _loadEpoch) return;
     _rows = rows;
+    _baselineHintRows = {};
     _loadState = rows.isEmpty ? Wes2LoadState.empty : Wes2LoadState.loaded;
     _loadErrorMessage = null;
     _originHadBb3Rows = rows.any((r) => r.source == Wes2RowSource.bb3Planned);
@@ -162,6 +174,7 @@ class Wes2SessionController extends ChangeNotifier {
     _pendingExerciseAdds.clear();
     _flushedExercises.clear();
     _readPlanNotes.clear();
+    _baselineHintRows = {};
     _loadEpoch++;
     _loadState = Wes2LoadState.idle;
     _loadErrorMessage = null;
@@ -218,15 +231,22 @@ class Wes2SessionController extends ChangeNotifier {
 
   /// Recomputes hints for row at [rowIdx] using the registered hint service
   /// and merges the results into [_rows]. No-op when no service is registered.
+  ///
+  /// Builds the recalculation input from the baseline hint row overlaid with
+  /// the current actual values so clearing actuals always restores original hints.
   void _applyHintsForRow(int rowIdx) {
     final svc = _hintService;
     final blockId = _hintBlockId;
     if (svc == null || blockId == null) return;
     final current = _rows[rowIdx];
+    final baseline = _baselineHintRows[current.exerciseId];
+    final rowForRecalc = baseline != null
+        ? _rowWithCurrentActualsOverBaseline(current, baseline)
+        : current;
     Wes2ExerciseRow hinted;
     try {
       hinted = svc.computeRowHints(
-        row: current,
+        row: rowForRecalc,
         blockId: blockId,
         uid: _actingUid,
         date: _selectedDate,
@@ -235,6 +255,68 @@ class Wes2SessionController extends ChangeNotifier {
       return; // hint failure is non-fatal; typed values are unaffected
     }
     _mergeHintsIntoRow(rowIdx, hinted);
+  }
+
+  /// Builds a row that combines [baseline] hint values/origins with
+  /// [current] actual values. Direct field construction avoids the
+  /// withActual(null) origin mis-labeling that would treat stale model hints
+  /// as BB3 constraints on subsequent recalculation.
+  static Wes2ExerciseRow _rowWithCurrentActualsOverBaseline(
+      Wes2ExerciseRow current, Wes2ExerciseRow baseline) {
+    final count = current.setCount > baseline.setCount
+        ? current.setCount
+        : baseline.setCount;
+    final newSets = List<Wes2SetState>.generate(count, (i) {
+      final cs =
+          i < current.sets.length ? current.sets[i] : Wes2SetState(setIndex: i);
+      final bs =
+          i < baseline.sets.length ? baseline.sets[i] : Wes2SetState(setIndex: i);
+      return Wes2SetState(
+        setIndex: i,
+        weight: Wes2FieldState<double>(
+          actualValue: cs.weight.actualValue,
+          hintValue: bs.weight.hintValue,
+          origin: cs.weight.actualValue != null
+              ? FieldOrigin.typed
+              : bs.weight.origin,
+          dirty: cs.weight.dirty,
+          lastEditedAt: cs.weight.lastEditedAt,
+        ),
+        reps: Wes2FieldState<int>(
+          actualValue: cs.reps.actualValue,
+          hintValue: bs.reps.hintValue,
+          origin:
+              cs.reps.actualValue != null ? FieldOrigin.typed : bs.reps.origin,
+          dirty: cs.reps.dirty,
+          lastEditedAt: cs.reps.lastEditedAt,
+        ),
+        rir: Wes2FieldState<double>(
+          actualValue: cs.rir.actualValue,
+          hintValue: bs.rir.hintValue,
+          origin:
+              cs.rir.actualValue != null ? FieldOrigin.typed : bs.rir.origin,
+          dirty: cs.rir.dirty,
+          lastEditedAt: cs.rir.lastEditedAt,
+        ),
+        velocity: Wes2FieldState<double>(
+          actualValue: cs.velocity.actualValue,
+          hintValue: bs.velocity.hintValue,
+          origin: cs.velocity.actualValue != null
+              ? FieldOrigin.typed
+              : bs.velocity.origin,
+          dirty: cs.velocity.dirty,
+          lastEditedAt: cs.velocity.lastEditedAt,
+        ),
+        executionNote: cs.executionNote,
+        planNote: bs.planNote ?? cs.planNote,
+      );
+    });
+    return baseline.copyWith(
+      sets: newSets,
+      setCount: count,
+      isMarkedDone: current.isMarkedDone,
+      isExpanded: current.isExpanded,
+    );
   }
 
   /// Merges hintValues from [hintedRow] into the row at [rowIdx].
@@ -460,6 +542,7 @@ class Wes2SessionController extends ChangeNotifier {
     if (idx == -1) return;
     _pushUndo();
     _rows = List<Wes2ExerciseRow>.from(_rows)..removeAt(idx);
+    _baselineHintRows.remove(exerciseId);
     if (_rows.isEmpty) _loadState = Wes2LoadState.empty;
     notifyListeners();
   }
@@ -479,6 +562,7 @@ class Wes2SessionController extends ChangeNotifier {
       return;
     }
     _pushUndo();
+    _baselineHintRows.remove(oldExerciseId);
     final old = _rows[idx];
     final newRow = Wes2ExerciseRow(
       exerciseId: newExerciseId,
@@ -577,6 +661,7 @@ class Wes2SessionController extends ChangeNotifier {
   void replaceWithTemplateRows(List<Wes2ExerciseRow> templateRows) {
     _pushUndo();
     _rows = List<Wes2ExerciseRow>.from(templateRows);
+    _baselineHintRows = {};
     _templateWasLoaded = true;
     _loadState = _rows.isEmpty ? Wes2LoadState.empty : Wes2LoadState.loaded;
     notifyListeners();
@@ -587,6 +672,7 @@ class Wes2SessionController extends ChangeNotifier {
     if (_rows.isEmpty) return;
     _pushUndo();
     _rows = [];
+    _baselineHintRows = {};
     _loadState = Wes2LoadState.empty;
     _templateWasLoaded = false;
     _originHadBb3Rows = false;

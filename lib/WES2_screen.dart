@@ -285,6 +285,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         );
         _controller.applyModelHints(row.exerciseId, hinted);
       }
+      // Snapshot hinted rows as baseline so same-set recalc can restore
+      // original hints when the user clears all typed actuals.
+      if (mounted) _controller.captureBaselineHintRows();
     } catch (e) {
       debugPrint('[WES2] Hint computation failed: $e');
     }
