@@ -23,8 +23,9 @@ abstract class Wes2HintService {
   });
 }
 
-/// Phase 21B/21C implementation: computes Set 1 model hints only.
-/// Set 2+ is a no-op; explicit BB3 hint values are never overwritten.
+/// Phase 21D implementation: computes Set 1 model hints, then cascades
+/// Set 2+ hints from the immediately prior resolved set using WES drop-off
+/// group math.  Explicit BB3 hint values are never overwritten.
 class Wes2HintServiceImpl implements Wes2HintService {
   final Map<String, dynamic> exerciseSettings;
   final DateTime blockStartDate;
@@ -59,7 +60,6 @@ class Wes2HintServiceImpl implements Wes2HintService {
       return i < row.sets.length ? row.sets[i] : Wes2SetState(setIndex: i);
     });
 
-    // Only compute hints for Set 1 (index 0) in Phase 21B/21C.
     final newSets = List<Wes2SetState>.from(padded);
     newSets[0] = _computeSet1Hints(
       row: row,
@@ -69,6 +69,19 @@ class Wes2HintServiceImpl implements Wes2HintService {
       date: date,
       uid: uid,
     );
+
+    // Phase 21D: cascade Set 2+ hints from the immediately prior resolved set.
+    final exSettings = exerciseSettings[row.exerciseId] as Map<String, dynamic>?;
+    for (int i = 1; i < effectiveCount; i++) {
+      newSets[i] = _computeSetNHints(
+        row: row,
+        set: newSets[i],
+        prevSet: newSets[i - 1],
+        setIdx: i,
+        exSettings: exSettings,
+      );
+    }
+
     return row.copyWith(sets: newSets, setCount: effectiveCount);
   }
 
@@ -282,6 +295,104 @@ class Wes2HintServiceImpl implements Wes2HintService {
     return PeriodizationModelUtils.calculateE1RM(w, r, rir);
   }
 
+  /// Computes Set N (N ≥ 2, setIdx ≥ 1) hints using the WES drop-off cascade.
+  ///
+  /// Previous set resolved values drive the target E1RM:
+  ///   targetE1RM = clamp(prevE1RM − gatedDrop, 1.0, 9999.0)
+  ///
+  /// Fields with BB3 locks or actuals are left untouched via _mergeDouble/_mergeInt.
+  /// No RIR cascade is applied (Phase 21D scope).
+  Wes2SetState _computeSetNHints({
+    required Wes2ExerciseRow row,
+    required Wes2SetState set,
+    required Wes2SetState prevSet,
+    required int setIdx,
+    required Map<String, dynamic>? exSettings,
+  }) {
+    final prevWeight = prevSet.weight.actualValue ?? prevSet.weight.hintValue;
+    final prevReps   = prevSet.reps.actualValue   ?? prevSet.reps.hintValue;
+    if (prevWeight == null || prevReps == null) return set;
+
+    final prevRir   = prevSet.rir.actualValue ?? prevSet.rir.hintValue ?? 0.0;
+    final prevE1rm  = PeriodizationModelUtils.calculateE1RM(
+      prevWeight, prevReps.toDouble(), prevRir,
+    );
+    if (prevE1rm <= 0) return set;
+
+    final group      = _dropGroup(row.name, exSettings);
+    final rawDrop    = _rawDropFor(group, setIdx);
+    final drop       = _gatedDrop(rawDrop, prevRir);
+    final targetE1rm = (prevE1rm - drop).clamp(1.0, 9999.0);
+
+    final thisRir  = set.rir.actualValue  ?? set.rir.hintValue  ?? 0.0;
+    final cwt      = _constraintWeight(set);
+    final creps    = _constraintReps(set);
+
+    double? weightHint;
+    int?    repsHint;
+
+    if (cwt != null && creps != null) {
+      // Both locked — nothing to compute.
+    } else if (creps != null) {
+      // Reps locked → solve weight at locked reps.
+      final raw = PeriodizationModelUtils.reverseCalculateWeight(
+        targetE1RM: targetE1rm,
+        reps: creps,
+        rir: thisRir,
+      );
+      if (raw > 0) {
+        weightHint = PeriodizationModelUtils.roundToNearestValidIncrement(
+          targetWeight: raw,
+          exerciseName: row.name,
+        );
+      }
+    } else if (cwt != null) {
+      // Weight locked → solve reps from candidates.
+      final midD = PeriodizationModelUtils.reverseCalculateReps(
+        targetE1RM: targetE1rm,
+        weight: prevWeight,
+        baseWeight: prevWeight,
+        rir: thisRir,
+      ).clamp(1.0, 45.0);
+      repsHint = _closestRepsForWeight(
+        targetE1rm: targetE1rm,
+        weight: cwt,
+        center: midD.round().clamp(1, 45),
+        rir: thisRir,
+        group: group,
+      );
+    } else {
+      // Neither locked → compute both from center reps anchored at prevWeight.
+      final midD = PeriodizationModelUtils.reverseCalculateReps(
+        targetE1RM: targetE1rm,
+        weight: prevWeight,
+        baseWeight: prevWeight,
+        rir: thisRir,
+      ).clamp(1.0, 45.0);
+      final midRep = midD.round().clamp(1, 45);
+
+      final rawW = PeriodizationModelUtils.reverseCalculateWeight(
+        targetE1RM: targetE1rm,
+        reps: midRep,
+        rir: thisRir,
+      );
+      if (rawW > 0) {
+        weightHint = PeriodizationModelUtils.roundToNearestValidIncrement(
+          targetWeight: rawW,
+          exerciseName: row.name,
+        );
+      }
+      repsHint = midRep;
+    }
+
+    return _applyModelHintToSet(
+      existing: set,
+      weightHint: weightHint,
+      repsHint: repsHint,
+      rirHint: null,
+    );
+  }
+
   /// Picks the valid-increment weight whose E1RM is closest to [targetE1rm].
   /// Evaluates the nearest rounded increment plus one step below and one above,
   /// returning the candidate with the smallest absolute E1RM difference.
@@ -388,4 +499,119 @@ class Wes2HintServiceImpl implements Wes2HintService {
   static double? _constraintRir(Wes2SetState s) =>
       s.rir.actualValue ??
       (s.rir.hintOrigin == FieldOrigin.bb3Hint ? s.rir.hintValue : null);
+
+  // ── Drop-off helpers (Phase 21D) ──────────────────────────────────────────
+
+  /// WES drop-off group for an exercise.
+  /// Mirrors workout_entry_screen.dart _groupFor exactly:
+  /// named overrides first (A, B), then category from exerciseSettings, else C.
+  static String _dropGroup(String exerciseName, Map<String, dynamic>? exSettings) {
+    final n = exerciseName.trim().toLowerCase();
+    const groupA = {
+      'chin-up',
+      'bench press, barbell',
+      'bench press, narrow grip',
+      'bench press, larsen press',
+      'bench press, long pause',
+      'back squat, barbell',
+      'back squat, low bar',
+      'back squat, paused squat',
+      'back squat, pin squat',
+      'deadlift, conventional',
+      'deadlift, deficit',
+      'deadlift, sumo',
+      'deadlift, sumo, deficit',
+      'romanian deadlift',
+    };
+    if (groupA.contains(n)) return 'A';
+
+    const groupB = {
+      'overhead dumbbell press, unilateral',
+      'overhead barbell press',
+    };
+    if (groupB.contains(n)) return 'B';
+
+    final cat = (exSettings?['category'] as String?)?.toLowerCase().trim() ?? '';
+    const groupC = {
+      'horizontal press',
+      'horizontal pull',
+      'vertical press',
+      'vertical pull',
+      'squat pattern',
+      'hip hinge',
+    };
+    const groupD = {
+      'lateral raise',
+      'arm extension',
+      'arm curl',
+      'leg extension',
+      'leg curl',
+      'hip abduction/adduction',
+      'calf raise',
+      'core',
+    };
+    if (groupC.contains(cat)) return 'C';
+    if (groupD.contains(cat)) return 'D';
+    return 'C';
+  }
+
+  /// Raw E1RM drop (kg) per set by group.  setIdx is 0-based (1 = Set 2, 2 = Set 3).
+  static double _rawDropFor(String group, int setIdx) {
+    switch (group) {
+      case 'A':
+        return 5.5;
+      case 'B':
+        if (setIdx == 1) return 1.5;
+        if (setIdx == 2) return 4.3;
+        return 1.5;
+      case 'C':
+        return 1.0;
+      case 'D':
+        return 0.3;
+      default:
+        return 1.0;
+    }
+  }
+
+  /// Applies RIR gating: high-RIR previous set → reduced or zero drop.
+  static double _gatedDrop(double drop, double prevRir) {
+    if (prevRir > 2.0) return 0.0;
+    if (prevRir >= 1.8 && prevRir <= 2.0) return drop * 0.8;
+    return drop;
+  }
+
+  /// Picks the reps from {center−1, center, center+1} whose E1RM at [weight]
+  /// is closest to [targetE1rm], with WES tolerance rules (D: 0.3 kg, else 0.7 kg).
+  static int _closestRepsForWeight({
+    required double targetE1rm,
+    required double weight,
+    required int center,
+    required double rir,
+    required String group,
+  }) {
+    final tol = group == 'D' ? 0.3 : 0.7;
+    final candidates = <int>{
+      (center - 1).clamp(1, 45),
+      center,
+      (center + 1).clamp(1, 45),
+    }.toList()..sort();
+
+    int best = center;
+    double bestErr = double.infinity;
+    for (final r in candidates) {
+      final e   = PeriodizationModelUtils.calculateE1RM(weight, r.toDouble(), rir);
+      final err = (e - targetE1rm).abs();
+      final withinTolBest = bestErr <= tol + 1e-6;
+      final withinTolCur  = err   <= tol + 1e-6;
+      final take =
+          (withinTolCur && !withinTolBest) ||
+          (withinTolCur  && withinTolBest  && (err < bestErr - 1e-9 || ((err - bestErr).abs() <= 1e-9 && r < best))) ||
+          (!withinTolCur && !withinTolBest && (err < bestErr - 1e-9 || ((err - bestErr).abs() <= 1e-9 && r < best)));
+      if (take) {
+        bestErr = err;
+        best    = r;
+      }
+    }
+    return best;
+  }
 }
