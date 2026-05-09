@@ -23,7 +23,7 @@ abstract class Wes2HintService {
   });
 }
 
-/// Phase 21B implementation: computes Set 1 model hints only.
+/// Phase 21B/21C implementation: computes Set 1 model hints only.
 /// Set 2+ is a no-op; BB3 hints are never overwritten.
 class Wes2HintServiceImpl implements Wes2HintService {
   final Map<String, dynamic> exerciseSettings;
@@ -119,7 +119,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
       );
     }
 
-    // History path: delegate to BB3HintService for full model hint.
+    // History path: delegate to BB3HintService with BB3/actual constraints so
+    // sibling hints are solved around the same progression target E1RM.
     final hint = BB3HintService.getHintsForSet(
       exerciseId: row.exerciseId,
       exerciseName: row.name,
@@ -131,6 +132,9 @@ class Wes2HintServiceImpl implements Wes2HintService {
       blockEndDate: blockEndDate,
       selectedDate: date,
       uid: uid,
+      userWeight: _constraintWeight(set),
+      userReps: _constraintReps(set),
+      userRir: _constraintRir(set),
     );
 
     if (hint.isEmpty) return null;
@@ -211,39 +215,60 @@ class Wes2HintServiceImpl implements Wes2HintService {
     );
   }
 
-  /// Applies model hints to a single set, preserving BB3 hints on any field
-  /// that already carries a bb3Hint origin.
+  /// Applies model hints to a single set.
+  /// Priority: BB3 hint > model hint > empty.
+  /// Stale model hints are cleared when the recompute returns no hint.
   static Wes2SetState _applyModelHintToSet({
     required Wes2SetState existing,
     required double? weightHint,
     required int? repsHint,
     required double? rirHint,
   }) {
-    final newWeight =
-        (existing.weight.origin == FieldOrigin.bb3Hint || weightHint == null)
-            ? existing.weight
-            : existing.weight.withHint(weightHint, FieldOrigin.modelHint);
-
-    final newReps =
-        (existing.reps.origin == FieldOrigin.bb3Hint || repsHint == null || repsHint <= 0)
-            ? existing.reps
-            : existing.reps.withHint(repsHint, FieldOrigin.modelHint);
-
-    final newRir =
-        (existing.rir.origin == FieldOrigin.bb3Hint || rirHint == null)
-            ? existing.rir
-            : existing.rir.withHint(rirHint, FieldOrigin.modelHint);
-
-    if (newWeight == existing.weight &&
-        newReps == existing.reps &&
-        newRir == existing.rir) {
-      return existing;
-    }
-
     return existing.copyWith(
-      weight: newWeight,
-      reps: newReps,
-      rir: newRir,
+      weight: _mergeDouble(existing.weight, weightHint),
+      reps: _mergeInt(existing.reps, repsHint),
+      rir: _mergeDouble(existing.rir, rirHint),
     );
   }
+
+  /// Merges a model-derived [hint] into a double field.
+  /// BB3 hint: unchanged. New hint: apply as modelHint.
+  /// Null hint on a stale modelHint field: clear to empty.
+  static Wes2FieldState<double> _mergeDouble(
+      Wes2FieldState<double> field, double? hint) {
+    if (field.origin == FieldOrigin.bb3Hint) return field;
+    if (hint != null) return field.withHint(hint, FieldOrigin.modelHint);
+    if (field.origin == FieldOrigin.modelHint) {
+      return field.withHint(null, FieldOrigin.empty);
+    }
+    return field;
+  }
+
+  /// Merges a model-derived [hint] into an int field.
+  static Wes2FieldState<int> _mergeInt(
+      Wes2FieldState<int> field, int? hint) {
+    if (field.origin == FieldOrigin.bb3Hint) return field;
+    if (hint != null && hint > 0) return field.withHint(hint, FieldOrigin.modelHint);
+    if (field.origin == FieldOrigin.modelHint) {
+      return field.withHint(null, FieldOrigin.empty);
+    }
+    return field;
+  }
+
+  // ── Constraint helpers ─────────────────────────────────────────────────────
+  // Priority: user actual > BB3 explicit hint > null (no constraint).
+  // These are passed to BB3HintService so sibling fields are solved around the
+  // same progression target E1RM with the constrained fields held fixed.
+
+  static double? _constraintWeight(Wes2SetState s) =>
+      s.weight.actualValue ??
+      (s.weight.origin == FieldOrigin.bb3Hint ? s.weight.hintValue : null);
+
+  static int? _constraintReps(Wes2SetState s) =>
+      s.reps.actualValue ??
+      (s.reps.origin == FieldOrigin.bb3Hint ? s.reps.hintValue : null);
+
+  static double? _constraintRir(Wes2SetState s) =>
+      s.rir.actualValue ??
+      (s.rir.origin == FieldOrigin.bb3Hint ? s.rir.hintValue : null);
 }

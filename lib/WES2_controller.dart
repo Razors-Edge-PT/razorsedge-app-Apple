@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'WES2_hint_service.dart';
 import 'WES2_models.dart';
 
 enum Wes2LoadState { idle, loading, loaded, empty, error }
@@ -19,6 +20,8 @@ class Wes2SessionController extends ChangeNotifier {
   DateTime? _blockStartDate;
   DateTime? _blockEndDate;
   Map<String, dynamic> _exerciseSettings = const {};
+  Wes2HintService? _hintService;
+  String? _hintBlockId;
   int _loadEpoch = 0;
   String? _loadErrorMessage;
   final List<({String exerciseId, String name})> _pendingExerciseAdds = [];
@@ -77,6 +80,13 @@ class Wes2SessionController extends ChangeNotifier {
   }
 
   Map<String, dynamic> get exerciseSettings => _exerciseSettings;
+
+  /// Register the hint service for same-set real-time recalculation.
+  /// Called once per day load after exerciseSettings are fetched.
+  void setHintService(Wes2HintService service, String blockId) {
+    _hintService = service;
+    _hintBlockId = blockId;
+  }
 
   /// Apply model hints from a pre-computed hinted row onto the current row state.
   /// Uses the CURRENT row (not a snapshot) to avoid overwriting actuals typed
@@ -201,7 +211,51 @@ class Wes2SessionController extends ChangeNotifier {
     final newRows = List<Wes2ExerciseRow>.from(_rows);
     newRows[rowIdx] = row.copyWith(sets: sets);
     _rows = newRows;
+    // Phase 21C: same-set hint recalculation (synchronous).
+    _applyHintsForRow(rowIdx);
     notifyListeners();
+  }
+
+  /// Recomputes hints for row at [rowIdx] using the registered hint service
+  /// and merges the results into [_rows]. No-op when no service is registered.
+  void _applyHintsForRow(int rowIdx) {
+    final svc = _hintService;
+    final blockId = _hintBlockId;
+    if (svc == null || blockId == null) return;
+    final current = _rows[rowIdx];
+    Wes2ExerciseRow hinted;
+    try {
+      hinted = svc.computeRowHints(
+        row: current,
+        blockId: blockId,
+        uid: _actingUid,
+        date: _selectedDate,
+      );
+    } catch (_) {
+      return; // hint failure is non-fatal; typed values are unaffected
+    }
+    _mergeHintsIntoRow(rowIdx, hinted);
+  }
+
+  /// Merges hintValues from [hintedRow] into the row at [rowIdx].
+  /// actualValues and executionNote/planNote are never changed.
+  void _mergeHintsIntoRow(int rowIdx, Wes2ExerciseRow hintedRow) {
+    final current = _rows[rowIdx];
+    final count = current.setCount;
+    final newSets = List<Wes2SetState>.generate(count, (i) {
+      final cs =
+          i < current.sets.length ? current.sets[i] : Wes2SetState(setIndex: i);
+      final hs = i < hintedRow.sets.length ? hintedRow.sets[i] : null;
+      if (hs == null) return cs;
+      return cs.copyWith(
+        weight: cs.weight.withHint(hs.weight.hintValue, hs.weight.origin),
+        reps: cs.reps.withHint(hs.reps.hintValue, hs.reps.origin),
+        rir: cs.rir.withHint(hs.rir.hintValue, hs.rir.origin),
+      );
+    });
+    final newRows = List<Wes2ExerciseRow>.from(_rows);
+    newRows[rowIdx] = current.copyWith(sets: newSets);
+    _rows = newRows;
   }
 
   static bool _canParse(Wes2FieldKey key, String text) {

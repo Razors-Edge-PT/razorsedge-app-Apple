@@ -269,6 +269,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         blockEndDate: _controller.blockEndDate,
         uid: _controller.actingUid,
       );
+      // Phase 21C: register service so updateSetField can do same-set recalc.
+      _controller.setHintService(svc, blockId);
 
       final date = _controller.selectedDate;
       final rows = _controller.rows.toList();

@@ -228,16 +228,33 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
   _E1rmDisplay _resolveE1rmDisplay(Wes2SetState set) {
     final actualWeight = set.weight.actualValue;
     final actualReps = set.reps.actualValue;
+    final actualRir = set.rir.actualValue;
 
-    if (actualWeight != null && actualReps != null) {
-      final rir = set.rir.actualValue ?? set.rir.hintValue ?? 0.0;
+    // Actual/user-entered E1RM only when the full completed set exists:
+    // weight + reps + RIR all entered by the user.
+    if (actualWeight != null && actualReps != null && actualRir != null) {
       final e1rm = PeriodizationModelUtils.calculateE1RM(
         actualWeight,
         actualReps.toDouble(),
-        rir,
+        actualRir,
       );
       if (e1rm > 0) {
         return _E1rmDisplay(e1rm.toStringAsFixed(1), isActual: true);
+      }
+    }
+
+    // Projected/hint E1RM when weight + reps are actual, but RIR is still only a hint.
+    if (actualWeight != null && actualReps != null) {
+      final hintRir = set.rir.hintValue;
+      if (hintRir != null) {
+        final e1rm = PeriodizationModelUtils.calculateE1RM(
+          actualWeight,
+          actualReps.toDouble(),
+          hintRir,
+        );
+        if (e1rm > 0) {
+          return _E1rmDisplay(e1rm.toStringAsFixed(1), isHint: true);
+        }
       }
     }
 
