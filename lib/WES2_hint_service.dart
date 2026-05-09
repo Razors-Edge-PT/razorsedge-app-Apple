@@ -79,6 +79,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
         prevSet: newSets[i - 1],
         setIdx: i,
         exSettings: exSettings,
+        weekIndex: weekIndex,
+        sessionIndex: sessionIndex,
       );
     }
 
@@ -300,14 +302,16 @@ class Wes2HintServiceImpl implements Wes2HintService {
   /// Previous set resolved values drive the target E1RM:
   ///   targetE1RM = clamp(prevE1RM − gatedDrop, 1.0, 9999.0)
   ///
+  /// RIR priority: actual > BB3 explicit hint > rirPlan set-specific > 0.0 fallback.
   /// Fields with BB3 locks or actuals are left untouched via _mergeDouble/_mergeInt.
-  /// No RIR cascade is applied (Phase 21D scope).
   Wes2SetState _computeSetNHints({
     required Wes2ExerciseRow row,
     required Wes2SetState set,
     required Wes2SetState prevSet,
     required int setIdx,
     required Map<String, dynamic>? exSettings,
+    required int weekIndex,
+    required int sessionIndex,
   }) {
     final prevWeight = prevSet.weight.actualValue ?? prevSet.weight.hintValue;
     final prevReps   = prevSet.reps.actualValue   ?? prevSet.reps.hintValue;
@@ -324,9 +328,20 @@ class Wes2HintServiceImpl implements Wes2HintService {
     final drop       = _gatedDrop(rawDrop, prevRir);
     final targetE1rm = (prevE1rm - drop).clamp(1.0, 9999.0);
 
-    final thisRir  = set.rir.actualValue  ?? set.rir.hintValue  ?? 0.0;
-    final cwt      = _constraintWeight(set);
-    final creps    = _constraintReps(set);
+    // RIR precedence: actual > BB3 explicit > rirPlan > 0.0 fallback.
+    final constrainedRir = _constraintRir(set);
+    final planRir = BB3PlannedExerciseService.getRirFromPlan(
+      exSettings: exSettings,
+      weekIndex: weekIndex,
+      sessionIndex: sessionIndex,
+      setNumber: setIdx + 1,
+    );
+    final thisRir = constrainedRir ?? (planRir > 0 ? planRir : 0.0);
+    // Emit RIR hint only when neither actual nor BB3 holds the field.
+    final rirHint = constrainedRir == null && planRir > 0 ? planRir : null;
+
+    final cwt   = _constraintWeight(set);
+    final creps = _constraintReps(set);
 
     double? weightHint;
     int?    repsHint;
@@ -389,7 +404,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
       existing: set,
       weightHint: weightHint,
       repsHint: repsHint,
-      rirHint: null,
+      rirHint: rirHint,
     );
   }
 
