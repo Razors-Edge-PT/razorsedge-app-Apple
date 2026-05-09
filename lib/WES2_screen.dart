@@ -260,21 +260,84 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   }
 
   /// Merges completed + WES2-planned rows (Phase 3) with BB3 rows (Phase 4).
-  /// Priority: completedServer → wes2Manual → bb3Planned.
-  /// Deduplication by exerciseId via putIfAbsent. Sorted by orderIndex.
+  /// When the same exerciseId appears in both lists, the rows are merged
+  /// field-by-field so BB3 hint values are preserved underneath completed
+  /// actual values rather than being discarded by a row-level putIfAbsent.
   static List<Wes2ExerciseRow> _mergeRows(
     List<Wes2ExerciseRow> completedRows,
     List<Wes2ExerciseRow> bb3Rows,
   ) {
-    final seen = <String, Wes2ExerciseRow>{};
-    for (final r in completedRows) {
-      seen.putIfAbsent(r.exerciseId, () => r);
-    }
+    // Index bb3 rows for O(1) lookup.
+    final bb3ById = <String, Wes2ExerciseRow>{};
     for (final r in bb3Rows) {
-      seen.putIfAbsent(r.exerciseId, () => r);
+      bb3ById.putIfAbsent(r.exerciseId, () => r);
     }
+
+    final seen = <String, Wes2ExerciseRow>{};
+
+    for (final completed in completedRows) {
+      final bb3 = bb3ById[completed.exerciseId];
+      if (bb3 != null) {
+        // Both sources have this exercise: inject BB3 hints into completed row.
+        seen[completed.exerciseId] = _mergeCompletedAndBb3Row(completed, bb3);
+      } else {
+        seen.putIfAbsent(completed.exerciseId, () => completed);
+      }
+    }
+
+    // BB3-only rows (no matching completed row): keep as-is.
+    for (final bb3 in bb3Rows) {
+      seen.putIfAbsent(bb3.exerciseId, () => bb3);
+    }
+
     return seen.values.toList()
       ..sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
+  }
+
+  /// Produces one row that preserves actual values, executionNote, and
+  /// isMarkedDone from [completed] while injecting hint values and planNote
+  /// from [bb3]. setCount is the max of both sources so hints for sets beyond
+  /// the completed count are not dropped.
+  static Wes2ExerciseRow _mergeCompletedAndBb3Row(
+    Wes2ExerciseRow completed,
+    Wes2ExerciseRow bb3,
+  ) {
+    final setCount =
+        completed.setCount > bb3.setCount ? completed.setCount : bb3.setCount;
+    final sets = List.generate(setCount, (i) {
+      final cs = i < completed.sets.length ? completed.sets[i] : null;
+      final bs = i < bb3.sets.length ? bb3.sets[i] : null;
+      return _mergeSetHintsAndActuals(cs, bs, i);
+    });
+    return completed.copyWith(sets: sets, setCount: setCount);
+  }
+
+  /// Merges one set slot: actual values and executionNote come from
+  /// [completedSet]; hint values and planNote come from [bb3Set].
+  static Wes2SetState _mergeSetHintsAndActuals(
+    Wes2SetState? completedSet,
+    Wes2SetState? bb3Set,
+    int setIndex,
+  ) {
+    if (completedSet == null && bb3Set == null) {
+      return Wes2SetState(setIndex: setIndex);
+    }
+    if (bb3Set == null) return completedSet!;
+    if (completedSet == null) return bb3Set;
+    // withHint preserves existing actualValue while injecting the hint.
+    return Wes2SetState(
+      setIndex: setIndex,
+      weight: completedSet.weight
+          .withHint(bb3Set.weight.hintValue, FieldOrigin.bb3Hint),
+      reps: completedSet.reps
+          .withHint(bb3Set.reps.hintValue, FieldOrigin.bb3Hint),
+      rir: completedSet.rir
+          .withHint(bb3Set.rir.hintValue, FieldOrigin.bb3Hint),
+      velocity: completedSet.velocity
+          .withHint(bb3Set.velocity.hintValue, FieldOrigin.bb3Hint),
+      executionNote: completedSet.executionNote,
+      planNote: bb3Set.planNote,
+    );
   }
 
   /// Overlays local draft actualValues onto the server/BB3 merged row list.

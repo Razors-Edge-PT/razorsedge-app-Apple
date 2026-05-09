@@ -43,7 +43,9 @@ class Wes2FieldState<T> {
   Wes2FieldState<T> withActual(T? value) => Wes2FieldState<T>(
         actualValue: value,
         hintValue: hintValue,
-        origin: value != null ? FieldOrigin.typed : FieldOrigin.empty,
+        origin: value != null
+            ? FieldOrigin.typed
+            : (hintValue != null ? FieldOrigin.bb3Hint : FieldOrigin.empty),
         dirty: true,
         lastEditedAt: DateTime.now(),
       );
