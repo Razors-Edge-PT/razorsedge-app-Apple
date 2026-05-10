@@ -445,7 +445,11 @@ class BB3PlannedExerciseService {
     if (rirPlan == null) return 1.0;
 
     final weekKey = 'week${weekIndex + 1}';
-    final weekData = (rirPlan[weekKey] as Map?)?.cast<String, dynamic>() ?? {};
+    // week1 is the repeating microcycle template; fall back when literal week is absent.
+    final effectiveWeekKey =
+        rirPlan.containsKey(weekKey) ? weekKey : 'week1';
+    final weekData =
+        (rirPlan[effectiveWeekKey] as Map?)?.cast<String, dynamic>() ?? {};
 
     // Try the exact session; fall back to session1
     String sessionKey = 'session${sessionIndex + 1}';
@@ -453,7 +457,7 @@ class BB3PlannedExerciseService {
 
     final setKey = 'set$setNumber';
     final planned = double.tryParse(
-      rirPlan[weekKey]?[sessionKey]?[setKey]?['rir']?.toString() ?? '',
+      rirPlan[effectiveWeekKey]?[sessionKey]?[setKey]?['rir']?.toString() ?? '',
     );
 
     return planned ?? 1.0;
@@ -473,7 +477,10 @@ class BB3PlannedExerciseService {
     if (repTargets is! Map) return 8;
 
     final weekKey = 'week${weekIndex + 1}';
-    final weekData = repTargets[weekKey];
+    // week1 is the repeating microcycle template; fall back when literal week is absent.
+    final weekData = repTargets.containsKey(weekKey)
+        ? repTargets[weekKey]
+        : repTargets['week1'];
     if (weekData is! Map) return 8;
 
     final instanceKey = 'instance${sessionIndex + 1}';

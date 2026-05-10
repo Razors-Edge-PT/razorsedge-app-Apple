@@ -158,7 +158,9 @@ class _Wes2ExerciseSettingsDialogState
     _repTargetCtrls.clear();
 
     final repTargets = settings['repTargets'] as Map<String, dynamic>?;
-    final weekData = repTargets?[_weekKey] as Map<String, dynamic>?;
+    // week1 is the repeating microcycle template; fall back when current week has no data.
+    final weekData = (repTargets?[_weekKey] ?? repTargets?['week1'])
+        as Map<String, dynamic>?;
 
     if (_isDupSignature) {
       _repTargetCtrls['min'] = TextEditingController(
@@ -185,7 +187,9 @@ class _Wes2ExerciseSettingsDialogState
     _rirPlanCtrls.clear();
 
     final rirPlan = settings['rirPlan'] as Map<String, dynamic>?;
-    final weekData = rirPlan?[_weekKey] as Map<String, dynamic>?;
+    // week1 is the repeating microcycle template; fall back when current week has no data.
+    final weekData = (rirPlan?[_weekKey] ?? rirPlan?['week1'])
+        as Map<String, dynamic>?;
 
     final count = _sessionCount;
     for (int i = 1; i <= count; i++) {
