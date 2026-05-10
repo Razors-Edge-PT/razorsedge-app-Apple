@@ -99,6 +99,16 @@ class Wes2SessionController extends ChangeNotifier {
     _baselineHintRows = {for (final r in _rows) r.exerciseId: r};
   }
 
+  /// Returns the original planned/model RIR hint value for [setIndex] of
+  /// [exerciseId] as captured at load time.  Used by Wes2SetRow to compute
+  /// the Phase 21F RIR direction cue without exposing the full baseline map.
+  double? baselineRirHintFor(String exerciseId, int setIndex) {
+    final baselineRow = _baselineHintRows[exerciseId];
+    if (baselineRow == null) return null;
+    if (setIndex >= baselineRow.sets.length) return null;
+    return baselineRow.sets[setIndex].rir.hintValue;
+  }
+
   /// Apply model hints from a pre-computed hinted row onto the current row state.
   /// Uses the CURRENT row (not a snapshot) to avoid overwriting actuals typed
   /// between hint computation and application.

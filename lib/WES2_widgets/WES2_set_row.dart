@@ -77,6 +77,9 @@ class Wes2SetRow extends StatefulWidget {
   final VoidCallback? onRemoveSet;
   final VoidCallback? onNoteTap;
   final bool isPlanNoteRead;
+  /// Phase 21F: original planned/model RIR hint captured at session load.
+  /// Used to compute the green/amber direction cue on the RIR field.
+  final double? baselineRirHint;
 
   const Wes2SetRow({
     super.key,
@@ -87,6 +90,7 @@ class Wes2SetRow extends StatefulWidget {
     this.onRemoveSet,
     this.onNoteTap,
     this.isPlanNoteRead = false,
+    this.baselineRirHint,
   });
 
   @override
@@ -246,6 +250,25 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
     return _E1rmDisplay(e1rm.toStringAsFixed(1), isActual: isActual, isHint: !isActual);
   }
 
+  /// Phase 21F: subtle green/amber border on the RIR field when the hint has
+  /// shifted from baseline due to user-entered weight + reps.
+  /// Returns null (no cue) when: actual RIR typed, weight or reps not both
+  /// entered, no baseline, no current hint, or shift < 0.5.
+  Color? _rirBorderColor() {
+    final s = widget.set;
+    if (s.weight.actualValue == null) return null;
+    if (s.reps.actualValue == null) return null;
+    if (s.rir.actualValue != null) return null;
+    final bRir = widget.baselineRirHint;
+    final cRir = s.rir.hintValue;
+    if (bRir == null || cRir == null) return null;
+    final delta = cRir - bRir;
+    if (delta.abs() < 0.5) return null;
+    return delta > 0
+        ? Colors.greenAccent.withValues(alpha: 0.65)
+        : Colors.amberAccent.withValues(alpha: 0.75);
+  }
+
   Color _noteIconColor() {
     final s = widget.set;
     if (s.executionNote != null) return Colors.lightBlueAccent;
@@ -282,7 +305,12 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
     required String? hintText,
     required double width,
     bool decimal = false,
+    Color? activeBorderColor,
   }) {
+    final enabledBorder = activeBorderColor != null
+        ? UnderlineInputBorder(
+            borderSide: BorderSide(color: activeBorderColor, width: 1))
+        : _kEnabledBorder;
     return SizedBox(
       width: width,
       height: 36,
@@ -296,7 +324,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             contentPadding: _kContentPadding,
             hintText: hintText,
             hintStyle: _kHintStyle,
-            enabledBorder: _kEnabledBorder,
+            enabledBorder: enabledBorder,
             focusedBorder: _kFocusedBorder,
             isDense: true,
           ),
@@ -316,6 +344,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
         s.reps.hintValue != null ? _fmtInt(s.reps.hintValue!) : null;
     final rirHint =
         s.rir.hintValue != null ? _fmtDouble(s.rir.hintValue!) : null;
+    final rirBorderColor = _rirBorderColor();
     final velocityHint =
         s.velocity.hintValue != null ? _fmtDouble(s.velocity.hintValue!) : null;
 
@@ -367,6 +396,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             hintText: rirHint,
             width: 50,
             decimal: true,
+            activeBorderColor: rirBorderColor,
           ),
           const SizedBox(width: 4),
           // E1RM — calculated from actuals (or hints when no actuals present)

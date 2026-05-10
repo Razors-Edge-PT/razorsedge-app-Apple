@@ -238,6 +238,8 @@ class Wes2ExerciseCard extends StatelessWidget {
                       key: ValueKey('${row.exerciseId}_${s.setIndex}'),
                       set: s,
                       showVelocity: showVelocity,
+                      baselineRirHint: wes2Ctrl.baselineRirHintFor(
+                          row.exerciseId, s.setIndex),
                       onFieldChanged: (fieldKey, rawText) =>
                           wes2Ctrl.updateSetField(
                         exerciseId: row.exerciseId,
