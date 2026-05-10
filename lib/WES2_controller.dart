@@ -267,10 +267,27 @@ class Wes2SessionController extends ChangeNotifier {
     _mergeHintsIntoRow(rowIdx, hinted);
   }
 
+  /// Returns true when [actual] equals [hint] within floating-point tolerance.
+  /// Suppresses same-value constraints so BB3HintService sees the value as
+  /// unconstrained and solves siblings identically to the initial hint pass.
+  static bool _sameAsHint(double? actual, double? hint) {
+    if (actual == null || hint == null) return false;
+    return (actual - hint).abs() < 0.001;
+  }
+
+  static bool _sameAsHintInt(int? actual, int? hint) {
+    if (actual == null || hint == null) return false;
+    return actual == hint;
+  }
+
   /// Builds a row that combines [baseline] hint values/origins with
   /// [current] actual values. Direct field construction avoids the
   /// withActual(null) origin mis-labeling that would treat stale model hints
   /// as BB3 constraints on subsequent recalculation.
+  ///
+  /// Same-value actuals (where the user accepted a displayed hint verbatim)
+  /// are suppressed so that BB3HintService solves siblings using the same
+  /// unconstrained path it used during the initial hint pass.
   static Wes2ExerciseRow _rowWithCurrentActualsOverBaseline(
       Wes2ExerciseRow current, Wes2ExerciseRow baseline) {
     final count = current.setCount > baseline.setCount
@@ -281,33 +298,46 @@ class Wes2SessionController extends ChangeNotifier {
           i < current.sets.length ? current.sets[i] : Wes2SetState(setIndex: i);
       final bs =
           i < baseline.sets.length ? baseline.sets[i] : Wes2SetState(setIndex: i);
+      // Suppress actuals that equal the baseline hint — the user accepted the
+      // displayed value without changing it. Passing the same numeric value as
+      // a hard constraint changes BB3HintService's solving path and produces
+      // different sibling hints than the unconstrained initial pass.
+      final weightActual = _sameAsHint(cs.weight.actualValue, bs.weight.hintValue)
+          ? null
+          : cs.weight.actualValue;
+      final repsActual = _sameAsHintInt(cs.reps.actualValue, bs.reps.hintValue)
+          ? null
+          : cs.reps.actualValue;
+      final rirActual = _sameAsHint(cs.rir.actualValue, bs.rir.hintValue)
+          ? null
+          : cs.rir.actualValue;
       return Wes2SetState(
         setIndex: i,
         weight: Wes2FieldState<double>(
-          actualValue: cs.weight.actualValue,
+          actualValue: weightActual,
           hintValue: bs.weight.hintValue,
           hintOrigin: bs.weight.hintOrigin,
-          origin: cs.weight.actualValue != null
+          origin: weightActual != null
               ? FieldOrigin.typed
               : bs.weight.hintOrigin,
           dirty: cs.weight.dirty,
           lastEditedAt: cs.weight.lastEditedAt,
         ),
         reps: Wes2FieldState<int>(
-          actualValue: cs.reps.actualValue,
+          actualValue: repsActual,
           hintValue: bs.reps.hintValue,
           hintOrigin: bs.reps.hintOrigin,
-          origin: cs.reps.actualValue != null
+          origin: repsActual != null
               ? FieldOrigin.typed
               : bs.reps.hintOrigin,
           dirty: cs.reps.dirty,
           lastEditedAt: cs.reps.lastEditedAt,
         ),
         rir: Wes2FieldState<double>(
-          actualValue: cs.rir.actualValue,
+          actualValue: rirActual,
           hintValue: bs.rir.hintValue,
           hintOrigin: bs.rir.hintOrigin,
-          origin: cs.rir.actualValue != null
+          origin: rirActual != null
               ? FieldOrigin.typed
               : bs.rir.hintOrigin,
           dirty: cs.rir.dirty,
@@ -349,6 +379,9 @@ class Wes2SessionController extends ChangeNotifier {
         weight: cs.weight.withHint(hs.weight.hintValue, hs.weight.hintOrigin),
         reps: cs.reps.withHint(hs.reps.hintValue, hs.reps.hintOrigin),
         rir: cs.rir.withHint(hs.rir.hintValue, hs.rir.hintOrigin),
+        weightLockedByBb3OverrideCue: hs.weightLockedByBb3OverrideCue,
+        repsLockedByBb3OverrideCue: hs.repsLockedByBb3OverrideCue,
+        rirLockedByBb3OverrideCue: hs.rirLockedByBb3OverrideCue,
       );
     });
     final newRows = List<Wes2ExerciseRow>.from(_rows);

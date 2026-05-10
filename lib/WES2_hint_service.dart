@@ -129,6 +129,10 @@ class Wes2HintServiceImpl implements Wes2HintService {
     final constrainedReps   = _constraintReps(set);
     final constrainedRir    = _constraintRir(set);
 
+    // If BB3 explicitly supplies all three hints, their combined E1RM defines
+    // the target for this set — stronger than history/model target.
+    final bb3SetTarget = _bb3FullSetTargetE1rm(set);
+
     // Plan-level values used as fallback when neither BB3 nor model fills a field.
     final planReps = BB3PlannedExerciseService.getRepTargetForSet(
       exSettings: exSettings,
@@ -255,12 +259,152 @@ class Wes2HintServiceImpl implements Wes2HintService {
       rirHint = planRir;
     }
 
-    return _applyModelHintToSet(
+    Wes2SetState result = _applyModelHintToSet(
       existing: set,
       weightHint: weightHint,
       repsHint: repsHint,
       rirHint: rirHint,
     );
+
+    // Phase 21F: when actual weight + actual reps are both present and RIR is
+    // neither typed nor BB3-locked, solve the RIR hint that preserves the
+    // progression target E1RM.  BB3-locked RIR is excluded here so its hint
+    // value is preserved for the Phase 21C blue cue comparison below.
+    // withHint() never touches actualValue, so typing actual RIR still wins.
+    if (set.weight.actualValue != null &&
+        set.reps.actualValue != null &&
+        set.rir.actualValue == null &&
+        !_isBb3Locked(set.rir)) {
+      final targetE1rm = bb3SetTarget ?? _getTargetE1rm(
+        row: row,
+        weekIndex: weekIndex,
+        sessionIndex: sessionIndex,
+        date: date,
+        uid: uid,
+      );
+      final solved = targetE1rm != null
+          ? _solveRirForTargetE1rm(
+              targetE1rm: targetE1rm,
+              weight: set.weight.actualValue!,
+              reps: set.reps.actualValue!,
+            )
+          : null;
+      if (solved != null) {
+        result = result.copyWith(
+          rir: result.rir.withHint(solved, FieldOrigin.modelHint),
+        );
+      }
+    }
+
+    // Phase 21C: BB3-override locked-field cue flags (Set 1).
+    // Each cue fires only when BOTH of the following hold:
+    //   (a) the field has no WES2 actual and carries a BB3 explicit hint, AND
+    //   (b) at least one relevant sibling field has a current WES2 actual that
+    //       changes the solve context (so the conflict is user-driven, not just
+    //       a static model-vs-BB3 difference).
+    // Flags are display-only; no hint values or Firestore are affected.
+    bool weightCue = false;
+    bool repsCue = false;
+    bool rirCue = false;
+
+    final weightBb3Only =
+        set.weight.actualValue == null && _isBb3Locked(set.weight);
+    final repsBb3Only =
+        set.reps.actualValue == null && _isBb3Locked(set.reps);
+    final rirBb3Only =
+        set.rir.actualValue == null && _isBb3Locked(set.rir);
+
+    // Compute target E1RM once if any cue may fire.
+    double? targetE1rmForCue;
+    final needsE1rm =
+        (weightBb3Only &&
+            (set.reps.actualValue != null || set.rir.actualValue != null)) ||
+        (repsBb3Only &&
+            (set.weight.actualValue != null || set.rir.actualValue != null)) ||
+        (rirBb3Only &&
+            set.weight.actualValue != null &&
+            set.reps.actualValue != null);
+    if (needsE1rm) {
+      targetE1rmForCue = bb3SetTarget;
+      if (targetE1rmForCue == null &&
+          PeriodizationModelUtils.savedWorkoutsList.isNotEmpty) {
+        targetE1rmForCue = _getTargetE1rm(
+          row: row,
+          weekIndex: weekIndex,
+          sessionIndex: sessionIndex,
+          date: date,
+          uid: uid,
+        );
+      }
+    }
+
+    // Weight cue: requires a sibling reps or RIR actual to change the solve.
+    if (weightBb3Only &&
+        (set.reps.actualValue != null || set.rir.actualValue != null) &&
+        targetE1rmForCue != null) {
+      final rawFreeW = PeriodizationModelUtils.reverseCalculateWeight(
+        targetE1RM: targetE1rmForCue,
+        reps: repsForWeight,
+        rir: rirForWeight,
+      );
+      if (rawFreeW > 0) {
+        final freeW = _closestE1rmWeight(
+          targetE1rm: targetE1rmForCue,
+          rawWeight: rawFreeW,
+          reps: repsForWeight,
+          rir: rirForWeight,
+          exerciseName: row.name,
+        );
+        if (freeW != null && (freeW - set.weight.hintValue!).abs() >= 0.25) {
+          weightCue = true;
+        }
+      }
+    }
+
+    // Reps cue: requires a sibling weight or RIR actual to change the solve.
+    // constrainedWeight may be an actual or a BB3 hint; the gate above ensures
+    // at least one sibling actual is present, so the context is user-driven.
+    if (repsBb3Only &&
+        (set.weight.actualValue != null || set.rir.actualValue != null) &&
+        targetE1rmForCue != null &&
+        constrainedWeight != null) {
+      final freeD = PeriodizationModelUtils.reverseCalculateReps(
+        targetE1RM: targetE1rmForCue,
+        weight: constrainedWeight,
+        baseWeight: constrainedWeight,
+        rir: rirForWeight,
+      ).clamp(1.0, 45.0);
+      final freeR = freeD.round().clamp(1, 45);
+      if ((freeR - set.reps.hintValue!).abs() >= 1) {
+        repsCue = true;
+      }
+    }
+
+    // RIR cue: requires both weight and reps actuals.
+    // Uses free solved RIR (not planRir) — the difference must be caused by the
+    // user's actual weight + reps, not by a static plan-vs-BB3 discrepancy.
+    if (rirBb3Only &&
+        set.weight.actualValue != null &&
+        set.reps.actualValue != null &&
+        targetE1rmForCue != null) {
+      final freeSolvedRir = _solveRirForTargetE1rm(
+        targetE1rm: targetE1rmForCue,
+        weight: set.weight.actualValue!,
+        reps: set.reps.actualValue!,
+      );
+      if (freeSolvedRir != null &&
+          (freeSolvedRir - set.rir.hintValue!).abs() >= 0.5) {
+        rirCue = true;
+      }
+    }
+
+    result = result.copyWith(
+      weightLockedByBb3OverrideCue: weightCue,
+      repsLockedByBb3OverrideCue: repsCue,
+      rirLockedByBb3OverrideCue: rirCue,
+    );
+
+    return result;
   }
 
   /// Gets the unconstrained progression target E1RM for the day.
@@ -326,7 +470,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
     final group      = _dropGroup(row.name, exSettings);
     final rawDrop    = _rawDropFor(group, setIdx);
     final drop       = _gatedDrop(rawDrop, prevRir);
-    final targetE1rm = (prevE1rm - drop).clamp(1.0, 9999.0);
+    final cascadeTarget = (prevE1rm - drop).clamp(1.0, 9999.0);
+    final targetE1rm = _bb3FullSetTargetE1rm(set) ?? cascadeTarget;
 
     // RIR precedence: actual > BB3 explicit > rirPlan > 0.0 fallback.
     final constrainedRir = _constraintRir(set);
@@ -400,12 +545,117 @@ class Wes2HintServiceImpl implements Wes2HintService {
       repsHint = midRep;
     }
 
-    return _applyModelHintToSet(
+    Wes2SetState result = _applyModelHintToSet(
       existing: set,
       weightHint: weightHint,
       repsHint: repsHint,
       rirHint: rirHint,
     );
+
+    // Phase 21F: same logic as Set 1 — solve RIR when both actuals present and
+    // RIR is not BB3-locked. BB3-locked RIR is preserved for the 21C cue below.
+    if (set.weight.actualValue != null &&
+        set.reps.actualValue != null &&
+        set.rir.actualValue == null &&
+        !_isBb3Locked(set.rir)) {
+      final solved = _solveRirForTargetE1rm(
+        targetE1rm: targetE1rm,
+        weight: set.weight.actualValue!,
+        reps: set.reps.actualValue!,
+      );
+      if (solved != null) {
+        result = result.copyWith(
+          rir: result.rir.withHint(solved, FieldOrigin.modelHint),
+        );
+      }
+    }
+
+    // Phase 21C: BB3-override locked-field cue flags (Set N).
+    // Same "offending actual" gate as Set 1 — cue fires only when a current
+    // WES2 actual in a relevant sibling is causing the conflict.
+    bool weightCue = false;
+    bool repsCue = false;
+    bool rirCue = false;
+
+    final weightBb3OnlyN =
+        set.weight.actualValue == null && _isBb3Locked(set.weight);
+    final repsBb3OnlyN =
+        set.reps.actualValue == null && _isBb3Locked(set.reps);
+    final rirBb3OnlyN =
+        set.rir.actualValue == null && _isBb3Locked(set.rir);
+
+    // Weight/reps cues share the unconstrained (free) computation.
+    final needsFreeN =
+        (weightBb3OnlyN &&
+            (set.reps.actualValue != null || set.rir.actualValue != null)) ||
+        (repsBb3OnlyN &&
+            (set.weight.actualValue != null || set.rir.actualValue != null));
+    if (needsFreeN) {
+      // Weight cue: free reps at prevWeight → free weight at targetE1rm.
+      if (weightBb3OnlyN &&
+          (set.reps.actualValue != null || set.rir.actualValue != null)) {
+        final freeD = PeriodizationModelUtils.reverseCalculateReps(
+          targetE1RM: targetE1rm,
+          weight: prevWeight,
+          baseWeight: prevWeight,
+          rir: thisRir,
+        ).clamp(1.0, 45.0);
+        final freeRepInt = freeD.round().clamp(1, 45);
+        final rawFreeW = PeriodizationModelUtils.reverseCalculateWeight(
+          targetE1RM: targetE1rm,
+          reps: freeRepInt,
+          rir: thisRir,
+        );
+        if (rawFreeW > 0) {
+          final freeW = PeriodizationModelUtils.roundToNearestValidIncrement(
+            targetWeight: rawFreeW,
+            exerciseName: row.name,
+          );
+          if ((freeW - set.weight.hintValue!).abs() >= 0.25) {
+            weightCue = true;
+          }
+        }
+      }
+
+      // Reps cue: anchored at actual weight when present — the cue must reflect
+      // what the model suggests at the weight the user actually entered, not prevWeight.
+      if (repsBb3OnlyN &&
+          (set.weight.actualValue != null || set.rir.actualValue != null)) {
+        final anchorW = set.weight.actualValue ?? prevWeight;
+        final freeRepForCue = PeriodizationModelUtils.reverseCalculateReps(
+          targetE1RM: targetE1rm,
+          weight: anchorW,
+          baseWeight: anchorW,
+          rir: thisRir,
+        ).clamp(1.0, 45.0).round().clamp(1, 45);
+        if ((freeRepForCue - set.reps.hintValue!).abs() >= 1) {
+          repsCue = true;
+        }
+      }
+    }
+
+    // RIR cue: requires both actuals; uses free solved RIR, not planRir.
+    if (rirBb3OnlyN &&
+        set.weight.actualValue != null &&
+        set.reps.actualValue != null) {
+      final freeSolvedRir = _solveRirForTargetE1rm(
+        targetE1rm: targetE1rm,
+        weight: set.weight.actualValue!,
+        reps: set.reps.actualValue!,
+      );
+      if (freeSolvedRir != null &&
+          (freeSolvedRir - set.rir.hintValue!).abs() >= 0.5) {
+        rirCue = true;
+      }
+    }
+
+    result = result.copyWith(
+      weightLockedByBb3OverrideCue: weightCue,
+      repsLockedByBb3OverrideCue: repsCue,
+      rirLockedByBb3OverrideCue: rirCue,
+    );
+
+    return result;
   }
 
   /// Picks the valid-increment weight whose E1RM is closest to [targetE1rm].
@@ -474,6 +724,22 @@ class Wes2HintServiceImpl implements Wes2HintService {
   static bool _isBb3Locked<T extends Object>(Wes2FieldState<T> f) =>
       f.hintOrigin == FieldOrigin.bb3Hint && f.hintValue != null;
 
+  /// Returns the E1RM implied by BB3's explicit hints when all three fields
+  /// carry a BB3 lock.  Used as the priority target E1RM when the coach has
+  /// prescribed a complete set (weight + reps + RIR), overriding history/model.
+  /// Returns null when any field lacks a BB3 lock or the result is ≤ 0.
+  static double? _bb3FullSetTargetE1rm(Wes2SetState set) {
+    if (!_isBb3Locked(set.weight)) return null;
+    if (!_isBb3Locked(set.reps)) return null;
+    if (!_isBb3Locked(set.rir)) return null;
+    final e = PeriodizationModelUtils.calculateE1RM(
+      set.weight.hintValue!,
+      set.reps.hintValue!.toDouble(),
+      set.rir.hintValue!,
+    );
+    return e > 0 ? e : null;
+  }
+
   /// Merges a model-derived [hint] into a double field.
   /// Explicit BB3 hint (non-null hintValue): unchanged.
   /// New hint: apply as modelHint. Stale modelHint with null recompute: clear.
@@ -514,6 +780,34 @@ class Wes2HintServiceImpl implements Wes2HintService {
   static double? _constraintRir(Wes2SetState s) =>
       s.rir.actualValue ??
       (s.rir.hintOrigin == FieldOrigin.bb3Hint ? s.rir.hintValue : null);
+
+  // ── Phase 21F: RIR solver ─────────────────────────────────────────────────
+
+  /// Searches RIR candidates [0.0, 0.5, …, 10.0] and returns the one whose
+  /// calculateE1RM(weight, reps, candidate) is closest to [targetE1rm].
+  /// Candidates are at 0.5 increments, so the result is already rounded to 0.5.
+  /// Returns null when any input is invalid (≤ 0).
+  static double? _solveRirForTargetE1rm({
+    required double targetE1rm,
+    required double weight,
+    required int reps,
+  }) {
+    if (targetE1rm <= 0 || weight <= 0 || reps <= 0) return null;
+    double? bestRir;
+    double bestDiff = double.infinity;
+    for (int i = 0; i <= 20; i++) {
+      final candidate = i * 0.5;
+      final e1rm = PeriodizationModelUtils.calculateE1RM(
+        weight, reps.toDouble(), candidate,
+      );
+      final diff = (e1rm - targetE1rm).abs();
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestRir  = candidate;
+      }
+    }
+    return bestRir;
+  }
 
   // ── Drop-off helpers (Phase 21D) ──────────────────────────────────────────
 

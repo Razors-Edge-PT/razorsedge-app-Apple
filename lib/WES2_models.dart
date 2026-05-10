@@ -98,6 +98,14 @@ class Wes2SetState {
   final String? executionNote;
   final String? planNote;
 
+  /// Display-only cue flags: true when a BB3 explicit override hint is locked
+  /// and the free model calculation would have placed the field at a meaningfully
+  /// different value. Never persisted to Firestore. Always false until the hint
+  /// service computes them; reset to false if actualValue is present.
+  final bool weightLockedByBb3OverrideCue;
+  final bool repsLockedByBb3OverrideCue;
+  final bool rirLockedByBb3OverrideCue;
+
   const Wes2SetState({
     required this.setIndex,
     this.weight = const Wes2FieldState<double>(),
@@ -106,6 +114,9 @@ class Wes2SetState {
     this.velocity = const Wes2FieldState<double>(),
     this.executionNote,
     this.planNote,
+    this.weightLockedByBb3OverrideCue = false,
+    this.repsLockedByBb3OverrideCue = false,
+    this.rirLockedByBb3OverrideCue = false,
   });
 
   bool get hasAnyActual =>
@@ -118,6 +129,9 @@ class Wes2SetState {
     Wes2FieldState<double>? velocity,
     String? executionNote,
     String? planNote,
+    bool? weightLockedByBb3OverrideCue,
+    bool? repsLockedByBb3OverrideCue,
+    bool? rirLockedByBb3OverrideCue,
   }) {
     return Wes2SetState(
       setIndex: setIndex,
@@ -127,6 +141,12 @@ class Wes2SetState {
       velocity: velocity ?? this.velocity,
       executionNote: executionNote ?? this.executionNote,
       planNote: planNote ?? this.planNote,
+      weightLockedByBb3OverrideCue:
+          weightLockedByBb3OverrideCue ?? this.weightLockedByBb3OverrideCue,
+      repsLockedByBb3OverrideCue:
+          repsLockedByBb3OverrideCue ?? this.repsLockedByBb3OverrideCue,
+      rirLockedByBb3OverrideCue:
+          rirLockedByBb3OverrideCue ?? this.rirLockedByBb3OverrideCue,
     );
   }
 

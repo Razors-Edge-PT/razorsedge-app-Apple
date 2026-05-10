@@ -250,12 +250,36 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
     return _E1rmDisplay(e1rm.toStringAsFixed(1), isActual: isActual, isHint: !isActual);
   }
 
-  /// Phase 21F: subtle green/amber border on the RIR field when the hint has
-  /// shifted from baseline due to user-entered weight + reps.
-  /// Returns null (no cue) when: actual RIR typed, weight or reps not both
-  /// entered, no baseline, no current hint, or shift < 0.5.
+  /// Phase 21C: blue border for weight — BB3 override hint is locked and the
+  /// free model would have placed weight meaningfully differently.
+  /// Only fires on hint fields (actualValue == null).
+  Color? _weightBorderColor() {
+    final s = widget.set;
+    if (!s.weightLockedByBb3OverrideCue) return null;
+    if (s.weight.actualValue != null) return null;
+    return Colors.lightBlueAccent.withValues(alpha: 0.65);
+  }
+
+  /// Phase 21C: blue border for reps — same logic as weight.
+  Color? _repsBorderColor() {
+    final s = widget.set;
+    if (!s.repsLockedByBb3OverrideCue) return null;
+    if (s.reps.actualValue != null) return null;
+    return Colors.lightBlueAccent.withValues(alpha: 0.65);
+  }
+
+  /// Phase 21F/21C: border color for the RIR field.
+  /// Priority: blue (BB3 RIR locked, model would have moved it) >
+  ///           green/amber (free RIR hint shifted from baseline by >= 0.5).
+  /// Blue takes priority because the RIR did not actually move — the BB3
+  /// override held it. Green/amber applies only to freely moving model RIR.
   Color? _rirBorderColor() {
     final s = widget.set;
+    // BB3 RIR locked — model would have changed it, but BB3 override won.
+    if (s.rirLockedByBb3OverrideCue && s.rir.actualValue == null) {
+      return Colors.lightBlueAccent.withValues(alpha: 0.65);
+    }
+    // Free-moving model RIR: green = higher than baseline, amber = lower.
     if (s.weight.actualValue == null) return null;
     if (s.reps.actualValue == null) return null;
     if (s.rir.actualValue != null) return null;
@@ -345,6 +369,8 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
     final rirHint =
         s.rir.hintValue != null ? _fmtDouble(s.rir.hintValue!) : null;
     final rirBorderColor = _rirBorderColor();
+    final weightBorderColor = _weightBorderColor();
+    final repsBorderColor = _repsBorderColor();
     final velocityHint =
         s.velocity.hintValue != null ? _fmtDouble(s.velocity.hintValue!) : null;
 
@@ -379,6 +405,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             hintText: weightHint,
             width: 76,
             decimal: true,
+            activeBorderColor: weightBorderColor,
           ),
           const SizedBox(width: 4),
           _field(
@@ -387,6 +414,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             fieldKey: Wes2FieldKey.reps,
             hintText: repsHint,
             width: 50,
+            activeBorderColor: repsBorderColor,
           ),
           const SizedBox(width: 4),
           _field(

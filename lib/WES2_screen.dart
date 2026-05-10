@@ -949,6 +949,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
           row: _controller.rows[rowIdx],
         );
       }
+      // ignore: discarded_futures
+      _loadAndApplyHints();
     }
   }
 
@@ -1674,6 +1676,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
     _controller.replaceWithTemplateRows(reindexed);
     _saveDraftNow();
+    // ignore: discarded_futures
+    _loadAndApplyHints();
 
     // Persist: clear exercises[] + wesPlanned[], write template rows to wesPlanned.
     // ignore: discarded_futures
