@@ -606,7 +606,10 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
 
   Widget _buildDayList(DateTime weekStart) {
     return ListView.builder(
-      padding: const EdgeInsets.only(bottom: 16),
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).padding.bottom + 30,
+      ),
+
       itemCount: 7,
       itemBuilder: (context, d) {
         final date = weekStart.add(Duration(days: d));

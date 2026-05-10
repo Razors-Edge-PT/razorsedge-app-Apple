@@ -64,6 +64,9 @@ class Wes2ExerciseCard extends StatelessWidget {
   final VoidCallback? onNotes;
   final void Function(int setIndex)? onRemoveSet;
   final void Function(int setIndex)? onNoteTap;
+  final VoidCallback? onExerciseDetails;
+  final VoidCallback? onOpenExercisePlanNote;
+  final bool isExercisePlanNoteRead;
 
   const Wes2ExerciseCard({
     super.key,
@@ -78,6 +81,9 @@ class Wes2ExerciseCard extends StatelessWidget {
     this.onNotes,
     this.onRemoveSet,
     this.onNoteTap,
+    this.onExerciseDetails,
+    this.onOpenExercisePlanNote,
+    this.isExercisePlanNoteRead = false,
   });
 
   @override
@@ -112,16 +118,33 @@ class Wes2ExerciseCard extends StatelessWidget {
         tilePadding: const EdgeInsets.symmetric(horizontal: 8),
         backgroundColor: isDone ? doneBg : normalBg,
         collapsedBackgroundColor: isDone ? doneBg : normalBg,
-        // ── Title: exercise name + optional BB3 label ──────────────────────
+        // ── Title: exercise name + optional note icon + optional BB3 label ──
         title: Row(
           children: [
             Expanded(
               child: Text(
                 row.name,
-                style: const TextStyle(fontSize: 14),
+                style: const TextStyle(fontSize: 14, height: 1.0),
+                maxLines: 2,
+                softWrap: true,
                 overflow: TextOverflow.ellipsis,
               ),
             ),
+            if (row.exercisePlanNote != null &&
+                row.exercisePlanNote!.isNotEmpty)
+              GestureDetector(
+                onTap: onOpenExercisePlanNote,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Icon(
+                    Icons.sticky_note_2_outlined,
+                    size: isExercisePlanNoteRead ? 16 : 20,
+                    color: isExercisePlanNoteRead
+                        ? Colors.grey.shade400
+                        : Colors.amberAccent,
+                  ),
+                ),
+              ),
             if (isBb3)
               const Text(
                 ' · BB3 Plan',
@@ -163,6 +186,12 @@ class Wes2ExerciseCard extends StatelessWidget {
             // Active — reuses existing ExerciseVideoButton; returns
             // SizedBox.shrink() when no asset exists for this exerciseId.
             ExerciseVideoButton(exerciseId: row.exerciseId),
+            IconButton(
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+              icon: Icon(Icons.insights, size: 20, color: cs.primary),
+              onPressed: onExerciseDetails,
+            ),
             IconButton(
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints.tightFor(width: 32, height: 32),

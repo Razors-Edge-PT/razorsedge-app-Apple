@@ -38,6 +38,11 @@ abstract class Wes2PlanService {
     required String exerciseId,
     required Map<String, dynamic> settings,
   });
+
+  /// Fetch the exercise type (e.g. "Barbell", "Machine", "Dumbbell") for each
+  /// given exerciseId from /exercises/{exerciseId}.type. Missing or blank types
+  /// are excluded from the result.
+  Future<Map<String, String>> loadExerciseTypes(List<String> exerciseIds);
 }
 
 /// Concrete Firestore implementation.
@@ -116,6 +121,10 @@ class FirestoreWes2PlanService implements Wes2PlanService {
       ];
     }
 
+    final exercisePlanNote = ((raw['perExerciseNote'] ??
+            raw['exerciseNote']) as String?)
+        ?.trim();
+
     return Wes2ExerciseRow(
       exerciseId: exerciseId,
       name: name,
@@ -124,6 +133,7 @@ class FirestoreWes2PlanService implements Wes2PlanService {
       setCount: sets.length,
       sets: sets,
       source: Wes2RowSource.bb3Planned,
+      exercisePlanNote: exercisePlanNote?.isNotEmpty == true ? exercisePlanNote : null,
     );
   }
 
@@ -300,5 +310,25 @@ class FirestoreWes2PlanService implements Wes2PlanService {
         SetOptions(merge: true),
       );
     });
+  }
+
+  @override
+  Future<Map<String, String>> loadExerciseTypes(
+      List<String> exerciseIds) async {
+    if (exerciseIds.isEmpty) return const {};
+    final futures = exerciseIds.map((id) async {
+      try {
+        final doc = await FirebaseFirestore.instance
+            .collection('exercises')
+            .doc(id)
+            .get();
+        final type = doc.data()?['type'] as String?;
+        return MapEntry(id, type ?? '');
+      } catch (_) {
+        return MapEntry(id, '');
+      }
+    });
+    final entries = await Future.wait(futures);
+    return Map.fromEntries(entries.where((e) => e.value.isNotEmpty));
   }
 }

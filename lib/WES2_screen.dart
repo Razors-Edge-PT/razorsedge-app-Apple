@@ -17,6 +17,7 @@ import 'WES2_local_store.dart';
 import 'WES2_template_service.dart';
 import 'WES2_widgets/WES2_template_picker.dart';
 import 'WES2_widgets/WES2_exercise_settings_dialog.dart';
+import 'exercise_details_screen.dart';
 
 enum _Wes2AppBarMenuAction { timer, templates, deleteAll }
 
@@ -40,6 +41,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   final Wes2TemplateService _templateService = FirestoreWes2TemplateService();
   bool _loadStarted = false;
   Map<String, dynamic> _cachedExerciseSettings = const {};
+  Map<String, String> _cachedExerciseTypes = const {};
   // IDs present in the BB3 planned day at last load. Keyed by exerciseId.
   // Allows post-merge rows (source=completedServer) to still trigger BB3 sync.
   Set<String> _bb3PlannedExerciseIds = const {};
@@ -268,8 +270,27 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
       if (!mounted) return;
 
+      // Fetch exercise types for type-aware default weight hints (Issue 5).
+      // Only fetches IDs not already cached; keyed by exerciseId.
+      final uncachedIds = _controller.rows
+          .map((r) => r.exerciseId)
+          .where((id) => !_cachedExerciseTypes.containsKey(id))
+          .toSet()
+          .toList();
+      if (uncachedIds.isNotEmpty) {
+        try {
+          final fetched = await _planService.loadExerciseTypes(uncachedIds);
+          _cachedExerciseTypes = {..._cachedExerciseTypes, ...fetched};
+        } catch (_) {
+          // Type fetch is non-critical; hints still work without it.
+        }
+      }
+
+      if (!mounted) return;
+
       final svc = Wes2HintServiceImpl(
         exerciseSettings: _cachedExerciseSettings,
+        exerciseTypes: _cachedExerciseTypes,
         blockStartDate: blockStart,
         blockEndDate: _controller.blockEndDate,
         uid: _controller.actingUid,
@@ -368,7 +389,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       final bs = i < bb3.sets.length ? bb3.sets[i] : null;
       return _mergeSetHintsAndActuals(cs, bs, i);
     });
-    return completed.copyWith(sets: sets, setCount: setCount);
+    return completed.copyWith(
+      sets: sets,
+      setCount: setCount,
+      exercisePlanNote: bb3.exercisePlanNote,
+    );
   }
 
   /// Merges one set slot: actual values and executionNote come from
@@ -878,6 +903,14 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             onNotes: () => _showNotesPlaceholder(),
             onRemoveSet: (setIndex) => _onRemoveSet(row, setIndex),
             onNoteTap: (setIndex) => _onOpenSetNoteDialog(row, setIndex),
+            onExerciseDetails: () => _navigateToExerciseDetails(row),
+            isExercisePlanNoteRead:
+                controller.isExercisePlanNoteRead(row.exerciseId),
+            onOpenExercisePlanNote:
+                row.exercisePlanNote != null &&
+                        row.exercisePlanNote!.isNotEmpty
+                    ? () => _onOpenExercisePlanNoteDialog(row)
+                    : null,
           ));
         }
 
@@ -1144,6 +1177,40 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     _showSnackBar('Use the note icon beside each set to add notes.');
   }
 
+  void _navigateToExerciseDetails(Wes2ExerciseRow row) {
+    if (_controller.actingUid.isEmpty) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ExerciseDetailsScreen(
+          exerciseId: row.exerciseId,
+          exerciseName: row.name,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _onOpenExercisePlanNoteDialog(Wes2ExerciseRow row) async {
+    _controller.markExercisePlanNoteRead(row.exerciseId);
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          row.name,
+          style: const TextStyle(fontSize: 16),
+        ),
+        content: Text(row.exercisePlanNote ?? ''),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _showTemplatePicker() async {
     if (_controller.actingUid.isEmpty) return;
     final templateId = await showModalBottomSheet<String>(
@@ -1261,6 +1328,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       newName: result.name,
     );
     _saveDraftNow();
+    // ignore: discarded_futures
+    _loadAndApplyHints();
     _showUndoSnackBar('Exercise replaced');
     // ignore: discarded_futures
     _replaceExerciseSilently(

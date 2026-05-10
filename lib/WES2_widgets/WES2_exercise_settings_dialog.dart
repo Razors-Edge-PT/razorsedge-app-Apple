@@ -1,4 +1,5 @@
-﻿import 'package:flutter/material.dart';
+﻿import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
 import '../WES2_plan_service.dart';
 
 class Wes2ExerciseSettingsDialog extends StatefulWidget {
@@ -32,6 +33,7 @@ class _Wes2ExerciseSettingsDialogState
   String? _loadError;
   bool _saving = false;
   String? _saveError;
+  String? _exerciseType;
 
   // The full exerciseSettings map from the block doc (for merging on save).
   Map<String, dynamic> _existingSettings = {};
@@ -125,6 +127,19 @@ class _Wes2ExerciseSettingsDialogState
 
       _populateRepTargets(settings);
       _populateRirPlan(settings);
+
+      // Fetch exercise type for display in footer.
+      try {
+        final exDoc = await FirebaseFirestore.instance
+            .collection('exercises')
+            .doc(widget.exerciseId)
+            .get();
+        if (mounted) {
+          _exerciseType = exDoc.data()?['type'] as String?;
+        }
+      } catch (_) {
+        // Non-critical; footer shows 'Not set' if unavailable.
+      }
 
       setState(() => _loading = false);
     } catch (e) {
@@ -599,6 +614,13 @@ class _Wes2ExerciseSettingsDialogState
           const SizedBox(height: 3),
           Text(
             'Current weekly rep target instance: $_weeklyInstanceDisplay of $_sessionCount',
+            style: const TextStyle(fontSize: 12, color: Colors.white70),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 3),
+          Text(
+            'Exercise type: ${_exerciseType ?? 'Not set'}',
             style: const TextStyle(fontSize: 12, color: Colors.white70),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,

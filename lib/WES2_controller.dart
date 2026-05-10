@@ -33,6 +33,8 @@ class Wes2SessionController extends ChangeNotifier {
   // Session-local set of plan-note keys that have been read.
   // Key format: "$exerciseId:$setIndex". Cleared on date change.
   final Set<String> _readPlanNotes = {};
+  // Session-local set of exerciseIds whose exercise-level plan note has been read.
+  final Set<String> _readExercisePlanNotes = {};
 
   Wes2SessionController(DateTime initialDate)
       : _selectedDate = DateTime(
@@ -184,6 +186,7 @@ class Wes2SessionController extends ChangeNotifier {
     _pendingExerciseAdds.clear();
     _flushedExercises.clear();
     _readPlanNotes.clear();
+    _readExercisePlanNotes.clear();
     _baselineHintRows = {};
     _loadEpoch++;
     _loadState = Wes2LoadState.idle;
@@ -689,6 +692,16 @@ class Wes2SessionController extends ChangeNotifier {
     _readPlanNotes.add(key);
     notifyListeners();
   }
+
+  bool isExercisePlanNoteRead(String exerciseId) =>
+      _readExercisePlanNotes.contains(exerciseId);
+
+  void markExercisePlanNoteRead(String exerciseId) {
+    if (_readExercisePlanNotes.contains(exerciseId)) return;
+    _readExercisePlanNotes.add(exerciseId);
+    notifyListeners();
+  }
+
   // ── Template tracking (Phase 18) ────────────────────────────────────────
 
   bool _templateWasLoaded = false;

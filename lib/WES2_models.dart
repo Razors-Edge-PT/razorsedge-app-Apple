@@ -191,6 +191,8 @@ class Wes2ExerciseRow {
   final Wes2RowSource source;
   final bool isMarkedDone;
   final bool isExpanded;
+  /// BB3 exercise-level plan note. Display-only; never written to WES2 execution data.
+  final String? exercisePlanNote;
 
   const Wes2ExerciseRow({
     required this.exerciseId,
@@ -202,6 +204,7 @@ class Wes2ExerciseRow {
     required this.source,
     this.isMarkedDone = false,
     this.isExpanded = true,
+    this.exercisePlanNote,
   });
 
   /// BB3 completion rule: at least one set has weight AND reps.
@@ -226,6 +229,7 @@ class Wes2ExerciseRow {
     Wes2RowSource? source,
     bool? isMarkedDone,
     bool? isExpanded,
+    String? exercisePlanNote,
   }) {
     return Wes2ExerciseRow(
       exerciseId: exerciseId ?? this.exerciseId,
@@ -237,6 +241,7 @@ class Wes2ExerciseRow {
       source: source ?? this.source,
       isMarkedDone: isMarkedDone ?? this.isMarkedDone,
       isExpanded: isExpanded ?? this.isExpanded,
+      exercisePlanNote: exercisePlanNote ?? this.exercisePlanNote,
     );
   }
 
@@ -249,6 +254,7 @@ class Wes2ExerciseRow {
         'source': source.name,
         'isMarkedDone': isMarkedDone,
         'sets': sets.map((s) => s.toJson()).toList(),
+        if (exercisePlanNote != null) 'exercisePlanNote': exercisePlanNote,
       };
 
   static Wes2ExerciseRow fromJson(Map<String, dynamic> map) {
@@ -265,6 +271,7 @@ class Wes2ExerciseRow {
       setCount: map['setCount'] as int,
       source: src,
       isMarkedDone: map['isMarkedDone'] as bool? ?? false,
+      exercisePlanNote: map['exercisePlanNote'] as String?,
       sets: (map['sets'] as List<dynamic>)
           .map((s) => Wes2SetState.fromJson(s as Map<String, dynamic>))
           .toList(),

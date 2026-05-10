@@ -28,6 +28,7 @@ abstract class Wes2HintService {
 /// group math.  Explicit BB3 hint values are never overwritten.
 class Wes2HintServiceImpl implements Wes2HintService {
   final Map<String, dynamic> exerciseSettings;
+  final Map<String, String> exerciseTypes;
   final DateTime blockStartDate;
   final DateTime? blockEndDate;
   final String uid;
@@ -37,6 +38,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
     required this.blockStartDate,
     required this.blockEndDate,
     required this.uid,
+    this.exerciseTypes = const {},
   });
 
   @override
@@ -229,6 +231,14 @@ class Wes2HintServiceImpl implements Wes2HintService {
       }
     }
 
+    // Issues 1+3: when weight or RIR is constrained but reps is not, anchor reps
+    // at the existing hint so the free field absorbs the progression delta rather
+    // than reps drifting. Applies after history path resolves hints.
+    if (constrainedReps == null &&
+        (constrainedWeight != null || constrainedRir != null)) {
+      repsHint = set.reps.hintValue ?? (planReps > 0 ? planReps : repsHint);
+    }
+
     // ── Plan/default fallback ─────────────────────────────────────────────────
     // Fill any field that was not resolved by BB3HintService and is not locked
     // by an explicit BB3 hint value.  Fields with origin=bb3Hint but
@@ -242,7 +252,11 @@ class Wes2HintServiceImpl implements Wes2HintService {
         repsForWeight,
         rirForWeight,
       );
-      if (defW > 0) weightHint = defW;
+      if (defW > 0) {
+        // Issue 5: PMU _defaultWeightForExercise returns 5 for Machine; override to 6.
+        final type = exerciseTypes[row.exerciseId];
+        weightHint = (defW == 5.0 && type == 'Machine') ? 6.0 : defW;
+      }
     }
 
     if (repsHint == null &&
@@ -507,42 +521,62 @@ class Wes2HintServiceImpl implements Wes2HintService {
         );
       }
     } else if (cwt != null) {
-      // Weight locked → solve reps from candidates.
-      final midD = PeriodizationModelUtils.reverseCalculateReps(
-        targetE1RM: targetE1rm,
-        weight: prevWeight,
-        baseWeight: prevWeight,
-        rir: thisRir,
-      ).clamp(1.0, 45.0);
-      repsHint = _closestRepsForWeight(
-        targetE1rm: targetE1rm,
-        weight: cwt,
-        center: midD.round().clamp(1, 45),
-        rir: thisRir,
-        group: group,
-      );
-    } else {
-      // Neither locked → compute both from center reps anchored at prevWeight.
-      final midD = PeriodizationModelUtils.reverseCalculateReps(
-        targetE1RM: targetE1rm,
-        weight: prevWeight,
-        baseWeight: prevWeight,
-        rir: thisRir,
-      ).clamp(1.0, 45.0);
-      final midRep = midD.round().clamp(1, 45);
-
-      final rawW = PeriodizationModelUtils.reverseCalculateWeight(
-        targetE1RM: targetE1rm,
-        reps: midRep,
-        rir: thisRir,
-      );
-      if (rawW > 0) {
-        weightHint = PeriodizationModelUtils.roundToNearestValidIncrement(
-          targetWeight: rawW,
-          exerciseName: row.name,
+      // Weight locked → preserve reps if a hint already exists (Issue 3);
+      // else solve reps from candidates.
+      if (set.reps.hintValue == null) {
+        final midD = PeriodizationModelUtils.reverseCalculateReps(
+          targetE1RM: targetE1rm,
+          weight: prevWeight,
+          baseWeight: prevWeight,
+          rir: thisRir,
+        ).clamp(1.0, 45.0);
+        repsHint = _closestRepsForWeight(
+          targetE1rm: targetE1rm,
+          weight: cwt,
+          center: midD.round().clamp(1, 45),
+          rir: thisRir,
+          group: group,
         );
       }
-      repsHint = midRep;
+    } else {
+      // Neither locked.
+      // Issue 1: if only RIR is typed, anchor reps at existing hint to update weight only.
+      if (set.rir.actualValue != null && set.reps.hintValue != null) {
+        final rawW = PeriodizationModelUtils.reverseCalculateWeight(
+          targetE1RM: targetE1rm,
+          reps: set.reps.hintValue!,
+          rir: thisRir,
+        );
+        if (rawW > 0) {
+          weightHint = PeriodizationModelUtils.roundToNearestValidIncrement(
+            targetWeight: rawW,
+            exerciseName: row.name,
+          );
+        }
+        // repsHint stays null — existing hint preserved via _mergeInt.
+      } else {
+        // Compute both from center reps anchored at prevWeight.
+        final midD = PeriodizationModelUtils.reverseCalculateReps(
+          targetE1RM: targetE1rm,
+          weight: prevWeight,
+          baseWeight: prevWeight,
+          rir: thisRir,
+        ).clamp(1.0, 45.0);
+        final midRep = midD.round().clamp(1, 45);
+
+        final rawW = PeriodizationModelUtils.reverseCalculateWeight(
+          targetE1RM: targetE1rm,
+          reps: midRep,
+          rir: thisRir,
+        );
+        if (rawW > 0) {
+          weightHint = PeriodizationModelUtils.roundToNearestValidIncrement(
+            targetWeight: rawW,
+            exerciseName: row.name,
+          );
+        }
+        repsHint = midRep;
+      }
     }
 
     Wes2SetState result = _applyModelHintToSet(

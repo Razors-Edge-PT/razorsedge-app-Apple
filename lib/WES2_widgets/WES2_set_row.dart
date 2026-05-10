@@ -288,6 +288,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
     if (bRir == null || cRir == null) return null;
     final delta = cRir - bRir;
     if (delta.abs() < 0.5) return null;
+    if (delta <= -2.5) return Colors.redAccent.withValues(alpha: 0.8);
     return delta > 0
         ? Colors.greenAccent.withValues(alpha: 0.65)
         : Colors.amberAccent.withValues(alpha: 0.75);
