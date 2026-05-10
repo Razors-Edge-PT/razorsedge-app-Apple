@@ -71,7 +71,9 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
   List<DailyBestE1RM> _dailyBests = [];
   bool _loadingDaily = true;
 
-
+  bool _includeRIRForTrend = true;
+  String _rirToggleTextTrend() =>
+      _includeRIRForTrend ? 'Including RIR' : 'Excluding RIR';
 
   double calculateE1RM(double weight, double reps, double rir) {
     return PeriodizationModelUtils.calculateE1RM(weight, reps, rir);
@@ -630,7 +632,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
         return aE1 > bE1 ? a : b;
       });
 
-      final e1 = calculateE1RM(top.weight ?? 0.0, (top.reps ?? 0).toDouble(), top.rir ?? 0.0);
+      final e1 = calculateE1RM(top.weight ?? 0.0, (top.reps ?? 0).toDouble(), _includeRIRForTrend ? (top.rir ?? 0.0) : 0.0);
       series.add(E1RMPoint(workout.date, e1));
       _metaAllTop[workout.date] = _PointMeta(
         (top.weight ?? 0.0),
@@ -905,30 +907,58 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.center, // 👈 center contents
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                TextButton.icon(
-                  onPressed: _cycleTrend,
-                  label: Text(
-                    'E1RM Trend • ${_rangeLabel(_trend)}',
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.secondary,
-                      fontWeight: FontWeight.w600,
+                Flexible(
+                  child: TextButton.icon(
+                    onPressed: _cycleTrend,
+                    label: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        'E1RM Trend • ${_rangeLabel(_trend)}',
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.secondary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      foregroundColor: Theme.of(context).colorScheme.secondary,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        side: BorderSide(color: Theme.of(context).colorScheme.secondary),
+                      ),
                     ),
                   ),
-
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    foregroundColor: Theme.of(context).colorScheme.secondary,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      side: BorderSide(color: Theme.of(context).colorScheme.secondary),
+                ),
+                const SizedBox(width: 8),
+                ConstrainedBox(
+                  constraints: const BoxConstraints.tightFor(height: 32),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () => setState(() => _includeRIRForTrend = !_includeRIRForTrend),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Theme.of(context).colorScheme.secondary),
+                        borderRadius: BorderRadius.circular(8),
+                        color: Theme.of(context).colorScheme.secondary.withOpacity(0.08),
+                      ),
+                      child: Text(
+                        _rirToggleTextTrend(),
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.secondary,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ),
                   ),
                 ),
               ],
             ),
-
           ),
 
 
@@ -1034,6 +1064,8 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                   lineTouchData: LineTouchData(
                     touchTooltipData: LineTouchTooltipData(
                       tooltipBgColor: Colors.grey[900]!,
+                      fitInsideHorizontally: true,
+                      fitInsideVertically: true,
                       getTooltipItems: (touchedSpots) {
                         return touchedSpots.map((spot) {
                           final idx   = spot.x.toInt();
@@ -1271,6 +1303,8 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                   lineTouchData: LineTouchData(
                     touchTooltipData: LineTouchTooltipData(
                       tooltipBgColor: Colors.grey[900]!,
+                      fitInsideHorizontally: true,
+                      fitInsideVertically: true,
                       getTooltipItems: (touchedSpots) {
                         return touchedSpots.map((spot) {
                           final gi = spot.barIndex;              // which series

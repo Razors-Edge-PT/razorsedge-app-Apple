@@ -211,17 +211,23 @@ class BB3HintService {
       }
 
       // Only RIR overridden: recompute weight hint at the new intensity.
+      final effectiveRepsRirOnly = (baseReps > 0 && baseReps <= 45)
+          ? baseReps.round()
+          : repTarget;
       return BB3SetHint(
-        weightDisplay: _wHint(repTarget, userRir!),
-        repsDisplay: repTarget > 0 ? repTarget.toString() : '',
+        weightDisplay: _wHint(effectiveRepsRirOnly, userRir!),
+        repsDisplay: effectiveRepsRirOnly > 0 ? effectiveRepsRirOnly.toString() : '',
         rirDisplay: '',
       );
     }
 
     // ── Baseline hints (no overrides) ──────────────────────────────────────
+    final effectiveReps = (baseReps > 0 && baseReps <= 45)
+        ? baseReps.round()
+        : repTarget;
     return BB3SetHint(
-      weightDisplay: _wHint(repTarget, setRir),
-      repsDisplay: repTarget > 0 ? repTarget.toString() : '',
+      weightDisplay: _wHint(effectiveReps, setRir),
+      repsDisplay: effectiveReps > 0 ? effectiveReps.toString() : '',
       rirDisplay: rirDisplay,
     );
   }

@@ -197,8 +197,11 @@ class ProgressionEngine {
       // Get exercise info.
       final exerciseName =
           _selectedExercisesWithCircuits[exerciseIndex]['name']?.trim() ?? '';
-      final exerciseId =
-          PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
+      final rawExId = ((_selectedExercisesWithCircuits[exerciseIndex]['exerciseId']
+          ?? _selectedExercisesWithCircuits[exerciseIndex]['id']) as String?)?.trim() ?? '';
+      final exerciseId = rawExId.isNotEmpty
+          ? rawExId
+          : PeriodizationModelUtils.nameToId[exerciseName] ?? exerciseName;
       final uidForBw = _cachedUid ?? FirebaseAuth.instance.currentUser?.uid ??
           '';
 
@@ -214,8 +217,14 @@ class ProgressionEngine {
 
       // Get rep target.
       double repTarget;
-      final model =
-      PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
+      PeriodizationModelType? model =
+          PeriodizationModelUtils.exercisePeriodizationModels[exerciseId];
+      if (model == null) {
+        final pmStr = _exerciseSettings[exerciseId]?['periodizationModel'] as String?;
+        if (pmStr != null && pmStr.isNotEmpty) {
+          model = PeriodizationModelUtils.stringToModel(pmStr);
+        }
+      }
 
       if (model == PeriodizationModelType.dailyUndulatingExposure) {
         // (Assuming your existing model-specific logic is used here)
