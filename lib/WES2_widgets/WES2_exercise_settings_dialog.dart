@@ -47,6 +47,7 @@ class _Wes2ExerciseSettingsDialogState
   final _weeklyFrequencyCtrl = TextEditingController();
   final _incrementsPrimaryCtrl = TextEditingController();
   final _incrementsSecondaryCtrl = TextEditingController();
+  final _defaultSetsCtrl = TextEditingController();
 
   // repTargets for current week: instanceN → format string, or 'min'/'max' for Signature
   final Map<String, TextEditingController> _repTargetCtrls = {};
@@ -65,6 +66,7 @@ class _Wes2ExerciseSettingsDialogState
     _weeklyFrequencyCtrl.dispose();
     _incrementsPrimaryCtrl.dispose();
     _incrementsSecondaryCtrl.dispose();
+    _defaultSetsCtrl.dispose();
     for (final c in _repTargetCtrls.values) {
       c.dispose();
     }
@@ -144,6 +146,8 @@ class _Wes2ExerciseSettingsDialogState
       _incrementsPrimaryCtrl.text = increments?['primary']?.toString() ?? '';
       _incrementsSecondaryCtrl.text =
           increments?['secondary']?.toString() ?? '';
+
+      _defaultSetsCtrl.text = settings['defaultSets']?.toString() ?? '';
 
       _populateRepTargets(settings);
       _populateRirPlan(settings);
@@ -287,6 +291,16 @@ class _Wes2ExerciseSettingsDialogState
       final wfText = _weeklyFrequencyCtrl.text.trim();
       final wf = wfText.isNotEmpty ? int.tryParse(wfText) : null;
 
+      final dsText = _defaultSetsCtrl.text.trim();
+      final ds = dsText.isNotEmpty ? int.tryParse(dsText) : null;
+      if (_isDupSignature && ds != null && ds < 1) {
+        setState(() {
+          _saving = false;
+          _saveError = 'Default Set Count must be at least 1.';
+        });
+        return;
+      }
+
       final merged = <String, dynamic>{
         ..._existingSettings,
         if (_periodizationModel != null)
@@ -295,6 +309,7 @@ class _Wes2ExerciseSettingsDialogState
         if (_progressionModel != null) 'progressionModel': _progressionModel,
         if (wf != null) 'weeklyFrequency': wf,
         if (increments.isNotEmpty) 'increments': increments,
+        if (_isDupSignature && ds != null) 'defaultSets': ds,
         'repTargets': _buildRepTargets(),
         'rirPlan': _buildRirPlan(),
       };
@@ -461,17 +476,30 @@ class _Wes2ExerciseSettingsDialogState
     _syncSessionControllersToFrequency();
 
     if (_isDupSignature) {
-      return _settingsRow(
-        left: _buildTextField(
-          controller: _repTargetCtrls['min'] ??= TextEditingController(),
-          label: 'Min Reps',
-          keyboardType: TextInputType.number,
-        ),
-        right: _buildTextField(
-          controller: _repTargetCtrls['max'] ??= TextEditingController(),
-          label: 'Max Reps',
-          keyboardType: TextInputType.number,
-        ),
+      return Column(
+        children: [
+          _settingsRow(
+            left: _buildTextField(
+              controller: _repTargetCtrls['min'] ??= TextEditingController(),
+              label: 'Min Reps',
+              keyboardType: TextInputType.number,
+            ),
+            right: _buildTextField(
+              controller: _repTargetCtrls['max'] ??= TextEditingController(),
+              label: 'Max Reps',
+              keyboardType: TextInputType.number,
+            ),
+          ),
+          const SizedBox(height: 8),
+          _settingsRow(
+            left: _buildTextField(
+              controller: _defaultSetsCtrl,
+              label: 'Default Set Count',
+              keyboardType: TextInputType.number,
+            ),
+            right: const SizedBox.shrink(),
+          ),
+        ],
       );
     }
 

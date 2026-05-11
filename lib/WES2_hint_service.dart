@@ -133,12 +133,18 @@ class Wes2HintServiceImpl implements Wes2HintService {
     final constrainedRir    = _constraintRir(set);
 
     // Plan-level values used as fallback when neither BB3 nor model fills a field.
-    final planReps = BB3PlannedExerciseService.getRepTargetForSet(
+    var planReps = BB3PlannedExerciseService.getRepTargetForSet(
       exSettings: exSettings,
       weekIndex: weekIndex,
       sessionIndex: sessionIndex,
       setIndex: 0,
     );
+    // DUP Signature: override planReps with history-aware rep target from exerciseSettings.
+    int? dupSigReps;
+    if (exSettings?['periodizationModel'] == 'DUP, Signature') {
+      dupSigReps = _computeDupSignatureReps(exSettings, weekIndex, row.name);
+      if (dupSigReps != null) planReps = dupSigReps;
+    }
     final planRir = BB3PlannedExerciseService.getRirFromPlan(
       exSettings: exSettings,
       weekIndex: weekIndex,
@@ -177,7 +183,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
         selectedDate: date,
         uid: uid,
         userWeight: constrainedWeight,
-        userReps:   constrainedReps,
+        userReps:   constrainedReps ?? dupSigReps,
         userRir:    constrainedRir,
       );
 
@@ -207,7 +213,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
       // guarantee the resulting E1RM is closest to the day's progression target.
       // Get the unconstrained target E1RM, then generate floor/nearest/ceiling
       // candidates and pick the one whose E1RM is closest to the target.
-      if (weightFromHistory && (constrainedReps != null || constrainedRir != null)) {
+      if (weightFromHistory && (constrainedReps != null || dupSigReps != null || constrainedRir != null)) {
         final targetE1rm = _getTargetE1rm(
           row: row,
           weekIndex: weekIndex,
@@ -1091,5 +1097,62 @@ class Wes2HintServiceImpl implements Wes2HintService {
       }
     }
     return best;
+  }
+
+  /// Returns the DUP Signature rep target for Set 1 using exerciseSettings min/max
+  /// and history derived from savedWorkoutsList (the same source WES2 already uses).
+  /// Returns null when min/max are missing or invalid.
+  int? _computeDupSignatureReps(
+    Map<String, dynamic>? exSettings,
+    int weekIndex,
+    String exerciseName,
+  ) {
+    final weekKey = 'week${weekIndex + 1}';
+    final repTargets = exSettings?['repTargets'] as Map<String, dynamic>?;
+    if (repTargets == null) return null;
+    final weekData = (repTargets[weekKey] ?? repTargets['week1'])
+        as Map<String, dynamic>?;
+    if (weekData == null) return null;
+    final min = (weekData['min'] as num?)?.toInt();
+    final max = (weekData['max'] as num?)?.toInt();
+    if (min == null || max == null || min > max) return null;
+
+    // Build top-set effective-reps history from savedWorkoutsList (newest-first).
+    final rawHistory = <int>[];
+    for (final workout in PeriodizationModelUtils.savedWorkoutsList) {
+      final exercises = workout['exercises'] as List<dynamic>?;
+      if (exercises == null) continue;
+      for (final ex in exercises) {
+        if (ex['name'] != exerciseName) continue;
+        final sets = ex['sets'] as List<dynamic>? ?? [];
+        double bestE1rm = 0.0;
+        int? bestEffReps;
+        for (final s in sets) {
+          final w = (s['weight'] as num?)?.toDouble() ?? 0.0;
+          final r = (s['reps'] as num?)?.toDouble() ?? 0.0;
+          final rir = (s['rir'] as num?)?.toDouble() ?? 0.0;
+          if (w <= 0 || r <= 0) continue;
+          final total = r + rir;
+          final e1rm = total <= 6
+              ? w * (36 / (37 - total))
+              : w * (1 + 0.0333 * total);
+          if (e1rm > bestE1rm) {
+            bestE1rm = e1rm;
+            bestEffReps = (r + rir).floor();
+          }
+        }
+        if (bestEffReps != null) rawHistory.add(bestEffReps);
+        break; // one top-set entry per workout for this exercise
+      }
+    }
+
+    // REsignatureRepTargets expects oldest-first; savedWorkoutsList is newest-first.
+    final history = rawHistory.reversed.toList();
+    final sequence = PeriodizationModelUtils.REsignatureRepTargets(
+      min: min,
+      max: max,
+      history: history,
+    );
+    return sequence.isNotEmpty ? sequence.first : max;
   }
 }
