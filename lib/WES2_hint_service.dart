@@ -83,6 +83,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
         exSettings: exSettings,
         weekIndex: weekIndex,
         sessionIndex: sessionIndex,
+        date: date,
       );
     }
 
@@ -131,10 +132,6 @@ class Wes2HintServiceImpl implements Wes2HintService {
     final constrainedReps   = _constraintReps(set);
     final constrainedRir    = _constraintRir(set);
 
-    // If BB3 explicitly supplies all three hints, their combined E1RM defines
-    // the target for this set — stronger than history/model target.
-    final bb3SetTarget = _bb3FullSetTargetE1rm(set);
-
     // Plan-level values used as fallback when neither BB3 nor model fills a field.
     final planReps = BB3PlannedExerciseService.getRepTargetForSet(
       exSettings: exSettings,
@@ -153,6 +150,11 @@ class Wes2HintServiceImpl implements Wes2HintService {
     // Constraint wins over plan, plan wins over hard fallback.
     final repsForWeight = constrainedReps ?? (planReps > 0 ? planReps : 8);
     final rirForWeight  = constrainedRir  ?? (planRir  > 0 ? planRir  : 2.0);
+
+    // BB3-implied target E1RM: weight+reps locked (plus RIR when also locked).
+    // Bodyweight-aware; used as priority target over history when BB3 has
+    // prescribed this set. Placed after rirForWeight so fallbackRir is available.
+    final bb3SetTarget = _bb3ImpliedSetTargetE1rm(set, rirForWeight, row, date);
 
     double? weightHint;
     int?    repsHint;
@@ -235,7 +237,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
     // user actual), or when RIR is constrained. User-typed weight allows reps
     // to adapt reactively to maintain the target E1RM.
     if (constrainedReps == null &&
-        (constrainedRir != null ||
+        ((constrainedRir != null && set.rir.actualValue == null) ||
          (constrainedWeight != null && set.weight.actualValue == null))) {
       repsHint = set.reps.hintValue ?? (planReps > 0 ? planReps : repsHint);
     }
@@ -290,17 +292,57 @@ class Wes2HintServiceImpl implements Wes2HintService {
         set.reps.actualValue != null &&
         set.rir.actualValue == null &&
         !_isBb3Locked(set.rir)) {
-      final targetE1rm = bb3SetTarget ?? _getTargetE1rm(
-        row: row,
-        weekIndex: weekIndex,
-        sessionIndex: sessionIndex,
-        date: date,
-        uid: uid,
-      );
+      final isBw1 = PeriodizationModelUtils.isBodyweightExercise(
+          id: row.exerciseId, name: row.name);
+
+      // Third fallback: E1RM implied by the pre-edit baseline hint values.
+      // Used when bb3SetTarget is null (no explicit BB3 weight override) and
+      // the exercise has no saved history for _getTargetE1rm to resolve.
+      double? baselineHintE1rm;
+      {
+        final hW = set.weight.hintValue;
+        final hR = set.reps.hintValue;
+        if (hW != null && hR != null) {
+          final hRir = set.rir.hintValue ?? rirForWeight;
+          final absHW = isBw1
+              ? PeriodizationModelUtils.toAbsoluteWeight(
+                  uid: uid,
+                  displayAddedKg: hW,
+                  exerciseId: row.exerciseId,
+                  exerciseName: row.name,
+                  asOfDate: date,
+                )
+              : hW;
+          final e = PeriodizationModelUtils.calculateE1RM(absHW, hR.toDouble(), hRir);
+          if (e > 0) baselineHintE1rm = e;
+        }
+      }
+
+      final targetE1rm = bb3SetTarget
+          ?? _getTargetE1rm(
+               row: row,
+               weekIndex: weekIndex,
+               sessionIndex: sessionIndex,
+               date: date,
+               uid: uid,
+             )
+          ?? baselineHintE1rm;
+
+      // Convert display-added BW load to absolute before solving.
+      final solveWAbs = isBw1
+          ? PeriodizationModelUtils.toAbsoluteWeight(
+              uid: uid,
+              displayAddedKg: set.weight.actualValue!,
+              exerciseId: row.exerciseId,
+              exerciseName: row.name,
+              asOfDate: date,
+            )
+          : set.weight.actualValue!;
+
       final solved = targetE1rm != null
           ? _solveRirForTargetE1rm(
               targetE1rm: targetE1rm,
-              weight: set.weight.actualValue!,
+              weight: solveWAbs,
               reps: set.reps.actualValue!,
             )
           : null;
@@ -388,8 +430,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
         weight: constrainedWeight,
         baseWeight: constrainedWeight,
         rir: rirForWeight,
-      ).clamp(1.0, 45.0);
-      final freeR = freeD.round().clamp(1, 45);
+      ).clamp(1.0, 100.0);
+      final freeR = freeD.round().clamp(1, 100);
       if ((freeR - set.reps.hintValue!).abs() >= 1) {
         repsCue = true;
       }
@@ -471,14 +513,28 @@ class Wes2HintServiceImpl implements Wes2HintService {
     required Map<String, dynamic>? exSettings,
     required int weekIndex,
     required int sessionIndex,
+    required DateTime date,
   }) {
     final prevWeight = prevSet.weight.actualValue ?? prevSet.weight.hintValue;
     final prevReps   = prevSet.reps.actualValue   ?? prevSet.reps.hintValue;
     if (prevWeight == null || prevReps == null) return set;
 
-    final prevRir   = prevSet.rir.actualValue ?? prevSet.rir.hintValue ?? 0.0;
-    final prevE1rm  = PeriodizationModelUtils.calculateE1RM(
-      prevWeight, prevReps.toDouble(), prevRir,
+    final prevRir = prevSet.rir.actualValue ?? prevSet.rir.hintValue ?? 0.0;
+
+    // Bodyweight exercises store display-added load; E1RM math needs absolute load.
+    final isBw = PeriodizationModelUtils.isBodyweightExercise(
+        id: row.exerciseId, name: row.name);
+    final prevWeightAbs = isBw
+        ? PeriodizationModelUtils.toAbsoluteWeight(
+            uid: uid,
+            displayAddedKg: prevWeight,
+            exerciseId: row.exerciseId,
+            exerciseName: row.name,
+            asOfDate: date,
+          )
+        : prevWeight;
+    final prevE1rm = PeriodizationModelUtils.calculateE1RM(
+      prevWeightAbs, prevReps.toDouble(), prevRir,
     );
     if (prevE1rm <= 0) return set;
 
@@ -486,7 +542,6 @@ class Wes2HintServiceImpl implements Wes2HintService {
     final rawDrop    = _rawDropFor(group, setIdx);
     final drop       = _gatedDrop(rawDrop, prevRir);
     final cascadeTarget = (prevE1rm - drop).clamp(1.0, 9999.0);
-    final targetE1rm = _bb3FullSetTargetE1rm(set) ?? cascadeTarget;
 
     // RIR precedence: actual > BB3 explicit > rirPlan > 0.0 fallback.
     final constrainedRir = _constraintRir(set);
@@ -499,6 +554,9 @@ class Wes2HintServiceImpl implements Wes2HintService {
     final thisRir = constrainedRir ?? (planRir > 0 ? planRir : 0.0);
     // Emit RIR hint only when neither actual nor BB3 holds the field.
     final rirHint = constrainedRir == null && planRir > 0 ? planRir : null;
+
+    // BB3-implied target wins when BB3 has prescribed this set; cascade is fallback.
+    final targetE1rm = _bb3ImpliedSetTargetE1rm(set, thisRir, row, date) ?? cascadeTarget;
 
     final cwt   = _constraintWeight(set);
     final creps = _constraintReps(set);
@@ -516,32 +574,51 @@ class Wes2HintServiceImpl implements Wes2HintService {
         rir: thisRir,
       );
       if (raw > 0) {
-        weightHint = PeriodizationModelUtils.roundToNearestValidIncrement(
+        final rounded = PeriodizationModelUtils.roundToNearestValidIncrement(
           targetWeight: raw,
           exerciseName: row.name,
         );
+        // reverseCalculateWeight returns absolute load; BW display is added load.
+        weightHint = isBw
+            ? PeriodizationModelUtils.toDisplayAddedWeight(
+                uid: uid,
+                absoluteKg: rounded,
+                exerciseId: row.exerciseId,
+                exerciseName: row.name,
+                asOfDate: date,
+              )
+            : rounded;
       }
     } else if (cwt != null) {
       // Weight constraint: solve reps unless locked by BB3 or user actual.
-      // User-typed weight allows reps to adapt reactively to maintain target E1RM.
+      // Center is derived from cwt (actual weight), not prevWeight — fixes Issue 4.
+      // For BW exercises, use absolute load for all E1RM math.
       if (!_isBb3Locked(set.reps) && set.reps.actualValue == null) {
+        final cwtForMath = isBw
+            ? PeriodizationModelUtils.toAbsoluteWeight(
+                uid: uid,
+                displayAddedKg: cwt,
+                exerciseId: row.exerciseId,
+                exerciseName: row.name,
+                asOfDate: date,
+              )
+            : cwt;
         final midD = PeriodizationModelUtils.reverseCalculateReps(
           targetE1RM: targetE1rm,
-          weight: prevWeight,
-          baseWeight: prevWeight,
+          weight: cwtForMath,
+          baseWeight: cwtForMath,
           rir: thisRir,
-        ).clamp(1.0, 45.0);
+        ).clamp(1.0, 100.0);
         repsHint = _closestRepsForWeight(
           targetE1rm: targetE1rm,
-          weight: cwt,
-          center: midD.round().clamp(1, 45),
+          weight: cwtForMath,
+          center: midD.round().clamp(1, 100),
           rir: thisRir,
           group: group,
         );
       }
     } else {
-      // Neither locked.
-      // Issue 1: if only RIR is typed, anchor reps at existing hint to update weight only.
+      // Neither locked. If only RIR is typed, preserve reps hint; only weight updates.
       if (set.rir.actualValue != null && set.reps.hintValue != null) {
         final rawW = PeriodizationModelUtils.reverseCalculateWeight(
           targetE1RM: targetE1rm,
@@ -549,21 +626,31 @@ class Wes2HintServiceImpl implements Wes2HintService {
           rir: thisRir,
         );
         if (rawW > 0) {
-          weightHint = PeriodizationModelUtils.roundToNearestValidIncrement(
+          final rounded = PeriodizationModelUtils.roundToNearestValidIncrement(
             targetWeight: rawW,
             exerciseName: row.name,
           );
+          weightHint = isBw
+              ? PeriodizationModelUtils.toDisplayAddedWeight(
+                  uid: uid,
+                  absoluteKg: rounded,
+                  exerciseId: row.exerciseId,
+                  exerciseName: row.name,
+                  asOfDate: date,
+                )
+              : rounded;
         }
-        // repsHint stays null — existing hint preserved via _mergeInt.
+        // Pass existing hint so _mergeInt keeps it instead of clearing (Issue 2 fix).
+        repsHint = set.reps.hintValue;
       } else {
-        // Compute both from center reps anchored at prevWeight.
+        // Compute both; anchor center at prevWeightAbs (absolute for BW).
         final midD = PeriodizationModelUtils.reverseCalculateReps(
           targetE1RM: targetE1rm,
-          weight: prevWeight,
-          baseWeight: prevWeight,
+          weight: prevWeightAbs,
+          baseWeight: prevWeightAbs,
           rir: thisRir,
-        ).clamp(1.0, 45.0);
-        final midRep = midD.round().clamp(1, 45);
+        ).clamp(1.0, 100.0);
+        final midRep = midD.round().clamp(1, 100);
 
         final rawW = PeriodizationModelUtils.reverseCalculateWeight(
           targetE1RM: targetE1rm,
@@ -571,10 +658,19 @@ class Wes2HintServiceImpl implements Wes2HintService {
           rir: thisRir,
         );
         if (rawW > 0) {
-          weightHint = PeriodizationModelUtils.roundToNearestValidIncrement(
+          final rounded = PeriodizationModelUtils.roundToNearestValidIncrement(
             targetWeight: rawW,
             exerciseName: row.name,
           );
+          weightHint = isBw
+              ? PeriodizationModelUtils.toDisplayAddedWeight(
+                  uid: uid,
+                  absoluteKg: rounded,
+                  exerciseId: row.exerciseId,
+                  exerciseName: row.name,
+                  asOfDate: date,
+                )
+              : rounded;
         }
         repsHint = midRep;
       }
@@ -587,15 +683,25 @@ class Wes2HintServiceImpl implements Wes2HintService {
       rirHint: rirHint,
     );
 
-    // Phase 21F: same logic as Set 1 — solve RIR when both actuals present and
-    // RIR is not BB3-locked. BB3-locked RIR is preserved for the 21C cue below.
+    // Phase 21F: solve RIR when both actuals present and RIR is not BB3-locked.
+    // BB3-locked RIR is preserved for the 21C cue below.
+    // BW: convert display-added actual to absolute for E1RM math.
     if (set.weight.actualValue != null &&
         set.reps.actualValue != null &&
         set.rir.actualValue == null &&
         !_isBb3Locked(set.rir)) {
+      final solveWAbs = isBw
+          ? PeriodizationModelUtils.toAbsoluteWeight(
+              uid: uid,
+              displayAddedKg: set.weight.actualValue!,
+              exerciseId: row.exerciseId,
+              exerciseName: row.name,
+              asOfDate: date,
+            )
+          : set.weight.actualValue!;
       final solved = _solveRirForTargetE1rm(
         targetE1rm: targetE1rm,
-        weight: set.weight.actualValue!,
+        weight: solveWAbs,
         reps: set.reps.actualValue!,
       );
       if (solved != null) {
@@ -626,16 +732,16 @@ class Wes2HintServiceImpl implements Wes2HintService {
         (repsBb3OnlyN &&
             (set.weight.actualValue != null || set.rir.actualValue != null));
     if (needsFreeN) {
-      // Weight cue: free reps at prevWeight → free weight at targetE1rm.
+      // Weight cue: free reps at prevWeightAbs → free weight at targetE1rm.
       if (weightBb3OnlyN &&
           (set.reps.actualValue != null || set.rir.actualValue != null)) {
         final freeD = PeriodizationModelUtils.reverseCalculateReps(
           targetE1RM: targetE1rm,
-          weight: prevWeight,
-          baseWeight: prevWeight,
+          weight: prevWeightAbs,
+          baseWeight: prevWeightAbs,
           rir: thisRir,
-        ).clamp(1.0, 45.0);
-        final freeRepInt = freeD.round().clamp(1, 45);
+        ).clamp(1.0, 100.0);
+        final freeRepInt = freeD.round().clamp(1, 100);
         final rawFreeW = PeriodizationModelUtils.reverseCalculateWeight(
           targetE1RM: targetE1rm,
           reps: freeRepInt,
@@ -652,17 +758,25 @@ class Wes2HintServiceImpl implements Wes2HintService {
         }
       }
 
-      // Reps cue: anchored at actual weight when present — the cue must reflect
-      // what the model suggests at the weight the user actually entered, not prevWeight.
+      // Reps cue: anchored at actual weight when present (absolute for BW).
       if (repsBb3OnlyN &&
           (set.weight.actualValue != null || set.rir.actualValue != null)) {
         final anchorW = set.weight.actualValue ?? prevWeight;
+        final anchorWAbs = isBw
+            ? PeriodizationModelUtils.toAbsoluteWeight(
+                uid: uid,
+                displayAddedKg: anchorW,
+                exerciseId: row.exerciseId,
+                exerciseName: row.name,
+                asOfDate: date,
+              )
+            : anchorW;
         final freeRepForCue = PeriodizationModelUtils.reverseCalculateReps(
           targetE1RM: targetE1rm,
-          weight: anchorW,
-          baseWeight: anchorW,
+          weight: anchorWAbs,
+          baseWeight: anchorWAbs,
           rir: thisRir,
-        ).clamp(1.0, 45.0).round().clamp(1, 45);
+        ).clamp(1.0, 100.0).round().clamp(1, 100);
         if ((freeRepForCue - set.reps.hintValue!).abs() >= 1) {
           repsCue = true;
         }
@@ -670,12 +784,22 @@ class Wes2HintServiceImpl implements Wes2HintService {
     }
 
     // RIR cue: requires both actuals; uses free solved RIR, not planRir.
+    // BW: convert display-added actual to absolute for E1RM solve.
     if (rirBb3OnlyN &&
         set.weight.actualValue != null &&
         set.reps.actualValue != null) {
+      final solveWAbs = isBw
+          ? PeriodizationModelUtils.toAbsoluteWeight(
+              uid: uid,
+              displayAddedKg: set.weight.actualValue!,
+              exerciseId: row.exerciseId,
+              exerciseName: row.name,
+              asOfDate: date,
+            )
+          : set.weight.actualValue!;
       final freeSolvedRir = _solveRirForTargetE1rm(
         targetE1rm: targetE1rm,
-        weight: set.weight.actualValue!,
+        weight: solveWAbs,
         reps: set.reps.actualValue!,
       );
       if (freeSolvedRir != null &&
@@ -759,18 +883,28 @@ class Wes2HintServiceImpl implements Wes2HintService {
   static bool _isBb3Locked<T extends Object>(Wes2FieldState<T> f) =>
       f.hintOrigin == FieldOrigin.bb3Hint && f.hintValue != null;
 
-  /// Returns the E1RM implied by BB3's explicit hints when all three fields
-  /// carry a BB3 lock.  Used as the priority target E1RM when the coach has
-  /// prescribed a complete set (weight + reps + RIR), overriding history/model.
-  /// Returns null when any field lacks a BB3 lock or the result is ≤ 0.
-  static double? _bb3FullSetTargetE1rm(Wes2SetState set) {
-    if (!_isBb3Locked(set.weight)) return null;
-    if (!_isBb3Locked(set.reps)) return null;
-    if (!_isBb3Locked(set.rir)) return null;
+  /// Returns the E1RM implied by BB3's explicit hints when weight+reps are
+  /// BB3-locked.  If RIR is also BB3-locked, uses it; otherwise uses
+  /// [fallbackRir].  Handles partial locks (weight+reps only) in addition to
+  /// full three-field locks.  Bodyweight-aware: converts display-added load to
+  /// absolute load before calling calculateE1RM.
+  double? _bb3ImpliedSetTargetE1rm(
+      Wes2SetState set, double fallbackRir, Wes2ExerciseRow row, DateTime date) {
+    if (!_isBb3Locked(set.weight) || !_isBb3Locked(set.reps)) return null;
+    double absWeight = set.weight.hintValue!;
+    if (PeriodizationModelUtils.isBodyweightExercise(
+        id: row.exerciseId, name: row.name)) {
+      absWeight = PeriodizationModelUtils.toAbsoluteWeight(
+        uid: uid,
+        displayAddedKg: absWeight,
+        exerciseId: row.exerciseId,
+        exerciseName: row.name,
+        asOfDate: date,
+      );
+    }
+    final effectiveRir = _isBb3Locked(set.rir) ? set.rir.hintValue! : fallbackRir;
     final e = PeriodizationModelUtils.calculateE1RM(
-      set.weight.hintValue!,
-      set.reps.hintValue!.toDouble(),
-      set.rir.hintValue!,
+      absWeight, set.reps.hintValue!.toDouble(), effectiveRir,
     );
     return e > 0 ? e : null;
   }
@@ -935,9 +1069,9 @@ class Wes2HintServiceImpl implements Wes2HintService {
   }) {
     final tol = group == 'D' ? 0.3 : 0.7;
     final candidates = <int>{
-      (center - 1).clamp(1, 45),
+      (center - 1).clamp(1, 100),
       center,
-      (center + 1).clamp(1, 45),
+      (center + 1).clamp(1, 100),
     }.toList()..sort();
 
     int best = center;

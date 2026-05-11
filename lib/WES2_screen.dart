@@ -42,6 +42,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   final Wes2TemplateService _templateService = FirestoreWes2TemplateService();
   bool _loadStarted = false;
   String? _athleteUsername;
+  String? _athleteGreeting;
   String? _fetchedForUid;
   Map<String, dynamic> _cachedExerciseSettings = const {};
   Map<String, String> _cachedExerciseTypes = const {};
@@ -60,10 +61,30 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     try {
       final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
       final data = doc.data() ?? {};
-      final name = (data['username'] as String?)?.trim();
+
+      // Prefer username, fall back to displayName then fullName
+      String? name;
+      for (final key in ['username', 'displayName', 'fullName']) {
+        final v = (data[key] as String?)?.trim();
+        if (v != null && v.isNotEmpty) { name = v; break; }
+      }
+
+      // Greeting from profile.gender (not sex)
+      String greeting = 'Welcome';
+      final profile = data['profile'];
+      if (profile is Map<String, dynamic>) {
+        final gender = (profile['gender'] as String?)?.toLowerCase().trim() ?? '';
+        if (gender == 'female' || gender == 'woman' || gender == 'girl') {
+          greeting = 'Welcome queen';
+        } else if (gender == 'male' || gender == 'man' || gender == 'boy') {
+          greeting = 'Welcome king';
+        }
+      }
+
       if (mounted) {
         setState(() {
           _athleteUsername = (name != null && name.isNotEmpty) ? name : null;
+          _athleteGreeting = greeting;
           _fetchedForUid = uid;
         });
       }
@@ -710,22 +731,38 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
           appBar: AppBar(
             title: const Text(' '),
             actions: [
-              if (_athleteUsername != null)
+              if (_athleteGreeting != null)
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 6),
                   child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 110),
-                    child: Center(
-                      child: Text(
-                        _athleteUsername!,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.secondary,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
+                    constraints: const BoxConstraints(maxWidth: 120),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _athleteGreeting!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.secondary,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
-                      ),
+                        if (_athleteUsername != null)
+                          Text(
+                            _athleteUsername!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.secondary,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                 ),
@@ -828,7 +865,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
               if (_timerVisible)
                 Positioned(
                   right: 12,
-                  bottom: MediaQuery.of(context).padding.bottom + 12,
+                  bottom: MediaQuery.of(context).padding.bottom + 2,
                   child: _buildFloatingTimer(),
                 ),
             ],
