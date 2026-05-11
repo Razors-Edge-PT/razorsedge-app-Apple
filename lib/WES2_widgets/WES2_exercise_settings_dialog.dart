@@ -91,6 +91,26 @@ class _Wes2ExerciseSettingsDialogState
   }
 
 
+  int get _microcycleSlotCount {
+    final repTargets = _existingSettings['repTargets'] as Map<String, dynamic>?;
+    final week1 = repTargets?['week1'] as Map<String, dynamic>?;
+    if (week1 == null) return 0;
+    return week1.keys.where((k) => k.startsWith('instance')).length;
+  }
+
+  String get _microcycleInstanceDisplay {
+    final n = _microcycleSlotCount;
+    if (n <= 0) return 'Not set';
+    final g = _globalInstanceDisplay;
+    final int x;
+    if (_periodizationModel == 'DUP, By Week') {
+      x = _weeklyInstanceDisplay.clamp(1, n);
+    } else {
+      x = ((g - 1) % n) + 1;
+    }
+    return '$x of $n';
+  }
+
   int get _sessionCount {
     final wf = int.tryParse(_weeklyFrequencyCtrl.text.trim());
     if (wf != null && wf > 0) return wf;
@@ -287,7 +307,7 @@ class _Wes2ExerciseSettingsDialogState
       );
 
       if (!mounted) return;
-      Navigator.of(context).pop();
+      Navigator.of(context).pop(true);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -618,6 +638,13 @@ class _Wes2ExerciseSettingsDialogState
           const SizedBox(height: 3),
           Text(
             'Current weekly rep target instance: $_weeklyInstanceDisplay of $_sessionCount',
+            style: const TextStyle(fontSize: 12, color: Colors.white70),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 3),
+          Text(
+            'Current microcycle rep target instance: $_microcycleInstanceDisplay',
             style: const TextStyle(fontSize: 12, color: Colors.white70),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,

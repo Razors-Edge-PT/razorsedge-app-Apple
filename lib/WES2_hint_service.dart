@@ -231,11 +231,12 @@ class Wes2HintServiceImpl implements Wes2HintService {
       }
     }
 
-    // Issues 1+3: when weight or RIR is constrained but reps is not, anchor reps
-    // at the existing hint so the free field absorbs the progression delta rather
-    // than reps drifting. Applies after history path resolves hints.
+    // Anchor reps only when the weight constraint is a BB3 explicit hint (no
+    // user actual), or when RIR is constrained. User-typed weight allows reps
+    // to adapt reactively to maintain the target E1RM.
     if (constrainedReps == null &&
-        (constrainedWeight != null || constrainedRir != null)) {
+        (constrainedRir != null ||
+         (constrainedWeight != null && set.weight.actualValue == null))) {
       repsHint = set.reps.hintValue ?? (planReps > 0 ? planReps : repsHint);
     }
 
@@ -521,9 +522,9 @@ class Wes2HintServiceImpl implements Wes2HintService {
         );
       }
     } else if (cwt != null) {
-      // Weight locked → preserve reps if a hint already exists (Issue 3);
-      // else solve reps from candidates.
-      if (set.reps.hintValue == null) {
+      // Weight constraint: solve reps unless locked by BB3 or user actual.
+      // User-typed weight allows reps to adapt reactively to maintain target E1RM.
+      if (!_isBb3Locked(set.reps) && set.reps.actualValue == null) {
         final midD = PeriodizationModelUtils.reverseCalculateReps(
           targetE1RM: targetE1rm,
           weight: prevWeight,

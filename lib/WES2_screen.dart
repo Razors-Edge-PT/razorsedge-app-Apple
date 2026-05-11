@@ -1145,7 +1145,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
   // ── Exercise settings dialog (Phase 19) ──────────────────────────────────
 
-  void _showExerciseSettingsDialog(Wes2ExerciseRow row) {
+  Future<void> _showExerciseSettingsDialog(Wes2ExerciseRow row) async {
     final blockId = _controller.activeBlockId;
     final blockStart = _controller.blockStartDate;
     if (blockId == null ||
@@ -1159,7 +1159,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       return;
     }
     final wd = _weekDayFromDate(blockStart, _controller.selectedDate);
-    showDialog<void>(
+    final saved = await showDialog<bool>(
       context: context,
       builder: (_) => Wes2ExerciseSettingsDialog(
         uid: _controller.actingUid,
@@ -1171,6 +1171,14 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         planService: _planService,
       ),
     );
+    if (saved == true && mounted) {
+      _cachedExerciseSettings = await _planService.loadExerciseSettings(
+        uid: _controller.actingUid,
+        blockId: blockId,
+      );
+      _controller.setExerciseSettings(_cachedExerciseSettings);
+      await _loadAndApplyHints();
+    }
   }
 
   void _showNotesPlaceholder() {
