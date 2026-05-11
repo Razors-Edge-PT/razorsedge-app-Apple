@@ -305,12 +305,39 @@ class Wes2SessionController extends ChangeNotifier {
       // displayed value without changing it. Passing the same numeric value as
       // a hard constraint changes BB3HintService's solving path and produces
       // different sibling hints than the unconstrained initial pass.
-      final weightActual = _sameAsHint(cs.weight.actualValue, bs.weight.hintValue)
+      //
+      // Exception: when a field has a BB3 hint and the OTHER sibling has a
+      // different actual (and RIR is not yet typed), keep the same-as-hint
+      // actual so Phase 21F and the 21C RIR cue can see both fields as entered.
+      // Safety: _constraintWeight/_constraintReps in the hint service falls back
+      // to the BB3 hintValue when actualValue is null, so the numeric constraint
+      // seen by BB3HintService is identical either way — no sibling-solve regression.
+      final repsHasDifferentActual = cs.reps.actualValue != null &&
+          !_sameAsHintInt(cs.reps.actualValue, bs.reps.hintValue);
+      final weightHasDifferentActual = cs.weight.actualValue != null &&
+          !_sameAsHint(cs.weight.actualValue, bs.weight.hintValue);
+      final rirNoActual = cs.rir.actualValue == null;
+
+      final weightSuppressible = _sameAsHint(cs.weight.actualValue, bs.weight.hintValue);
+      final unsuppressWeight = weightSuppressible &&
+          bs.weight.hintOrigin == FieldOrigin.bb3Hint &&
+          bs.weight.hintValue != null &&
+          repsHasDifferentActual &&
+          rirNoActual;
+      final weightActual = (weightSuppressible && !unsuppressWeight)
           ? null
           : cs.weight.actualValue;
-      final repsActual = _sameAsHintInt(cs.reps.actualValue, bs.reps.hintValue)
+
+      final repsSuppressible = _sameAsHintInt(cs.reps.actualValue, bs.reps.hintValue);
+      final unsuppressReps = repsSuppressible &&
+          bs.reps.hintOrigin == FieldOrigin.bb3Hint &&
+          bs.reps.hintValue != null &&
+          weightHasDifferentActual &&
+          rirNoActual;
+      final repsActual = (repsSuppressible && !unsuppressReps)
           ? null
           : cs.reps.actualValue;
+
       final rirActual = _sameAsHint(cs.rir.actualValue, bs.rir.hintValue)
           ? null
           : cs.rir.actualValue;
