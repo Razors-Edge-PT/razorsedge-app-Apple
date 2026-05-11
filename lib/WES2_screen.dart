@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'user_context.dart';
 import 'WES2_controller.dart';
 import 'WES2_models.dart';
@@ -40,6 +41,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   final Wes2LocalStore _localStore = IsarWes2LocalStore();
   final Wes2TemplateService _templateService = FirestoreWes2TemplateService();
   bool _loadStarted = false;
+  String? _athleteUsername;
+  String? _fetchedForUid;
   Map<String, dynamic> _cachedExerciseSettings = const {};
   Map<String, String> _cachedExerciseTypes = const {};
   // IDs present in the BB3 planned day at last load. Keyed by exerciseId.
@@ -52,6 +55,22 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   int _elapsedSeconds = 0;
   DateTime? _timerStartedAt;
   Timer? _timerTicker;
+
+  Future<void> _fetchAthleteUsername(String uid) async {
+    try {
+      final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      final data = doc.data() ?? {};
+      final name = (data['username'] as String?)?.trim();
+      if (mounted) {
+        setState(() {
+          _athleteUsername = (name != null && name.isNotEmpty) ? name : null;
+          _fetchedForUid = uid;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _fetchedForUid = uid);
+    }
+  }
 
   @override
   void initState() {
@@ -679,10 +698,37 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     return ChangeNotifierProvider<Wes2SessionController>.value(
       value: _controller,
       child: Consumer<Wes2SessionController>(
-        builder: (context, controller, _) => Scaffold(
+        builder: (context, controller, _) {
+          final uc = UserContext.of(context); // listen:true → rebuilds on athlete switch
+          final actingUid = uc.currentUid;
+          if (_fetchedForUid != actingUid) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted && _fetchedForUid != actingUid) _fetchAthleteUsername(actingUid);
+            });
+          }
+          return Scaffold(
           appBar: AppBar(
             title: const Text(' '),
             actions: [
+              if (_athleteUsername != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 110),
+                    child: Center(
+                      child: Text(
+                        _athleteUsername!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.secondary,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               Padding(
                 padding: const EdgeInsets.only(left: 4, right: 4),
                 child: Image.asset(
@@ -782,12 +828,13 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
               if (_timerVisible)
                 Positioned(
                   right: 12,
-                  bottom: 12,
+                  bottom: MediaQuery.of(context).padding.bottom + 12,
                   child: _buildFloatingTimer(),
                 ),
             ],
           ),
-        ),
+        );
+        },
       ),
     );
   }
