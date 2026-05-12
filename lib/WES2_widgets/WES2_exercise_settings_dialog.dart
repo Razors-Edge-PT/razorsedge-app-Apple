@@ -181,19 +181,19 @@ class _Wes2ExerciseSettingsDialogState
     }
     _repTargetCtrls.clear();
 
-    final repTargets = settings['repTargets'] as Map<String, dynamic>?;
-    // week1 is the repeating microcycle template; fall back when current week has no data.
-    final weekData = (repTargets?[_weekKey] ?? repTargets?['week1'])
-        as Map<String, dynamic>?;
-
     if (_isDupSignature) {
+      final range = _parseDupSignatureRange(settings['repTargets']);
       _repTargetCtrls['min'] = TextEditingController(
-        text: weekData?['min']?.toString() ?? '',
+        text: range?['min']?.toString() ?? '',
       );
       _repTargetCtrls['max'] = TextEditingController(
-        text: weekData?['max']?.toString() ?? '',
+        text: range?['max']?.toString() ?? '',
       );
     } else {
+      final repTargets = settings['repTargets'] as Map<String, dynamic>?;
+      // week1 is the repeating microcycle template; fall back when current week has no data.
+      final weekData = (repTargets?[_weekKey] ?? repTargets?['week1'])
+          as Map<String, dynamic>?;
       final count = _sessionCount;
       for (int i = 1; i <= count; i++) {
         final key = 'instance$i';
@@ -229,21 +229,79 @@ class _Wes2ExerciseSettingsDialogState
   Map<String, dynamic> _buildRepTargets() {
     final existing =
         (_existingSettings['repTargets'] as Map<String, dynamic>?) ?? {};
-    final Map<String, dynamic> weekData = {};
 
     if (_isDupSignature) {
+      // DUP Signature range is block-scoped: write to repRange.
+      // Spread existing first so week1, weekN, and any other keys are preserved.
       final minVal = int.tryParse(_repTargetCtrls['min']?.text.trim() ?? '');
       final maxVal = int.tryParse(_repTargetCtrls['max']?.text.trim() ?? '');
-      if (minVal != null) weekData['min'] = minVal;
-      if (maxVal != null) weekData['max'] = maxVal;
-    } else {
-      for (final entry in _repTargetCtrls.entries) {
-        final v = entry.value.text.trim();
-        if (v.isNotEmpty) weekData[entry.key] = v;
+      final existingRepRangeRaw = existing['repRange'];
+      final repRange = existingRepRangeRaw is Map
+          ? Map<String, dynamic>.from(existingRepRangeRaw)
+          : <String, dynamic>{};
+      if (minVal != null) repRange['min'] = minVal;
+      if (maxVal != null) repRange['max'] = maxVal;
+      return {...existing, 'repRange': repRange};
+    }
+
+    final Map<String, dynamic> weekData = {};
+    for (final entry in _repTargetCtrls.entries) {
+      final v = entry.value.text.trim();
+      if (v.isNotEmpty) weekData[entry.key] = v;
+    }
+    return {...existing, _weekKey: weekData};
+  }
+
+  /// Parses a DUP Signature min/max rep range from a raw repTargets value.
+  /// DUP Signature range is block-scoped; no week index needed.
+  /// Priority: repRange.{min,max} → week1.{min,max} → week1.instance1 string.
+  /// Uses only safe conversions — never throws on malformed data.
+  static Map<String, int>? _parseDupSignatureRange(dynamic repTargetsRaw) {
+    Map<String, dynamic>? asStringMap(dynamic v) {
+      if (v is Map) return Map<String, dynamic>.from(v);
+      return null;
+    }
+
+    int? parseInt(dynamic v) {
+      if (v == null) return null;
+      if (v is num) return v.toInt();
+      return int.tryParse(v.toString().trim());
+    }
+
+    Map<String, int>? fromMap(Map<String, dynamic>? m) {
+      if (m == null) return null;
+      final mn = parseInt(m['min']);
+      final mx = parseInt(m['max']);
+      if (mn != null && mx != null && mn < mx) return {'min': mn, 'max': mx};
+      return null;
+    }
+
+    final repTargets = asStringMap(repTargetsRaw);
+    if (repTargets == null) return null;
+
+    // 1. repRange — canonical block-scoped shape
+    final r1 = fromMap(asStringMap(repTargets['repRange']));
+    if (r1 != null) return r1;
+
+    // 2. week1.{min,max} — compatibility fallback
+    final week1 = asStringMap(repTargets['week1']);
+    final r2 = fromMap(week1);
+    if (r2 != null) return r2;
+
+    // 3. week1.instance1 string e.g. "6 – 12 reps" / "6-12" / "6 - 12"
+    if (week1 != null) {
+      final raw = week1['instance1']?.toString();
+      if (raw != null) {
+        final m = RegExp(r'(\d+)\s*[–\-—]\s*(\d+)').firstMatch(raw);
+        if (m != null) {
+          final mn = int.tryParse(m.group(1)!);
+          final mx = int.tryParse(m.group(2)!);
+          if (mn != null && mx != null && mn < mx) return {'min': mn, 'max': mx};
+        }
       }
     }
 
-    return {...existing, _weekKey: weekData};
+    return null;
   }
 
   Map<String, dynamic> _buildRirPlan() {

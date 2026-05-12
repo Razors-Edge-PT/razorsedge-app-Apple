@@ -343,13 +343,17 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
       for (final row in rows) {
         if (!mounted) return;
-        final hinted = svc.computeRowHints(
-          row: row,
-          blockId: blockId,
-          uid: _controller.actingUid,
-          date: date,
-        );
-        _controller.applyModelHints(row.exerciseId, hinted);
+        try {
+          final hinted = svc.computeRowHints(
+            row: row,
+            blockId: blockId,
+            uid: _controller.actingUid,
+            date: date,
+          );
+          _controller.applyModelHints(row.exerciseId, hinted);
+        } catch (e) {
+          debugPrint('[WES2] Hint failed for ${row.name} (${row.exerciseId}): $e');
+        }
       }
       // Snapshot hinted rows as baseline so same-set recalc can restore
       // original hints when the user clears all typed actuals.

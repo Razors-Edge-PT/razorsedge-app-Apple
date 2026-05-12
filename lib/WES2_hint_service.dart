@@ -1101,36 +1101,46 @@ class Wes2HintServiceImpl implements Wes2HintService {
 
   /// Returns the DUP Signature rep target for Set 1 using exerciseSettings min/max
   /// and history derived from savedWorkoutsList (the same source WES2 already uses).
-  /// Returns null when min/max are missing or invalid.
+  /// Returns null when min/max are missing or invalid — never throws.
   int? _computeDupSignatureReps(
     Map<String, dynamic>? exSettings,
     int weekIndex,
     String exerciseName,
   ) {
-    final weekKey = 'week${weekIndex + 1}';
-    final repTargets = exSettings?['repTargets'] as Map<String, dynamic>?;
-    if (repTargets == null) return null;
-    final weekData = (repTargets[weekKey] ?? repTargets['week1'])
-        as Map<String, dynamic>?;
-    if (weekData == null) return null;
-    final min = (weekData['min'] as num?)?.toInt();
-    final max = (weekData['max'] as num?)?.toInt();
-    if (min == null || max == null || min > max) return null;
+    final range = _parseDupSignatureRange(exSettings?['repTargets']);
+    if (range == null) return null;
+    final min = range['min']!;
+    final max = range['max']!;
+
+    double parseDouble(dynamic v) {
+      if (v == null) return 0.0;
+      if (v is num) return v.toDouble();
+      return double.tryParse(v.toString().trim()) ?? 0.0;
+    }
+
+    Map<String, dynamic>? asStringMap(dynamic v) {
+      if (v is Map) return Map<String, dynamic>.from(v);
+      return null;
+    }
 
     // Build top-set effective-reps history from savedWorkoutsList (newest-first).
     final rawHistory = <int>[];
     for (final workout in PeriodizationModelUtils.savedWorkoutsList) {
-      final exercises = workout['exercises'] as List<dynamic>?;
-      if (exercises == null) continue;
-      for (final ex in exercises) {
-        if (ex['name'] != exerciseName) continue;
-        final sets = ex['sets'] as List<dynamic>? ?? [];
+      final exercisesRaw = workout['exercises'];
+      if (exercisesRaw is! List) continue;
+      for (final ex in exercisesRaw) {
+        final exMap = asStringMap(ex);
+        if (exMap == null || exMap['name'] != exerciseName) continue;
+        final setsRaw = exMap['sets'];
+        final sets = setsRaw is List ? setsRaw : const <dynamic>[];
         double bestE1rm = 0.0;
         int? bestEffReps;
         for (final s in sets) {
-          final w = (s['weight'] as num?)?.toDouble() ?? 0.0;
-          final r = (s['reps'] as num?)?.toDouble() ?? 0.0;
-          final rir = (s['rir'] as num?)?.toDouble() ?? 0.0;
+          final sMap = asStringMap(s);
+          if (sMap == null) continue;
+          final w = parseDouble(sMap['weight']);
+          final r = parseDouble(sMap['reps']);
+          final rir = parseDouble(sMap['rir']);
           if (w <= 0 || r <= 0) continue;
           final total = r + rir;
           final e1rm = total <= 6
@@ -1154,5 +1164,57 @@ class Wes2HintServiceImpl implements Wes2HintService {
       history: history,
     );
     return sequence.isNotEmpty ? sequence.first : max;
+  }
+
+  /// Parses a DUP Signature min/max rep range from a raw repTargets value.
+  /// DUP Signature range is block-scoped; no week index needed.
+  /// Priority: repRange.{min,max} → week1.{min,max} → week1.instance1 string.
+  /// Uses only safe conversions — never throws on malformed data.
+  static Map<String, int>? _parseDupSignatureRange(dynamic repTargetsRaw) {
+    Map<String, dynamic>? asStringMap(dynamic v) {
+      if (v is Map) return Map<String, dynamic>.from(v);
+      return null;
+    }
+
+    int? parseInt(dynamic v) {
+      if (v == null) return null;
+      if (v is num) return v.toInt();
+      return int.tryParse(v.toString().trim());
+    }
+
+    Map<String, int>? fromMap(Map<String, dynamic>? m) {
+      if (m == null) return null;
+      final mn = parseInt(m['min']);
+      final mx = parseInt(m['max']);
+      if (mn != null && mx != null && mn < mx) return {'min': mn, 'max': mx};
+      return null;
+    }
+
+    final repTargets = asStringMap(repTargetsRaw);
+    if (repTargets == null) return null;
+
+    // 1. repRange — canonical block-scoped shape
+    final r1 = fromMap(asStringMap(repTargets['repRange']));
+    if (r1 != null) return r1;
+
+    // 2. week1.{min,max} — compatibility fallback
+    final week1 = asStringMap(repTargets['week1']);
+    final r2 = fromMap(week1);
+    if (r2 != null) return r2;
+
+    // 3. week1.instance1 string e.g. "6 – 12 reps" / "6-12" / "6 - 12"
+    if (week1 != null) {
+      final raw = week1['instance1']?.toString();
+      if (raw != null) {
+        final m = RegExp(r'(\d+)\s*[–\-—]\s*(\d+)').firstMatch(raw);
+        if (m != null) {
+          final mn = int.tryParse(m.group(1)!);
+          final mx = int.tryParse(m.group(2)!);
+          if (mn != null && mx != null && mn < mx) return {'min': mn, 'max': mx};
+        }
+      }
+    }
+
+    return null;
   }
 }
