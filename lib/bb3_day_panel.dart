@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'bb3_models.dart';
 import 'bb3_hint_service.dart';
 import 'bb3_planned_exercise_service.dart';
+import 'bb3_template_picker.dart';
 import 'template_model.dart';
 import 'periodization_model_utils.dart';
 import 'exercise_details_screen.dart';
@@ -1691,7 +1692,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
             ),
             onPressed: widget.templates.isEmpty
                 ? null
-                : () => _showTemplateDialog(theme),
+                : () { _showTemplateDialog(theme); },
           ),
         ],
       ),
@@ -1959,57 +1960,31 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
 
   // ── Template dialog ───────────────────────────────────────────────────────
 
-  void _showTemplateDialog(ThemeData theme) {
-    showDialog(
+  Future<void> _showTemplateDialog(ThemeData theme) async {
+    final templateId = await showModalBottomSheet<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Load Template'),
-        content: SizedBox(
-          width: 280,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Replaces planned exercises only. Completed exercises are not affected.',
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: Colors.grey.shade600),
-              ),
-              const SizedBox(height: 8),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 300),
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: widget.templates.length,
-                  itemBuilder: (_, i) {
-                    final t = widget.templates[i];
-                    return ListTile(
-                      dense: true,
-                      title: Text(t.name, style: const TextStyle(fontSize: 13)),
-                      subtitle: Text(
-                        '${t.exercises.length} exercise(s)',
-                        style:
-                            const TextStyle(fontSize: 11, color: Colors.grey),
-                      ),
-                      onTap: () {
-                        Navigator.pop(ctx);
-                        _loadTemplate(t);
-                      },
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-        ],
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => BB3TemplatePicker(
+        uid: widget.uid,
+        activeBlockId: widget.blockId,
       ),
     );
+    if (templateId == null || !mounted) return;
+    Template? selected;
+    for (final t in widget.templates) {
+      if (t.id == templateId) {
+        selected = t;
+        break;
+      }
+    }
+    if (selected != null) {
+      _loadTemplate(selected);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Template could not be loaded.')),
+      );
+    }
   }
 
   void _loadTemplate(Template t) {
