@@ -324,6 +324,20 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
   );
   static const _kContentPadding = EdgeInsets.only(left: 2);
 
+  void _acceptHint(
+    TextEditingController ctrl,
+    Wes2FieldKey fieldKey,
+    String? hintText,
+  ) {
+    if (ctrl.text.trim().isNotEmpty) return;
+    final hint = hintText?.trim();
+    if (hint == null || hint.isEmpty) return;
+    ctrl.text = hint;
+    ctrl.selection = TextSelection.collapsed(offset: hint.length);
+    widget.onFieldChanged(fieldKey, hint);
+    widget.onFieldUnfocused(fieldKey, hint);
+  }
+
   Widget _field({
     required TextEditingController ctrl,
     required FocusNode focus,
@@ -332,12 +346,13 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
     required double width,
     bool decimal = false,
     Color? activeBorderColor,
+    VoidCallback? onDoubleTap,
   }) {
     final enabledBorder = activeBorderColor != null
         ? UnderlineInputBorder(
             borderSide: BorderSide(color: activeBorderColor, width: 1))
         : _kEnabledBorder;
-    return SizedBox(
+    final field = SizedBox(
       width: width,
       height: 36,
       child: Align(
@@ -359,6 +374,8 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
         ),
       ),
     );
+    if (onDoubleTap == null) return field;
+    return GestureDetector(onDoubleTap: onDoubleTap, child: field);
   }
 
   @override
@@ -408,6 +425,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             width: 76,
             decimal: true,
             activeBorderColor: weightBorderColor,
+            onDoubleTap: () => _acceptHint(_weightCtrl, Wes2FieldKey.weight, weightHint),
           ),
           const SizedBox(width: 4),
           _field(
@@ -417,6 +435,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             hintText: repsHint,
             width: 50,
             activeBorderColor: repsBorderColor,
+            onDoubleTap: () => _acceptHint(_repsCtrl, Wes2FieldKey.reps, repsHint),
           ),
           const SizedBox(width: 4),
           _field(
@@ -427,6 +446,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             width: 50,
             decimal: true,
             activeBorderColor: rirBorderColor,
+            onDoubleTap: () => _acceptHint(_rirCtrl, Wes2FieldKey.rir, rirHint),
           ),
           const SizedBox(width: 4),
           // E1RM — calculated from actuals (or hints when no actuals present)
