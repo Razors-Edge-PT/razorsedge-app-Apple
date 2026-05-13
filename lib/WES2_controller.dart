@@ -312,33 +312,23 @@ class Wes2SessionController extends ChangeNotifier {
       // Safety: _constraintWeight/_constraintReps in the hint service falls back
       // to the BB3 hintValue when actualValue is null, so the numeric constraint
       // seen by BB3HintService is identical either way — no sibling-solve regression.
-      final repsHasDifferentActual = cs.reps.actualValue != null &&
-          !_sameAsHintInt(cs.reps.actualValue, bs.reps.hintValue);
       final weightHasDifferentActual = cs.weight.actualValue != null &&
           !_sameAsHint(cs.weight.actualValue, bs.weight.hintValue);
-      final rirNoActual = cs.rir.actualValue == null;
+      final repsHasDifferentActual = cs.reps.actualValue != null &&
+          !_sameAsHintInt(cs.reps.actualValue, bs.reps.hintValue);
+      // When any E1RM-relevant actual differs from baseline, preserve all user-entered
+      // actuals so the cascade uses the correct resolved E1RM, not a BB3HintService
+      // re-solve against the old target. Suppression applies only when nothing has
+      // changed (all actuals equal hints), keeping the unconstrained initial-pass path.
+      final anyActualDiffersFromHint = weightHasDifferentActual || repsHasDifferentActual;
 
-      final weightSuppressible = _sameAsHint(cs.weight.actualValue, bs.weight.hintValue);
-      final unsuppressWeight = weightSuppressible &&
-          bs.weight.hintOrigin == FieldOrigin.bb3Hint &&
-          bs.weight.hintValue != null &&
-          repsHasDifferentActual &&
-          rirNoActual;
-      final weightActual = (weightSuppressible && !unsuppressWeight)
+      final weightActual = (_sameAsHint(cs.weight.actualValue, bs.weight.hintValue) && !anyActualDiffersFromHint)
           ? null
           : cs.weight.actualValue;
-
-      final repsSuppressible = _sameAsHintInt(cs.reps.actualValue, bs.reps.hintValue);
-      final unsuppressReps = repsSuppressible &&
-          bs.reps.hintOrigin == FieldOrigin.bb3Hint &&
-          bs.reps.hintValue != null &&
-          weightHasDifferentActual &&
-          rirNoActual;
-      final repsActual = (repsSuppressible && !unsuppressReps)
+      final repsActual = (_sameAsHintInt(cs.reps.actualValue, bs.reps.hintValue) && !anyActualDiffersFromHint)
           ? null
           : cs.reps.actualValue;
-
-      final rirActual = _sameAsHint(cs.rir.actualValue, bs.rir.hintValue)
+      final rirActual = (_sameAsHint(cs.rir.actualValue, bs.rir.hintValue) && !anyActualDiffersFromHint)
           ? null
           : cs.rir.actualValue;
       return Wes2SetState(

@@ -996,11 +996,25 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                           theme, ex, visibleSetIndex, locked,
                           expandedMode: false),
                       if (!locked) ...[
-                        const SizedBox(width: 4),
-                        GestureDetector(
-                          onTap: () => _confirmDelete(ex),
-                          child: Icon(Icons.close,
-                              size: 14, color: Colors.red.shade300),
+                        const SizedBox(width: 2),
+                        PopupMenuButton<_BB3ExMenuAction>(
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                              minWidth: 28, minHeight: 22),
+                          child: SizedBox(
+                            width: 24,
+                            height: 22,
+                            child: Icon(Icons.more_vert,
+                                size: 16, color: Colors.grey.shade400),
+                          ),
+                          onSelected: (action) {
+                            if (action == _BB3ExMenuAction.deleteExercise) {
+                              _confirmDelete(ex);
+                            } else {
+                              _showReplaceExerciseDialog(theme, ex);
+                            }
+                          },
+                          itemBuilder: (_) => _buildExMenuItems(),
                         ),
                       ],
                     ],
@@ -1081,11 +1095,25 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                       ),
                     ],
                     if (!locked) ...[
-                      const SizedBox(width: 4),
-                      GestureDetector(
-                        onTap: () => _confirmDelete(ex),
-                        child: Icon(Icons.close,
-                            size: 14, color: Colors.red.shade300),
+                      const SizedBox(width: 2),
+                      PopupMenuButton<_BB3ExMenuAction>(
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(
+                            minWidth: 28, minHeight: 22),
+                        child: SizedBox(
+                          width: 24,
+                          height: 22,
+                          child: Icon(Icons.more_vert,
+                              size: 16, color: Colors.grey.shade400),
+                        ),
+                        onSelected: (action) {
+                          if (action == _BB3ExMenuAction.deleteExercise) {
+                            _confirmDelete(ex);
+                          } else {
+                            _showReplaceExerciseDialog(theme, ex);
+                          }
+                        },
+                        itemBuilder: (_) => _buildExMenuItems(),
                       ),
                     ],
                   ],
@@ -1760,71 +1788,141 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     }
   }
 
-  void _addExercise(Map<String, dynamic> ex) {
+  BB3Exercise? _buildExerciseFromLibraryMap(
+    Map<String, dynamic> ex, {
+    required int orderIndex,
+    int circuitIndex = 0,
+  }) {
     final exerciseId =
         (ex['id'] ?? ex['exerciseId'] ?? ex['name'] ?? '').toString().trim();
     final name = (ex['name'] ?? exerciseId).toString();
+    if (exerciseId.isEmpty) return null;
 
-    if (exerciseId.isEmpty) return;
-
-    // Determine set count from block settings
     int setCount = 3;
     if (widget.blockSettings != null) {
       final exSettings = widget.blockSettings!.settingsFor(exerciseId);
       if (exSettings.isNotEmpty) {
         setCount = BB3PlannedExerciseService.resolveSetCount(
-          exSettings: exSettings.isNotEmpty ? exSettings : null,
+          exSettings: exSettings,
           weekIndex: widget.weekIndex,
-          sessionIndex: widget.sessionIndexByExerciseId?[exerciseId] ?? widget.sessionIndex,
+          sessionIndex:
+              widget.sessionIndexByExerciseId?[exerciseId] ?? widget.sessionIndex,
         );
       }
     }
 
-    final newEx = BB3Exercise(
+    return BB3Exercise(
       exerciseId: exerciseId,
       name: name,
-      circuitIndex: 0,
-      orderIndex: _orderedExIds.length,
+      circuitIndex: circuitIndex,
+      orderIndex: orderIndex,
       sets: List.generate(setCount, (_) => const BB3Set()),
     );
+  }
+
+  void _initControllersForExercise(String id, int setCount) {
+    _weightCtrl[id] = [];
+    _repsCtrl[id] = [];
+    _rirCtrl[id] = [];
+    _notesCtrl[id] = [];
+    _focusNodes[id] = [];
+    _velocityCtrl[id] = [];
+    _velocityFocusNodes[id] = [];
+    for (int si = 0; si < setCount; si++) {
+      _weightCtrl[id]!.add(TextEditingController());
+      _repsCtrl[id]!.add(TextEditingController());
+      _rirCtrl[id]!.add(TextEditingController());
+      _notesCtrl[id]!.add(TextEditingController());
+      _velocityCtrl[id]!.add(TextEditingController());
+      for (int f = 0; f < 3; f++) {
+        final fn = FocusNode();
+        fn.addListener(() {
+          if (!fn.hasFocus) _saveIfDirty();
+        });
+        _focusNodes[id]!.add(fn);
+      }
+      final velFn = FocusNode();
+      velFn.addListener(() {
+        if (!velFn.hasFocus) _saveIfDirty();
+      });
+      _velocityFocusNodes[id]!.add(velFn);
+    }
+  }
+
+  void _addExercise(Map<String, dynamic> ex) {
+    final newEx = _buildExerciseFromLibraryMap(
+      ex,
+      orderIndex: _orderedExIds.length,
+    );
+    if (newEx == null) return;
+    final setCount = newEx.sets.length;
 
     setState(() {
-      // Stage the new exercise so the render path finds the correct name
-      // before widget.plannedExercises is updated by the parent
       _localExercises[newEx.exerciseId] = newEx;
-
-      // Append controllers for the new exercise
-      final id = newEx.exerciseId;
-      _weightCtrl[id] = [];
-      _repsCtrl[id] = [];
-      _rirCtrl[id] = [];
-      _notesCtrl[id] = [];
-      _focusNodes[id] = [];
-      _velocityCtrl[id] = [];
-      _velocityFocusNodes[id] = [];
-      for (int si = 0; si < setCount; si++) {
-        _weightCtrl[id]!.add(TextEditingController());
-        _repsCtrl[id]!.add(TextEditingController());
-        _rirCtrl[id]!.add(TextEditingController());
-        _notesCtrl[id]!.add(TextEditingController());
-        _velocityCtrl[id]!.add(TextEditingController());
-        for (int f = 0; f < 3; f++) {
-          final fn = FocusNode();
-          fn.addListener(() {
-            if (!fn.hasFocus) _saveIfDirty();
-          });
-          _focusNodes[id]!.add(fn);
-        }
-        final velFn = FocusNode();
-        velFn.addListener(() {
-          if (!velFn.hasFocus) _saveIfDirty();
-        });
-        _velocityFocusNodes[id]!.add(velFn);
-      }
-      _orderedExIds.add(id);
+      _initControllersForExercise(newEx.exerciseId, setCount);
+      _orderedExIds.add(newEx.exerciseId);
     });
 
     // Persist immediately
+    _saveIfDirty();
+  }
+
+  // ── Replace exercise ──────────────────────────────────────────────────────
+
+  Future<void> _showReplaceExerciseDialog(
+      ThemeData theme, BB3Exercise oldEx) async {
+    final blockedIds = Set<String>.from(_alreadyPresentExIds)
+      ..remove(oldEx.exerciseId.toLowerCase());
+    final result = await showModalBottomSheet<List<Map<String, dynamic>>>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => _BB3AddExercisePicker(
+        allExercises: widget.allExercises,
+        alreadyPresentIds: blockedIds,
+        blockSettings: widget.blockSettings,
+        multiSelect: false,
+        title: 'Replace Exercise',
+      ),
+    );
+    if (result == null || result.isEmpty || !mounted) return;
+    _replaceExercise(oldEx, result.first);
+  }
+
+  void _replaceExercise(BB3Exercise oldEx, Map<String, dynamic> replacementMap) {
+    final replacement = _buildExerciseFromLibraryMap(
+      replacementMap,
+      orderIndex: oldEx.orderIndex,
+      circuitIndex: oldEx.circuitIndex,
+    );
+    if (replacement == null) return;
+
+    final newId = replacement.exerciseId;
+    if (newId == oldEx.exerciseId) return;
+
+    final otherIds =
+        _orderedExIds.where((id) => id != oldEx.exerciseId).toSet();
+    if (otherIds.contains(newId)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Exercise already exists on this day.')),
+      );
+      return;
+    }
+
+    setState(() {
+      final idx = _orderedExIds.indexOf(oldEx.exerciseId);
+      if (idx >= 0) {
+        _orderedExIds[idx] = newId;
+      }
+      _disposeExerciseControllers(oldEx.exerciseId);
+      _localExercises.remove(oldEx.exerciseId);
+      _expandedByExId.remove(oldEx.exerciseId);
+      _viewedNoteExIds.remove(oldEx.exerciseId);
+      // Stage replacement before _saveIfDirty so _buildCurrentExercises resolves it
+      _localExercises[newId] = replacement;
+      _initControllersForExercise(newId, replacement.sets.length);
+    });
+
     _saveIfDirty();
   }
 
@@ -1900,6 +1998,33 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
 
     // Save immediately
     widget.onSave(widget.dayIndex, newExercises);
+  }
+
+  // ── Per-exercise menu ─────────────────────────────────────────────────────
+
+  List<PopupMenuEntry<_BB3ExMenuAction>> _buildExMenuItems() {
+    return [
+      PopupMenuItem<_BB3ExMenuAction>(
+        value: _BB3ExMenuAction.deleteExercise,
+        child: Row(
+          children: [
+            Icon(Icons.close, size: 16, color: Colors.red.shade400),
+            const SizedBox(width: 8),
+            const Text('Delete exercise'),
+          ],
+        ),
+      ),
+      const PopupMenuItem<_BB3ExMenuAction>(
+        value: _BB3ExMenuAction.replaceExercise,
+        child: Row(
+          children: [
+            Icon(Icons.swap_horiz, size: 16),
+            SizedBox(width: 8),
+            Text('Replace exercise'),
+          ],
+        ),
+      ),
+    ];
   }
 
   // ── Delete confirm ────────────────────────────────────────────────────────
@@ -2066,6 +2191,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
 // ── Day menu action ───────────────────────────────────────────────────────────
 
 enum _BB3DayMenuAction { deleteAllExercises, moveAllToNextDay }
+enum _BB3ExMenuAction { deleteExercise, replaceExercise }
 
 // ── Drag payload ──────────────────────────────────────────────────────────────
 
@@ -2081,11 +2207,15 @@ class _BB3AddExercisePicker extends StatefulWidget {
   final List<Map<String, dynamic>> allExercises;
   final Set<String> alreadyPresentIds;
   final BB3BlockSettings? blockSettings;
+  final bool multiSelect;
+  final String title;
 
   const _BB3AddExercisePicker({
     required this.allExercises,
     required this.alreadyPresentIds,
     this.blockSettings,
+    this.multiSelect = true,
+    this.title = 'Add Exercise',
   });
 
   @override
@@ -2202,11 +2332,11 @@ class _BB3AddExercisePickerState extends State<_BB3AddExercisePicker> {
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Row(
               children: [
-                const Expanded(
+                Expanded(
                   child: Text(
-                    'Add Exercise',
-                    style:
-                        TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                    widget.title,
+                    style: const TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.w600),
                     overflow: TextOverflow.ellipsis,
                     maxLines: 1,
                   ),
@@ -2246,15 +2376,17 @@ class _BB3AddExercisePickerState extends State<_BB3AddExercisePicker> {
                     onPressed: () => Navigator.of(context).pop(null),
                     child: const Text('Cancel'),
                   ),
-                  const SizedBox(width: 8),
-                  FilledButton(
-                    onPressed: _selectedIds.isEmpty ? null : _onSave,
-                    child: Text(
-                      _selectedIds.isEmpty
-                          ? 'Add'
-                          : 'Add (${_selectedIds.length})',
+                  if (widget.multiSelect) ...[
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      onPressed: _selectedIds.isEmpty ? null : _onSave,
+                      child: Text(
+                        _selectedIds.isEmpty
+                            ? 'Add'
+                            : 'Add (${_selectedIds.length})',
+                      ),
                     ),
-                  ),
+                  ],
                 ],
               ),
             ),
@@ -2357,8 +2489,23 @@ class _BB3AddExercisePickerState extends State<_BB3AddExercisePicker> {
         (ex['id'] ?? ex['exerciseId'] ?? ex['name'] ?? '').toString().trim();
     final idKey = rawId.toLowerCase();
     final name = (ex['name'] ?? rawId).toString();
-    final isSelected = _selectedIds.contains(idKey);
 
+    if (!widget.multiSelect) {
+      return ListTile(
+        dense: true,
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+        title: Text(
+          name,
+          style: const TextStyle(fontSize: 14),
+          overflow: TextOverflow.ellipsis,
+          maxLines: 1,
+        ),
+        onTap: () => Navigator.of(context).pop([ex]),
+      );
+    }
+
+    final isSelected = _selectedIds.contains(idKey);
     return CheckboxListTile(
       value: isSelected,
       dense: true,
