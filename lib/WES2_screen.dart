@@ -1350,7 +1350,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     if (!confirmed || !mounted) return;
 
     final hadBb3Rows =
-        _controller.rows.any((r) => r.source == Wes2RowSource.bb3Planned);
+        _bb3PlannedExerciseIds.isNotEmpty ||
+        _controller.rows.any((r) =>
+            r.source == Wes2RowSource.bb3Planned ||
+            _bb3PlannedExerciseIds.contains(r.exerciseId));
 
     _controller.deleteAllExercises();
     _saveDraftNow();
