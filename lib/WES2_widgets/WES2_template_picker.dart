@@ -43,8 +43,11 @@ class _Wes2TemplatePickerState extends State<Wes2TemplatePicker> {
         .get();
     final templates = snap.docs
         .map((d) => Template.fromFirestore(d.data(), d.id))
-        .where((t) => t.exercises.any((e) =>
-            ((e['exerciseId'] ?? e['id']) as String? ?? '').isNotEmpty))
+        .where((t) => t.exercises.any((e) {
+          final id = ((e['exerciseId'] ?? e['id']) as String? ?? '').trim();
+          if (id.isNotEmpty) return true;
+          return ((e['name'] ?? e['exercise']) as String? ?? '').trim().isNotEmpty;
+        }))
         .toList();
 
     // Best-effort load block names for group headers.

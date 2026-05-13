@@ -46,14 +46,15 @@ class FirestoreWes2TemplateService implements Wes2TemplateService {
       final raw = rawExercises[i];
       if (raw is! Map<String, dynamic>) continue;
 
-      final exerciseId =
+      final rawName =
+          ((raw['name'] ?? raw['exercise']) as String? ?? '').trim();
+      String exerciseId =
           ((raw['exerciseId'] ?? raw['id']) as String? ?? '').trim();
+      if (exerciseId.isEmpty) exerciseId = rawName;
       if (exerciseId.isEmpty) continue;
       if (seen.contains(exerciseId)) continue;
       seen.add(exerciseId);
 
-      final rawName =
-          ((raw['name'] ?? raw['exercise']) as String? ?? '').trim();
       final name = rawName.isNotEmpty ? rawName : exerciseId;
       final circuitIndex = (raw['circuitIndex'] as num?)?.toInt() ?? 0;
       final setCount =
