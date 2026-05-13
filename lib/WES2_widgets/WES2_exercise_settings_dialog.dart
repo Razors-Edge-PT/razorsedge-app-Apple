@@ -57,6 +57,10 @@ class _Wes2ExerciseSettingsDialogState
   // rirPlan for current week: sessionN_setM → rir string
   final Map<String, TextEditingController> _rirPlanCtrls = {};
 
+  // Snapshot of values as loaded from Firestore; used in _buildRirPlan to
+  // detect which fields the user actually changed before writing forward.
+  final Map<String, String> _originalRirPlanValues = {};
+
   @override
   void initState() {
     super.initState();
@@ -125,6 +129,23 @@ class _Wes2ExerciseSettingsDialogState
     final existing = _existingSettings['weeklyFrequency'];
     if (existing is num && existing.toInt() > 0) return existing.toInt();
     return 3;
+  }
+
+  /// Returns the planned set count for [sessionNumber] (1-based) by parsing
+  /// the corresponding rep target string ("N x M" or "NxM" → M sets).
+  /// Falls back to exerciseSettings.defaultSets, then 4.
+  int _setCountForSession(int sessionNumber) {
+    final raw = _repTargetCtrls['instance$sessionNumber']?.text.trim() ?? '';
+    if (raw.isNotEmpty) {
+      final m = RegExp(r'[xX]\s*(\d+)').firstMatch(raw);
+      if (m != null) {
+        final n = int.tryParse(m.group(1)!);
+        if (n != null && n > 0) return n.clamp(1, 10);
+      }
+    }
+    final ds = (_existingSettings['defaultSets'] as num?)?.toInt();
+    if (ds != null && ds > 0) return ds.clamp(1, 10);
+    return 4;
   }
 
   Future<void> _loadSettings() async {
@@ -221,6 +242,7 @@ class _Wes2ExerciseSettingsDialogState
       c.dispose();
     }
     _rirPlanCtrls.clear();
+    _originalRirPlanValues.clear();
 
     final rirPlan = settings['rirPlan'] as Map<String, dynamic>?;
     final weekData = (rirPlan?[_weekKey] ?? rirPlan?['week1'])
@@ -230,11 +252,13 @@ class _Wes2ExerciseSettingsDialogState
     for (int i = 1; i <= count; i++) {
       final sessionKey = 'session$i';
       final sessionData = weekData?[sessionKey] as Map<String, dynamic>?;
-      for (int s = 1; s <= 4; s++) {
+      final sc = _setCountForSession(i);
+      for (int s = 1; s <= sc; s++) {
+        final key = '${sessionKey}_set$s';
         final setData = sessionData?['set$s'] as Map<String, dynamic>?;
-        _rirPlanCtrls['${sessionKey}_set$s'] = TextEditingController(
-          text: setData?['rir']?.toString() ?? '',
-        );
+        final loaded = setData?['rir']?.toString() ?? '';
+        _rirPlanCtrls[key] = TextEditingController(text: loaded);
+        _originalRirPlanValues[key] = loaded;
       }
     }
   }
@@ -324,18 +348,23 @@ class _Wes2ExerciseSettingsDialogState
         (_existingSettings['rirPlan'] as Map<String, dynamic>?) ?? {};
     final result = Map<String, dynamic>.from(existing);
 
-    // Collect only changed session/set pairs from the controllers.
-    final sessionChanges = <String, Map<String, String>>{};
+    // Only propagate session/set keys where the user actually changed the value.
+    // null = user cleared a previously non-empty field → remove 'rir' from future weeks.
+    // non-null = user set or updated a value → write it forward.
+    final sessionChanges = <String, Map<String, String?>>{};
     for (final entry in _rirPlanCtrls.entries) {
-      final rirText = entry.value.text.trim();
-      if (rirText.isEmpty) continue;
+      final current = entry.value.text.trim();
+      final original = _originalRirPlanValues[entry.key] ?? '';
+      if (current == original) continue; // unchanged — do not touch future weeks
       final parts = entry.key.split('_'); // ['sessionN', 'setM']
       if (parts.length != 2) continue;
-      sessionChanges.putIfAbsent(parts[0], () => {})[parts[1]] = rirText;
+      sessionChanges.putIfAbsent(parts[0], () => {})[parts[1]] =
+          current.isEmpty ? null : current;
     }
 
-    // Write the same values for every week from the current week onward.
-    // Previous weeks are preserved unchanged.
+    if (sessionChanges.isEmpty) return result; // nothing changed
+
+    // Write changes from the current week onward; leave previous weeks untouched.
     for (int w = widget.weekIndex + 1; w <= widget.totalBlockWeeks; w++) {
       final weekKey = 'week$w';
       final existingWeek =
@@ -352,7 +381,18 @@ class _Wes2ExerciseSettingsDialogState
           final setKey = setEntry.key;
           final existingSet =
               (sessionData[setKey] as Map<String, dynamic>?) ?? {};
-          sessionData[setKey] = {...existingSet, 'rir': setEntry.value};
+          if (setEntry.value == null) {
+            // User cleared — remove 'rir' key, preserve any other set-level keys.
+            final cleaned = Map<String, dynamic>.from(existingSet)
+              ..remove('rir');
+            if (cleaned.isEmpty) {
+              sessionData.remove(setKey);
+            } else {
+              sessionData[setKey] = cleaned;
+            }
+          } else {
+            sessionData[setKey] = {...existingSet, 'rir': setEntry.value};
+          }
         }
 
         weekData[sessionKey] = sessionData;
@@ -649,44 +689,52 @@ class _Wes2ExerciseSettingsDialogState
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         for (int i = 1; i <= count; i++) ...[
-          if (i > 1) const SizedBox(height: 8),
+          if (i > 1) const SizedBox(height: 5),
           Text(
             'Session $i',
             style: const TextStyle(fontSize: 11, color: Colors.white54),
           ),
-          const SizedBox(height: 4),
-          _settingsRow(
-            left: _buildTextField(
-              controller:
-                  _rirPlanCtrls['session${i}_set1'] ?? TextEditingController(),
-              label: 'S1 RIR',
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-            ),
-            right: _buildTextField(
-              controller:
-                  _rirPlanCtrls['session${i}_set2'] ?? TextEditingController(),
-              label: 'S2 RIR',
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-            ),
-          ),
-          const SizedBox(height: 4),
-          _settingsRow(
-            left: _buildTextField(
-              controller:
-                  _rirPlanCtrls['session${i}_set3'] ?? TextEditingController(),
-              label: 'S3 RIR',
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-            ),
-            right: _buildTextField(
-              controller:
-                  _rirPlanCtrls['session${i}_set4'] ?? TextEditingController(),
-              label: 'S4 RIR',
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-            ),
+          const SizedBox(height: 2),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              const double minFieldWidth = 60;
+              const double gap = 4;
+              final sc = _setCountForSession(i);
+
+              Widget field(int s) => _buildRirTextField(
+                    controller: _rirPlanCtrls['session${i}_set$s']
+                        ?? TextEditingController(),
+                    label: 'S$s',
+                  );
+
+              Widget rowOf(int from, int to) => Row(
+                    children: [
+                      for (int s = from; s <= to; s++) ...[
+                        if (s > from) const SizedBox(width: gap),
+                        Expanded(child: field(s)),
+                      ],
+                    ],
+                  );
+
+              // All sets fit on one row when sc <= 4 and width allows.
+              final allOnOneRow = sc <= 4 &&
+                  constraints.maxWidth >=
+                      minFieldWidth * sc + gap * (sc - 1);
+
+              if (allOnOneRow) return rowOf(1, sc);
+
+              // Chunks of up to 4 per row.
+              final rows = <Widget>[];
+              for (int start = 1; start <= sc; start += 4) {
+                final end = (start + 3).clamp(start, sc);
+                if (rows.isNotEmpty) rows.add(const SizedBox(height: gap));
+                rows.add(rowOf(start, end));
+              }
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: rows,
+              );
+            },
           ),
         ],
       ],
@@ -725,13 +773,17 @@ class _Wes2ExerciseSettingsDialogState
       }
     }
 
-    final wantedRir = <String>{
-      for (int i = 1; i <= count; i++)
-        for (int s = 1; s <= 4; s++) 'session${i}_set$s',
-    };
+    final wantedRir = <String>{};
+    for (int i = 1; i <= count; i++) {
+      final sc = _setCountForSession(i);
+      for (int s = 1; s <= sc; s++) {
+        wantedRir.add('session${i}_set$s');
+      }
+    }
 
     for (int i = 1; i <= count; i++) {
-      for (int s = 1; s <= 4; s++) {
+      final sc = _setCountForSession(i);
+      for (int s = 1; s <= sc; s++) {
         _rirPlanCtrls.putIfAbsent(
           'session${i}_set$s',
           () => TextEditingController(),
@@ -863,6 +915,33 @@ class _Wes2ExerciseSettingsDialogState
               Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+        ),
+      ),
+    );
+  }
+
+  /// Compact variant of [_buildTextField] for RIR set fields only.
+  /// Shorter height and tighter padding to reduce vertical space in the RIR section.
+  Widget _buildRirTextField({
+    required TextEditingController controller,
+    required String label,
+  }) {
+    return SizedBox(
+      height: 40,
+      child: TextField(
+        controller: controller,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        style: const TextStyle(fontSize: 13),
+        decoration: InputDecoration(
+          labelText: label,
+          floatingLabelBehavior: FloatingLabelBehavior.always,
+          isDense: true,
+          filled: true,
+          fillColor: Theme.of(context).cardTheme.color ??
+              Theme.of(context).colorScheme.surface,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
         ),
       ),
