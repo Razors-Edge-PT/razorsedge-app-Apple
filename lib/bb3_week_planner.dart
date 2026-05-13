@@ -370,6 +370,115 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
     _onDaySave(targetDayIndex, targetList);
   }
 
+  // ── Move-all to next day ──────────────────────────────────────────────────
+
+  void _onMoveAllToNextDay(int sourceDayIndex) {
+    final completedIds = _completedByDay[sourceDayIndex]
+        .map((c) => (c['exerciseId'] ?? c['id'] ?? '').toString())
+        .toSet();
+    final toMove = _plannedByDay[sourceDayIndex]
+        .where((e) => !completedIds.contains(e.exerciseId))
+        .toList();
+    if (toMove.isEmpty) return;
+
+    if (sourceDayIndex < 6) {
+      final targetDayIndex = sourceDayIndex + 1;
+      final sourceList = _plannedByDay[sourceDayIndex]
+          .where((e) => completedIds.contains(e.exerciseId))
+          .toList();
+
+      final targetExistingIds =
+          _plannedByDay[targetDayIndex].map((e) => e.exerciseId).toSet();
+      final targetList =
+          List<BB3Exercise>.from(_plannedByDay[targetDayIndex]);
+
+      for (final ex in toMove) {
+        if (!targetExistingIds.contains(ex.exerciseId)) {
+          targetList.add(ex.copyWith(orderIndex: targetList.length));
+        }
+      }
+
+      final reindexed = targetList
+          .asMap()
+          .entries
+          .map((e) => e.value.copyWith(orderIndex: e.key))
+          .toList();
+
+      setState(() {
+        _plannedByDay[sourceDayIndex] = sourceList;
+        _plannedByDay[targetDayIndex] = reindexed;
+      });
+
+      _onDaySave(sourceDayIndex, sourceList);
+      _onDaySave(targetDayIndex, reindexed);
+    } else {
+      // ignore: discarded_futures
+      _moveAllToNextWeekMonday(toMove, sourceDayIndex);
+    }
+  }
+
+  Future<void> _moveAllToNextWeekMonday(
+      List<BB3Exercise> toMove, int sourceDayIndex) async {
+    final blockId = _selectedBlockId;
+    if (blockId == null || blockId.isEmpty) return;
+    final uid = _uid;
+
+    final completedIds = _completedByDay[sourceDayIndex]
+        .map((c) => (c['exerciseId'] ?? c['id'] ?? '').toString())
+        .toSet();
+    final sundayLocked = _plannedByDay[sourceDayIndex]
+        .where((e) => completedIds.contains(e.exerciseId))
+        .toList();
+
+    setState(() => _plannedByDay[sourceDayIndex] = sundayLocked);
+    await _onDaySave(sourceDayIndex, sundayLocked);
+
+    final nextMonday = _weekStart.add(const Duration(days: 7));
+    final (:weekIndex, :dayIndex) = BB3PlannedExerciseService.dateToWeekDay(
+      _blockSettings?.startDate ?? _weekStart,
+      nextMonday,
+    );
+
+    List<BB3Exercise> existing = [];
+    try {
+      existing = await BB3PlannedExerciseService.getPlannedDay(
+        uid: uid,
+        blockId: blockId,
+        weekIndex: weekIndex,
+        dayIndex: dayIndex,
+        date: nextMonday,
+        exerciseSettings: _blockSettings?.exerciseSettings,
+      );
+    } catch (_) {}
+
+    final existingIds = existing.map((e) => e.exerciseId).toSet();
+    final merged = List<BB3Exercise>.from(existing);
+    for (final ex in toMove) {
+      if (!existingIds.contains(ex.exerciseId)) {
+        merged.add(ex.copyWith(orderIndex: merged.length));
+      }
+    }
+    final reindexed = merged
+        .asMap()
+        .entries
+        .map((e) => e.value.copyWith(orderIndex: e.key))
+        .toList();
+
+    await BB3PlannedExerciseService.savePlannedDay(
+      uid: uid,
+      blockId: blockId,
+      weekIndex: weekIndex,
+      dayIndex: dayIndex,
+      exercises: reindexed,
+    );
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Exercises moved to next week Monday')),
+      );
+    }
+  }
+
   // ── Week navigation ───────────────────────────────────────────────────────
 
   // ignore: unused_element
@@ -670,6 +779,7 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
           templates: _templates,
           onSave: _onDaySave,
           onDrop: _onDrop,
+          onMoveAllToNextDay: _onMoveAllToNextDay,
           isInsideBlock: isInBlock,
           blockId: _selectedBlockId,
         );

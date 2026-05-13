@@ -31,6 +31,7 @@ typedef BB3SaveCallback = Future<void> Function(
     int dayIndex, List<BB3Exercise> exercises);
 typedef BB3DropCallback = void Function(
     int sourceDayIndex, int targetDayIndex, BB3Exercise exercise);
+typedef BB3MoveAllCallback = void Function(int sourceDayIndex);
 
 class BB3DayPanel extends StatefulWidget {
   final int dayIndex;            // 0 = Monday … 6 = Sunday
@@ -46,6 +47,7 @@ class BB3DayPanel extends StatefulWidget {
   final List<Template> templates;               // for the template picker
   final BB3SaveCallback onSave;
   final BB3DropCallback onDrop;   // cross-day drag
+  final BB3MoveAllCallback onMoveAllToNextDay;
   final bool isInsideBlock;       // whether this day is inside the active block range
   final String? blockId;          // needed for direct savePlannedDay on dispose
 
@@ -64,6 +66,7 @@ class BB3DayPanel extends StatefulWidget {
     required this.templates,
     required this.onSave,
     required this.onDrop,
+    required this.onMoveAllToNextDay,
     required this.isInsideBlock,
     this.blockId,
   });
@@ -473,7 +476,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
 
   Widget _buildDayHeader(ThemeData theme, String label) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
       decoration: BoxDecoration(
         color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.4),
         borderRadius: const BorderRadius.vertical(top: Radius.circular(7)),
@@ -501,6 +504,45 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               visualDensity: VisualDensity.compact,
             ),
+          ),
+          PopupMenuButton<_BB3DayMenuAction>(
+            padding: EdgeInsets.zero,
+            child: const Padding(
+              padding: EdgeInsets.symmetric(vertical: 5),
+              child: SizedBox(
+                width: 26,
+                height: 22,
+                child: Center(
+                  child: Icon(Icons.more_vert, size: 18),
+                ),
+              ),
+            ),
+            onSelected: (action) {
+              if (action == _BB3DayMenuAction.deleteAllExercises) {
+                _confirmDeleteAllExercises();
+              } else {
+                widget.onMoveAllToNextDay(widget.dayIndex);
+              }
+            },
+            itemBuilder: (_) {
+              final hasUnlocked = _orderedExIds.any((id) =>
+              !BB3HintService.isExerciseLocked(
+                exerciseId: id,
+                completedExercisesForDay: widget.completedExercises,
+              ));
+              return [
+                PopupMenuItem(
+                  value: _BB3DayMenuAction.deleteAllExercises,
+                  enabled: hasUnlocked,
+                  child: const Text('Delete all exercises'),
+                ),
+                PopupMenuItem(
+                  value: _BB3DayMenuAction.moveAllToNextDay,
+                  enabled: hasUnlocked,
+                  child: const Text('Move all exercises to next day'),
+                ),
+              ];
+            },
           ),
         ],
       ),
@@ -1887,38 +1929,41 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     );
   }
 
+  void _disposeExerciseControllers(String id) {
+    for (final c in _weightCtrl[id] ?? []) {
+      c.dispose();
+    }
+    for (final c in _repsCtrl[id] ?? []) {
+      c.dispose();
+    }
+    for (final c in _rirCtrl[id] ?? []) {
+      c.dispose();
+    }
+    for (final c in _notesCtrl[id] ?? []) {
+      c.dispose();
+    }
+    for (final fn in _focusNodes[id] ?? []) {
+      fn.dispose();
+    }
+    for (final c in _velocityCtrl[id] ?? []) {
+      c.dispose();
+    }
+    for (final fn in _velocityFocusNodes[id] ?? []) {
+      fn.dispose();
+    }
+    _weightCtrl.remove(id);
+    _repsCtrl.remove(id);
+    _rirCtrl.remove(id);
+    _notesCtrl.remove(id);
+    _focusNodes.remove(id);
+    _velocityCtrl.remove(id);
+    _velocityFocusNodes.remove(id);
+  }
+
   void _deleteExercise(BB3Exercise ex) {
     setState(() {
-      final id = ex.exerciseId;
-      _orderedExIds.remove(id);
-      for (final c in _weightCtrl[id] ?? []) {
-        c.dispose();
-      }
-      for (final c in _repsCtrl[id] ?? []) {
-        c.dispose();
-      }
-      for (final c in _rirCtrl[id] ?? []) {
-        c.dispose();
-      }
-      for (final c in _notesCtrl[id] ?? []) {
-        c.dispose();
-      }
-      for (final fn in _focusNodes[id] ?? []) {
-        fn.dispose();
-      }
-      for (final c in _velocityCtrl[id] ?? []) {
-        c.dispose();
-      }
-      for (final fn in _velocityFocusNodes[id] ?? []) {
-        fn.dispose();
-      }
-      _weightCtrl.remove(id);
-      _repsCtrl.remove(id);
-      _rirCtrl.remove(id);
-      _notesCtrl.remove(id);
-      _focusNodes.remove(id);
-      _velocityCtrl.remove(id);
-      _velocityFocusNodes.remove(id);
+      _orderedExIds.remove(ex.exerciseId);
+      _disposeExerciseControllers(ex.exerciseId);
     });
     _saveIfDirty();
     // ignore: discarded_futures
@@ -1927,6 +1972,75 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
       date: widget.date,
       exerciseId: ex.exerciseId,
     );
+  }
+
+  Future<void> _confirmDeleteAllExercises() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete All exercises'),
+        content: const Text(
+            'This will delete all exercises for this day, are you sure?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red.shade600),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) _deleteAllExercises();
+  }
+
+  void _deleteAllExercises() {
+    final toDelete = _orderedExIds
+        .where((id) => !BB3HintService.isExerciseLocked(
+              exerciseId: id,
+              completedExercisesForDay: widget.completedExercises,
+            ))
+        .toList();
+    if (toDelete.isEmpty) return;
+
+    final exerciseRefs = toDelete.map((id) {
+      return widget.plannedExercises.firstWhere(
+        (e) => e.exerciseId == id,
+        orElse: () =>
+            _localExercises[id] ??
+            BB3Exercise(
+              exerciseId: id,
+              name: id,
+              circuitIndex: 0,
+              orderIndex: 0,
+              sets: const [],
+            ),
+      );
+    }).toList();
+
+    setState(() {
+      for (final id in toDelete) {
+        _orderedExIds.remove(id);
+        _disposeExerciseControllers(id);
+        _localExercises.remove(id);
+        _expandedByExId.remove(id);
+        _viewedNoteExIds.remove(id);
+      }
+    });
+
+    _saveIfDirty();
+
+    for (final ex in exerciseRefs) {
+      // ignore: discarded_futures
+      BB3PlannedExerciseService.removeExerciseFromWorkoutDoc(
+        uid: widget.uid,
+        date: widget.date,
+        exerciseId: ex.exerciseId,
+      );
+    }
   }
 
   // ── Note viewer ───────────────────────────────────────────────────────────
@@ -1948,6 +2062,10 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     );
   }
 }
+
+// ── Day menu action ───────────────────────────────────────────────────────────
+
+enum _BB3DayMenuAction { deleteAllExercises, moveAllToNextDay }
 
 // ── Drag payload ──────────────────────────────────────────────────────────────
 
