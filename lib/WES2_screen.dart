@@ -536,10 +536,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   static List<Wes2ExerciseRow> _hardened(List<Wes2ExerciseRow> rows) {
     const sourcePriority = {
       Wes2RowSource.completedServer: 0,
-      Wes2RowSource.wes2Manual: 1,
+      Wes2RowSource.bb3Planned: 1,
       Wes2RowSource.templateLoaded: 1,
       Wes2RowSource.localDraft: 1,
-      Wes2RowSource.bb3Planned: 2,
+      Wes2RowSource.wes2Manual: 2,
     };
     // Sort so higher-priority source is first — wins putIfAbsent-style dedupe.
     final sorted = List<Wes2ExerciseRow>.from(rows)
@@ -552,7 +552,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     final seen = <String>{};
     final deduped = <Wes2ExerciseRow>[];
     for (final r in sorted) {
-      if (seen.add(r.exerciseId)) deduped.add(_normalizeSetCount(r));
+      final key = r.exerciseId.trim().toLowerCase();
+      if (seen.add(key)) deduped.add(_normalizeSetCount(r));
     }
     deduped.sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
     return deduped;
