@@ -977,6 +977,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             );
             prevCi = ci;
           }
+          final combinedNote = _buildCombinedPlanNote(row);
           items.add(Wes2ExerciseCard(
             row: row,
             onFieldUnfocused: _onFieldUnfocused,
@@ -993,11 +994,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             onExerciseDetails: () => _navigateToExerciseDetails(row),
             isExercisePlanNoteRead:
                 controller.isExercisePlanNoteRead(row.exerciseId),
-            onOpenExercisePlanNote:
-                row.exercisePlanNote != null &&
-                        row.exercisePlanNote!.isNotEmpty
-                    ? () => _onOpenExercisePlanNoteDialog(row)
-                    : null,
+            onOpenExercisePlanNote: combinedNote != null
+                ? () => _onOpenExercisePlanNoteDialog(row, combinedNote)
+                : null,
           ));
         }
 
@@ -1285,7 +1284,22 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _onOpenExercisePlanNoteDialog(Wes2ExerciseRow row) async {
+  String? _buildCombinedPlanNote(Wes2ExerciseRow row) {
+    final lines = <String>[];
+    if (row.exercisePlanNote != null && row.exercisePlanNote!.trim().isNotEmpty) {
+      lines.add('Exercise note: ${row.exercisePlanNote!.trim()}');
+    }
+    for (int i = 0; i < row.sets.length; i++) {
+      final note = row.sets[i].planNote?.trim();
+      if (note != null && note.isNotEmpty) {
+        lines.add('Set ${i + 1}: $note');
+      }
+    }
+    return lines.isEmpty ? null : lines.join('\n\n');
+  }
+
+  Future<void> _onOpenExercisePlanNoteDialog(
+      Wes2ExerciseRow row, String combinedNote) async {
     _controller.markExercisePlanNoteRead(row.exerciseId);
     if (!mounted) return;
     await showDialog<void>(
@@ -1295,7 +1309,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
           row.name,
           style: const TextStyle(fontSize: 16),
         ),
-        content: Text(row.exercisePlanNote ?? ''),
+        content: Text(combinedNote),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),

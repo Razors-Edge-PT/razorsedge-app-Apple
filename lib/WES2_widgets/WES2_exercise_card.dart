@@ -130,8 +130,7 @@ class Wes2ExerciseCard extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
-            if (row.exercisePlanNote != null &&
-                row.exercisePlanNote!.isNotEmpty)
+            if (onOpenExercisePlanNote != null)
               GestureDetector(
                 onTap: onOpenExercisePlanNote,
                 child: Padding(
