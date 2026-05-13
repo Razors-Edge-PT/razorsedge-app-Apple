@@ -9,6 +9,7 @@ class Wes2ExerciseSettingsDialog extends StatefulWidget {
   final String exerciseName;
   final int weekIndex; // 0-based
   final int dayIndex; // 0-based, used as estimated session display
+  final int totalBlockWeeks; // used to write RIR from current week forward
   final Wes2PlanService planService;
 
   const Wes2ExerciseSettingsDialog({
@@ -19,6 +20,7 @@ class Wes2ExerciseSettingsDialog extends StatefulWidget {
     required this.exerciseName,
     required this.weekIndex,
     required this.dayIndex,
+    required this.totalBlockWeeks,
     required this.planService,
   });
 
@@ -52,7 +54,7 @@ class _Wes2ExerciseSettingsDialogState
   // repTargets for current week: instanceN → format string, or 'min'/'max' for Signature
   final Map<String, TextEditingController> _repTargetCtrls = {};
 
-  // rirPlan for current week: sessionN → set1 rir string
+  // rirPlan for current week: sessionN_setM → rir string
   final Map<String, TextEditingController> _rirPlanCtrls = {};
 
   @override
@@ -79,6 +81,10 @@ class _Wes2ExerciseSettingsDialogState
   String get _weekKey => 'week${widget.weekIndex + 1}';
 
   bool get _isDupSignature => _periodizationModel == 'DUP, Signature';
+
+  bool get _isDupWeekOrExposure =>
+      _periodizationModel == 'DUP, By Week' ||
+      _periodizationModel == 'DUP, By Exposure';
 
   int get _weeklyInstanceDisplay {
     final count = _sessionCount;
@@ -191,9 +197,15 @@ class _Wes2ExerciseSettingsDialogState
       );
     } else {
       final repTargets = settings['repTargets'] as Map<String, dynamic>?;
-      // week1 is the repeating microcycle template; fall back when current week has no data.
-      final weekData = (repTargets?[_weekKey] ?? repTargets?['week1'])
-          as Map<String, dynamic>?;
+      // DUP By Week/Exposure: week1 is the single repeating microcycle template.
+      // Other models: prefer current week, fall back to week1.
+      Map<String, dynamic>? weekData;
+      if (_isDupWeekOrExposure) {
+        weekData = repTargets?['week1'] as Map<String, dynamic>?;
+      } else {
+        weekData = (repTargets?[_weekKey] ?? repTargets?['week1'])
+            as Map<String, dynamic>?;
+      }
       final count = _sessionCount;
       for (int i = 1; i <= count; i++) {
         final key = 'instance$i';
@@ -211,7 +223,6 @@ class _Wes2ExerciseSettingsDialogState
     _rirPlanCtrls.clear();
 
     final rirPlan = settings['rirPlan'] as Map<String, dynamic>?;
-    // week1 is the repeating microcycle template; fall back when current week has no data.
     final weekData = (rirPlan?[_weekKey] ?? rirPlan?['week1'])
         as Map<String, dynamic>?;
 
@@ -219,10 +230,12 @@ class _Wes2ExerciseSettingsDialogState
     for (int i = 1; i <= count; i++) {
       final sessionKey = 'session$i';
       final sessionData = weekData?[sessionKey] as Map<String, dynamic>?;
-      final set1 = sessionData?['set1'] as Map<String, dynamic>?;
-      _rirPlanCtrls[sessionKey] = TextEditingController(
-        text: set1?['rir']?.toString() ?? '',
-      );
+      for (int s = 1; s <= 4; s++) {
+        final setData = sessionData?['set$s'] as Map<String, dynamic>?;
+        _rirPlanCtrls['${sessionKey}_set$s'] = TextEditingController(
+          text: setData?['rir']?.toString() ?? '',
+        );
+      }
     }
   }
 
@@ -249,7 +262,9 @@ class _Wes2ExerciseSettingsDialogState
       final v = entry.value.text.trim();
       if (v.isNotEmpty) weekData[entry.key] = v;
     }
-    return {...existing, _weekKey: weekData};
+    // DUP By Week/Exposure: save into week1 (the repeating template); never write weekN.
+    final saveKey = _isDupWeekOrExposure ? 'week1' : _weekKey;
+    return {...existing, saveKey: weekData};
   }
 
   /// Parses a DUP Signature min/max rep range from a raw repTargets value.
@@ -307,25 +322,46 @@ class _Wes2ExerciseSettingsDialogState
   Map<String, dynamic> _buildRirPlan() {
     final existing =
         (_existingSettings['rirPlan'] as Map<String, dynamic>?) ?? {};
-    final existingWeek =
-        (existing[_weekKey] as Map<String, dynamic>?) ?? {};
-    final weekData = Map<String, dynamic>.from(existingWeek);
+    final result = Map<String, dynamic>.from(existing);
 
+    // Collect only changed session/set pairs from the controllers.
+    final sessionChanges = <String, Map<String, String>>{};
     for (final entry in _rirPlanCtrls.entries) {
       final rirText = entry.value.text.trim();
       if (rirText.isEmpty) continue;
-      final sessionKey = entry.key;
-      final existingSession =
-          (weekData[sessionKey] as Map<String, dynamic>?) ?? {};
-      final existingSet1 =
-          (existingSession['set1'] as Map<String, dynamic>?) ?? {};
-      weekData[sessionKey] = {
-        ...existingSession,
-        'set1': {...existingSet1, 'rir': rirText},
-      };
+      final parts = entry.key.split('_'); // ['sessionN', 'setM']
+      if (parts.length != 2) continue;
+      sessionChanges.putIfAbsent(parts[0], () => {})[parts[1]] = rirText;
     }
 
-    return {...existing, _weekKey: weekData};
+    // Write the same values for every week from the current week onward.
+    // Previous weeks are preserved unchanged.
+    for (int w = widget.weekIndex + 1; w <= widget.totalBlockWeeks; w++) {
+      final weekKey = 'week$w';
+      final existingWeek =
+          (result[weekKey] as Map<String, dynamic>?) ?? {};
+      final weekData = Map<String, dynamic>.from(existingWeek);
+
+      for (final sessionEntry in sessionChanges.entries) {
+        final sessionKey = sessionEntry.key;
+        final existingSession =
+            (weekData[sessionKey] as Map<String, dynamic>?) ?? {};
+        final sessionData = Map<String, dynamic>.from(existingSession);
+
+        for (final setEntry in sessionEntry.value.entries) {
+          final setKey = setEntry.key;
+          final existingSet =
+              (sessionData[setKey] as Map<String, dynamic>?) ?? {};
+          sessionData[setKey] = {...existingSet, 'rir': setEntry.value};
+        }
+
+        weekData[sessionKey] = sessionData;
+      }
+
+      result[weekKey] = weekData;
+    }
+
+    return result;
   }
 
   Future<void> _save() async {
@@ -601,14 +637,8 @@ class _Wes2ExerciseSettingsDialogState
   Widget _buildRirPlanSection() {
     _syncSessionControllersToFrequency();
 
-    final entries = _rirPlanCtrls.entries.toList()
-      ..sort((a, b) {
-        final ai = int.tryParse(a.key.replaceAll('session', '')) ?? 0;
-        final bi = int.tryParse(b.key.replaceAll('session', '')) ?? 0;
-        return ai.compareTo(bi);
-      });
-
-    if (entries.isEmpty) {
+    final count = _sessionCount.clamp(1, 14);
+    if (_rirPlanCtrls.isEmpty) {
       return const Text(
         'Set weekly frequency to populate RIR targets.',
         style: TextStyle(fontSize: 12, color: Colors.white54),
@@ -616,27 +646,48 @@ class _Wes2ExerciseSettingsDialogState
     }
 
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        for (int i = 0; i < entries.length; i += 2) ...[
+        for (int i = 1; i <= count; i++) ...[
+          if (i > 1) const SizedBox(height: 8),
+          Text(
+            'Session $i',
+            style: const TextStyle(fontSize: 11, color: Colors.white54),
+          ),
+          const SizedBox(height: 4),
           _settingsRow(
             left: _buildTextField(
-              controller: entries[i].value,
-              label:
-                  'RIR Session ${entries[i].key.replaceAll('session', '')}',
+              controller:
+                  _rirPlanCtrls['session${i}_set1'] ?? TextEditingController(),
+              label: 'S1 RIR',
               keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
             ),
-            right: i + 1 < entries.length
-                ? _buildTextField(
-                    controller: entries[i + 1].value,
-                    label:
-                        'RIR Session ${entries[i + 1].key.replaceAll('session', '')}',
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                  )
-                : const SizedBox.shrink(),
+            right: _buildTextField(
+              controller:
+                  _rirPlanCtrls['session${i}_set2'] ?? TextEditingController(),
+              label: 'S2 RIR',
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+            ),
           ),
-          if (i + 2 < entries.length) const SizedBox(height: 8),
+          const SizedBox(height: 4),
+          _settingsRow(
+            left: _buildTextField(
+              controller:
+                  _rirPlanCtrls['session${i}_set3'] ?? TextEditingController(),
+              label: 'S3 RIR',
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+            ),
+            right: _buildTextField(
+              controller:
+                  _rirPlanCtrls['session${i}_set4'] ?? TextEditingController(),
+              label: 'S4 RIR',
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+            ),
+          ),
         ],
       ],
     );
@@ -675,14 +726,17 @@ class _Wes2ExerciseSettingsDialogState
     }
 
     final wantedRir = <String>{
-      for (int i = 1; i <= count; i++) 'session$i',
+      for (int i = 1; i <= count; i++)
+        for (int s = 1; s <= 4; s++) 'session${i}_set$s',
     };
 
     for (int i = 1; i <= count; i++) {
-      _rirPlanCtrls.putIfAbsent(
-        'session$i',
-        () => TextEditingController(),
-      );
+      for (int s = 1; s <= 4; s++) {
+        _rirPlanCtrls.putIfAbsent(
+          'session${i}_set$s',
+          () => TextEditingController(),
+        );
+      }
     }
 
     final removeRirKeys =

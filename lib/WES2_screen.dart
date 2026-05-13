@@ -1246,6 +1246,14 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       return;
     }
     final wd = _weekDayFromDate(blockStart, _controller.selectedDate);
+    final blockEndDate = _controller.blockEndDate;
+    int totalBlockWeeks;
+    if (blockEndDate != null) {
+      totalBlockWeeks = (blockEndDate.difference(blockStart).inDays ~/ 7) + 1;
+    } else {
+      totalBlockWeeks = wd.weekIndex + 52;
+    }
+
     final saved = await showDialog<bool>(
       context: context,
       builder: (_) => Wes2ExerciseSettingsDialog(
@@ -1255,6 +1263,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         exerciseName: row.name,
         weekIndex: wd.weekIndex,
         dayIndex: wd.dayIndex,
+        totalBlockWeeks: totalBlockWeeks,
         planService: _planService,
       ),
     );
