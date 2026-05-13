@@ -1924,6 +1924,12 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     });
 
     _saveIfDirty();
+    // ignore: discarded_futures
+    BB3PlannedExerciseService.removeExerciseFromWorkoutDoc(
+      uid: widget.uid,
+      date: widget.date,
+      exerciseId: oldEx.exerciseId,
+    );
   }
 
   // ── Template dialog ───────────────────────────────────────────────────────

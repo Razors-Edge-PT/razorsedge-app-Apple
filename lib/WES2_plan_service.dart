@@ -144,7 +144,9 @@ class FirestoreWes2PlanService implements Wes2PlanService {
       reps: _toIntHint(s['reps']),
       rir: _toDoubleHint(s['rir']),
       velocity: _toDoubleHint(s['velocity']),
-      planNote: (s['note'] as String?) ?? (s['planNote'] as String?),
+      planNote: (s['notes'] as String?) ??
+          (s['note'] as String?) ??
+          (s['planNote'] as String?),
     );
   }
 
