@@ -2116,25 +2116,29 @@ class _BB3AddExercisePickerState extends State<_BB3AddExercisePicker> {
           const SizedBox(height: 4),
           Expanded(child: _buildList(scrollCtrl)),
           const Divider(height: 1),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(null),
-                  child: const Text('Cancel'),
-                ),
-                const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: _selectedIds.isEmpty ? null : _onSave,
-                  child: Text(
-                    _selectedIds.isEmpty
-                        ? 'Add'
-                        : 'Add (${_selectedIds.length})',
+          SafeArea(
+            top: false,
+            minimum: const EdgeInsets.only(bottom: 16),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(null),
+                    child: const Text('Cancel'),
                   ),
-                ),
-              ],
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    onPressed: _selectedIds.isEmpty ? null : _onSave,
+                    child: Text(
+                      _selectedIds.isEmpty
+                          ? 'Add'
+                          : 'Add (${_selectedIds.length})',
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],

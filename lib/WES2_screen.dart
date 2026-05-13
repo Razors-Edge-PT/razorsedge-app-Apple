@@ -663,7 +663,6 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     // survive fast reopen, especially for BB3-planned rows where no Firestore
     // write occurs until the user types an actual value.
     _saveDraftNow();
-    _showUndoSnackBar('Set added');
 
     final rowIdx =
         _controller.rows.indexWhere((r) => r.exerciseId == exerciseId);
@@ -1575,7 +1574,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
     _controller.removeSet(currentRow.exerciseId, setIndex);
     _saveDraftNow();
-    if (targetSet.hasAnyActual) _showUndoSnackBar('Set removed');
+    final hasUserValues = targetSet.hasAnyActual ||
+        (targetSet.executionNote?.trim().isNotEmpty ?? false);
+    if (hasUserValues) _showUndoSnackBar('Set removed');
     // ignore: discarded_futures
     _removeSetSilently(
       uid: _controller.actingUid,
