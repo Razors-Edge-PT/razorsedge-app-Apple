@@ -1678,7 +1678,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               visualDensity: VisualDensity.compact,
             ),
-            onPressed: () => _showAddExerciseDialog(theme),
+            onPressed: () { _showAddExerciseDialog(theme); },
           ),
           const SizedBox(width: 4),
           TextButton.icon(
@@ -1701,193 +1701,21 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
 
   // ── Add exercise dialog ───────────────────────────────────────────────────
 
-  void _showAddExerciseDialog(ThemeData theme) {
-    final presentIds = _alreadyPresentExIds;
-
-    // Same category ordering as WES
-    const categoryOrder = [
-      'Horizontal Press', 'Horizontal Pull',
-      'Vertical Press', 'Vertical Pull',
-      'Lateral Raise',
-      'Arm Extension', 'Arm Curl',
-      'Squat Pattern', 'Hip Hinge',
-      'Leg Extension', 'Leg Curl',
-      'Hip Abduction/adduction', 'Calf Raise',
-      'Core',
-    ];
-
-    // Build ordered grouped map: category → sorted exercise list
-    final Map<String, List<Map<String, dynamic>>> rawGroups = {};
-    for (final ex in widget.allExercises) {
-      final cat = (ex['category'] ?? 'Other').toString();
-      rawGroups.putIfAbsent(cat, () => []).add(ex);
-    }
-    for (final list in rawGroups.values) {
-      list.sort((a, b) => (a['name'] ?? '').toString().toLowerCase()
-          .compareTo((b['name'] ?? '').toString().toLowerCase()));
-    }
-    final Map<String, List<Map<String, dynamic>>> orderedGroups = {};
-    for (final cat in categoryOrder) {
-      if (rawGroups.containsKey(cat)) orderedGroups[cat] = rawGroups[cat]!;
-    }
-    for (final entry in rawGroups.entries) {
-      if (!orderedGroups.containsKey(entry.key)) {
-        orderedGroups[entry.key] = entry.value;
-      }
-    }
-
-    final Map<String, bool> expandedGroups = {};
-    String searchQuery = '';
-
-    showDialog(
+  Future<void> _showAddExerciseDialog(ThemeData theme) async {
+    final selected = await showModalBottomSheet<List<Map<String, dynamic>>>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDlg) {
-          // Flat alphabetical list used when the user is searching
-          final List<Map<String, dynamic>>? searchResults =
-              searchQuery.trim().isEmpty
-                  ? null
-                  : (widget.allExercises
-                      .where((e) => (e['name'] ?? '')
-                          .toString()
-                          .toLowerCase()
-                          .contains(searchQuery.toLowerCase()))
-                      .toList()
-                    ..sort((a, b) => (a['name'] ?? '')
-                        .toString()
-                        .toLowerCase()
-                        .compareTo(
-                            (b['name'] ?? '').toString().toLowerCase())));
-
-          // Exercise tile — CheckboxListTile visual (mirrors WES style).
-          // BB3 single-select: value=false=available, value=true=already added.
-          // Tap adds immediately (no Save button needed for single-select).
-          Widget tile(Map<String, dynamic> ex, {double leftPad = 10}) {
-            final id = (ex['id'] ?? ex['exerciseId'] ?? ex['name'] ?? '')
-                .toString()
-                .toLowerCase();
-            final name = (ex['name'] ?? id).toString();
-            final alreadyPresent = presentIds.contains(id);
-            return CheckboxListTile(
-              value: alreadyPresent,
-              dense: true,
-              enabled: !alreadyPresent,
-              contentPadding:
-                  EdgeInsets.symmetric(horizontal: leftPad, vertical: 0),
-              controlAffinity: ListTileControlAffinity.leading,
-              activeColor: theme.colorScheme.primary,
-              checkColor: Colors.white,
-              title: Text(
-                name,
-                style: TextStyle(
-                  fontSize: 13,
-                  color: alreadyPresent ? Colors.grey.shade400 : null,
-                ),
-              ),
-              subtitle: alreadyPresent
-                  ? Text('already added',
-                      style: TextStyle(
-                          fontSize: 11, color: Colors.grey.shade400))
-                  : null,
-              onChanged: alreadyPresent
-                  ? null
-                  : (_) {
-                      Navigator.pop(ctx);
-                      _addExercise(ex);
-                    },
-            );
-          }
-
-          return AlertDialog(
-            insetPadding:
-                const EdgeInsets.symmetric(horizontal: 24, vertical: 2),
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            title: const Text('Select Exercise',
-                style: TextStyle(fontSize: 13)),
-            content: SizedBox(
-              width: double.maxFinite,
-              height: 480,
-              child: Column(
-                children: [
-                  // Search bar — WES style
-                  TextField(
-                    onChanged: (v) => setDlg(() => searchQuery = v),
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      hintText: 'Search exercises...',
-                      hintStyle: const TextStyle(color: Colors.white54),
-                      prefixIcon:
-                          const Icon(Icons.search, color: Colors.white70),
-                      isDense: true,
-                      filled: true,
-                      fillColor: theme.cardTheme.color ??
-                          theme.colorScheme.surface,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Expanded(
-                    child: searchResults != null
-                        // ── Search results: flat alphabetical ──────────
-                        ? ListView(
-                            children: searchResults
-                                .map((ex) => tile(ex))
-                                .toList(),
-                          )
-                        // ── Category groups (WES pattern) ──────────────
-                        : ListView(
-                            children: orderedGroups.entries.map((entry) {
-                              final cat = entry.key;
-                              final exercises = entry.value;
-                              final isExpanded =
-                                  expandedGroups[cat] ?? false;
-                              return Column(
-                                crossAxisAlignment:
-                                    CrossAxisAlignment.start,
-                                children: [
-                                  ListTile(
-                                    dense: true,
-                                    title: Text(
-                                      cat,
-                                      style: const TextStyle(
-                                          fontWeight: FontWeight.bold),
-                                    ),
-                                    trailing: Icon(
-                                      isExpanded
-                                          ? Icons.expand_less
-                                          : Icons.expand_more,
-                                      color: Colors.white70,
-                                      size: 18,
-                                    ),
-                                    onTap: () => setDlg(() =>
-                                        expandedGroups[cat] = !isExpanded),
-                                  ),
-                                  if (isExpanded)
-                                    ...exercises.map(
-                                        (ex) => tile(ex, leftPad: 20)),
-                                  const Divider(
-                                      height: 10, color: Colors.grey),
-                                ],
-                              );
-                            }).toList(),
-                          ),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel'),
-              ),
-            ],
-          );
-        },
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => _BB3AddExercisePicker(
+        allExercises: widget.allExercises,
+        alreadyPresentIds: _alreadyPresentExIds,
+        blockSettings: widget.blockSettings,
       ),
     );
+    if (selected == null || selected.isEmpty || !mounted) return;
+    for (final ex in selected) {
+      _addExercise(ex);
+    }
   }
 
   void _addExercise(Map<String, dynamic> ex) {
@@ -2127,4 +1955,321 @@ class _BB3DragPayload {
   final int sourceDayIndex;
   final BB3Exercise exercise;
   const _BB3DragPayload({required this.sourceDayIndex, required this.exercise});
+}
+
+// ── Add Exercise picker ───────────────────────────────────────────────────────
+
+class _BB3AddExercisePicker extends StatefulWidget {
+  final List<Map<String, dynamic>> allExercises;
+  final Set<String> alreadyPresentIds;
+  final BB3BlockSettings? blockSettings;
+
+  const _BB3AddExercisePicker({
+    required this.allExercises,
+    required this.alreadyPresentIds,
+    this.blockSettings,
+  });
+
+  @override
+  State<_BB3AddExercisePicker> createState() => _BB3AddExercisePickerState();
+}
+
+class _BB3AddExercisePickerState extends State<_BB3AddExercisePicker> {
+  static const List<String> _categoryOrder = [
+    'Horizontal Press', 'Horizontal Pull',
+    'Vertical Press', 'Vertical Pull',
+    'Lateral Raise',
+    'Arm Extension', 'Arm Curl',
+    'Squat Pattern', 'Hip Hinge',
+    'Leg Extension', 'Leg Curl',
+    'Hip Abduction/adduction', 'Calf Raise',
+    'Core',
+  ];
+
+  final TextEditingController _searchCtrl = TextEditingController();
+  String _query = '';
+  bool _showPlannedOnly = false;
+  Set<String> _plannedIds = {};
+  late final Set<String> _expandedCategories;
+  final Set<String> _selectedIds = {};
+  final Map<String, Map<String, dynamic>> _selectedById = {};
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.blockSettings != null) {
+      _plannedIds = widget.blockSettings!.exerciseSettings.keys.toSet();
+      _showPlannedOnly = _plannedIds.isNotEmpty;
+    }
+    _expandedCategories = {..._categoryOrder, 'Other'};
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  List<Map<String, dynamic>> _visibleExercises() {
+    var list = widget.allExercises.where((ex) {
+      final id = (ex['id'] ?? ex['exerciseId'] ?? ex['name'] ?? '')
+          .toString()
+          .trim()
+          .toLowerCase();
+      return !widget.alreadyPresentIds.contains(id);
+    }).toList();
+    if (_showPlannedOnly && _plannedIds.isNotEmpty) {
+      list = list.where((ex) {
+        final id = (ex['id'] ?? ex['exerciseId'] ?? ex['name'] ?? '')
+            .toString()
+            .trim();
+        return _plannedIds.contains(id);
+      }).toList();
+    }
+    if (_query.isNotEmpty) {
+      final q = _query.toLowerCase();
+      list = list
+          .where(
+              (ex) => (ex['name'] ?? '').toString().toLowerCase().contains(q))
+          .toList();
+    }
+    return list;
+  }
+
+  Map<String, List<Map<String, dynamic>>> _groupedExercises(
+      List<Map<String, dynamic>> exercises) {
+    final map = <String, List<Map<String, dynamic>>>{};
+    for (final cat in _categoryOrder) {
+      map[cat] = [];
+    }
+    map['Other'] = [];
+    for (final ex in exercises) {
+      final cat = (ex['category'] ?? 'Other').toString();
+      if (_categoryOrder.contains(cat)) {
+        map[cat]!.add(ex);
+      } else {
+        map['Other']!.add(ex);
+      }
+    }
+    for (final list in map.values) {
+      list.sort((a, b) => (a['name'] ?? '')
+          .toString()
+          .toLowerCase()
+          .compareTo((b['name'] ?? '').toString().toLowerCase()));
+    }
+    map.removeWhere((_, list) => list.isEmpty);
+    return map;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.7,
+      minChildSize: 0.4,
+      maxChildSize: 0.95,
+      expand: false,
+      builder: (_, scrollCtrl) => Column(
+        children: [
+          const SizedBox(height: 8),
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.white24,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Add Exercise',
+                    style:
+                        TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ),
+                if (_plannedIds.isNotEmpty) _buildPlannedToggle(),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: TextField(
+              controller: _searchCtrl,
+              decoration: const InputDecoration(
+                hintText: 'Search exercises…',
+                prefixIcon: Icon(Icons.search),
+                border: OutlineInputBorder(),
+                contentPadding:
+                    EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                isDense: true,
+              ),
+              onChanged: (v) => setState(() => _query = v.trim()),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Expanded(child: _buildList(scrollCtrl)),
+          const Divider(height: 1),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(null),
+                  child: const Text('Cancel'),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  onPressed: _selectedIds.isEmpty ? null : _onSave,
+                  child: Text(
+                    _selectedIds.isEmpty
+                        ? 'Add'
+                        : 'Add (${_selectedIds.length})',
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPlannedToggle() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text(
+          'Planned',
+          style: TextStyle(fontSize: 12, color: Colors.white70),
+        ),
+        Switch(
+          value: _showPlannedOnly,
+          onChanged: (v) => setState(() => _showPlannedOnly = v),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildList(ScrollController scrollCtrl) {
+    final visible = _visibleExercises();
+    if (visible.isEmpty) {
+      return const Center(
+        child: Text(
+          'No exercises found.',
+          style: TextStyle(color: Colors.white54),
+        ),
+      );
+    }
+    if (_query.isNotEmpty) {
+      final sorted = List.of(visible)
+        ..sort((a, b) => (a['name'] ?? '')
+            .toString()
+            .toLowerCase()
+            .compareTo((b['name'] ?? '').toString().toLowerCase()));
+      return ListView.builder(
+        controller: scrollCtrl,
+        itemCount: sorted.length,
+        itemBuilder: (_, i) => _buildTile(sorted[i]),
+      );
+    }
+    final groups = _groupedExercises(visible);
+    final items = <Widget>[];
+    for (final entry in groups.entries) {
+      final cat = entry.key;
+      final exercises = entry.value;
+      final isExpanded = _expandedCategories.contains(cat);
+      items.add(_buildCategoryHeader(cat, isExpanded));
+      if (isExpanded) {
+        for (final ex in exercises) {
+          items.add(_buildTile(ex));
+        }
+      }
+    }
+    return ListView(controller: scrollCtrl, children: items);
+  }
+
+  Widget _buildCategoryHeader(String category, bool isExpanded) {
+    return InkWell(
+      onTap: () => setState(() {
+        if (isExpanded) {
+          _expandedCategories.remove(category);
+        } else {
+          _expandedCategories.add(category);
+        }
+      }),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+        child: Row(
+          children: [
+            Text(
+              category.toUpperCase(),
+              style: const TextStyle(
+                fontSize: 11,
+                color: Colors.white38,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.8,
+              ),
+            ),
+            const Spacer(),
+            Icon(
+              isExpanded ? Icons.expand_less : Icons.expand_more,
+              size: 16,
+              color: Colors.white38,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTile(Map<String, dynamic> ex) {
+    final rawId =
+        (ex['id'] ?? ex['exerciseId'] ?? ex['name'] ?? '').toString().trim();
+    final idKey = rawId.toLowerCase();
+    final name = (ex['name'] ?? rawId).toString();
+    final isSelected = _selectedIds.contains(idKey);
+
+    return CheckboxListTile(
+      value: isSelected,
+      dense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+      controlAffinity: ListTileControlAffinity.leading,
+      title: Text(
+        name,
+        style: const TextStyle(fontSize: 14),
+        overflow: TextOverflow.ellipsis,
+        maxLines: 1,
+      ),
+      onChanged: (checked) {
+        setState(() {
+          if (checked == true) {
+            _selectedIds.add(idKey);
+            _selectedById[idKey] = ex;
+          } else {
+            _selectedIds.remove(idKey);
+            _selectedById.remove(idKey);
+          }
+        });
+      },
+    );
+  }
+
+  void _onSave() {
+    final ordered = widget.allExercises.where((ex) {
+      final id = (ex['id'] ?? ex['exerciseId'] ?? ex['name'] ?? '')
+          .toString()
+          .trim()
+          .toLowerCase();
+      return _selectedIds.contains(id);
+    }).toList();
+    Navigator.of(context).pop(ordered);
+  }
 }
