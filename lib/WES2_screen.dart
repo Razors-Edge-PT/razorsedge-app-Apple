@@ -1488,6 +1488,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       MaterialPageRoute(
         builder: (_) => TopSetsScreen(
           exerciseName: row.name,
+          exerciseId: row.exerciseId,
           recentWorkouts: const [],
         ),
       ),

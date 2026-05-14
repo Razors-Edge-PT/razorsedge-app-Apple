@@ -8,13 +8,15 @@ import 'package:google_fonts/google_fonts.dart';
 import 'periodization_model_utils.dart';
 
 class TopSetsScreen extends StatefulWidget {
-  final String exerciseName; // ✅ Define exercise name
-  final List<Workout> recentWorkouts; // ✅ Add recent workouts as a parameter
+  final String exerciseName;
+  final String? exerciseId;
+  final List<Workout> recentWorkouts;
 
   const TopSetsScreen({
     super.key,
     required this.exerciseName,
-    required this.recentWorkouts, // ✅ Accepts recent workouts
+    this.exerciseId,
+    required this.recentWorkouts,
   });
 
   @override
@@ -44,6 +46,38 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
     super.initState();
     _loadInitialWorkouts();
     _scrollController.addListener(_onScroll);
+    final uid = userId;
+    _primeBwHistory(uid).then((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  Future<void> _primeBwHistory(String uid) async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('weights')
+          .orderBy('timestamp', descending: true)
+          .limit(1000)
+          .get();
+      final entries = <Map<String, dynamic>>[];
+      for (final d in snap.docs) {
+        final data = d.data();
+        final double? bw = (data['weight'] as num?)?.toDouble();
+        final DateTime ts =
+            (data['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now();
+        final String unit = (data['unit'] as String?) ?? 'kg';
+        if (bw != null && bw > 0 && unit == 'kg') {
+          entries.add({'date': ts, 'weight': bw, 'unit': 'kg'});
+        }
+      }
+      if (entries.isNotEmpty) {
+        PeriodizationModelUtils.setBodyweightHistory(uid: uid, entries: entries);
+      }
+    } catch (e) {
+      debugPrint('⚠️ [TopSets] BW history load failed: $e');
+    }
   }
 
   @override
@@ -119,11 +153,38 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
       if (_sortOption == 'date') {
         _workouts.sort((a, b) => b.date.compareTo(a.date));
       } else if (_sortOption == 'e1rm') {
-        double topE1rm(Workout w) => w.exercises
-            .expand((e) => e.sets)
-            .map((s) => calculateE1RM(s.weight ?? 0, (s.reps ?? 0).toDouble(), s.rir ?? 0))
-            .fold(0.0, (p, c) => c > p ? c : p);
-        _workouts.sort((a, b) => topE1rm(b).compareTo(topE1rm(a)));
+        final isBw = PeriodizationModelUtils.isBodyweightExercise(
+          id: widget.exerciseId,
+          name: widget.exerciseName,
+        );
+        if (isBw) {
+          double topAddedE1rm(Workout w) {
+            double best = 0.0;
+            for (final ex in w.exercises) {
+              if (ex.name != widget.exerciseName) continue;
+              for (final s in ex.sets) {
+                final e = PeriodizationModelUtils.e1rmForDisplay(
+                  uid: userId,
+                  absoluteKg: s.weight ?? 0,
+                  reps: s.reps ?? 0,
+                  rir: s.rir ?? 0,
+                  exerciseId: widget.exerciseId,
+                  exerciseName: widget.exerciseName,
+                  asOfDate: w.date,
+                );
+                if (e > best) best = e;
+              }
+            }
+            return best;
+          }
+          _workouts.sort((a, b) => topAddedE1rm(b).compareTo(topAddedE1rm(a)));
+        } else {
+          double topE1rm(Workout w) => w.exercises
+              .expand((e) => e.sets)
+              .map((s) => calculateE1RM(s.weight ?? 0, (s.reps ?? 0).toDouble(), s.rir ?? 0))
+              .fold(0.0, (p, c) => c > p ? c : p);
+          _workouts.sort((a, b) => topE1rm(b).compareTo(topE1rm(a)));
+        }
       }
     });
   }
@@ -318,6 +379,40 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
                 if (topSet == null) return const SizedBox.shrink();
                 final highlight = _selectedRepTarget != null && topSet!.reps == _selectedRepTarget;
 
+                final isBw = PeriodizationModelUtils.isBodyweightExercise(
+                  id: widget.exerciseId,
+                  name: widget.exerciseName,
+                );
+
+                final double displayWeight = isBw
+                    ? PeriodizationModelUtils.toDisplayAddedWeight(
+                        uid: userId,
+                        absoluteKg: topSet!.weight ?? 0.0,
+                        exerciseId: widget.exerciseId,
+                        exerciseName: widget.exerciseName,
+                        asOfDate: workout.date,
+                      )
+                    : (topSet!.weight ?? 0.0);
+
+                final double displayE1rm = isBw
+                    ? PeriodizationModelUtils.e1rmForDisplay(
+                        uid: userId,
+                        absoluteKg: topSet!.weight ?? 0.0,
+                        reps: topSet!.reps ?? 0,
+                        rir: topSet!.rir ?? 0.0,
+                        exerciseId: widget.exerciseId,
+                        exerciseName: widget.exerciseName,
+                        asOfDate: workout.date,
+                      )
+                    : highestE1RM;
+
+                final String weightLabel = isBw
+                    ? '+${displayWeight.toStringAsFixed(1)} kg'
+                    : '${displayWeight.toStringAsFixed(1)} kg';
+                final String e1rmLabel = isBw
+                    ? '+${displayE1rm.toStringAsFixed(1)} kg'
+                    : '${displayE1rm.toStringAsFixed(1)} kg';
+
                 return Card(
                   margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
                   shape: highlight
@@ -336,21 +431,14 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
                         style: DefaultTextStyle.of(context).style,
                         children: [
                           TextSpan(
-                            text: '${topSet!.weight}',
+                            text: weightLabel,
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               color: Theme.of(context).colorScheme.tertiary,
                             ),
                           ),
                           TextSpan(
-                            text: 'kg ',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: Theme.of(context).colorScheme.tertiary,
-                            ),
-                          ),
-                          TextSpan(
-                            text: 'x ',
+                            text: ' x ',
                             style: TextStyle(
                               color: Theme.of(context).colorScheme.tertiary,
                             ),
@@ -382,7 +470,7 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
                             ),
                           ),
                           TextSpan(
-                            text: '${highestE1RM.toStringAsFixed(1)} kg',
+                            text: e1rmLabel,
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               color: Theme.of(context).colorScheme.tertiary,
