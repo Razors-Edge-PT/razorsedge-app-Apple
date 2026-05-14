@@ -60,6 +60,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   DateTime? _timerStartedAt;
   Timer? _timerTicker;
 
+  // ── Automatic workout duration (separate from manual floating timer) ────────
+  int _workoutDurationMilliseconds = 0;
+  DateTime? _workoutDurationSegmentStartedAt;
+
   Future<void> _fetchAthleteUsername(String uid) async {
     try {
       final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
@@ -127,6 +131,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   @override
   void dispose() {
     _timerTicker?.cancel();
+    _pauseWorkoutDurationSegment();
     _saveDraftNow();
     WidgetsBinding.instance.removeObserver(this);
     _controller.dispose();
@@ -136,6 +141,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
+      _pauseWorkoutDurationSegment();
       _saveDraftNow();
     } else if (state == AppLifecycleState.resumed) {
       // Resync timer elapsed from the anchored start time after backgrounding.
@@ -159,6 +165,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       uid: _controller.actingUid,
       date: _controller.selectedDate,
       rows: _controller.rows.toList(),
+      workoutDurationMs: _currentWorkoutDurationMs(),
     );
   }
 
@@ -240,6 +247,28 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     return h > 0 ? '$h:$mm:$ss' : '$mm:$ss';
   }
 
+  // ── Workout duration helpers ──────────────────────────────────────────────
+
+  void _startWorkoutDurationSegment() {
+    if (_workoutDurationSegmentStartedAt != null) return;
+    _workoutDurationSegmentStartedAt = DateTime.now();
+  }
+
+  void _pauseWorkoutDurationSegment() {
+    final start = _workoutDurationSegmentStartedAt;
+    if (start == null) return;
+    _workoutDurationMilliseconds +=
+        DateTime.now().difference(start).inMilliseconds;
+    _workoutDurationSegmentStartedAt = null;
+  }
+
+  int _currentWorkoutDurationMs() {
+    final start = _workoutDurationSegmentStartedAt;
+    if (start == null) return _workoutDurationMilliseconds;
+    return _workoutDurationMilliseconds +
+        DateTime.now().difference(start).inMilliseconds;
+  }
+
   /// Load completed workout + BB3 planned rows for the current date, then merge.
   /// beginLoad() increments the epoch; stale completions are discarded.
   Future<void> _loadDay() async {
@@ -278,9 +307,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       );
       if (!mounted) return;
       _controller.setRows(
-        _hardened(_applyDraftActuals(_mergeRows(completedRows, bb3Rows), draft)),
+        _hardened(_applyDraftActuals(_mergeRows(completedRows, bb3Rows), draft?.rows)),
         epoch,
       );
+      _workoutDurationMilliseconds = draft?.workoutDurationMs ?? 0;
+      _workoutDurationSegmentStartedAt = null;
       // Phase 21B: apply Set 1 model/default hints after rows settle.
       // ignore: discarded_futures
       _loadAndApplyHints();
@@ -722,6 +753,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     } else {
       value = _parseFieldValue(fieldKey, text);
       if (value == null) return; // invalid non-empty → skip save
+      if (fieldKey == Wes2FieldKey.weight ||
+          fieldKey == Wes2FieldKey.reps ||
+          fieldKey == Wes2FieldKey.rir) {
+        _startWorkoutDurationSegment();
+      }
     }
     final rowIdx =
         _controller.rows.indexWhere((r) => r.exerciseId == exerciseId);
@@ -1273,14 +1309,20 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   // ── Date navigation (Phase 13) ────────────────────────────────────────────
 
   void _onPrevDay() {
+    _pauseWorkoutDurationSegment();
     _saveDraftNow();
+    _workoutDurationMilliseconds = 0;
+    _workoutDurationSegmentStartedAt = null;
     _controller
         .changeDate(_controller.selectedDate.subtract(const Duration(days: 1)));
     _loadDay();
   }
 
   void _onNextDay() {
+    _pauseWorkoutDurationSegment();
     _saveDraftNow();
+    _workoutDurationMilliseconds = 0;
+    _workoutDurationSegmentStartedAt = null;
     _controller
         .changeDate(_controller.selectedDate.add(const Duration(days: 1)));
     _loadDay();
@@ -1295,7 +1337,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       lastDate: DateTime(now.year, now.month, now.day + 365),
     );
     if (picked == null || !mounted) return;
+    _pauseWorkoutDurationSegment();
     _saveDraftNow();
+    _workoutDurationMilliseconds = 0;
+    _workoutDurationSegmentStartedAt = null;
     _controller.changeDate(picked);
     _loadDay();
   }
@@ -2215,9 +2260,14 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             _summaryStatRow('Exercises', '$totalExercises'),
             _summaryStatRow('Total sets', '$totalSets'),
             _summaryStatRow('Sets logged', '$setsLogged'),
+            if (_currentWorkoutDurationMs() > 0)
+              _summaryStatRow(
+                'Workout duration',
+                _formatDuration(_currentWorkoutDurationMs()),
+              ),
             if (_elapsedMilliseconds > 0)
               _summaryStatRow(
-                'Total workout time',
+                'Last thing you timed',
                 _formatDuration(_elapsedMilliseconds),
               ),
             if (totalVolume > 0)

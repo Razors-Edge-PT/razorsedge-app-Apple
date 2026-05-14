@@ -12,10 +12,11 @@ abstract class Wes2LocalStore {
     required String uid,
     required DateTime date,
     required List<Wes2ExerciseRow> rows,
+    int workoutDurationMs = 0,
   });
 
   /// Load the most recent local draft for uid + date, or null if none.
-  Future<List<Wes2ExerciseRow>?> loadDraft({
+  Future<({List<Wes2ExerciseRow> rows, int workoutDurationMs})?> loadDraft({
     required String uid,
     required DateTime date,
   });
@@ -84,6 +85,7 @@ class IsarWes2LocalStore implements Wes2LocalStore {
     required String uid,
     required DateTime date,
     required List<Wes2ExerciseRow> rows,
+    int workoutDurationMs = 0,
   }) async {
     final key = _key(uid, date);
     // Guard: never write to a non-wes2_ key.
@@ -95,6 +97,7 @@ class IsarWes2LocalStore implements Wes2LocalStore {
     final payload = jsonEncode({
       'schemaVersion': 1,
       'savedAt': DateTime.now().millisecondsSinceEpoch,
+      'workoutDurationMs': workoutDurationMs,
       'exercises': rows.map((r) => r.toJson()).toList(),
     });
 
@@ -110,7 +113,7 @@ class IsarWes2LocalStore implements Wes2LocalStore {
   }
 
   @override
-  Future<List<Wes2ExerciseRow>?> loadDraft({
+  Future<({List<Wes2ExerciseRow> rows, int workoutDurationMs})?> loadDraft({
     required String uid,
     required DateTime date,
   }) async {
@@ -131,9 +134,13 @@ class IsarWes2LocalStore implements Wes2LocalStore {
     try {
       final decoded = jsonDecode(snap.snapshotJson) as Map<String, dynamic>;
       final exercises = decoded['exercises'] as List<dynamic>;
-      return exercises
-          .map((e) => Wes2ExerciseRow.fromJson(e as Map<String, dynamic>))
-          .toList();
+      final durationMs = (decoded['workoutDurationMs'] as int?) ?? 0;
+      return (
+        rows: exercises
+            .map((e) => Wes2ExerciseRow.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        workoutDurationMs: durationMs,
+      );
     } catch (_) {
       // Corrupt or incompatible snapshot — treat as absent.
       return null;
