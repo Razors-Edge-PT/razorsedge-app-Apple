@@ -53,7 +53,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   // ── Day timer state (Phase 17) ─────────────────────────────────────────────
   bool _timerVisible = false;
   bool _timerRunning = false;
-  int _elapsedSeconds = 0;
+  int _elapsedMilliseconds = 0;
   DateTime? _timerStartedAt;
   Timer? _timerTicker;
 
@@ -138,7 +138,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       // Resync timer elapsed from the anchored start time after backgrounding.
       if (_timerRunning && _timerStartedAt != null) {
         _syncTimerElapsed();
-        if (_elapsedSeconds >= 3600) {
+        if (_elapsedMilliseconds >= 3600000) {
           _stopTimer();
         } else if (mounted) {
           setState(() {});
@@ -170,10 +170,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       _timerRunning = true;
       // Anchor virtual start so that elapsed is preserved across stop/start.
       _timerStartedAt =
-          DateTime.now().subtract(Duration(seconds: _elapsedSeconds));
+          DateTime.now().subtract(Duration(milliseconds: _elapsedMilliseconds));
     });
     _timerTicker =
-        Timer.periodic(const Duration(seconds: 1), (_) => _tickTimer());
+        Timer.periodic(const Duration(milliseconds: 100), (_) => _tickTimer());
   }
 
   void _stopTimer() {
@@ -192,7 +192,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     _timerTicker = null;
     setState(() {
       _timerRunning = false;
-      _elapsedSeconds = 0;
+      _elapsedMilliseconds = 0;
       _timerStartedAt = null;
     });
   }
@@ -206,7 +206,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   void _tickTimer() {
     if (!mounted) return;
     _syncTimerElapsed();
-    if (_elapsedSeconds >= 3600) {
+    if (_elapsedMilliseconds >= 3600000) {
       _stopTimer();
     } else {
       setState(() {});
@@ -215,16 +215,25 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
   void _syncTimerElapsed() {
     if (_timerStartedAt == null) return;
-    final elapsed = DateTime.now().difference(_timerStartedAt!).inSeconds;
-    _elapsedSeconds = elapsed.clamp(0, 3600);
+    final elapsed = DateTime.now().difference(_timerStartedAt!).inMilliseconds;
+    _elapsedMilliseconds = elapsed.clamp(0, 3600000);
   }
 
-  String _formatDuration(int seconds) {
-    final h = seconds ~/ 3600;
-    final m = (seconds % 3600) ~/ 60;
-    final s = seconds % 60;
+  String _formatDuration(int milliseconds, {bool includeSplitSeconds = false}) {
+    final totalSeconds = milliseconds ~/ 1000;
+    final h = totalSeconds ~/ 3600;
+    final m = (totalSeconds % 3600) ~/ 60;
+    final s = totalSeconds % 60;
+    final cs = (milliseconds % 1000) ~/ 10;
+
     final mm = m.toString().padLeft(2, '0');
     final ss = s.toString().padLeft(2, '0');
+    final cc = cs.toString().padLeft(2, '0');
+
+    if (includeSplitSeconds) {
+      return h > 0 ? '$h:$mm:$ss.$cc' : '$mm:$ss.$cc';
+    }
+
     return h > 0 ? '$h:$mm:$ss' : '$mm:$ss';
   }
 
@@ -1778,7 +1787,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  _formatDuration(_elapsedSeconds),
+                  _formatDuration(_elapsedMilliseconds, includeSplitSeconds: true),
                   style: const TextStyle(
                     fontSize: 22,
                     fontWeight: FontWeight.bold,
@@ -2075,15 +2084,15 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             _summaryStatRow('Exercises', '$totalExercises'),
             _summaryStatRow('Total sets', '$totalSets'),
             _summaryStatRow('Sets logged', '$setsLogged'),
+            if (_elapsedMilliseconds > 0)
+              _summaryStatRow(
+                'Total workout time',
+                _formatDuration(_elapsedMilliseconds),
+              ),
             if (totalVolume > 0)
               _summaryStatRow(
                 'Total volume',
                 '${totalVolume.toStringAsFixed(0)} kg·reps',
-              ),
-            if (_elapsedSeconds > 0)
-              _summaryStatRow(
-                'Session time',
-                _formatDuration(_elapsedSeconds),
               ),
             if (rows.isEmpty)
               const Padding(

@@ -7,7 +7,6 @@ import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart'; // for Timestamp & Firestore
 import 'package:flutter/services.dart'; // for FilteringTextInputFormatter
-import 'user_context.dart';
 import 'periodization_model_utils.dart';
 
 enum TrendRange { d14, m1, m6, y1, y2 }
@@ -551,12 +550,50 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
   }
 
 
+  // Loads BW history into PMU so toDisplayAddedWeight/e1rmForDisplay use real data.
+  // Mirrors the pattern in workout_entry_screen._primeBodyweightHistoryCache.
+  Future<void> _primeBwHistory(String uid) async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('weights')
+          .orderBy('timestamp', descending: true)
+          .limit(1000)
+          .get();
+      final entries = <Map<String, dynamic>>[];
+      for (final d in snap.docs) {
+        final data = d.data();
+        final double? bw = (data['weight'] as num?)?.toDouble();
+        final DateTime ts =
+            (data['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now();
+        final String unit = (data['unit'] as String?) ?? 'kg';
+        if (bw != null && bw > 0 && unit == 'kg') {
+          entries.add({'date': ts, 'weight': bw, 'unit': 'kg'});
+        }
+      }
+      if (entries.isNotEmpty) {
+        PeriodizationModelUtils.setBodyweightHistory(uid: uid, entries: entries);
+      }
+    } catch (e) {
+      debugPrint('⚠️ [ExerciseDetails] BW history load failed: $e');
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     print('🟦 [Details] init for id="${widget.exerciseId}", name="${widget.exerciseName}"');
     _onRepTargetChanged(_repTargetCtrl.text); // seed groups from "5"
     final selectedUid = UserContext.of(context, listen: false).currentUid;
+
+    // Load BW history so Top Sets displays added weight for BW exercises.
+    // Fires concurrently with the workout fetch; triggers a rebuild once done
+    // if the workout list is already visible.
+    _primeBwHistory(selectedUid).then((_) {
+      if (mounted && _workouts.isNotEmpty) setState(() {});
+    });
+
     // …then fetch full 2y history and replace
     _fetchTwoYearHistoryForExercise(
       exerciseId: widget.exerciseId,
@@ -1385,7 +1422,39 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
             return aE1 > bE1 ? a : b;
           });
 
-          final e1rm = calculateE1RM(topSet.weight ?? 0.0, (topSet.reps ?? 0).toDouble(), topSet.rir ?? 0.0);
+          final bool isBw = PeriodizationModelUtils.isBodyweightExercise(
+            id: widget.exerciseId,
+            name: widget.exerciseName,
+          );
+
+          final double displayWeight = isBw
+              ? PeriodizationModelUtils.toDisplayAddedWeight(
+                  uid: userId,
+                  absoluteKg: topSet.weight ?? 0.0,
+                  exerciseId: widget.exerciseId,
+                  exerciseName: widget.exerciseName,
+                  asOfDate: workout.date,
+                )
+              : (topSet.weight ?? 0.0);
+
+          final double e1rm = isBw
+              ? PeriodizationModelUtils.e1rmForDisplay(
+                  uid: userId,
+                  absoluteKg: topSet.weight ?? 0.0,
+                  reps: topSet.reps ?? 0,
+                  rir: topSet.rir ?? 0.0,
+                  exerciseId: widget.exerciseId,
+                  exerciseName: widget.exerciseName,
+                  asOfDate: workout.date,
+                )
+              : calculateE1RM(topSet.weight ?? 0.0, (topSet.reps ?? 0).toDouble(), topSet.rir ?? 0.0);
+
+          final String weightLabel = isBw
+              ? '+${displayWeight.toStringAsFixed(1)} kg'
+              : '${displayWeight.toStringAsFixed(1)} kg';
+          final String e1rmLabel = isBw
+              ? '+${e1rm.toStringAsFixed(1)} kg'
+              : '${e1rm.toStringAsFixed(1)} kg';
 
           return ListTile(
             title: Text(
@@ -1393,7 +1462,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
               style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
             ),
             subtitle: Text(
-              '${topSet.weight} kg × ${topSet.reps}, RIR ${topSet.rir} → E1RM: ${e1rm.toStringAsFixed(1)} kg',
+              '$weightLabel × ${topSet.reps}, RIR ${topSet.rir} → E1RM: $e1rmLabel',
               style: TextStyle(color: Theme.of(context).colorScheme.secondary),
             ),
           );
