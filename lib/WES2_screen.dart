@@ -19,6 +19,7 @@ import 'WES2_template_service.dart';
 import 'WES2_widgets/WES2_template_picker.dart';
 import 'WES2_widgets/WES2_exercise_settings_dialog.dart';
 import 'exercise_details_screen.dart';
+import 'periodization_model_utils.dart';
 
 enum _Wes2AppBarMenuAction { timer, templates, deleteAll }
 
@@ -49,6 +50,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   // IDs present in the BB3 planned day at last load. Keyed by exerciseId.
   // Allows post-merge rows (source=completedServer) to still trigger BB3 sync.
   Set<String> _bb3PlannedExerciseIds = const {};
+  // Composite key uid|blockId|date — prevents redundant server history refreshes.
+  String? _lastHistoryRefreshKey;
 
   // ── Day timer state (Phase 17) ─────────────────────────────────────────────
   bool _timerVisible = false;
@@ -308,6 +311,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     final blockStart = _controller.blockStartDate;
     if (blockId == null || blockId.isEmpty || blockStart == null) return;
 
+    await _refreshHistoryForHints(_controller.selectedDate);
+
     try {
       if (_cachedExerciseSettings.isEmpty) {
         _cachedExerciseSettings = await _planService.loadExerciseSettings(
@@ -370,6 +375,132 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     } catch (e) {
       debugPrint('[WES2] Hint computation failed: $e');
     }
+  }
+
+  /// Fetches the bounded block workout history from Firestore and patches it
+  /// into PeriodizationModelUtils.savedWorkoutsList so retroactive edits are
+  /// visible to progression hints without a full app restart.
+  ///
+  /// Runs at most once per (uid, blockId, selectedDate) triple. On server
+  /// failure the key is NOT marked, allowing a retry on the next navigation.
+  Future<void> _refreshHistoryForHints(DateTime selectedDate) async {
+    final uid = _controller.actingUid;
+    if (uid.isEmpty) return;
+    final blockStart = _controller.blockStartDate;
+    if (blockStart == null) return;
+    final blockId = _controller.activeBlockId ?? '';
+
+    String ymd(DateTime d) =>
+        '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+    final key = '$uid|$blockId|${ymd(selectedDate)}';
+    if (_lastHistoryRefreshKey == key) return;
+
+    final startKey = ymd(DateTime(blockStart.year, blockStart.month, blockStart.day));
+    final endKey   = ymd(DateTime(selectedDate.year, selectedDate.month, selectedDate.day));
+
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('workouts')
+          .orderBy(FieldPath.documentId)
+          .startAt([startKey])
+          .endAt([endKey])
+          .get(const GetOptions(source: Source.server));
+
+      final freshData = snap.docs.map((doc) {
+        final data = Map<String, dynamic>.from(doc.data());
+        data['date'] ??= doc.id;
+        return data;
+      }).toList();
+
+      // Replace cached entries in [startKey, endKey]; leave earlier history intact.
+      final merged = <Map<String, dynamic>>[];
+      for (final w in PeriodizationModelUtils.savedWorkoutsList) {
+        final raw  = (w['date'] ?? '').toString();
+        final wKey = raw.length >= 10 ? raw.substring(0, 10) : '';
+        if (wKey.isEmpty || wKey.compareTo(startKey) < 0 || wKey.compareTo(endKey) > 0) {
+          merged.add(w);
+        }
+      }
+      merged.addAll(freshData);
+
+      // Stable date order so downstream history logic receives a consistent list.
+      merged.sort((a, b) {
+        final aKey = (a['date'] ?? '').toString();
+        final bKey = (b['date'] ?? '').toString();
+        final ak = aKey.length >= 10 ? aKey.substring(0, 10) : aKey;
+        final bk = bKey.length >= 10 ? bKey.substring(0, 10) : bKey;
+        return bk.compareTo(ak); // newest-first, matching WarmupService convention
+      });
+
+      PeriodizationModelUtils.savedWorkoutsList = merged;
+      _rebuildTopSetsFromSavedWorkouts();
+      _lastHistoryRefreshKey = key;
+    } catch (_) {
+      // Server fetch failed; savedWorkoutsList is unchanged.
+      // Key is intentionally NOT set — next navigation will retry.
+    }
+  }
+
+  /// Rebuilds PeriodizationModelUtils.topSetsByExercise from the current
+  /// savedWorkoutsList. Called after _refreshHistoryForHints patches in fresh
+  /// server data so ProgressionEngine → BB3HintService sees updated history.
+  void _rebuildTopSetsFromSavedWorkouts() {
+    double parseD(dynamic v) {
+      if (v == null) return 0.0;
+      if (v is num) return v.toDouble();
+      return double.tryParse(v.toString().trim()) ?? 0.0;
+    }
+    DateTime? parseDate(dynamic v) {
+      if (v is DateTime) return v;
+      if (v is String && v.length >= 10) return DateTime.tryParse(v.substring(0, 10));
+      return null;
+    }
+
+    final newMap = <String, List<Map<String, dynamic>>>{};
+    for (final w in PeriodizationModelUtils.savedWorkoutsList) {
+      final wDate = parseDate(w['date']);
+      if (wDate == null) continue;
+      final exs = w['exercises'];
+      if (exs is! List) continue;
+      for (final ex in exs) {
+        if (ex is! Map) continue;
+        final name = (ex['name'] ?? '').toString().trim();
+        if (name.isEmpty) continue;
+        final sets = ex['sets'];
+        if (sets is! List) continue;
+        double bestE1rm = 0;
+        Map<String, dynamic>? best;
+        for (final s in sets) {
+          if (s is! Map) continue;
+          final w2  = parseD(s['weight']  ?? s['actualWeight']);
+          final r   = parseD(s['reps']    ?? s['actualReps']);
+          final rir = parseD(s['rir']     ?? s['actualRir']);
+          if (w2 <= 0 || r <= 0) continue;
+          final e1rm = PeriodizationModelUtils.calculateE1RM(w2, r, rir);
+          if (e1rm > bestE1rm) {
+            bestE1rm = e1rm;
+            best = {'weight': w2, 'reps': r, 'rir': rir, 'date': wDate};
+          }
+        }
+        if (best != null) newMap.putIfAbsent(name, () => []).add(best);
+      }
+    }
+    for (final list in newMap.values) {
+      list.sort((a, b) {
+        final ad = a['date'] as DateTime?;
+        final bd = b['date'] as DateTime?;
+        if (ad == null && bd == null) return 0;
+        if (ad == null) return 1;
+        if (bd == null) return -1;
+        return bd.compareTo(ad); // newest-first
+      });
+    }
+    PeriodizationModelUtils.topSetsByExercise
+      ..clear()
+      ..addAll(newMap);
   }
 
   /// Returns true if [date] (midnight-normalised) is strictly before
