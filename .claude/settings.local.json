@@ -35,7 +35,8 @@
       "Bash(grep -v \"avoid_print\\\\|unused_import\\\\|unused_field\\\\|uri_does_not_exist.*docs\\\\\\\\\")",
       "Bash(dart format *)",
       "Bash(findstr /i \"WES2\\\\|error\")",
-      "PowerShell(flutter analyze *)"
+      "PowerShell(flutter analyze *)",
+      "Bash(dart analyze *)"
     ]
   }
 }

@@ -476,11 +476,15 @@ class BB3PlannedExerciseService {
     final repTargets = exSettings['repTargets'];
     if (repTargets is! Map) return 8;
 
+    final model = (exSettings['periodizationModel'] as String?) ?? '';
+    final isDupWeekOrExposure =
+        model == 'DUP, By Week' || model == 'DUP, By Exposure';
     final weekKey = 'week${weekIndex + 1}';
-    // week1 is the repeating microcycle template; fall back when literal week is absent.
-    final weekData = repTargets.containsKey(weekKey)
-        ? repTargets[weekKey]
-        : repTargets['week1'];
+    final weekData = isDupWeekOrExposure
+        ? repTargets['week1']
+        : (repTargets.containsKey(weekKey)
+            ? repTargets[weekKey]
+            : repTargets['week1']);
     if (weekData is! Map) return 8;
 
     final instanceKey = 'instance${sessionIndex + 1}';
