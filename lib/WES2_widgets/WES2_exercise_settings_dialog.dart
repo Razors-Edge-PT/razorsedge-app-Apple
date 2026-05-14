@@ -103,24 +103,43 @@ class _Wes2ExerciseSettingsDialogState
   }
 
 
-  int get _microcycleSlotCount {
+  /// weekData source for rep-target slot count and active instance resolution.
+  /// DUP By Week / DUP By Exposure: always week1 (single repeating template;
+  /// never let polluted weekN keys affect slot count or active instance).
+  /// Other models: current week with week1 fallback.
+  Map<String, dynamic>? get _repTargetWeekData {
     final repTargets = _existingSettings['repTargets'] as Map<String, dynamic>?;
-    final week1 = repTargets?['week1'] as Map<String, dynamic>?;
-    if (week1 == null) return 0;
-    return week1.keys.where((k) => k.startsWith('instance')).length;
+    if (repTargets == null) return null;
+    if (_isDupWeekOrExposure) {
+      return repTargets['week1'] as Map<String, dynamic>?;
+    }
+    return (repTargets.containsKey(_weekKey)
+            ? repTargets[_weekKey]
+            : repTargets['week1'])
+        as Map<String, dynamic>?;
+  }
+
+  int get _microcycleSlotCount {
+    final weekData = _repTargetWeekData;
+    if (weekData == null) return 0;
+    return weekData.keys.where((k) => k.startsWith('instance')).length;
+  }
+
+  /// 1-based rep target instance number WES2 is using for today.
+  /// Mirrors _targetSetCountForSession / getRepTargetForSet instance selection:
+  /// if instance${dayIndex+1} exists in weekData → use it; else fall back to 1.
+  int get _resolvedActiveInstanceNumber {
+    if (_isDupSignature) return 1;
+    final weekData = _repTargetWeekData;
+    if (weekData == null) return 1;
+    final candidate = widget.dayIndex + 1;
+    return weekData.containsKey('instance$candidate') ? candidate : 1;
   }
 
   String get _microcycleInstanceDisplay {
     final n = _microcycleSlotCount;
     if (n <= 0) return 'Not set';
-    final g = _globalInstanceDisplay;
-    final int x;
-    if (_periodizationModel == 'DUP, By Week') {
-      x = _weeklyInstanceDisplay.clamp(1, n);
-    } else {
-      x = ((g - 1) % n) + 1;
-    }
-    return '$x of $n';
+    return '$_resolvedActiveInstanceNumber of $n';
   }
 
   int get _sessionCount {
@@ -651,20 +670,24 @@ class _Wes2ExerciseSettingsDialogState
       );
     }
 
+    final activeKey = 'instance$_resolvedActiveInstanceNumber';
+    String slotLabel(String key) {
+      final num = key.replaceAll('instance', '');
+      return key == activeKey ? 'Reps Session $num · Active' : 'Reps Session $num';
+    }
+
     return Column(
       children: [
         for (int i = 0; i < entries.length; i += 2) ...[
           _settingsRow(
             left: _buildTextField(
               controller: entries[i].value,
-              label:
-                  'Reps Session ${entries[i].key.replaceAll('instance', '')}',
+              label: slotLabel(entries[i].key),
             ),
             right: i + 1 < entries.length
                 ? _buildTextField(
                     controller: entries[i + 1].value,
-                    label:
-                        'Reps Session ${entries[i + 1].key.replaceAll('instance', '')}',
+                    label: slotLabel(entries[i + 1].key),
                   )
                 : const SizedBox.shrink(),
           ),

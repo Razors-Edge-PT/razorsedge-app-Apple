@@ -9,7 +9,7 @@ import 'template_model.dart';
 import 'periodization_model_utils.dart';
 import 'exercise_details_screen.dart';
 import 'user_context.dart';
-import 'workout_entry_screen.dart';
+import 'WES2_screen.dart';
 
 // ─── BB3DayPanel ─────────────────────────────────────────────────────────────
 //
@@ -465,9 +465,9 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
       MaterialPageRoute(
         builder: (_) => ChangeNotifierProvider<UserContext>.value(
           value: userContext,
-          child: WorkoutPage(
+          child: Wes2Screen(
             initialDate: widget.date,
-            blockId: widget.blockId,
+
           ),
         ),
       ),

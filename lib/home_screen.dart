@@ -2581,7 +2581,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                       MaterialPageRoute(
                                         builder: (_) => ChangeNotifierProvider<UserContext>.value(
                                           value: userContext,
-                                          child: const WorkoutPage(), // <- Your workout entry screen
+                                          child: const Wes2Screen(), // <- Your workout entry screen
                                         ),
                                       ),
                                     );
@@ -2595,10 +2595,28 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                           Positioned(
                                             top: 0,
                                             left: 0,
-                                            child: Icon(
-                                              Icons.fitness_center,
-                                              size: 48,
-                                              color: Theme.of(context).colorScheme.secondary,
+                                            child: SizedBox(
+                                              width: 56,
+                                              height: 56,
+                                              child: Stack(
+                                                clipBehavior: Clip.none,
+                                                children: [
+                                                  Icon(
+                                                    Icons.fitness_center,
+                                                    size: 48,
+                                                    color: Theme.of(context).colorScheme.secondary,
+                                                  ),
+                                                  Positioned(
+                                                    right: -2,
+                                                    bottom: -2,
+                                                    child: Icon(
+                                                      Icons.bolt,
+                                                      size: 24,
+                                                      color: Theme.of(context).colorScheme.tertiary,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
                                             ),
                                           ),
                                           Positioned(
@@ -2945,7 +2963,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                       MaterialPageRoute(
                                         builder: (_) => ChangeNotifierProvider<UserContext>.value(
                                           value: userContext,
-                                          child: const Wes2Screen(),
+                                          child: const WorkoutPage(),
                                         ),
                                       ),
                                     );
@@ -2960,7 +2978,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                             top: 0,
                                             left: 0,
                                             child: Icon(
-                                              Icons.bolt,
+                                              Icons.history_toggle_off,
                                               size: 48,
                                               color: Theme.of(context).colorScheme.secondary,
                                             ),
@@ -2970,7 +2988,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                             right: 0,
                                             left: 50,
                                             child: Text(
-                                              'WES2\nBeta',
+                                              'WES\noriginal',
                                               textAlign: TextAlign.center,
                                               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                                 height: 1.3,
@@ -3071,11 +3089,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                               _selectedDay = selectedDay;
                               _focusedDay = focusedDay;
                             });
+
+                            final userContext = UserContext.of(context, listen: false);
+
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                builder: (context) =>
-                                    WorkoutPage(initialDate: selectedDay),
+                                builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                  value: userContext,
+                                  child: Wes2Screen(initialDate: selectedDay),
+                                ),
                               ),
                             );
                           },
