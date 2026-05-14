@@ -28,6 +28,7 @@ import 'user_context.dart';
 import 'coach_home_screen.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
+import 'package:facebook_app_events/facebook_app_events.dart';
 import 'membership_gate.dart';
 import 'theme_controller.dart';
 import 'app_theme.dart';
@@ -185,6 +186,10 @@ void main() async {
     debugPrint('$st');
   }
 
+
+  if (!kIsWeb && Platform.isIOS) {
+    await FacebookAppEvents().activateApp();
+  }
 
   final themeController = ThemeController();
   await themeController.load();

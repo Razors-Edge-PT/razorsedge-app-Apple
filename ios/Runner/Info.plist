@@ -31,6 +31,13 @@
     <key>NSMicrophoneUsageDescription</key>
     <string>We need access to your microphone only if you record audio while capturing video.</string>
 
+	<key>FacebookAppID</key>
+	<string>1635600397499645</string>
+	<key>FacebookClientToken</key>
+	<string>7bfa04d490ce53cf0d2ee7c32a4159b2</string>
+	<key>FacebookDisplayName</key>
+	<string>Goodlift Training App</string>
+
 	<!-- Search-bar anchor: CFBundleURLTypes -->
 	<key>CFBundleURLTypes</key>
 	<array>
@@ -42,12 +49,24 @@
 				<string>com.googleusercontent.apps.659564418928-tb6thrajkglrsrmbv1tiu5jbtq2nka6q</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>fb1635600397499645</string>
+			</array>
+		</dict>
 	</array>
 
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>google</string>
 		<string>com.googleusercontent.apps</string>
+		<string>fbapi</string>
+		<string>fb-messenger-share-api</string>
+		<string>fbauth2</string>
+		<string>fbshareextension</string>
 	</array>
 
 
