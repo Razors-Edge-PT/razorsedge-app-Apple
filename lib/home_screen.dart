@@ -6,7 +6,6 @@ import 'workout_model.dart';
 import 'app_drawer.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'dart:io';
-import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'user_context.dart';
 import 'coach_home_screen.dart';
@@ -14,35 +13,23 @@ import 'approve_requests_screen.dart';
 import 'Camp_BB2.dart';
 import 'bb3_week_planner.dart';
 import 'WES2_screen.dart';
-import 'update_exercises.dart';
 import 'core_exercises.dart';
 import 'profile_page.dart';
 import 'warmup_service.dart';
 import 'dart:async';
-import'stats_snapshot.dart';
 import 'directMessages.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:path_provider/path_provider.dart';
 import 'warmupBB2.dart';
 import 'post_service.dart';
-import 'post_header.dart';
 import 'feed_post_card.dart';
 import 'main.dart';
-import 're_daily.dart';
-import 'dart:math';
 import 'leaderboard_page.dart';
 import 'template_bootstrapper.dart';
-import 'debug_utils.dart';
 import 'block_exercise_defaults_repository.dart';
 import 'templates.dart';
 import 'planned_blocks_screen.dart';
 import 'local_cache/block_plan_cache.dart';
-
-
- import 'dart:convert';
- import 'package:cloud_firestore/cloud_firestore.dart';
- import 'local_cache/block_plan_cache.dart';
- import 'local_cache/workout_day_cache.dart';
 import 'package:intl/intl.dart';
 
 
@@ -52,44 +39,6 @@ const String kUserPrefFeedTab = 'feedTab'; // 'home' | 'points'
 
 
 
-// Taglines to rotate
-const List<String> _kPointsTaglines = [
-  'Certified Gainz Accounting™ department 🧮🏋️‍♂️📊',
-  'Do you even metrics? 📏📐',
-  'Literally your street cred 🏙️✅',
-  'Woah take those points the bank, so you earn interest 🏦💰📈',
-  "Today's gains: properly weighted. ⚖️💪",
-  'Scored and adored ❤️🧮',
-  'That e1RM? Extremely my type 😏📊',
-  'Swipe right on those metrics 👉❤️📈',
-  'PRs + Pts = good chemistry 🧪❤️‍🔥',
-  'Points that slap 👋✨',
-  "You're not just strong—you're quantifiably tempting 📊😮‍💨",
-  'Big sets, big energy, big data 📦⚡💾',
-  'Quantifiable Clout',
-];
-
-const List<String> _kHomeTaglines = [
-  "Go on, scroll. We won't tell 🤫💪📱",
-  'For the love of iron pls do not scroll instagram.',
-  "Don't ghost the feed—post the set 👻📤",
-  "If it's not posted, was it even a set? 📸❓",
-  'Scroll your home feed, you love it 👇 ❤️📲',
-  'Humblebrag optional 🙃📤✅',
-  'Your spotter can film. No excuses 🎥🤝🙅‍♂️',
-  'The grid needs iron. Contribute 🔩🟦➕',
-  'Pics or it was active recovery 📸🆚🧘‍♂️',
-  'Post-workout afterglow belongs on the feed ✨📲',
-  'You + good lighting = public service 💡📸🫶',
-  'Camera loves you. Algorithm agrees ❤️‍🔥',
-  'Strong is the new aesthetic 💅🏽🏋️',
-  'The algorithm is blushing. Keep going 🤖😳➡️',
-  'Hit depth on that scroll ⬇️📱',
-  'A little lurk between sets 👀⏱️',
-  'Scroll like you mean it 💨📱',
-  'This is your sign to keep scrolling ➡️📱',
-  'Keep the algorithm company 🤖🫶',
-];
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -115,7 +64,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   // Firestore subscription for active block changes (training days refresh)
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _activeBlockSub;
 
-  final CalendarFormat _calendarFormat = CalendarFormat.month;
   DateTime _focusedDay = DateTime.now();
   DateTime? _selectedDay;
   Set<DateTime> _trainingDays = {};
@@ -123,11 +71,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   //Profile image
   bool _avatarPersistInProgress = false;
   String? _avatarLastUrlSaved;
-  final ImagePicker _picker = ImagePicker();
 
   //Warm ups
   bool _bb2WarmupScheduled = false;     // first-time warmup
-  bool _bb2WarmupOnResumePending = false; // throttle resume warmups in a single frame
 
 
 
@@ -144,29 +90,24 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   bool _feedHasMore = true;
   SelectedFeed _selectedFeed = SelectedFeed.home;
   final ScrollController _pointsScrollCtrl = ScrollController();
-  String _homeTagline = _kHomeTaglines.first;
 
 // Points feed state
   List<Post> _pointsPosts = [];
   bool _pointsLoading = false;
   bool _pointsHasMore = true;
-  DocumentSnapshot<Map<String, dynamic>>? _lastPointsSnap;
   Timestamp? _lastPointsCreatedAt;
-  String _pointsTagline = _kPointsTaglines.first;
 
 
 // Points month filter (yyyy-MM), default = current month
-  String _pointsMonthKey = () {
+  final String _pointsMonthKey = () {
     final now = DateTime.now();
     return '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}';
   }();
 
-  DocumentSnapshot<Map<String, dynamic>>? _lastFeedSnap; // last doc for pagination
   List<String> _feedOwnerUids = []; // self + buddies
   bool _feedOwnersResolved = false;
   static const int _kFeedPageSize = 6;
   bool _feedError = false;
-  String _feedErrorMsg = '';
   Timestamp? _lastCreatedAt; // simple, stable pagination
   bool _loadMoreScheduled = false;
 
@@ -204,11 +145,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     super.initState();
     debugPrint('🏠 [HOME:initState] running initState()');
 
-    final src = _selectedDay ?? _focusedDay;
-    final dateOnly = DateTime(src.year, src.month, src.day);
-
     final userContext = Provider.of<UserContext>(context, listen: false);
-    final actingUid = userContext.actingAsUid ?? userContext.actorUid; // add this line
+    final actingUid = userContext.actingAsUid;
     _homeScrollCtrl.addListener(_onHomeScroll);
     _pointsScrollCtrl.addListener(_onPointsScroll);
 
@@ -221,15 +159,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       await _restoreSelectedFeed();
       if (!mounted) return;
 
-      // 3) Pick the tagline once for the selected tab
-      setState(() {
-        if (_selectedFeed == SelectedFeed.home) {
-          _pickHomeTagline();
-        } else {
-          _pickPointsTagline();
-        }
-      });
-
       // 4) Kick exactly one initial load for the selected tab
       if (_selectedFeed == SelectedFeed.home) {
         await _loadInitialHomeFeed();
@@ -239,9 +168,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     }());
 
 // Pass block + date so Warmup can precompute the exact WES snapshot you'll need.
-    final _warmDateSrc = _selectedDay ?? _focusedDay; // use picked day, else the visible day
-    final _warmDate = DateTime(_warmDateSrc.year, _warmDateSrc.month, _warmDateSrc.day);
-
     // BB2 wiring disabled: warmWES pre-computes BB2-derived hints into WESInitSnapshot.
     // Disabled until BB3 integration is ready.
     // unawaited(WarmupService.instance.warmWES(
@@ -276,9 +202,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
       // 🔎 Kick the 8-day local/FS scan once (post-frame so context is ready)
       WidgetsBinding.instance.addPostFrameCallback((_) async {
-        final uid = actingUid ?? userContext.actorUid;
+        final uid = actingUid;
         final bid = userContext.activeBlockId;
-        if (uid != null && bid != null && bid.isNotEmpty) {
+        if (bid != null && bid.isNotEmpty) {
           // ✅ Roll forward missed BB2 plans into the next available days
           await _rollForwardMissedBB2Plans(uid: uid, blockId: bid);
         } else {
@@ -286,7 +212,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         }
 
         // 🔥 Prewarm BB2 current week (server-based merged cache for first-paint correctness)
-        if (actingUid != null && actingUid.isNotEmpty) {
+        if (actingUid.isNotEmpty) {
           unawaited(WarmupBB2.runForActiveBlock(uid: actingUid));
         }
       });
@@ -300,7 +226,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       return;
     }
 
-    if (actingUid != null && actingUid.isNotEmpty) {
+    if (actingUid.isNotEmpty) {
       final usersRef    = FirebaseFirestore.instance.collection('users').doc(actingUid);
       final onboardRef  = FirebaseFirestore.instance
           .collection('users')
@@ -865,15 +791,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     } catch (_) {}
   }
 
-  void _pickPointsTagline() {
-    final r = Random();
-    _pointsTagline = _kPointsTaglines[r.nextInt(_kPointsTaglines.length)];
-  }
-
-  void _pickHomeTagline() {
-    final r = Random();
-    _homeTagline = _kHomeTaglines[r.nextInt(_kHomeTaglines.length)];
-  }
 
   Future<void> _ensureAtLeastOneBlockExists() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -1353,9 +1270,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   void _onUserContextChange() {
     final uc = Provider.of<UserContext>(context, listen: false);
-    final newUid = uc.actingAsUid ?? uc.actorUid;
+    final newUid = uc.actingAsUid;
 
-    if (newUid != null && newUid != _lastWarmUid) {
+    if (newUid != _lastWarmUid) {
       _lastWarmUid = newUid;
 
       // Keep your existing warm
@@ -1402,7 +1319,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             : userContext.actorUid;
 
         debugPrint('🏁 [HOME] First-show: schedule WarmupBB2 for $actingUid');
-        if (actingUid != null && actingUid.isNotEmpty) {
+        if (actingUid.isNotEmpty) {
           unawaited(WarmupBB2.runForActiveBlock(uid: actingUid));
         }
       });
@@ -1455,9 +1372,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
       // 🔥 Warm up BB2 cache on resume
       final userContext = Provider.of<UserContext>(context, listen: false);
-      final actingUid = userContext.actingAsUid ?? userContext.actorUid;
+      final actingUid = userContext.actingAsUid;
       debugPrint('🔁 [HOME] didPopNext: resume WarmupBB2 for $actingUid');
-      if (actingUid != null && actingUid.isNotEmpty) {
+      if (actingUid.isNotEmpty) {
         unawaited(WarmupBB2.runForActiveBlock(uid: actingUid));
       }
     });
@@ -1471,7 +1388,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       _feedLoading = false;
       _feedHasMore = true;
       _feedError = false;
-      _feedErrorMsg = '';
       _feedPosts = [];
       _lastCreatedAt = null;
     });
@@ -1488,7 +1404,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     setState(() {
       _feedLoading = true;
       _feedError = false;
-      _feedErrorMsg = '';
     });
 
     try {
@@ -1562,7 +1477,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       }
       setState(() {
         _feedError = true;
-        _feedErrorMsg = '${e.code}: ${e.message}';
         _feedLoading = false;
         _feedHasMore = false;
       });
@@ -1573,7 +1487,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       }
       setState(() {
         _feedError = true;
-        _feedErrorMsg = '$e';
         _feedLoading = false;
         _feedHasMore = false;
       });
@@ -1725,7 +1638,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       // Only include confirmed (accepted) friends in the home feed.
       // Pending requests must not surface social content before acceptance.
       athletesMap.forEach((uid, val) {
-        if (val is Map && (val as Map)['status'] == 'accepted') {
+        if (val is Map && val['status'] == 'accepted') {
           owners.add(uid);
         }
       });
@@ -1787,8 +1700,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   Future<void> _loadAthleteEmail() async {
     final uid = Provider.of<UserContext>(context, listen: false).actingAsUid;
-    if (uid == null) return;
-
     final snap = await FirebaseFirestore.instance.collection('users').doc(uid).get();
     final data = snap.data();
     if (!mounted || data == null) return;
@@ -1969,36 +1880,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     }
   }
 
-  Future<List<Map<String, dynamic>>> _fetchTopLifts() async {
-    final userId = FirebaseAuth.instance.currentUser?.uid;
-    final snapshot = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(userId)
-        .collection('workouts')
-        .get();
-
-    Map<String, double> maxes = {};
-
-    for (var doc in snapshot.docs) {
-      final exercises = List.from(doc['exercises'] ?? []);
-      for (var exercise in exercises) {
-        final name = exercise['name'] ?? '';
-        final sets = List.from(exercise['sets'] ?? []);
-        for (var set in sets) {
-          final weight = (set['weight'] as num?)?.toDouble() ?? 0;
-          if (!maxes.containsKey(name) || weight > maxes[name]!) {
-            maxes[name] = weight;
-          }
-        }
-      }
-    }
-
-    return maxes.entries
-        .map((e) => {'exercise': e.key, 'weight': e.value})
-        .toList();
-  }
-
-
   Widget _buildFeatureCard(IconData icon, String label, String route) {
     return GestureDetector(
       onTap: () => Navigator.pushNamed(context, route),
@@ -2029,45 +1910,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     );
   }
 
-  Widget _buildImageCard(String label, String assetPath) {
-    return Card(
-      elevation: 10,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      color: Colors.white.withOpacity(0.9),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Expanded(
-              child: Image.asset(
-                assetPath,
-                fit: BoxFit.contain,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              label,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: Colors.black54,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-
-
   @override
   Widget build(BuildContext context) {
-    final userEmail = FirebaseAuth.instance.currentUser?.email ?? '';
     final uc = context.watch<UserContext>();
-    final dmUid = uc.currentUid ?? uc.actorUid; // ✅ never force unwrap currentUser
+    final dmUid = uc.currentUid;
 
     return Scaffold(
 
@@ -2129,7 +1975,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     child: Builder(
                       builder: (context) {
                         final uc = context.watch<UserContext>();
-                        final actingUid = uc.actingAsUid ?? uc.actorUid;
+                        final actingUid = uc.actingAsUid;
 
                         // 1) Prefer local file if present (fast path)
                         ImageProvider? localAvatar;
@@ -2148,22 +1994,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                         }
 
                         // 3) Otherwise, live-listen to users_public/{actingUid} for photoURL
-                        if (actingUid == null) {
-                          // Fallback if somehow no uid yet
-                          return CircleAvatar(
-                            radius: 18,
-                            backgroundColor: Colors.grey.shade300,
-                            child: ClipOval(
-                              child: Image.asset(
-                                'assets/InApp/Placeholder_profilepic.png',
-                                fit: BoxFit.cover,
-                                width: 36,
-                                height: 36,
-                              ),
-                            ),
-                          );
-                        }
-
                         return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
                           stream: FirebaseFirestore.instance
                               .collection('users_public')
@@ -2182,10 +2012,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                             }
 
                             // If we don't already have a good local file, persist one in the background.
-                            if (uid != null &&
-                                (uc.localPhotoPath == null || !(File(uc.localPhotoPath!).existsSync())) &&
+                            if ((uc.localPhotoPath == null || !(File(uc.localPhotoPath!).existsSync())) &&
                                 photoURL != null) {
-                              _persistAvatarLocalIfNeeded(context, uid: uid, photoURL: photoURL!);
+                              _persistAvatarLocalIfNeeded(context, uid: uid, photoURL: photoURL);
                             }
 
                             // Prefer local file instantly; fallback to network; else placeholder.
@@ -2194,7 +2023,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                               final f = File(uc.localPhotoPath!);
                               if (f.existsSync()) provider = FileImage(f);
                             }
-                            provider ??= (photoURL != null ? NetworkImage(photoURL!) : null);
+                            provider ??= (photoURL != null ? NetworkImage(photoURL) : null);
 
                             return CircleAvatar(
                               radius: 18,
@@ -2228,25 +2057,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             Builder(
               builder: (context) {
                 final userCtx = context.watch<UserContext>();
-                final String? invitesUid =
-                    userCtx.actingAsUid ??
-                        userCtx.actorUid ??
-                        FirebaseAuth.instance.currentUser?.uid;
-
-                // If we somehow have no uid yet, show plain icon with simple message.
-                if (invitesUid == null) {
-                  return IconButton(
-                    icon: Icon(Icons.person_add_alt_1,
-                        size: 24, color: Theme.of(context).colorScheme.secondary),
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text("No user loaded."),
-                        ),
-                      );
-                    },
-                  );
-                }
+                final String invitesUid = userCtx.actingAsUid;
 
                 return StreamBuilder<QuerySnapshot>(
                   stream: FirebaseFirestore.instance
@@ -2380,7 +2191,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
               // 📩 Direct Messages icon with unread badge
               StreamBuilder<QuerySnapshot>(
-                stream: (dmUid == null || dmUid.isEmpty)
+                stream: dmUid.isEmpty
                     ? const Stream<QuerySnapshot>.empty()
                     : FirebaseFirestore.instance
                     .collection('conversations')
@@ -3212,10 +3023,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                       await _persistSelectedFeed();
 
                                       if (next == SelectedFeed.home) {
-                                        _pickHomeTagline();
                                         if (_feedPosts.isEmpty && !_feedLoading) _loadInitialHomeFeed();
                                       } else if (next == SelectedFeed.points) {
-                                        _pickPointsTagline();
                                         if (_pointsPosts.isEmpty && !_pointsLoading) _loadInitialPointsFeed();
                                       } else { // SelectedFeed.leaderboard
                                         // optional: _pickLeaderboardTagline();
@@ -3470,49 +3279,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     ],
                   ),
                 ),
-    );
-  }
-}
-class _MonthPickerChip extends StatelessWidget {
-  final String monthKey; // "yyyy-MM"
-  final ValueChanged<String> onChanged;
-  const _MonthPickerChip({required this.monthKey, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    return ActionChip(
-      label: Text(monthKey),
-      onPressed: () async {
-        final now = DateTime.now();
-        final years = [for (int y = now.year; y >= now.year - 3; y--) y];
-        final months = [for (int m = 1; m <= 12; m++) m];
-        String? picked;
-        await showDialog<void>(
-          context: context,
-          builder: (_) => AlertDialog(
-            title: const Text('Select month'),
-            content: SizedBox(
-              width: 320,
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final y in years)
-                    for (final m in months)
-                      InkWell(
-                        onTap: () {
-                          picked = '${y.toString().padLeft(4, '0')}-${m.toString().padLeft(2, '0')}';
-                          Navigator.pop(context);
-                        },
-                        child: Chip(label: Text('$y-${m.toString().padLeft(2, '0')}')),
-                      ),
-                ],
-              ),
-            ),
-          ),
-        );
-        if (picked != null && picked != monthKey) onChanged(picked!);
-      },
     );
   }
 }
