@@ -65,6 +65,7 @@ class Wes2ExerciseCard extends StatelessWidget {
   final void Function(int setIndex)? onRemoveSet;
   final void Function(int setIndex)? onNoteTap;
   final VoidCallback? onExerciseDetails;
+  final VoidCallback? onTopSets;
   final VoidCallback? onOpenExercisePlanNote;
   final bool isExercisePlanNoteRead;
 
@@ -82,6 +83,7 @@ class Wes2ExerciseCard extends StatelessWidget {
     this.onRemoveSet,
     this.onNoteTap,
     this.onExerciseDetails,
+    this.onTopSets,
     this.onOpenExercisePlanNote,
     this.isExercisePlanNoteRead = false,
   });
@@ -190,6 +192,13 @@ class Wes2ExerciseCard extends StatelessWidget {
               constraints: const BoxConstraints.tightFor(width: 32, height: 32),
               icon: Icon(Icons.insights, size: 20, color: cs.primary),
               onPressed: onExerciseDetails,
+            ),
+            IconButton(
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+              tooltip: 'Top Sets',
+              icon: const Icon(Icons.bar_chart, size: 20, color: Colors.white70),
+              onPressed: onTopSets,
             ),
             IconButton(
               padding: EdgeInsets.zero,
