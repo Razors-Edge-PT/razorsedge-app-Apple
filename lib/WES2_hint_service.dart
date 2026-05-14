@@ -57,7 +57,13 @@ class Wes2HintServiceImpl implements Wes2HintService {
     // Build a padded sets list that covers at least setCount slots.
     // WES2-manual rows are created with setCount > 0 but sets: const [],
     // so we must not bail out on sets.isEmpty.
-    final effectiveCount = row.setCount > 0 ? row.setCount : 3;
+    final exSettings = exerciseSettings[row.exerciseId] as Map<String, dynamic>?;
+    final planCount = _targetSetCountForSession(
+      exSettings: exSettings,
+      weekIndex: weekIndex,
+      sessionIndex: sessionIndex,
+    );
+    final effectiveCount = _resolveEffectiveSetCount(row, planCount);
     final padded = List<Wes2SetState>.generate(effectiveCount, (i) {
       return i < row.sets.length ? row.sets[i] : Wes2SetState(setIndex: i);
     });
@@ -73,7 +79,6 @@ class Wes2HintServiceImpl implements Wes2HintService {
     );
 
     // Phase 21D: cascade Set 2+ hints from the immediately prior resolved set.
-    final exSettings = exerciseSettings[row.exerciseId] as Map<String, dynamic>?;
     for (int i = 1; i < effectiveCount; i++) {
       newSets[i] = _computeSetNHints(
         row: row,
@@ -1164,6 +1169,52 @@ class Wes2HintServiceImpl implements Wes2HintService {
       history: history,
     );
     return sequence.isNotEmpty ? sequence.first : max;
+  }
+
+  /// Returns the set count from the rep target string for the given session.
+  /// Uses weekN with week1 fallback (same as getRepTargetForSet).
+  /// Returns 0 when the count cannot be parsed.
+  static int _targetSetCountForSession({
+    required Map<String, dynamic>? exSettings,
+    required int weekIndex,
+    required int sessionIndex,
+  }) {
+    if (exSettings == null) return 0;
+    final repTargets = exSettings['repTargets'];
+    if (repTargets is! Map) return 0;
+    final model = (exSettings['periodizationModel'] as String?) ?? '';
+    final isDupWeekOrExposure =
+        model == 'DUP, By Week' || model == 'DUP, By Exposure';
+    final weekKey = 'week${weekIndex + 1}';
+    final weekData = isDupWeekOrExposure
+        ? repTargets['week1']
+        : (repTargets.containsKey(weekKey)
+            ? repTargets[weekKey]
+            : repTargets['week1']);
+    if (weekData is! Map) return 0;
+    final instanceKey = 'instance${sessionIndex + 1}';
+    final raw =
+        (weekData[instanceKey] ?? weekData['instance1'])?.toString() ?? '';
+    final match = RegExp(r'[xX]\s*(\d+)').firstMatch(raw.trim());
+    if (match == null) return 0;
+    return int.tryParse(match.group(1)!) ?? 0;
+  }
+
+  /// Returns the effective set count for hint row generation.
+  /// Expands unconditionally; shrinks only when no actual data would be lost.
+  static int _resolveEffectiveSetCount(Wes2ExerciseRow row, int planCount) {
+    final current = row.setCount > 0 ? row.setCount : 3;
+    if (planCount <= 0) return current;
+    if (planCount >= current) return planCount;
+    for (final s in row.sets) {
+      if (s.setIndex >= planCount) {
+        final hasActual = s.weight.actualValue != null ||
+            s.reps.actualValue != null ||
+            s.rir.actualValue != null;
+        if (hasActual) return current;
+      }
+    }
+    return planCount;
   }
 
   /// Parses a DUP Signature min/max rep range from a raw repTargets value.

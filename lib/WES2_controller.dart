@@ -119,8 +119,14 @@ class Wes2SessionController extends ChangeNotifier {
     final idx = _rows.indexWhere((r) => r.exerciseId == exerciseId);
     if (idx == -1) return;
     final current = _rows[idx];
-    final count = current.setCount;
-    bool changed = false;
+    int count = hintedRow.setCount > 0 ? hintedRow.setCount : current.setCount;
+    for (final cs in current.sets) {
+      final hasActual = cs.weight.actualValue != null ||
+          cs.reps.actualValue != null ||
+          cs.rir.actualValue != null;
+      if (hasActual && cs.setIndex + 1 > count) count = cs.setIndex + 1;
+    }
+    bool changed = count != current.setCount;
     final newSets = List<Wes2SetState>.generate(count, (i) {
       final cs =
           i < current.sets.length ? current.sets[i] : Wes2SetState(setIndex: i);
@@ -135,7 +141,7 @@ class Wes2SessionController extends ChangeNotifier {
     });
     if (!changed) return;
     final newRows = List<Wes2ExerciseRow>.from(_rows);
-    newRows[idx] = current.copyWith(sets: newSets);
+    newRows[idx] = current.copyWith(sets: newSets, setCount: count);
     _rows = newRows;
     notifyListeners();
   }
