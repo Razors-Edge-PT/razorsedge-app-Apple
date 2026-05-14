@@ -21,6 +21,7 @@ import 'WES2_widgets/WES2_exercise_settings_dialog.dart';
 import 'exercise_details_screen.dart';
 import 'top_sets_screen.dart';
 import 'periodization_model_utils.dart';
+import 'progression_engine.dart';
 
 enum _Wes2AppBarMenuAction { timer, templates, deleteAll }
 
@@ -1508,6 +1509,35 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         '\n  set1.rirHint=${row.sets.isNotEmpty ? row.sets[0].rir.hintValue : null}'
         '\n  set2.rirHint=${row.sets.length > 1 ? row.sets[1].rir.hintValue : null}');
 
+    // Compute history-aware active instance for DUP models so settings cog
+    // shows the same instance as ProgressionEngine.
+    int? resolvedActiveInstance;
+    final cogExSettings = _cachedExerciseSettings[row.exerciseId] as Map<String, dynamic>?;
+    final cogModel = (cogExSettings?['periodizationModel'] as String?) ?? '';
+    if (cogModel == 'DUP, By Exposure' || cogModel == 'DUP, By Week') {
+      final cogWeek1 = (cogExSettings?['repTargets'] as Map?)?['week1'];
+      final cogSorted = (cogWeek1 is Map<String, dynamic>)
+          ? (cogWeek1.entries.where((e) => e.key.startsWith('instance')).toList()
+              ..sort((a, b) => a.key.compareTo(b.key)))
+          : <MapEntry<String, dynamic>>[];
+      int cogPlannedBefore = 0;
+      for (final r in _controller.rows) {
+        if (r == row) break;
+        if (r.exerciseId == row.exerciseId) cogPlannedBefore++;
+      }
+      final cogRes = ProgressionEngine.resolveDupActiveInstance(
+        exerciseId: row.exerciseId,
+        exerciseName: row.name,
+        blockStartDate: blockStart,
+        selectedDate: _controller.selectedDate,
+        weekIndex: wd.weekIndex,
+        sorted: cogSorted,
+        plannedCountBefore: cogPlannedBefore,
+        byWeek: cogModel == 'DUP, By Week',
+      );
+      resolvedActiveInstance = cogRes?.instanceNumber;
+    }
+
     final saved = await showDialog<bool>(
       context: context,
       builder: (_) => Wes2ExerciseSettingsDialog(
@@ -1519,6 +1549,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         dayIndex: wd.dayIndex,
         totalBlockWeeks: totalBlockWeeks,
         planService: _planService,
+        resolvedActiveInstanceOverride: resolvedActiveInstance,
       ),
     );
     if (saved == true && mounted) {

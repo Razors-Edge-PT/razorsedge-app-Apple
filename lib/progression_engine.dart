@@ -68,6 +68,102 @@ class ProgressionEngine {
 
 
 
+  /// Resolves which DUP instance is active today and returns the raw rep-target string.
+  ///
+  /// byWeek=false → DUP By Exposure: counts completions in [blockStart, today).
+  ///   plannedCountBefore is added before modding (for same-exercise siblings in a session).
+  /// byWeek=true  → DUP By Week: counts completions in [weekStart, today).
+  ///   plannedCountBefore should always be 0 (WES rule for weekly DUP).
+  ///
+  /// Returns null when sorted is empty or blockStartDate / selectedDate is null.
+  static ({int instanceIndex, int instanceNumber, String raw, int completedCount, Set<String> matchedDates})?
+      resolveDupActiveInstance({
+    required String exerciseId,
+    required String exerciseName,
+    required DateTime? blockStartDate,
+    required DateTime? selectedDate,
+    required int weekIndex,
+    required List<MapEntry<String, dynamic>> sorted,
+    required int plannedCountBefore,
+    required bool byWeek,
+  }) {
+    if (sorted.isEmpty || blockStartDate == null || selectedDate == null) return null;
+
+    int completedCount = 0;
+    final matchedDates = <String>{};
+
+    try {
+      final base = DateTime(blockStartDate.year, blockStartDate.month, blockStartDate.day);
+      final todayStart = DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
+      final windowStart = byWeek ? base.add(Duration(days: weekIndex * 7)) : base;
+
+      String norm(String s) {
+        var t = s.toLowerCase().trim();
+        t = t.replaceAll(RegExp(r'\([^)]*\)'), '');
+        t = t.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');
+        t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
+        t = t.replaceAll(RegExp(r'\bdb\b'), 'dumbbell');
+        t = t.replaceAll(RegExp(r'\bbb\b'), 'barbell');
+        return t;
+      }
+
+      final targetId = exerciseId;
+      final targetNameNorm = norm(exerciseName);
+
+      bool hasValidSet(dynamic setsRaw) {
+        final sets = (setsRaw is List) ? setsRaw.cast<Map>() : const <Map>[];
+        return sets.any((s) {
+          final w = (s['weight']?.toString() ?? '').trim();
+          final r = (s['reps']?.toString() ?? '').trim();
+          return w.isNotEmpty && r.isNotEmpty;
+        });
+      }
+
+      for (final w in PeriodizationModelUtils.savedWorkoutsList) {
+        final dateStr = (w['date'] ?? '').toString();
+        final dt = DateTime.tryParse(dateStr);
+        if (dt == null) continue;
+
+        final dayOnly = DateTime(dt.year, dt.month, dt.day);
+        if (dayOnly.isBefore(windowStart) || !dayOnly.isBefore(todayStart)) continue;
+
+        final exs = w['exercises'];
+        if (exs is! List) continue;
+
+        final matched = exs.any((ex) {
+          if (!hasValidSet(ex['sets'])) return false;
+
+          final exId = (ex['exerciseId'] ?? ex['id'] ?? ex['exercise_id'] ?? '').toString();
+          if (exId.isNotEmpty && exId == targetId) return true;
+
+          final exName = (ex['name'] ?? ex['exercise'] ?? ex['title'] ?? '').toString();
+          if (exName.isNotEmpty && norm(exName) == targetNameNorm) return true;
+
+          final mapped = (PeriodizationModelUtils.nameToId[exName] ?? '').toString();
+          return mapped.isNotEmpty && mapped == targetId;
+        });
+
+        if (matched) {
+          matchedDates.add(dateStr.length >= 10 ? dateStr.substring(0, 10) : dateStr);
+        }
+      }
+
+      completedCount = matchedDates.length;
+    } catch (e) {}
+
+    final plannedIndex = completedCount + (byWeek ? 0 : plannedCountBefore);
+    final index = plannedIndex % sorted.length;
+    final raw = sorted[index].value?.toString() ?? '';
+
+    return (
+      instanceIndex: index,
+      instanceNumber: index + 1,
+      raw: raw,
+      completedCount: completedCount,
+      matchedDates: matchedDates,
+    );
+  }
+
   /// Public method you can call from WarmupServices or anywhere else.
   static Map<String, dynamic> engineProgressedValues(
       ProgressionEngineInputs i,
@@ -238,77 +334,18 @@ class ProgressionEngine {
               .toList()
             ..sort((a, b) => a.key.compareTo(b.key));
           if (sorted.isNotEmpty) {
-            int completedBeforeTodayInBlock = 0;
-            final matchedDates = <String>{};
-
-            try {
-              final base = DateTime(blockStartDate!.year, blockStartDate!.month,
-                  blockStartDate!.day);
-              final todayStart = DateTime(
-                  _selectedDate!.year, _selectedDate!.month,
-                  _selectedDate!.day);
-
-              String norm(String s) {
-                var t = s.toLowerCase().trim();
-                t = t.replaceAll(RegExp(r'\([^)]*\)'), '');
-                t = t.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');
-                t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
-                t = t.replaceAll(RegExp(r'\bdb\b'), 'dumbbell');
-                t = t.replaceAll(RegExp(r'\bbb\b'), 'barbell');
-                return t;
-              }
-
-              final targetId = exerciseId;
-              final targetNameNorm = norm(exerciseName);
-
-              bool hasValidSet(dynamic setsRaw) {
-                final sets = (setsRaw is List) ? setsRaw.cast<Map>() : const <
-                    Map>[];
-                return sets.any((s) {
-                  final w = (s['weight']?.toString() ?? '').trim();
-                  final r = (s['reps']?.toString() ?? '').trim();
-                  return w.isNotEmpty && r.isNotEmpty;
-                });
-              }
-
-              for (final w in PeriodizationModelUtils.savedWorkoutsList) {
-                final dateStr = (w['date'] ?? '').toString();
-                final dt = DateTime.tryParse(dateStr);
-                if (dt == null) continue;
-
-                final dayOnly = DateTime(dt.year, dt.month, dt.day);
-                if (dayOnly.isBefore(base) || !dayOnly.isBefore(todayStart))
-                  continue; // [base, today)
-
-                final exs = w['exercises'];
-                if (exs is! List) continue;
-
-                final matched = exs.any((ex) {
-                  if (!hasValidSet(ex['sets'])) return false;
-
-                  final exId = (ex['exerciseId'] ?? ex['id'] ??
-                      ex['exercise_id'] ?? '').toString();
-                  if (exId.isNotEmpty && exId == targetId) return true;
-
-                  final exName = (ex['name'] ?? ex['exercise'] ?? ex['title'] ??
-                      '').toString();
-                  if (exName.isNotEmpty && norm(exName) == targetNameNorm)
-                    return true;
-
-                  final mapped = (PeriodizationModelUtils.nameToId[exName] ??
-                      '').toString();
-                  return mapped.isNotEmpty && mapped == targetId;
-                });
-
-                if (matched) {
-                  matchedDates.add(dateStr.length >= 10
-                      ? dateStr.substring(0, 10)
-                      : dateStr);
-                }
-              }
-
-              completedBeforeTodayInBlock = matchedDates.length;
-            } catch (e) {}
+            final expRes = resolveDupActiveInstance(
+              exerciseId: exerciseId,
+              exerciseName: exerciseName,
+              blockStartDate: blockStartDate,
+              selectedDate: _selectedDate,
+              weekIndex: weekIndex ?? 0,
+              sorted: sorted,
+              plannedCountBefore: plannedCountBefore,
+              byWeek: false,
+            );
+            final int completedBeforeTodayInBlock = expRes?.completedCount ?? 0;
+            final Set<String> matchedDates = expRes?.matchedDates ?? {};
 
             // AFTER you finish building `matchedDates` (and before plannedIndex/index):
             final countedDebug = <Map<String, String>>[];
@@ -385,10 +422,8 @@ class ProgressionEngine {
             // Now compute plannedIndex / index as before
             final plannedIndex = completedBeforeTodayInBlock +
                 plannedCountBefore;
-            final index = sorted.isEmpty ? 0 : plannedIndex % sorted.length;
-
-            final raw = sorted.isNotEmpty ? (sorted[index].value?.toString() ??
-                '') : '';
+            final index = expRes?.instanceIndex ?? 0;
+            final raw = expRes?.raw ?? '';
             final match = RegExp(r'^(\d+)').firstMatch(raw);
             repTarget = match != null
                 ? int.tryParse(match.group(1)!)?.toDouble() ?? 10.0
@@ -431,87 +466,23 @@ class ProgressionEngine {
               repTarget = 10.0;
             } else {
               // ✅ Count only *actual* completions earlier this week (strictly before today)
-              int completedEarlierThisWeek = 0;
-              final matchedDates = <String>{};
-
-              try {
-                final base = DateTime(
-                    blockStartDate!.year, blockStartDate!.month,
-                    blockStartDate!.day);
-                final wkIdx = weekIndex ?? 0;
-                final weekStart = base.add(Duration(days: wkIdx * 7));
-                final todayStart = DateTime(
-                    _selectedDate!.year, _selectedDate!.month,
-                    _selectedDate!.day);
-
-                String norm(String s) {
-                  var t = s.toLowerCase().trim();
-                  t = t.replaceAll(RegExp(r'\([^)]*\)'), '');
-                  t = t.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');
-                  t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
-                  t = t.replaceAll(RegExp(r'\bdb\b'), 'dumbbell');
-                  t = t.replaceAll(RegExp(r'\bbb\b'), 'barbell');
-                  return t;
-                }
-
-                final targetId = exerciseId;
-                final targetNameNorm = norm(exerciseName);
-
-                bool hasValidSet(dynamic setsRaw) {
-                  final sets = (setsRaw is List) ? setsRaw.cast<Map>() : const <
-                      Map>[];
-                  return sets.any((s) {
-                    final w = (s['weight']?.toString() ?? '').trim();
-                    final r = (s['reps']?.toString() ?? '').trim();
-                    return w.isNotEmpty && r.isNotEmpty;
-                  });
-                }
-
-                for (final w in PeriodizationModelUtils.savedWorkoutsList) {
-                  final dateStr = (w['date'] ?? '').toString();
-                  final dt = DateTime.tryParse(dateStr);
-                  if (dt == null) continue;
-
-                  final dayOnly = DateTime(dt.year, dt.month, dt.day);
-                  if (dayOnly.isBefore(weekStart) ||
-                      !dayOnly.isBefore(todayStart))
-                    continue; // strictly before today
-
-                  final exs = w['exercises'];
-                  if (exs is! List) continue;
-
-                  final matched = exs.any((ex) {
-                    if (!hasValidSet(ex['sets'])) return false;
-
-                    final exId = (ex['exerciseId'] ?? ex['id'] ??
-                        ex['exercise_id'] ?? '').toString();
-                    if (exId.isNotEmpty && exId == targetId) return true;
-
-                    final exName = (ex['name'] ?? ex['exercise'] ??
-                        ex['title'] ?? '').toString();
-                    if (exName.isNotEmpty && norm(exName) == targetNameNorm)
-                      return true;
-
-                    final mapped = (PeriodizationModelUtils.nameToId[exName] ??
-                        '').toString();
-                    return mapped.isNotEmpty && mapped == targetId;
-                  });
-
-                  if (matched) {
-                    matchedDates.add(dateStr.length >= 10
-                        ? dateStr.substring(0, 10)
-                        : dateStr);
-                  }
-                }
-
-                completedEarlierThisWeek = matchedDates.length;
-              } catch (e) {}
+              final wkRes = resolveDupActiveInstance(
+                exerciseId: exerciseId,
+                exerciseName: exerciseName,
+                blockStartDate: blockStartDate,
+                selectedDate: _selectedDate,
+                weekIndex: weekIndex ?? 0,
+                sorted: sorted,
+                plannedCountBefore: 0,
+                byWeek: true,
+              );
+              final int completedEarlierThisWeek = wkRes?.completedCount ?? 0;
+              final Set<String> matchedDates = wkRes?.matchedDates ?? {};
 
               // 🔑 WES rule: planned rows don't affect DUP Weekly indexing
               final plannedIndex = completedEarlierThisWeek;
-              final index = plannedIndex % sorted.length;
-
-              final raw = sorted[index].value?.toString() ?? '';
+              final index = wkRes?.instanceIndex ?? 0;
+              final raw = wkRes?.raw ?? '';
               final match = RegExp(r'^(\d+)').firstMatch(raw);
               repTarget = match != null
                   ? (int.tryParse(match.group(1)!)?.toDouble() ?? 10.0)

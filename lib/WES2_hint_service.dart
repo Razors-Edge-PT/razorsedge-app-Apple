@@ -3,6 +3,7 @@ import 'WES2_models.dart';
 import 'bb3_hint_service.dart';
 import 'bb3_planned_exercise_service.dart';
 import 'periodization_model_utils.dart';
+import 'progression_engine.dart';
 
 abstract class Wes2HintService {
   /// Recompute hints for a single exercise row.
@@ -59,11 +60,38 @@ class Wes2HintServiceImpl implements Wes2HintService {
     // WES2-manual rows are created with setCount > 0 but sets: const [],
     // so we must not bail out on sets.isEmpty.
     final exSettings = exerciseSettings[row.exerciseId] as Map<String, dynamic>?;
-    final planCount = _targetSetCountForSession(
-      exSettings: exSettings,
-      weekIndex: weekIndex,
-      sessionIndex: sessionIndex,
-    );
+    final dupModel = (exSettings?['periodizationModel'] as String?) ?? '';
+    final int planCount;
+    if (dupModel == 'DUP, By Exposure' || dupModel == 'DUP, By Week') {
+      final week1 = (exSettings?['repTargets'] as Map?)?['week1'];
+      final sortedInst = (week1 is Map<String, dynamic>)
+          ? (week1.entries.where((e) => e.key.startsWith('instance')).toList()
+              ..sort((a, b) => a.key.compareTo(b.key)))
+          : <MapEntry<String, dynamic>>[];
+      final dupRes = ProgressionEngine.resolveDupActiveInstance(
+        exerciseId: row.exerciseId,
+        exerciseName: row.name,
+        blockStartDate: blockStartDate,
+        selectedDate: date,
+        weekIndex: weekIndex,
+        sorted: sortedInst,
+        plannedCountBefore: 0,
+        byWeek: dupModel == 'DUP, By Week',
+      );
+      final dupRaw = dupRes?.raw ?? '';
+      final dupMatch = RegExp(r'[xX]\s*(\d+)').firstMatch(dupRaw.trim());
+      planCount = (dupMatch != null ? int.tryParse(dupMatch.group(1)!) : null) ?? 0;
+      // TEMP DEBUG — remove after instance mismatch diagnosis
+      debugPrint('🧪 [WES2 INSTANCE DEBUG] [WES2 SET COUNT RESOLVE]'
+          '\n  periodizationModel=$dupModel weekIndex=$weekIndex sessionIndex=$sessionIndex (DUP path, history-aware)'
+          '\n  resolvedInstance=${dupRes?.instanceNumber} raw="$dupRaw" planCount=$planCount');
+    } else {
+      planCount = _targetSetCountForSession(
+        exSettings: exSettings,
+        weekIndex: weekIndex,
+        sessionIndex: sessionIndex,
+      );
+    }
     final effectiveCount = _resolveEffectiveSetCount(row, planCount);
     final padded = List<Wes2SetState>.generate(effectiveCount, (i) {
       return i < row.sets.length ? row.sets[i] : Wes2SetState(setIndex: i);

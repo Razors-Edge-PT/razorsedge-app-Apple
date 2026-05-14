@@ -11,6 +11,7 @@ class Wes2ExerciseSettingsDialog extends StatefulWidget {
   final int dayIndex; // 0-based, used as estimated session display
   final int totalBlockWeeks; // used to write RIR from current week forward
   final Wes2PlanService planService;
+  final int? resolvedActiveInstanceOverride; // history-aware override for DUP models
 
   const Wes2ExerciseSettingsDialog({
     super.key,
@@ -22,6 +23,7 @@ class Wes2ExerciseSettingsDialog extends StatefulWidget {
     required this.dayIndex,
     required this.totalBlockWeeks,
     required this.planService,
+    this.resolvedActiveInstanceOverride,
   });
 
   @override
@@ -132,6 +134,26 @@ class _Wes2ExerciseSettingsDialogState
     if (_isDupSignature) return 1;
     final weekData = _repTargetWeekData;
     if (weekData == null) return 1;
+    // Use history-aware override when provided (DUP By Exposure / By Week).
+    // Clamp to valid slot range so a stale override cannot point outside the microcycle.
+    final slotCount = _microcycleSlotCount;
+    if (widget.resolvedActiveInstanceOverride != null && slotCount > 0) {
+      final clamped = ((widget.resolvedActiveInstanceOverride! - 1) % slotCount) + 1;
+      // TEMP DEBUG — remove after instance mismatch diagnosis
+      debugPrint('🧪 [WES2 INSTANCE DEBUG] [SETTINGS ACTIVE INSTANCE RESOLVE]'
+          '\n  exerciseId=${widget.exerciseId}'
+          '\n  exerciseName=${widget.exerciseName}'
+          '\n  periodizationModel=$_periodizationModel'
+          '\n  weekIndex=${widget.weekIndex} dayIndex=${widget.dayIndex}'
+          '\n  weeklyFrequency=$_sessionCount'
+          '\n  weeklyInstanceDisplay=$_weeklyInstanceDisplay'
+          '\n  globalInstanceDisplay=$_globalInstanceDisplay'
+          '\n  microcycleSlotCount=$slotCount'
+          '\n  resolvedActiveInstanceOverride=${widget.resolvedActiveInstanceOverride} clamped=$clamped'
+          '\n  weekDataKeys=${weekData.keys.toList()}'
+          '\n  repTargets.week1=${(_existingSettings["repTargets"] as Map?)?["week1"]}');
+      return clamped;
+    }
     final candidate = widget.dayIndex + 1;
     final resolved = weekData.containsKey('instance$candidate') ? candidate : 1;
     // TEMP DEBUG — remove after instance mismatch diagnosis
@@ -143,7 +165,7 @@ class _Wes2ExerciseSettingsDialogState
         '\n  weeklyFrequency=$_sessionCount'
         '\n  weeklyInstanceDisplay=$_weeklyInstanceDisplay'
         '\n  globalInstanceDisplay=$_globalInstanceDisplay'
-        '\n  microcycleSlotCount=$_microcycleSlotCount'
+        '\n  microcycleSlotCount=$slotCount'
         '\n  candidate=$candidate resolved=$resolved'
         '\n  weekDataKeys=${weekData.keys.toList()}'
         '\n  repTargets.week1=${(_existingSettings["repTargets"] as Map?)?["week1"]}');
