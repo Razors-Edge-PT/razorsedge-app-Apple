@@ -1,5 +1,6 @@
 //progression_engine.dart
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'dart:core';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'periodization_model_utils.dart'; // your existing utils
@@ -392,6 +393,16 @@ class ProgressionEngine {
             repTarget = match != null
                 ? int.tryParse(match.group(1)!)?.toDouble() ?? 10.0
                 : 10.0;
+            // TEMP DEBUG — remove after instance mismatch diagnosis
+            debugPrint('🧪 [WES2 INSTANCE DEBUG] [PROGRESSION DUP EXPOSURE RESOLVE]'
+                '\n  exerciseId=$exerciseId exerciseName=$exerciseName'
+                '\n  selectedDate=$_selectedDate blockStartDate=$blockStartDate'
+                '\n  completedBeforeTodayInBlock=$completedBeforeTodayInBlock'
+                '\n  plannedCountBefore=$plannedCountBefore'
+                '\n  plannedIndex=$plannedIndex sorted.length=${sorted.length}'
+                '\n  index=$index resolvedInstance=${index + 1}'
+                '\n  raw="$raw" repTarget=$repTarget'
+                '\n  countedDates=${countedDebug.map((d) => d["date"]).toList()}');
           } else {
             repTarget = 10.0;
           }
@@ -505,6 +516,15 @@ class ProgressionEngine {
               repTarget = match != null
                   ? (int.tryParse(match.group(1)!)?.toDouble() ?? 10.0)
                   : 10.0;
+              // TEMP DEBUG — remove after instance mismatch diagnosis
+              debugPrint('🧪 [WES2 INSTANCE DEBUG] [PROGRESSION DUP WEEK RESOLVE]'
+                  '\n  exerciseId=$exerciseId exerciseName=$exerciseName'
+                  '\n  selectedDate=$_selectedDate'
+                  '\n  completedEarlierThisWeek=$completedEarlierThisWeek'
+                  '\n  plannedIndex=$plannedIndex sorted.length=${sorted.length}'
+                  '\n  index=$index resolvedInstance=${index + 1}'
+                  '\n  raw="$raw" repTarget=$repTarget'
+                  '\n  matchedDates=$matchedDates');
             }
           } else {
             repTarget = 10.0;

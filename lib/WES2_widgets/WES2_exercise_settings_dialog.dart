@@ -133,7 +133,21 @@ class _Wes2ExerciseSettingsDialogState
     final weekData = _repTargetWeekData;
     if (weekData == null) return 1;
     final candidate = widget.dayIndex + 1;
-    return weekData.containsKey('instance$candidate') ? candidate : 1;
+    final resolved = weekData.containsKey('instance$candidate') ? candidate : 1;
+    // TEMP DEBUG — remove after instance mismatch diagnosis
+    debugPrint('🧪 [WES2 INSTANCE DEBUG] [SETTINGS ACTIVE INSTANCE RESOLVE]'
+        '\n  exerciseId=${widget.exerciseId}'
+        '\n  exerciseName=${widget.exerciseName}'
+        '\n  periodizationModel=$_periodizationModel'
+        '\n  weekIndex=${widget.weekIndex} dayIndex=${widget.dayIndex}'
+        '\n  weeklyFrequency=$_sessionCount'
+        '\n  weeklyInstanceDisplay=$_weeklyInstanceDisplay'
+        '\n  globalInstanceDisplay=$_globalInstanceDisplay'
+        '\n  microcycleSlotCount=$_microcycleSlotCount'
+        '\n  candidate=$candidate resolved=$resolved'
+        '\n  weekDataKeys=${weekData.keys.toList()}'
+        '\n  repTargets.week1=${(_existingSettings["repTargets"] as Map?)?["week1"]}');
+    return resolved;
   }
 
   String get _microcycleInstanceDisplay {
@@ -671,6 +685,11 @@ class _Wes2ExerciseSettingsDialogState
     }
 
     final activeKey = 'instance$_resolvedActiveInstanceNumber';
+    // TEMP DEBUG — remove after instance mismatch diagnosis
+    debugPrint('🧪 [WES2 INSTANCE DEBUG] [SETTINGS ACTIVE LABEL]'
+        '\n  activeKey=$activeKey'
+        '\n  repTargetKeys=${_repTargetCtrls.keys.toList()}'
+        '\n  repTargetValues=${_repTargetCtrls.map((k, v) => MapEntry(k, v.text))}');
     String slotLabel(String key) {
       final num = key.replaceAll('instance', '');
       return key == activeKey ? 'Reps Session $num · Active' : 'Reps Session $num';

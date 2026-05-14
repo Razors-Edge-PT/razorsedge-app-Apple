@@ -387,6 +387,35 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       final date = _controller.selectedDate;
       final rows = _controller.rows.toList();
 
+      // TEMP DEBUG — remove after instance mismatch diagnosis
+      debugPrint('🧪 [WES2 INSTANCE DEBUG] [LOAD APPLY HINTS START]'
+          '\n  selectedDate=$date'
+          '\n  activeBlockId=$blockId'
+          '\n  blockStartDate=$blockStart'
+          '\n  rows.count=${rows.length}'
+          '\n  savedWorkoutsList.count=${PeriodizationModelUtils.savedWorkoutsList.length}');
+      // TEMP DEBUG history count per exercise (in-block, strictly before selectedDate)
+      final _dbgSelStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+      final _dbgBlkStr = '${blockStart.year}-${blockStart.month.toString().padLeft(2, '0')}-${blockStart.day.toString().padLeft(2, '0')}';
+      for (final _dbgRow in rows) {
+        final _dbgCount = PeriodizationModelUtils.savedWorkoutsList.where((w) {
+          final wKey = (w['date'] ?? '').toString().length >= 10
+              ? (w['date'] ?? '').toString().substring(0, 10)
+              : (w['date'] ?? '').toString();
+          if (wKey.compareTo(_dbgBlkStr) < 0 || wKey.compareTo(_dbgSelStr) >= 0) return false;
+          final exs = w['exercises'];
+          if (exs is! List) return false;
+          return exs.any((ex) {
+            final exId = (ex['exerciseId'] ?? ex['id'] ?? '').toString();
+            final exName = (ex['name'] ?? '').toString();
+            return exId == _dbgRow.exerciseId || exName == _dbgRow.name;
+          });
+        }).length;
+        debugPrint('🧪 [WES2 INSTANCE DEBUG] [HISTORY COUNT DEBUG]'
+            '\n  exerciseId=${_dbgRow.exerciseId} name=${_dbgRow.name}'
+            '\n  priorExposuresInBlock(beforeSelectedDate)=$_dbgCount');
+      }
+
       for (final row in rows) {
         if (!mounted) return;
         try {
@@ -396,6 +425,14 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             uid: _controller.actingUid,
             date: date,
           );
+          // TEMP DEBUG — remove after instance mismatch diagnosis
+          debugPrint('🧪 [WES2 INSTANCE DEBUG] [APPLY HINTS ROW]'
+              '\n  exerciseId=${row.exerciseId} name=${row.name}'
+              '\n  setCount.before=${row.setCount} setCount.after=${hinted.setCount}'
+              '\n  set1.repsHint.before=${row.sets.isNotEmpty ? row.sets[0].reps.hintValue : null}'
+              '\n  set1.repsHint.after=${hinted.sets.isNotEmpty ? hinted.sets[0].reps.hintValue : null}'
+              '\n  set2.repsHint.before=${row.sets.length > 1 ? row.sets[1].reps.hintValue : null}'
+              '\n  set2.repsHint.after=${hinted.sets.length > 1 ? hinted.sets[1].reps.hintValue : null}');
           _controller.applyModelHints(row.exerciseId, hinted);
         } catch (e) {
           debugPrint('[WES2] Hint failed for ${row.name} (${row.exerciseId}): $e');
@@ -427,6 +464,13 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
     final key = '$uid|$blockId|${ymd(selectedDate)}';
     if (_lastHistoryRefreshKey == key) return;
+
+    // TEMP DEBUG — remove after instance mismatch diagnosis
+    debugPrint('🧪 [WES2 INSTANCE DEBUG] [HISTORY REFRESH]'
+        '\n  selectedDate=$selectedDate'
+        '\n  blockStartDate=$blockStart'
+        '\n  cacheKey=$key (not cached — fetching from server)'
+        '\n  savedWorkoutsList.countBefore=${PeriodizationModelUtils.savedWorkoutsList.length}');
 
     final startKey = ymd(DateTime(blockStart.year, blockStart.month, blockStart.day));
     final endKey   = ymd(DateTime(selectedDate.year, selectedDate.month, selectedDate.day));
@@ -468,6 +512,12 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       });
 
       PeriodizationModelUtils.savedWorkoutsList = merged;
+      // TEMP DEBUG — remove after instance mismatch diagnosis
+      debugPrint('🧪 [WES2 INSTANCE DEBUG] [HISTORY REFRESH COMPLETE]'
+          '\n  startKey=$startKey endKey=$endKey'
+          '\n  freshData.count=${freshData.length}'
+          '\n  mergedTotal.count=${merged.length}'
+          '\n  fetchedDates=${freshData.map((d) => (d["date"] ?? "").toString()).toList()}');
       _rebuildTopSetsFromSavedWorkouts();
       _lastHistoryRefreshKey = key;
     } catch (_) {
@@ -1440,6 +1490,23 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     } else {
       totalBlockWeeks = wd.weekIndex + 52;
     }
+
+    // TEMP DEBUG — remove after instance mismatch diagnosis
+    debugPrint('🧪 [WES2 INSTANCE DEBUG] [OPEN SETTINGS COG]'
+        '\n  selectedDate=${_controller.selectedDate}'
+        '\n  blockStartDate=$blockStart'
+        '\n  weekIndex=${wd.weekIndex} dayIndex=${wd.dayIndex}'
+        '\n  exerciseId=${row.exerciseId}'
+        '\n  exerciseName=${row.name}'
+        '\n  cachedPeriodizationModel=${_cachedExerciseSettings[row.exerciseId]?["periodizationModel"]}'
+        '\n  weeklyFrequency=${_cachedExerciseSettings[row.exerciseId]?["weeklyFrequency"]}'
+        '\n  row.setCount=${row.setCount}'
+        '\n  sets.length=${row.sets.length}'
+        '\n  set1.repsHint=${row.sets.isNotEmpty ? row.sets[0].reps.hintValue : null}'
+        '\n  set2.repsHint=${row.sets.length > 1 ? row.sets[1].reps.hintValue : null}'
+        '\n  set3.repsHint=${row.sets.length > 2 ? row.sets[2].reps.hintValue : null}'
+        '\n  set1.rirHint=${row.sets.isNotEmpty ? row.sets[0].rir.hintValue : null}'
+        '\n  set2.rirHint=${row.sets.length > 1 ? row.sets[1].rir.hintValue : null}');
 
     final saved = await showDialog<bool>(
       context: context,

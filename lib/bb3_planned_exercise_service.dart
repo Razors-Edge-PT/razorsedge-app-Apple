@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 import 'bb3_models.dart';
 import 'local_cache/block_plan_cache.dart';
@@ -492,10 +493,15 @@ class BB3PlannedExerciseService {
 
     // Format: "N x M" → N reps. Also may be just "N".
     final match = RegExp(r'^(\d+)\s*[xX]').firstMatch(raw.trim());
-    if (match != null) {
-      return int.tryParse(match.group(1)!) ?? 8;
-    }
-    return int.tryParse(raw.trim()) ?? 8;
+    final result = match != null
+        ? (int.tryParse(match.group(1)!) ?? 8)
+        : (int.tryParse(raw.trim()) ?? 8);
+    // TEMP DEBUG — remove after instance mismatch diagnosis
+    debugPrint('🧪 [WES2 INSTANCE DEBUG] [BB3 REP TARGET RESOLVE]'
+        '\n  periodizationModel=$model weekIndex=$weekIndex sessionIndex=$sessionIndex setIndex=$setIndex'
+        '\n  weekKey=$weekKey isDupWeekOrExposure=$isDupWeekOrExposure'
+        '\n  instanceKey=$instanceKey raw="$raw" parsedReps=$result');
+    return result;
   }
 
   // ── Per-exercise session index for BB3 planning surface ──────────────────
