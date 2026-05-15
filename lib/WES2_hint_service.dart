@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'WES2_models.dart';
 import 'bb3_hint_service.dart';
 import 'bb3_planned_exercise_service.dart';
@@ -81,10 +80,6 @@ class Wes2HintServiceImpl implements Wes2HintService {
       final dupRaw = dupRes?.raw ?? '';
       final dupMatch = RegExp(r'[xX]\s*(\d+)').firstMatch(dupRaw.trim());
       planCount = (dupMatch != null ? int.tryParse(dupMatch.group(1)!) : null) ?? 0;
-      // TEMP DEBUG — remove after instance mismatch diagnosis
-      debugPrint('🧪 [WES2 INSTANCE DEBUG] [WES2 SET COUNT RESOLVE]'
-          '\n  periodizationModel=$dupModel weekIndex=$weekIndex sessionIndex=$sessionIndex (DUP path, history-aware)'
-          '\n  resolvedInstance=${dupRes?.instanceNumber} raw="$dupRaw" planCount=$planCount');
     } else {
       planCount = _targetSetCountForSession(
         exSettings: exSettings,
@@ -315,16 +310,6 @@ class Wes2HintServiceImpl implements Wes2HintService {
         planRir > 0) {
       rirHint = planRir;
     }
-
-    // TEMP DEBUG — remove after instance mismatch diagnosis
-    debugPrint('🧪 [WES2 INSTANCE DEBUG] [WES2 REP HINT RESOLVE]'
-        '\n  exerciseId=${row.exerciseId}'
-        '\n  exerciseName=${row.name}'
-        '\n  periodizationModel=${exSettings?["periodizationModel"]}'
-        '\n  weekIndex=$weekIndex sessionIndex=$sessionIndex'
-        '\n  repTargets.week1=${(exSettings?["repTargets"] as Map?)?["week1"]}'
-        '\n  planReps=$planReps repsHint=$repsHint weightHint=$weightHint rirHint=$rirHint'
-        '\n  row.setCount(before compute)=${row.setCount}');
 
     Wes2SetState result = _applyModelHintToSet(
       existing: set,
@@ -1237,12 +1222,6 @@ class Wes2HintServiceImpl implements Wes2HintService {
     final match = RegExp(r'[xX]\s*(\d+)').firstMatch(raw.trim());
     if (match == null) return 0;
     final planCount = int.tryParse(match.group(1)!) ?? 0;
-    // TEMP DEBUG — remove after instance mismatch diagnosis
-    debugPrint('🧪 [WES2 INSTANCE DEBUG] [WES2 SET COUNT RESOLVE]'
-        '\n  periodizationModel=$model weekIndex=$weekIndex sessionIndex=$sessionIndex'
-        '\n  weekKey=$weekKey isDupWeekOrExposure=$isDupWeekOrExposure'
-        '\n  weekDataKeys=${weekData.keys.toList()}'
-        '\n  instanceKey=$instanceKey raw="$raw" planCount=$planCount');
     return planCount;
   }
 

@@ -139,36 +139,10 @@ class _Wes2ExerciseSettingsDialogState
     final slotCount = _microcycleSlotCount;
     if (widget.resolvedActiveInstanceOverride != null && slotCount > 0) {
       final clamped = ((widget.resolvedActiveInstanceOverride! - 1) % slotCount) + 1;
-      // TEMP DEBUG — remove after instance mismatch diagnosis
-      debugPrint('🧪 [WES2 INSTANCE DEBUG] [SETTINGS ACTIVE INSTANCE RESOLVE]'
-          '\n  exerciseId=${widget.exerciseId}'
-          '\n  exerciseName=${widget.exerciseName}'
-          '\n  periodizationModel=$_periodizationModel'
-          '\n  weekIndex=${widget.weekIndex} dayIndex=${widget.dayIndex}'
-          '\n  weeklyFrequency=$_sessionCount'
-          '\n  weeklyInstanceDisplay=$_weeklyInstanceDisplay'
-          '\n  globalInstanceDisplay=$_globalInstanceDisplay'
-          '\n  microcycleSlotCount=$slotCount'
-          '\n  resolvedActiveInstanceOverride=${widget.resolvedActiveInstanceOverride} clamped=$clamped'
-          '\n  weekDataKeys=${weekData.keys.toList()}'
-          '\n  repTargets.week1=${(_existingSettings["repTargets"] as Map?)?["week1"]}');
       return clamped;
     }
     final candidate = widget.dayIndex + 1;
     final resolved = weekData.containsKey('instance$candidate') ? candidate : 1;
-    // TEMP DEBUG — remove after instance mismatch diagnosis
-    debugPrint('🧪 [WES2 INSTANCE DEBUG] [SETTINGS ACTIVE INSTANCE RESOLVE]'
-        '\n  exerciseId=${widget.exerciseId}'
-        '\n  exerciseName=${widget.exerciseName}'
-        '\n  periodizationModel=$_periodizationModel'
-        '\n  weekIndex=${widget.weekIndex} dayIndex=${widget.dayIndex}'
-        '\n  weeklyFrequency=$_sessionCount'
-        '\n  weeklyInstanceDisplay=$_weeklyInstanceDisplay'
-        '\n  globalInstanceDisplay=$_globalInstanceDisplay'
-        '\n  microcycleSlotCount=$slotCount'
-        '\n  candidate=$candidate resolved=$resolved'
-        '\n  weekDataKeys=${weekData.keys.toList()}'
-        '\n  repTargets.week1=${(_existingSettings["repTargets"] as Map?)?["week1"]}');
     return resolved;
   }
 
@@ -524,7 +498,7 @@ class _Wes2ExerciseSettingsDialogState
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      insetPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 18),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
       titlePadding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
       contentPadding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
       actionsPadding: const EdgeInsets.fromLTRB(14, 4, 14, 10),
@@ -573,6 +547,7 @@ class _Wes2ExerciseSettingsDialogState
         maxHeight: MediaQuery.of(context).size.height * 0.72,
       ),
       child: SingleChildScrollView(
+        padding: const EdgeInsets.only(top: 5),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
@@ -707,11 +682,6 @@ class _Wes2ExerciseSettingsDialogState
     }
 
     final activeKey = 'instance$_resolvedActiveInstanceNumber';
-    // TEMP DEBUG — remove after instance mismatch diagnosis
-    debugPrint('🧪 [WES2 INSTANCE DEBUG] [SETTINGS ACTIVE LABEL]'
-        '\n  activeKey=$activeKey'
-        '\n  repTargetKeys=${_repTargetCtrls.keys.toList()}'
-        '\n  repTargetValues=${_repTargetCtrls.map((k, v) => MapEntry(k, v.text))}');
     String slotLabel(String key) {
       final num = key.replaceAll('instance', '');
       return key == activeKey ? 'Reps Session $num · Active' : 'Reps Session $num';

@@ -1,6 +1,5 @@
 //progression_engine.dart
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart';
 import 'dart:core';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'periodization_model_utils.dart'; // your existing utils
@@ -344,100 +343,11 @@ class ProgressionEngine {
               plannedCountBefore: plannedCountBefore,
               byWeek: false,
             );
-            final int completedBeforeTodayInBlock = expRes?.completedCount ?? 0;
-            final Set<String> matchedDates = expRes?.matchedDates ?? {};
-
-            // AFTER you finish building `matchedDates` (and before plannedIndex/index):
-            final countedDebug = <Map<String, String>>[];
-
-            // Re-scan only the matched dates to grab a representative set per day
-            for (final w in PeriodizationModelUtils.savedWorkoutsList) {
-              final dateStr = (w['date'] ?? '').toString();
-              final key = dateStr.length >= 10
-                  ? dateStr.substring(0, 10)
-                  : dateStr;
-              if (!matchedDates.contains(key)) continue;
-
-              final exs = w['exercises'];
-              if (exs is! List) continue;
-
-              String? weightTxt, repsTxt, rirTxt;
-
-              for (final ex in exs) {
-                // ID-first match (fallback to name→id only if no id on row)
-                final exId = (ex['exerciseId'] ?? ex['id'] ??
-                    ex['exercise_id'] ?? '').toString().trim();
-                final exName = (ex['name'] ?? ex['exercise'] ?? ex['title'] ??
-                    '').toString().trim();
-                final idMatches = exId.isNotEmpty
-                    ? (exId == exerciseId)
-                    : false;
-                final nameMatches = (exId.isEmpty)
-                    ? ((PeriodizationModelUtils.nameToId[exName] ?? '')
-                    .toString()
-                    .trim() == exerciseId)
-                    : false;
-                if (!(idMatches || nameMatches)) continue;
-
-                final sets = (ex['sets'] is List)
-                    ? List<Map<String, dynamic>>.from(ex['sets'])
-                    : const <Map<String, dynamic>>[];
-
-                // Pick the first set that looks numeric
-                for (final s in sets) {
-                  final wTxt = (s['actualWeight'] ?? s['weight'] ?? '')
-                      .toString()
-                      .trim();
-                  final rTxt = (s['actualReps'] ?? s['reps'] ?? '')
-                      .toString()
-                      .trim();
-                  final rir = (s['actualRir'] ?? s['rir'] ?? '')
-                      .toString()
-                      .trim();
-
-                  final looksNumber = double.tryParse(wTxt) != null &&
-                      int.tryParse(rTxt) != null;
-                  if (looksNumber) {
-                    weightTxt = wTxt;
-                    repsTxt = rTxt;
-                    rirTxt = rir.isEmpty ? null : rir;
-                    break;
-                  }
-                }
-
-                if (weightTxt != null || repsTxt != null) break;
-              }
-
-              countedDebug.add({
-                'date': key,
-                'weight': weightTxt ?? '—',
-                'reps': repsTxt ?? '—',
-                'rir': rirTxt ?? '—',
-              });
-            }
-
-            // Sort by date (ascending) so the cycle order is obvious
-            countedDebug.sort((a, b) => a['date']!.compareTo(b['date']!));
-
-            // Now compute plannedIndex / index as before
-            final plannedIndex = completedBeforeTodayInBlock +
-                plannedCountBefore;
-            final index = expRes?.instanceIndex ?? 0;
             final raw = expRes?.raw ?? '';
             final match = RegExp(r'^(\d+)').firstMatch(raw);
             repTarget = match != null
                 ? int.tryParse(match.group(1)!)?.toDouble() ?? 10.0
                 : 10.0;
-            // TEMP DEBUG — remove after instance mismatch diagnosis
-            debugPrint('🧪 [WES2 INSTANCE DEBUG] [PROGRESSION DUP EXPOSURE RESOLVE]'
-                '\n  exerciseId=$exerciseId exerciseName=$exerciseName'
-                '\n  selectedDate=$_selectedDate blockStartDate=$blockStartDate'
-                '\n  completedBeforeTodayInBlock=$completedBeforeTodayInBlock'
-                '\n  plannedCountBefore=$plannedCountBefore'
-                '\n  plannedIndex=$plannedIndex sorted.length=${sorted.length}'
-                '\n  index=$index resolvedInstance=${index + 1}'
-                '\n  raw="$raw" repTarget=$repTarget'
-                '\n  countedDates=${countedDebug.map((d) => d["date"]).toList()}');
           } else {
             repTarget = 10.0;
           }
@@ -476,26 +386,11 @@ class ProgressionEngine {
                 plannedCountBefore: 0,
                 byWeek: true,
               );
-              final int completedEarlierThisWeek = wkRes?.completedCount ?? 0;
-              final Set<String> matchedDates = wkRes?.matchedDates ?? {};
-
-              // 🔑 WES rule: planned rows don't affect DUP Weekly indexing
-              final plannedIndex = completedEarlierThisWeek;
-              final index = wkRes?.instanceIndex ?? 0;
               final raw = wkRes?.raw ?? '';
               final match = RegExp(r'^(\d+)').firstMatch(raw);
               repTarget = match != null
                   ? (int.tryParse(match.group(1)!)?.toDouble() ?? 10.0)
                   : 10.0;
-              // TEMP DEBUG — remove after instance mismatch diagnosis
-              debugPrint('🧪 [WES2 INSTANCE DEBUG] [PROGRESSION DUP WEEK RESOLVE]'
-                  '\n  exerciseId=$exerciseId exerciseName=$exerciseName'
-                  '\n  selectedDate=$_selectedDate'
-                  '\n  completedEarlierThisWeek=$completedEarlierThisWeek'
-                  '\n  plannedIndex=$plannedIndex sorted.length=${sorted.length}'
-                  '\n  index=$index resolvedInstance=${index + 1}'
-                  '\n  raw="$raw" repTarget=$repTarget'
-                  '\n  matchedDates=$matchedDates');
             }
           } else {
             repTarget = 10.0;
