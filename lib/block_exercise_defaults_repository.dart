@@ -245,25 +245,59 @@ class BlockExerciseDefaultsRepository {
   }
 
 
-  /// Build week1/sessionX/set1/rir structure – same as BP.
-  static Map<String, Map<String, Map<String, Map<String, String>>>> _buildRirPlan(
-      dynamic rirTargetsRaw,
-      ) {
-    final rirTargets = (rirTargetsRaw as List).map((e) => e as num).toList();
+  // Same default RIR matrix used in Block_Planner._showStaticRirDialog.
+  // Rows = sessions 1-4; columns = set1, set2, set3, set4 defaults.
+  static const List<List<double>> _defaultRirMatrix = [
+    [2.0, 2.0, 2.5, 3.0], // Session 1
+    [2.0, 2.0, 2.5, 3.0], // Session 2
+    [2.0, 2.0, 2.5, 3.5], // Session 3
+    [2.5, 3.0, 3.0, 3.5], // Session 4
+  ];
 
-    final weekMap = <String, Map<String, Map<String, String>>>{};
+  /// Build week1/sessionX/set1..setN/rir+reps structure.
+  /// [sets] controls how many set entries are written per session.
+  /// [week1RepTargets] optionally provides per-instance rep strings ("9 x 3")
+  /// so each set gets the correct reps value and per-session set count.
+  static Map<String, dynamic> _buildRirPlan(
+      dynamic rirTargetsRaw, {
+      int sets = 3,
+      Map<String, String>? week1RepTargets,
+      }) {
+    final rirTargets = (rirTargetsRaw as List).map((e) => e as num).toList();
+    final weekMap = <String, dynamic>{};
 
     for (int i = 0; i < rirTargets.length; i++) {
-      weekMap['session${i + 1}'] = {
-        'set1': {
-          'rir': rirTargets[i].toStringAsFixed(1),
-        },
-      };
+      final patternIndex =
+          i < _defaultRirMatrix.length ? i : i % _defaultRirMatrix.length;
+
+      final instanceKey = 'instance${i + 1}';
+      final repStr = week1RepTargets?[instanceKey] ?? '';
+      final repMatch = RegExp(r'^(\d+)').firstMatch(repStr);
+      final repsVal = repMatch?.group(1);
+      final setsMatch = RegExp(r'x\s*(\d+)').firstMatch(repStr);
+      final sessionSets = int.tryParse(setsMatch?.group(1) ?? '') ?? sets;
+
+      final sessionMap = <String, dynamic>{};
+      for (int s = 0; s < sessionSets; s++) {
+        final setKey = 'set${s + 1}';
+        final String setRir;
+        if (s == 0) {
+          setRir = rirTargets[i].toStringAsFixed(1);
+        } else {
+          final matrixRir = s < _defaultRirMatrix[patternIndex].length
+              ? _defaultRirMatrix[patternIndex][s]
+              : 3.0;
+          setRir = matrixRir.toStringAsFixed(1);
+        }
+        sessionMap[setKey] = {
+          'rir': setRir,
+          if (repsVal != null) 'reps': repsVal,
+        };
+      }
+      weekMap['session${i + 1}'] = sessionMap;
     }
 
-    return {
-      'week1': weekMap,
-    };
+    return {'week1': weekMap};
   }
 
 
@@ -319,18 +353,21 @@ class BlockExerciseDefaultsRepository {
       String bodyPart,
       ) {
     Map<String, dynamic> sanitize(Map<String, dynamic> def) {
+      final int defaultSets = (def['defaultSets'] as int?) ?? 3;
+      final repTargets = _buildRepTargetMap(def['repTargets'], sets: defaultSets);
       return {
         'weeklyFrequency': def['weeklyFrequency'],
         'increments': _parseIncrements(def['increments']),
         'periodizationModel': def['periodizationModel'],
-        'repTargets': _buildRepTargetMap(
-          def['repTargets'],
-          sets: (def['defaultSets'] ?? 3),
-        ),
+        'repTargets': repTargets,
         'rirModel': def['rirModel'],
-        'rirPlan': _buildRirPlan(def['rirTargets']),
+        'rirPlan': _buildRirPlan(
+          def['rirTargets'],
+          sets: defaultSets,
+          week1RepTargets: repTargets['week1'],
+        ),
         'progressionModel': def['progressionModel'],
-        'defaultSets': def['defaultSets'] ?? 3,
+        'defaultSets': defaultSets,
         'modelSpecificRepTargets': def['modelSpecificRepTargets'],
       };
     }
@@ -516,5 +553,152 @@ class BlockExerciseDefaultsRepository {
     }, SetOptions(merge: true));
 
     print('✅ [DefaultsRepo] Defaults seeded for block=$blockId');
+  }
+
+  // ---------------------------------------------------------------------------
+  // 6) SELF-HEAL: fill missing week1 set entries for existing users
+  // ---------------------------------------------------------------------------
+
+  /// Inspects [settings] for one exercise and returns a healed rirPlan map
+  /// (week1 only) if any session is missing set2/set3/etc entries.
+  /// Returns null when the rirPlan is already complete — no Firestore write needed.
+  /// Never overwrites existing rir values; only adds absent set keys and adds
+  /// the 'reps' field to sets that lack it.
+  static Map<String, dynamic>? healWeek1RirPlan(Map<String, dynamic> settings) {
+    final rirPlanRaw = settings['rirPlan'];
+    if (rirPlanRaw is! Map) return null;
+
+    final week1Raw = rirPlanRaw['week1'];
+    if (week1Raw is! Map) return null;
+
+    final repTargetsRaw = settings['repTargets'];
+    if (repTargetsRaw is! Map) return null;
+
+    final repWeek1Raw = repTargetsRaw['week1'];
+    if (repWeek1Raw is! Map) return null;
+
+    final sessionCount = repWeek1Raw.keys
+        .where((k) => k.toString().startsWith('instance'))
+        .length;
+    if (sessionCount == 0) return null;
+
+    final defaultSets = (settings['defaultSets'] as int?) ?? 3;
+    bool changed = false;
+
+    // Shallow-copy the existing week1 map so we can patch it.
+    final patchedWeek1 = Map<String, dynamic>.from(week1Raw);
+
+    for (int i = 0; i < sessionCount; i++) {
+      final sessionKey = 'session${i + 1}';
+      final instanceKey = 'instance${i + 1}';
+      final repStr = repWeek1Raw[instanceKey]?.toString() ?? '';
+
+      final repMatch = RegExp(r'^(\d+)').firstMatch(repStr);
+      final repsVal = repMatch?.group(1);
+      final setsMatch = RegExp(r'x\s*(\d+)').firstMatch(repStr);
+      final sessionSets = int.tryParse(setsMatch?.group(1) ?? '') ?? defaultSets;
+
+      if (sessionSets <= 0) continue;
+
+      final patternIndex =
+          i < _defaultRirMatrix.length ? i : i % _defaultRirMatrix.length;
+      final existingSessionRaw = week1Raw[sessionKey];
+      final patchedSession = existingSessionRaw is Map
+          ? Map<String, dynamic>.from(existingSessionRaw)
+          : <String, dynamic>{};
+
+      bool sessionChanged = false;
+
+      for (int s = 0; s < sessionSets; s++) {
+        final setKey = 'set${s + 1}';
+        final existingSetRaw = patchedSession[setKey];
+        final existingSet = existingSetRaw is Map
+            ? Map<String, dynamic>.from(existingSetRaw)
+            : null;
+
+        if (existingSet == null) {
+          // Entire set entry absent — create it.
+          final int idx = s < _defaultRirMatrix[patternIndex].length
+              ? s
+              : _defaultRirMatrix[patternIndex].length - 1;
+          final setRir = _defaultRirMatrix[patternIndex][idx].toStringAsFixed(1);
+          patchedSession[setKey] = {
+            'rir': setRir,
+            if (repsVal != null) 'reps': repsVal,
+          };
+          sessionChanged = true;
+        } else if (repsVal != null && !existingSet.containsKey('reps')) {
+          // Set exists but lacks 'reps' — add it without touching 'rir'.
+          existingSet['reps'] = repsVal;
+          patchedSession[setKey] = existingSet;
+          sessionChanged = true;
+        }
+        // Set is complete — leave it untouched.
+      }
+
+      if (sessionChanged) {
+        patchedWeek1[sessionKey] = patchedSession;
+        changed = true;
+      }
+    }
+
+    if (!changed) return null;
+
+    // Return only the patched rirPlan; other weeks are preserved as-is.
+    final patchedRirPlan = Map<String, dynamic>.from(rirPlanRaw);
+    patchedRirPlan['week1'] = patchedWeek1;
+    return patchedRirPlan;
+  }
+
+  /// Reads the active block's exerciseSettings, heals any sparse week1 rirPlan
+  /// entries, and writes back only the changed rirPlan fields via a targeted
+  /// Firestore update. Silently no-ops if all plans are already complete.
+  static Future<void> healActiveBlockRirPlan({
+    required String uid,
+    required String blockId,
+  }) async {
+    try {
+      final docRef = FirebaseFirestore.instance
+          .collection('planned_blocks')
+          .doc(uid)
+          .collection('blocks')
+          .doc(blockId);
+
+      final snap = await docRef.get();
+      if (!snap.exists) return;
+      final data = snap.data();
+      if (data == null) return;
+
+      final rawSettings = data['exerciseSettings'];
+      if (rawSettings is! Map) return;
+
+      final exerciseSettings =
+          Map<String, dynamic>.from(rawSettings);
+      final updates = <String, dynamic>{};
+
+      for (final entry in exerciseSettings.entries) {
+        final exerciseId = entry.key;
+        final settingsRaw = entry.value;
+        if (settingsRaw is! Map) continue;
+        final settings = Map<String, dynamic>.from(settingsRaw);
+        final healedRirPlan = healWeek1RirPlan(settings);
+        if (healedRirPlan != null) {
+          updates['exerciseSettings.$exerciseId.rirPlan'] =
+              _sanitizeForFirestore(healedRirPlan);
+        }
+      }
+
+      if (updates.isEmpty) {
+        print('✅ [DefaultsRepo] rirPlan already complete for block=$blockId');
+        return;
+      }
+
+      print(
+          '🩹 [DefaultsRepo] Healing rirPlan for ${updates.length} exercise(s) in block=$blockId');
+      await docRef.update(updates);
+      print('✅ [DefaultsRepo] rirPlan healed for block=$blockId');
+    } catch (e) {
+      print('❌ [DefaultsRepo] healActiveBlockRirPlan failed for block=$blockId: $e');
+    }
   }
 }
