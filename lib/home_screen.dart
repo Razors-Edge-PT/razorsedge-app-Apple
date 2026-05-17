@@ -1067,6 +1067,15 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       final block1Id = block1Ref.id;
       print('✅ [Home] Block 1 created id=$block1Id (${swCreate1.elapsed.inMilliseconds} ms)');
 
+      if (mounted) {
+        Provider.of<UserContext>(context, listen: false).applyBlockMeta(
+          uid: uid,
+          activeBlockId: block1Id,
+          startDate: startDate1,
+          endDate: endDate1,
+        );
+      }
+
       await BlockExerciseDefaultsRepository.seedDefaultsForBlock(
         uid: uid,
         blockId: block1Id,
@@ -2659,58 +2668,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                               ),
 
 
-                              SizedBox(
-                                width: kFeatureCardWidth,
-                                child: GestureDetector(
-                                  onTap: () {
-                                    final userContext = UserContext.of(context, listen: false);
 
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                          value: userContext,
-                                          child: const Camp_BB2(), // your week planner screen
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                  child: Card(
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(12),
-                                      child: Stack(
-                                        children: [
-                                          Positioned(
-                                            top: 0,
-                                            left: 0,
-                                            child: Icon(
-                                              Icons.calendar_month,
-                                              size: 48,
-                                              color: Theme.of(context).colorScheme.secondary,
-                                            ),
-                                          ),
-                                          Positioned(
-                                            bottom: 0,
-                                            right: 0,
-                                            left: 50,
-                                            child: Text(
-                                              'Week\nPlanner',
-                                              textAlign: TextAlign.center,
-                                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                                height: 1.3,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                              maxLines: 2,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
 
                               SizedBox(
                                 width: kFeatureCardWidth,
@@ -2747,7 +2705,60 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                             right: 0,
                                             left: 50,
                                             child: Text(
-                                              'BB3\nPlanner',
+                                              'Week\nPlanner',
+                                              textAlign: TextAlign.center,
+                                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                                height: 1.3,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+
+                              SizedBox(
+                                width: kFeatureCardWidth,
+                                child: GestureDetector(
+                                  onTap: () {
+                                    final userContext = UserContext.of(context, listen: false);
+
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                          value: userContext,
+                                          child: const Camp_BB2(), // your week planner screen
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  child: Card(
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(12),
+                                      child: Stack(
+                                        children: [
+                                          Positioned(
+                                            top: 0,
+                                            left: 0,
+                                            child: Icon(
+                                              Icons.calendar_month,
+                                              size: 48,
+                                              color: Theme.of(context).colorScheme.secondary,
+                                            ),
+                                          ),
+                                          Positioned(
+                                            bottom: 0,
+                                            right: 0,
+                                            left: 50,
+                                            child: Text(
+                                              'Previous\nWeeks',
                                               textAlign: TextAlign.center,
                                               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                                 height: 1.3,

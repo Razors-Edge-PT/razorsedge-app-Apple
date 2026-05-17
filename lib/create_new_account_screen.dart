@@ -1256,7 +1256,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
   // ── Commercial gym equipment (full list shown)
   final List<String> _commercialEquip = const [
     'Seated leg curl',
-    'Standing Leg Curl Machine'
+    'Standing Leg Curl Machine',
     '45 Degree Hip Extension',
     'Hack Squat',
     'Triceps Dip Machine',

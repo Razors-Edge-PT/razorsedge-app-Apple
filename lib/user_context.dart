@@ -1,4 +1,5 @@
 // user_context.dart
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -223,6 +224,28 @@ class UserContext extends ChangeNotifier {
         selectedDate: DateTime.now(),
       );
     }
+  }
+
+  /// Called by HomeScreen after auto-creating default blocks so WES2 has
+  /// block context immediately without waiting for the next server refresh.
+  void applyBlockMeta({
+    required String uid,
+    required String activeBlockId,
+    required DateTime? startDate,
+    required DateTime? endDate,
+  }) {
+    _setBlockMetaAtomic(
+      activeBlockId: activeBlockId,
+      startDate: startDate,
+      endDate: endDate,
+      source: 'server',
+    );
+    unawaited(_persistBlockMeta(
+      uid: uid,
+      activeBlockId: activeBlockId,
+      startDate: startDate,
+      endDate: endDate,
+    ));
   }
 
   /// Coach switches athlete – publish UID immediately, then do the same bootstrap
