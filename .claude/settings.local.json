@@ -36,7 +36,8 @@
       "Bash(dart format *)",
       "Bash(findstr /i \"WES2\\\\|error\")",
       "PowerShell(flutter analyze *)",
-      "Bash(dart analyze *)"
+      "Bash(dart analyze *)",
+      "Bash(grep -v \"^$\")"
     ]
   }
 }

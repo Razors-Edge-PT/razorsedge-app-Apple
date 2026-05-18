@@ -565,12 +565,6 @@ class BlockExerciseDefaultsRepository {
   /// Never overwrites existing rir values; only adds absent set keys and adds
   /// the 'reps' field to sets that lack it.
   static Map<String, dynamic>? healWeek1RirPlan(Map<String, dynamic> settings) {
-    final rirPlanRaw = settings['rirPlan'];
-    if (rirPlanRaw is! Map) return null;
-
-    final week1Raw = rirPlanRaw['week1'];
-    if (week1Raw is! Map) return null;
-
     final repTargetsRaw = settings['repTargets'];
     if (repTargetsRaw is! Map) return null;
 
@@ -585,8 +579,17 @@ class BlockExerciseDefaultsRepository {
     final defaultSets = (settings['defaultSets'] as int?) ?? 3;
     bool changed = false;
 
-    // Shallow-copy the existing week1 map so we can patch it.
-    final patchedWeek1 = Map<String, dynamic>.from(week1Raw);
+    // Start from existing rirPlan if present; create from scratch if absent.
+    final rirPlanRaw = settings['rirPlan'];
+    final existingRirPlan = rirPlanRaw is Map
+        ? Map<String, dynamic>.from(rirPlanRaw)
+        : <String, dynamic>{};
+
+    // Start from existing week1 if present; create from scratch if absent.
+    final week1Raw = existingRirPlan['week1'];
+    final patchedWeek1 = week1Raw is Map
+        ? Map<String, dynamic>.from(week1Raw)
+        : <String, dynamic>{};
 
     for (int i = 0; i < sessionCount; i++) {
       final sessionKey = 'session${i + 1}';
@@ -602,7 +605,7 @@ class BlockExerciseDefaultsRepository {
 
       final patternIndex =
           i < _defaultRirMatrix.length ? i : i % _defaultRirMatrix.length;
-      final existingSessionRaw = week1Raw[sessionKey];
+      final existingSessionRaw = patchedWeek1[sessionKey];
       final patchedSession = existingSessionRaw is Map
           ? Map<String, dynamic>.from(existingSessionRaw)
           : <String, dynamic>{};
@@ -644,10 +647,9 @@ class BlockExerciseDefaultsRepository {
 
     if (!changed) return null;
 
-    // Return only the patched rirPlan; other weeks are preserved as-is.
-    final patchedRirPlan = Map<String, dynamic>.from(rirPlanRaw);
-    patchedRirPlan['week1'] = patchedWeek1;
-    return patchedRirPlan;
+    // Return the patched rirPlan; other weeks are preserved as-is.
+    existingRirPlan['week1'] = patchedWeek1;
+    return existingRirPlan;
   }
 
   /// Reads the active block's exerciseSettings, heals any sparse week1 rirPlan

@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'WES2_models.dart';
 import 'local_cache/block_plan_cache.dart';
+import 'block_exercise_defaults_repository.dart';
 
 // Abstract interface — unchanged from Phase 1.
 abstract class Wes2PlanService {
@@ -189,18 +190,50 @@ class FirestoreWes2PlanService implements Wes2PlanService {
     required String uid,
     required String blockId,
   }) async {
-    final snap = await FirebaseFirestore.instance
+    final docRef = FirebaseFirestore.instance
         .collection('planned_blocks')
         .doc(uid)
         .collection('blocks')
-        .doc(blockId)
-        .get();
+        .doc(blockId);
+
+    final snap = await docRef.get();
     if (!snap.exists) return const {};
     final data = snap.data();
     if (data == null) return const {};
-    final settings = data['exerciseSettings'];
-    if (settings is! Map) return const {};
-    return Map<String, dynamic>.from(settings);
+    final settingsRaw = data['exerciseSettings'];
+    if (settingsRaw is! Map) return const {};
+
+    final rawMap = Map<String, dynamic>.from(settingsRaw);
+    final healedMap = <String, dynamic>{};
+    final updates = <String, dynamic>{};
+
+    for (final entry in rawMap.entries) {
+      final exerciseId = entry.key;
+      final settingsVal = entry.value;
+      if (settingsVal is! Map) {
+        healedMap[exerciseId] = settingsVal;
+        continue;
+      }
+      final settings = Map<String, dynamic>.from(settingsVal);
+      final healedRirPlan =
+          BlockExerciseDefaultsRepository.healWeek1RirPlan(settings);
+      if (healedRirPlan != null) {
+        settings['rirPlan'] = healedRirPlan;
+        updates['exerciseSettings.$exerciseId.rirPlan'] = healedRirPlan;
+      }
+      healedMap[exerciseId] = settings;
+    }
+
+    if (updates.isNotEmpty) {
+      try {
+        await docRef.update(updates);
+        print('[WES2PlanService] healed and wrote rirPlan for ${updates.length} exercise(s) in block=$blockId');
+      } catch (e) {
+        print('[WES2PlanService] rirPlan heal write failed for block=$blockId error=$e');
+      }
+    }
+
+    return healedMap;
   }
 
   @override

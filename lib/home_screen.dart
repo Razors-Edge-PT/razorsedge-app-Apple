@@ -202,9 +202,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
       // 🔎 Kick the 8-day local/FS scan once (post-frame so context is ready)
       WidgetsBinding.instance.addPostFrameCallback((_) async {
-        final uid = actingUid;
-        final bid = userContext.activeBlockId;
-        if (bid != null && bid.isNotEmpty) {
+        final uc = Provider.of<UserContext>(context, listen: false);
+        final uid = uc.actingAsUid;
+        final bid = uc.activeBlockId;
+        if (uid.isNotEmpty && bid != null && bid.isNotEmpty) {
           // ✅ Roll forward missed BB2 plans into the next available days
           await _rollForwardMissedBB2Plans(uid: uid, blockId: bid);
           // Self-heal sparse rirPlan for existing users (no-op if already complete).
@@ -212,8 +213,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             uid: uid,
             blockId: bid,
           ));
-        } else {
-
         }
 
         // 🔥 Prewarm BB2 current week (server-based merged cache for first-paint correctness)
@@ -1292,11 +1291,15 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       // Keep your existing warm
       unawaited(WarmupService.instance.warmWES(newUid));
 
-      // ✅ Roll-forward after switch (post-frame so block meta has a chance to hydrate)
+      // ✅ Roll-forward + RIR heal after switch (post-frame so block meta has a chance to hydrate)
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         final bid = uc.activeBlockId;
         if (bid != null && bid.isNotEmpty) {
           await _rollForwardMissedBB2Plans(uid: newUid, blockId: bid);
+          unawaited(BlockExerciseDefaultsRepository.healActiveBlockRirPlan(
+            uid: newUid,
+            blockId: bid,
+          ));
         } else {
           debugPrint('⚠️ [ROLL] skip on switch: activeBlockId missing');
         }
