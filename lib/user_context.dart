@@ -226,6 +226,39 @@ class UserContext extends ChangeNotifier {
     }
   }
 
+  /// Fetches active block id + dates from Firestore and updates UserContext.
+  /// Called by HomeScreen after _ensureAtLeastOneBlockExists completes so
+  /// WES2 always has up-to-date block context before the user navigates there.
+  Future<void> refreshBlockMetaFromServer({required String uid}) async {
+    try {
+      final repo = BlockRepository();
+      final id = await repo.fetchActiveBlockId(uid);
+      if (id == null || id.isEmpty) return;
+      final fs = FirebaseFirestore.instance;
+      final doc = await fs
+          .collection('planned_blocks')
+          .doc(uid)
+          .collection('blocks')
+          .doc(id)
+          .get(const GetOptions(source: Source.server));
+      final data = doc.data() ?? const {};
+      final tsStart = data['startDate'] as Timestamp?;
+      final tsEnd   = data['endDate']   as Timestamp?;
+      _setBlockMetaAtomic(
+        activeBlockId: id,
+        startDate: tsStart?.toDate(),
+        endDate: tsEnd?.toDate(),
+        source: 'server',
+      );
+      await _persistBlockMeta(
+        uid: uid,
+        activeBlockId: id,
+        startDate: tsStart?.toDate(),
+        endDate: tsEnd?.toDate(),
+      );
+    } catch (_) {}
+  }
+
   /// Called by HomeScreen after auto-creating default blocks so WES2 has
   /// block context immediately without waiting for the next server refresh.
   void applyBlockMeta({

@@ -185,7 +185,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       _loadAthleteEmail();
     });
 
-    _ensureAtLeastOneBlockExists().then((_) {
+    _ensureAtLeastOneBlockExists().then((_) async {
+      if (!mounted) return;
+      final uc = Provider.of<UserContext>(context, listen: false);
+      await uc.refreshBlockMetaFromServer(uid: uc.actingAsUid);
+
       _fetchRecentData();
       _fetchTrainingDaysForMonth(_focusedDay);
 
