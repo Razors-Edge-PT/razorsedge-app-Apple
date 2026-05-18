@@ -3717,8 +3717,8 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
 
                     // E) Optional best efforts
-                    const SizedBox(height: 19),
-                    _SectionHeader("OPTIONAL Bits:", color: Colors.black),
+                    const SizedBox(height: 9),
+                  //  _SectionHeader("OPTIONAL Bits:", color: Colors.black),
 
                     const SizedBox(height: 6),
                     // 🟦 How hard would you like to train?
@@ -3786,12 +3786,13 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                             "Totally optional — you can change this later.",
                             style: TextStyle(fontSize: 11, color: Colors.black45),
                           ),
+
                         ],
                       ),
                     ),
 
 
-
+/*
 
                     const SizedBox(height: 6),
                     const Text(
@@ -3851,7 +3852,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                       repsCtrl: _deadRepsCtrl,
                     ),
 
-
+*/
 
                     const SizedBox(height: 20),
 
@@ -3903,9 +3904,12 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                             ? const CircularProgressIndicator(color: Colors.white)
                             : Text(isEditMode ? 'Save Changes' : 'Finish', style: const TextStyle(fontSize: 18)),
                       ),
+
                     ),
+                    const SizedBox(height: 6)
                   ],
                 ),
+
               ),
             ),
           ),
