@@ -31,6 +31,7 @@ class Wes2ExerciseSettingsDialog extends StatefulWidget {
   final Wes2PlanService planService;
   final int? resolvedActiveInstanceOverride; // history-aware override for DUP models
   final int? completedInstanceCount; // completed instances of this exercise in the active block to date
+  final int? weeklyInstanceOverride; // BB3-computed within-week instance number (1-based)
 
   const Wes2ExerciseSettingsDialog({
     super.key,
@@ -44,6 +45,7 @@ class Wes2ExerciseSettingsDialog extends StatefulWidget {
     required this.planService,
     this.resolvedActiveInstanceOverride,
     this.completedInstanceCount,
+    this.weeklyInstanceOverride,
   });
 
   @override
@@ -114,6 +116,7 @@ class _Wes2ExerciseSettingsDialogState
       _periodizationModel == 'DUP, By Exposure';
 
   int get _weeklyInstanceDisplay {
+    if (widget.weeklyInstanceOverride != null) return widget.weeklyInstanceOverride!;
     final count = _sessionCount;
     if (count <= 0) return 1;
     return (widget.dayIndex % count) + 1;

@@ -573,12 +573,71 @@ class BB3PlannedExerciseService {
     return daysWithExposure.length;
   }
 
+  // ── Within-week instance count (synchronous) ─────────────────────────────
+  //
+  // Counts distinct days in [0, selectedDayIndex] where this exercise appears:
+  //   • Past days (d < todayDayIndex): completed with valid weight+reps required.
+  //   • Today and forward (d >= todayDayIndex): planned OR completed (union).
+  // Returns the count, which equals the 1-based instance number for the
+  // selected session when the selected day is included (planned or completed).
+
+  static int getWeeklyInstanceCount({
+    required List<List<BB3Exercise>> plannedByDay,
+    required List<List<Map<String, dynamic>>> completedByDay,
+    required int selectedDayIndex,
+    required int todayDayIndex,
+    required String exerciseId,
+    required String exerciseName,
+  }) {
+    final normName = exerciseName.trim().toLowerCase();
+    int count = 0;
+    for (int d = 0; d <= selectedDayIndex && d < 7; d++) {
+      if (d < todayDayIndex) {
+        // Past: completed with valid sets required
+        if (completedByDay.length > d) {
+          if (completedByDay[d].any((ex) {
+            final id = (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim();
+            final name = (ex['name'] ?? '').toString().trim().toLowerCase();
+            if (id != exerciseId && name != normName) return false;
+            final sets = (ex['sets'] as List?) ?? [];
+            return sets.any((s) {
+              if (s is! Map) return false;
+              final w = s['weight'] ?? s['weightKg'] ?? 0;
+              final r = s['reps'] ?? 0;
+              return (w is num && w > 0) && (r is num && r > 0);
+            });
+          })) {
+            count++;
+          }
+        }
+      } else {
+        // Today or future: planned OR completed (union, no double-count)
+        bool found = false;
+        if (plannedByDay.length > d) {
+          found = plannedByDay[d].any((e) =>
+              e.exerciseId == exerciseId ||
+              e.name.trim().toLowerCase() == normName);
+        }
+        if (!found && completedByDay.length > d) {
+          found = completedByDay[d].any((ex) {
+            final id = (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim();
+            final name = (ex['name'] ?? '').toString().trim().toLowerCase();
+            return id == exerciseId || name == normName;
+          });
+        }
+        if (found) count++;
+      }
+    }
+    return count;
+  }
+
   // ── Global block exposure count (Task B — dialog completedInstanceCount) ──
   //
   // Block-wide count of workout sessions containing this exercise:
-  //   • [blockStartDate, min(selectedDate, today)]: completed workouts only
-  //   • if selectedDate > today: add planned BB3 appearances from tomorrow
-  //     through selectedDate (remaining current-week days + future weeks)
+  //   • [blockStartDate, min(selectedDate, today)]: completed with valid sets
+  //   • if selectedDate >= today: add planned BB3 appearances from today
+  //     through selectedDate (current-week days + future weeks), skipping
+  //     any day already counted as completed above.
 
   static Future<int> getGlobalBlockExposureCount({
     required String exerciseId,
@@ -688,7 +747,14 @@ class BB3PlannedExerciseService {
             if (ex is! Map) return false;
             final id = (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim();
             final name = (ex['name'] ?? '').toString().trim().toLowerCase();
-            return id == exerciseId || name == normName;
+            if (id != exerciseId && name != normName) return false;
+            final sets = (ex['sets'] as List?) ?? [];
+            return sets.any((s) {
+              if (s is! Map) return false;
+              final w = s['weight'] ?? s['weightKg'] ?? 0;
+              final r = s['reps'] ?? 0;
+              return (w is num && w > 0) && (r is num && r > 0);
+            });
           })) {
             count++;
           }
@@ -696,31 +762,55 @@ class BB3PlannedExerciseService {
       } catch (_) {}
     }
 
-    // Step 2: future planned appearances (only when selectedDate > today)
-    if (selNorm.isAfter(today)) {
-      final tomorrow = today.add(const Duration(days: 1));
+    // Step 2: planned appearances from today through selectedDate (inclusive).
+    // Activates for today and future panels; skips entirely for past panels.
+    if (!selNorm.isBefore(today)) {
       final weekStartNorm = DateTime(
           currentWeekStart.year, currentWeekStart.month, currentWeekStart.day);
+      final todayIndexInWeek =
+          today.difference(weekStartNorm).inDays.clamp(0, 6);
+      final selectedDayIndex = currentDayIndexInWeek;
 
-      // Remaining days in current week after currentDayIndexInWeek
-      for (int d = currentDayIndexInWeek + 1; d < 7; d++) {
+      // Current week: scan [todayIndexInWeek, selectedDayIndex] inclusive.
+      for (int d = todayIndexInWeek; d <= selectedDayIndex && d < 7; d++) {
         final dayNorm = weekStartNorm.add(Duration(days: d));
-        if (dayNorm.isAfter(selNorm)) { break; }
-        if (dayNorm.isBefore(tomorrow)) { continue; }
-        if (currentWeekPlannedByDay[d].any((e) =>
-            e.exerciseId == exerciseId ||
-            e.name.trim().toLowerCase() == normName)) {
+        if (dayNorm.isAfter(selNorm)) break;
+
+        // Today only: skip if already counted as completed with valid sets.
+        if (dayNorm == today) {
+          final todayCmp = currentWeekCompletedByDay.length > d
+              ? currentWeekCompletedByDay[d]
+              : <Map<String, dynamic>>[];
+          final alreadyCounted = todayCmp.any((ex) {
+            final id = (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim();
+            final name = (ex['name'] ?? '').toString().trim().toLowerCase();
+            if (id != exerciseId && name != normName) return false;
+            final sets = (ex['sets'] as List?) ?? [];
+            return sets.any((s) {
+              if (s is! Map) return false;
+              final w = s['weight'] ?? s['weightKg'] ?? 0;
+              final r = s['reps'] ?? 0;
+              return (w is num && w > 0) && (r is num && r > 0);
+            });
+          });
+          if (alreadyCounted) continue;
+        }
+
+        if (currentWeekPlannedByDay.length > d &&
+            currentWeekPlannedByDay[d].any((e) =>
+                e.exerciseId == exerciseId ||
+                e.name.trim().toLowerCase() == normName)) {
           count++;
         }
       }
 
-      // Future weeks: nextWeekStart … selNorm
+      // Future weeks (weeks after the selected week): nextWeekStart … selNorm
       var weekStart = weekStartNorm.add(const Duration(days: 7));
       while (!weekStart.isAfter(selNorm)) {
         for (int d = 0; d < 7; d++) {
           final dayNorm = weekStart.add(Duration(days: d));
-          if (dayNorm.isAfter(selNorm)) { break; }
-          if (dayNorm.isBefore(tomorrow)) { continue; }
+          if (dayNorm.isAfter(selNorm)) break;
+          if (dayNorm.isBefore(today)) continue;
           final (:weekIndex, :dayIndex) = dateToWeekDay(blockStart, dayNorm);
           try {
             final planned = await getPlannedDay(

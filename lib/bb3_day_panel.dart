@@ -964,17 +964,33 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
 
     int? completedCount;
     int? resolvedInstance;
+    int? weeklyCount;
 
     if (widget.blockSettings?.startDate != null) {
       final d = widget.date;
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
       final currentWeekStart = DateTime(d.year, d.month, d.day)
           .subtract(Duration(days: widget.dayIndex));
+      final todayDayIndex =
+          today.difference(currentWeekStart).inDays.clamp(0, 6);
       final allWeekPlanned = widget.allWeekPlannedByDay.isNotEmpty
           ? widget.allWeekPlannedByDay
           : List.generate(7, (_) => <BB3Exercise>[]);
       final allWeekCompleted = widget.allWeekCompletedByDay.isNotEmpty
           ? widget.allWeekCompletedByDay
           : List.generate(7, (_) => <Map<String, dynamic>>[]);
+
+      // Within-week instance number (synchronous — used for weekly display and
+      // as microcycle position for DUP By Week and non-DUP models).
+      weeklyCount = BB3PlannedExerciseService.getWeeklyInstanceCount(
+        plannedByDay: allWeekPlanned,
+        completedByDay: allWeekCompleted,
+        selectedDayIndex: widget.dayIndex,
+        todayDayIndex: todayDayIndex,
+        exerciseId: ex.exerciseId,
+        exerciseName: ex.name,
+      ).clamp(1, 100);
 
       try {
         completedCount =
@@ -993,6 +1009,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
       } catch (_) {}
 
       if (model == 'DUP, By Exposure' || model == 'DUP, Signature') {
+        // Microcycle instance = block-wide exposure index (wraps over slot count).
         try {
           resolvedInstance =
               await BB3PlannedExerciseService.resolveBb3ModelInstanceIndex(
@@ -1009,6 +1026,9 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
             currentDayIndexInWeek: widget.dayIndex,
           );
         } catch (_) {}
+      } else {
+        // DUP By Week and non-DUP: within-week session count is the microcycle position.
+        resolvedInstance = weeklyCount;
       }
     }
 
@@ -1027,6 +1047,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
         planService: FirestoreWes2PlanService(),
         completedInstanceCount: completedCount,
         resolvedActiveInstanceOverride: resolvedInstance,
+        weeklyInstanceOverride: weeklyCount,
       ),
     );
 
