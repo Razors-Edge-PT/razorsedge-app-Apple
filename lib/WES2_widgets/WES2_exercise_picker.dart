@@ -166,7 +166,7 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
   @override
   Widget build(BuildContext context) {
     return DraggableScrollableSheet(
-      initialChildSize: 0.7,
+      initialChildSize: 0.84,
       minChildSize: 0.4,
       maxChildSize: 0.95,
       expand: false,
@@ -181,7 +181,7 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
               borderRadius: BorderRadius.circular(2),
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 0),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Row(
@@ -194,7 +194,7 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
               ],
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 0),
           if (widget.availableCircuits.length > 1) _buildCircuitSelector(),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -268,7 +268,7 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
   Widget _buildCircuitSelector() {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 1),
       child: Row(
         children: widget.availableCircuits.map((ci) {
           return Padding(
@@ -392,12 +392,20 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
   Widget _buildTile(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
     final name = (doc.data()['name'] as String?) ?? doc.id;
     return ListTile(
-      title: Text(name, style: const TextStyle(fontSize: 14)),
+      title: Text(
+        name,
+        style: const TextStyle(fontSize: 13),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
       dense: true,
+      visualDensity: VisualDensity.compact,
+      minVerticalPadding: 0,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
       onTap: () => Navigator.of(context).pop((
-        exerciseId: doc.id,
-        name: name,
-        circuitIndex: _selectedCircuitIndex,
+      exerciseId: doc.id,
+      name: name,
+      circuitIndex: _selectedCircuitIndex,
       )),
     );
   }
