@@ -80,6 +80,9 @@ class Wes2HintServiceImpl implements Wes2HintService {
       final dupRaw = dupRes?.raw ?? '';
       final dupMatch = RegExp(r'[xX]\s*(\d+)').firstMatch(dupRaw.trim());
       planCount = (dupMatch != null ? int.tryParse(dupMatch.group(1)!) : null) ?? 0;
+    } else if (dupModel == 'DUP, Signature') {
+      final ds = (exSettings?['defaultSets'] as num?)?.toInt();
+      planCount = (ds != null && ds > 0) ? ds : 0;
     } else {
       planCount = _targetSetCountForSession(
         exSettings: exSettings,
@@ -1226,20 +1229,11 @@ class Wes2HintServiceImpl implements Wes2HintService {
   }
 
   /// Returns the effective set count for hint row generation.
-  /// Expands unconditionally; shrinks only when no actual data would be lost.
+  /// Never shrinks below row.setCount — blank added sets are intentional state.
   static int _resolveEffectiveSetCount(Wes2ExerciseRow row, int planCount) {
     final current = row.setCount > 0 ? row.setCount : 3;
-    if (planCount <= 0) return current;
-    if (planCount >= current) return planCount;
-    for (final s in row.sets) {
-      if (s.setIndex >= planCount) {
-        final hasActual = s.weight.actualValue != null ||
-            s.reps.actualValue != null ||
-            s.rir.actualValue != null;
-        if (hasActual) return current;
-      }
-    }
-    return planCount;
+    if (planCount > current) return planCount;
+    return current;
   }
 
   /// Parses a DUP Signature min/max rep range from a raw repTargets value.

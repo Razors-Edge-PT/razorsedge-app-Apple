@@ -866,6 +866,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     if (rowIdx == -1) return;
     final row = _controller.rows[rowIdx];
 
+    // Reapply hints so the new set receives normal cascade hints immediately.
+    // ignore: discarded_futures
+    _loadAndApplyHints();
+
     // BB3-planned rows with no actuals are not yet materialised in the workout
     // document — skip Firestore until the first actual value is typed.
     if (row.source == Wes2RowSource.bb3Planned && !row.hasAnyExecutionValue) {
