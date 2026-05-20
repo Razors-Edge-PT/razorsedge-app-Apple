@@ -68,6 +68,7 @@ class Wes2ExerciseCard extends StatelessWidget {
   final VoidCallback? onTopSets;
   final VoidCallback? onOpenExercisePlanNote;
   final bool isExercisePlanNoteRead;
+  final bool showVelocityField;
 
   const Wes2ExerciseCard({
     super.key,
@@ -86,6 +87,7 @@ class Wes2ExerciseCard extends StatelessWidget {
     this.onTopSets,
     this.onOpenExercisePlanNote,
     this.isExercisePlanNoteRead = false,
+    this.showVelocityField = false,
   });
 
   @override
@@ -96,10 +98,8 @@ class Wes2ExerciseCard extends StatelessWidget {
       (i) => i < row.sets.length ? row.sets[i] : Wes2SetState(setIndex: i),
     );
 
-    // Show velocity column only when at least one set has a velocity value.
-    final showVelocity = row.sets.any(
-      (s) => s.velocity.hasActual || s.velocity.hasHint,
-    );
+    final showVelocity = showVelocityField ||
+        row.sets.any((s) => s.velocity.hasActual || s.velocity.hasHint);
 
     final bool isBb3 = row.source == Wes2RowSource.bb3Planned;
     final bool isDone = row.isMarkedDone;

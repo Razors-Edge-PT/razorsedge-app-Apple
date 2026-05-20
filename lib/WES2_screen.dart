@@ -49,6 +49,24 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   String? _fetchedForUid;
   Map<String, dynamic> _cachedExerciseSettings = const {};
   Map<String, String> _cachedExerciseTypes = const {};
+
+  static const Set<String> _defaultVelocityExerciseIds = {
+    'heeBViVINHO6tUScSd6y', // Back Squat, Barbell
+    'AJIQi4kzUVb7IfOyxfZs', // Back Squat, Pin Squat
+    'm6zHYgovIiYPM7NgqoeR', // Bench Press, Banded
+    'AmfUWbF1DH3I7qPAdh5k', // Bench Press, Barbell
+    'pU7wce56hFDsam53aKDr', // Bench Press, Larsen Press
+    'wtrVB88vFR0EDRc7Uli0', // Bench Press, Long Pause
+    'IECRZ5GJrc78DRnyuhtQ', // Bench Press, Narrow Grip
+    'ZH6VIWHexxxlpKRYgwil', // Bench Press, Pin Press
+    'WH2qpYjDeb6M0j2FtlGs', // Bench Press, Touch n Go
+    'MsGl7e9yanDeEnYX0e4X', // Deadlift, Conventional
+    'EQL6s4QJnXApe8DdmJbX', // Deadlift, Deficit
+    'YvwK9kwc1hcA2omz1g4r', // Larsen Bench Press
+    'lVDG90yN6Z8aPjRNV2wc', // Overhead Barbell Press
+    '10pEctikt6PP8eAg9Eip', // Sumo Deadlift
+    'NkctO0XmQrUHfLCkpRXr', // Sumo Deadlift, Deficit
+  };
   // IDs present in the BB3 planned day at last load. Keyed by exerciseId.
   // Allows post-merge rows (source=completedServer) to still trigger BB3 sync.
   Set<String> _bb3PlannedExerciseIds = const {};
@@ -1177,6 +1195,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             onOpenExercisePlanNote: combinedNote != null
                 ? () => _onOpenExercisePlanNoteDialog(row, combinedNote)
                 : null,
+            showVelocityField: _shouldShowVelocityField(row),
           ));
         }
 
@@ -1493,6 +1512,17 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       _controller.setExerciseSettings(_cachedExerciseSettings);
       await _loadAndApplyHints();
     }
+  }
+
+  bool _shouldShowVelocityField(Wes2ExerciseRow row) {
+    final hasExistingVelocity =
+        row.sets.any((s) => s.velocity.hasActual || s.velocity.hasHint);
+    if (hasExistingVelocity) return true;
+    final settings =
+        _cachedExerciseSettings[row.exerciseId] as Map<String, dynamic>?;
+    final explicit = settings?['showVelocityField'];
+    if (explicit is bool) return explicit;
+    return _defaultVelocityExerciseIds.contains(row.exerciseId);
   }
 
   void _showNotesPlaceholder() {

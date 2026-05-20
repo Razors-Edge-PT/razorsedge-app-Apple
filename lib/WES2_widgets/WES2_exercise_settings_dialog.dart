@@ -2,6 +2,24 @@
 import 'package:flutter/material.dart';
 import '../WES2_plan_service.dart';
 
+const Set<String> _defaultVelocityExerciseIds = {
+  'heeBViVINHO6tUScSd6y',
+  'AJIQi4kzUVb7IfOyxfZs',
+  'm6zHYgovIiYPM7NgqoeR',
+  'AmfUWbF1DH3I7qPAdh5k',
+  'pU7wce56hFDsam53aKDr',
+  'wtrVB88vFR0EDRc7Uli0',
+  'IECRZ5GJrc78DRnyuhtQ',
+  'ZH6VIWHexxxlpKRYgwil',
+  'WH2qpYjDeb6M0j2FtlGs',
+  'MsGl7e9yanDeEnYX0e4X',
+  'EQL6s4QJnXApe8DdmJbX',
+  'YvwK9kwc1hcA2omz1g4r',
+  'lVDG90yN6Z8aPjRNV2wc',
+  '10pEctikt6PP8eAg9Eip',
+  'NkctO0XmQrUHfLCkpRXr',
+};
+
 class Wes2ExerciseSettingsDialog extends StatefulWidget {
   final String uid;
   final String blockId;
@@ -38,6 +56,7 @@ class _Wes2ExerciseSettingsDialogState
   bool _saving = false;
   String? _saveError;
   String? _exerciseType;
+  bool _showVelocityField = false;
 
   // The full exerciseSettings map from the block doc (for merging on save).
   Map<String, dynamic> _existingSettings = {};
@@ -194,6 +213,11 @@ class _Wes2ExerciseSettingsDialogState
       _periodizationModel = settings['periodizationModel'] as String?;
       _rirModel = settings['rirModel'] as String?;
       _progressionModel = settings['progressionModel'] as String?;
+
+      final explicitVelocity = settings['showVelocityField'];
+      _showVelocityField = explicitVelocity is bool
+          ? explicitVelocity
+          : _defaultVelocityExerciseIds.contains(widget.exerciseId);
 
       final wf = settings['weeklyFrequency'];
       _weeklyFrequencyCtrl.text = wf != null ? '$wf' : '';
@@ -475,6 +499,7 @@ class _Wes2ExerciseSettingsDialogState
         if (_isDupSignature && ds != null) 'defaultSets': ds,
         'repTargets': _buildRepTargets(),
         'rirPlan': _buildRirPlan(),
+        'showVelocityField': _showVelocityField,
       };
 
       await widget.planService.saveExerciseSettings(
@@ -626,6 +651,35 @@ class _Wes2ExerciseSettingsDialogState
                 'None',
               ],
               onChanged: (v) => setState(() => _progressionModel = v),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: const [
+                      Text(
+                        'Show velocity input',
+                        style: TextStyle(fontSize: 14),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        'Adds a Vel. field so you can manually record bar speed if you track it. We recommend using a Vitruve Velocity Encoder, or GymAware Encoder.',
+                        style: TextStyle(fontSize: 11, color: Colors.white54),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                Switch.adaptive(
+                  value: _showVelocityField,
+                  onChanged: (v) => setState(() => _showVelocityField = v),
+                ),
+              ],
             ),
             const SizedBox(height: 10),
             _buildIndexFooter(),
