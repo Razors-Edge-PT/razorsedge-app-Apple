@@ -1465,6 +1465,93 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       totalBlockWeeks = wd.weekIndex + 52;
     }
 
+    // Compute completed instance count for this exercise in the active block
+    // up to and including the selected date. Used to display global rep target
+    // instance in the settings cog, independent of periodisation model or frequency.
+    final selectedDateOnly = DateTime(
+      _controller.selectedDate.year,
+      _controller.selectedDate.month,
+      _controller.selectedDate.day,
+    );
+    final blockStartOnly = DateTime(
+      blockStart.year, blockStart.month, blockStart.day,
+    );
+    final blockEndOnly = blockEndDate != null
+        ? DateTime(blockEndDate.year, blockEndDate.month, blockEndDate.day)
+        : null;
+
+    // Robust date parser: handles String, DateTime, or Firestore Timestamp-like.
+    DateTime? parseWorkoutDate(dynamic v) {
+      if (v == null) return null;
+      if (v is DateTime) return v;
+      final dt = DateTime.tryParse(v.toString());
+      if (dt != null) return dt;
+      try {
+        // ignore: avoid_dynamic_calls
+        final d = (v as dynamic).toDate();
+        if (d is DateTime) return d;
+      } catch (_) {}
+      return null;
+    }
+
+    int completedInstanceCount = 0;
+    final countedDates = <String>{};
+
+    for (final w in PeriodizationModelUtils.savedWorkoutsList) {
+      final dt = parseWorkoutDate(w['date']);
+      if (dt == null) continue;
+      final dayOnly = DateTime(dt.year, dt.month, dt.day);
+      if (dayOnly.isBefore(blockStartOnly)) continue;
+      if (dayOnly.isAfter(selectedDateOnly)) continue;
+      if (blockEndOnly != null && dayOnly.isAfter(blockEndOnly)) continue;
+
+      final exs = w['exercises'];
+      if (exs is! List) continue;
+
+      bool matched = false;
+      for (final ex in exs) {
+        final exId =
+            (ex['exerciseId'] ?? ex['id'] ?? '').toString();
+        if (exId != row.exerciseId) continue;
+        final setsRaw = ex['sets'];
+        final sets = setsRaw is List ? setsRaw : const [];
+        final hasWeightAndReps = sets.any((s) {
+          final sw = (s['weight']?.toString() ?? '').trim();
+          final sr = (s['reps']?.toString() ?? '').trim();
+          return sw.isNotEmpty && sr.isNotEmpty;
+        });
+        if (hasWeightAndReps) {
+          matched = true;
+          break;
+        }
+      }
+
+      if (matched) {
+        final dateKey =
+            '${dayOnly.year}-${dayOnly.month.toString().padLeft(2, '0')}-${dayOnly.day.toString().padLeft(2, '0')}';
+        countedDates.add(dateKey);
+        completedInstanceCount++;
+      }
+    }
+
+    // Same-day check: include in-progress actuals for the selected date when
+    // savedWorkoutsList has not yet captured them.
+    final todayKey =
+        '${selectedDateOnly.year}-${selectedDateOnly.month.toString().padLeft(2, '0')}-${selectedDateOnly.day.toString().padLeft(2, '0')}';
+    if (!countedDates.contains(todayKey)) {
+      bool hasCompletedToday = false;
+      for (final r in _controller.rows) {
+        if (r.exerciseId != row.exerciseId) continue;
+        if (r.sets.any(
+          (s) => s.weight.actualValue != null && s.reps.actualValue != null,
+        )) {
+          hasCompletedToday = true;
+          break;
+        }
+      }
+      if (hasCompletedToday) completedInstanceCount++;
+    }
+
     // Compute history-aware active instance for DUP models so settings cog
     // shows the same instance as ProgressionEngine.
     int? resolvedActiveInstance;
@@ -1506,6 +1593,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         totalBlockWeeks: totalBlockWeeks,
         planService: _planService,
         resolvedActiveInstanceOverride: resolvedActiveInstance,
+        completedInstanceCount: completedInstanceCount,
       ),
     );
     if (saved == true && mounted) {

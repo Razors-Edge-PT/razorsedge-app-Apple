@@ -30,6 +30,7 @@ class Wes2ExerciseSettingsDialog extends StatefulWidget {
   final int totalBlockWeeks; // used to write RIR from current week forward
   final Wes2PlanService planService;
   final int? resolvedActiveInstanceOverride; // history-aware override for DUP models
+  final int? completedInstanceCount; // completed instances of this exercise in the active block to date
 
   const Wes2ExerciseSettingsDialog({
     super.key,
@@ -42,6 +43,7 @@ class Wes2ExerciseSettingsDialog extends StatefulWidget {
     required this.totalBlockWeeks,
     required this.planService,
     this.resolvedActiveInstanceOverride,
+    this.completedInstanceCount,
   });
 
   @override
@@ -118,6 +120,7 @@ class _Wes2ExerciseSettingsDialogState
   }
 
   int get _globalInstanceDisplay {
+    if (widget.completedInstanceCount != null) return widget.completedInstanceCount!;
     final count = _sessionCount;
     if (count <= 0) return widget.dayIndex + 1;
     return (widget.weekIndex * count) + _weeklyInstanceDisplay;
