@@ -660,16 +660,35 @@ class _Wes2ExerciseSettingsDialogState
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
-                    children: const [
-                      Text(
-                        'Show velocity input',
-                        style: TextStyle(fontSize: 14),
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              'Show velocity input',
+                              style: const TextStyle(fontSize: 14),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Tooltip(
+                            message:
+                                'We recommend using a Vitruve Velocity Encoder or GymAware Encoder.',
+                            triggerMode: TooltipTriggerMode.tap,
+                            child: const Icon(
+                              Icons.info_outline,
+                              size: 15,
+                              color: Colors.white54,
+                            ),
+                          ),
+                        ],
                       ),
-                      SizedBox(height: 2),
-                      Text(
-                        'Adds a Vel. field so you can manually record bar speed if you track it. We recommend using a Vitruve Velocity Encoder, or GymAware Encoder.',
+                      const SizedBox(height: 2),
+                      const Text(
+                        'Adds a Vel. field so you can manually record bar speed if you track it.',
                         style: TextStyle(fontSize: 11, color: Colors.white54),
-                        maxLines: 3,
+                        maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ],

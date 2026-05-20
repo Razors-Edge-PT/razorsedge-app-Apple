@@ -120,17 +120,36 @@ class Wes2ExerciseCard extends StatelessWidget {
         tilePadding: const EdgeInsets.symmetric(horizontal: 8),
         backgroundColor: isDone ? doneBg : normalBg,
         collapsedBackgroundColor: isDone ? doneBg : normalBg,
-        // ── Title: exercise name + optional note icon + optional BB3 label ──
+        // ── Title: exercise name + optional note icon ──
         title: Row(
           children: [
             Expanded(
-              child: Text(
-                row.name,
-                style: const TextStyle(fontSize: 14, height: 1.0),
-                maxLines: 2,
-                softWrap: true,
-                overflow: TextOverflow.ellipsis,
-              ),
+              child: isBb3
+                  ? Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 4, vertical: 2),
+                      decoration: BoxDecoration(
+                        border: Border.all(
+                          color: _kBb3LabelColor.withValues(alpha: 0.65),
+                          width: 1,
+                        ),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        row.name,
+                        style: const TextStyle(fontSize: 14, height: 1.0),
+                        maxLines: 2,
+                        softWrap: true,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    )
+                  : Text(
+                      row.name,
+                      style: const TextStyle(fontSize: 14, height: 1.0),
+                      maxLines: 2,
+                      softWrap: true,
+                      overflow: TextOverflow.ellipsis,
+                    ),
             ),
             if (onOpenExercisePlanNote != null)
               GestureDetector(
@@ -144,15 +163,6 @@ class Wes2ExerciseCard extends StatelessWidget {
                         ? Colors.grey.shade400
                         : Colors.amberAccent,
                   ),
-                ),
-              ),
-            if (isBb3)
-              const Text(
-                ' · BB3 Plan',
-                style: TextStyle(
-                  fontSize: 11,
-                  color: _kBb3LabelColor,
-                  fontStyle: FontStyle.italic,
                 ),
               ),
           ],
