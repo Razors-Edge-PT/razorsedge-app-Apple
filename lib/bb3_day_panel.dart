@@ -1233,14 +1233,14 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                           expandedMode: false,
                           hint: hintFor(visibleSetIndex)),
                       if (!locked) ...[
-                        const SizedBox(width: 2),
+                        const SizedBox(width: 6),
                         GestureDetector(
                           onTap: () => _openExerciseSettings(ex),
                           child: SizedBox(
                             width: 22,
                             height: 22,
                             child: Icon(Icons.settings,
-                                size: 13, color: Colors.grey.shade400),
+                                size: 20, color: Colors.grey.shade400),
                           ),
                         ),
                         PopupMenuButton<_BB3ExMenuAction>(
@@ -1310,7 +1310,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                       ),
                       child: Icon(
                         Icons.insights,
-                        size: 14,
+                        size: 18,
                         color: Colors.cyanAccent,
                       ),
                     ),
@@ -1341,17 +1341,17 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                       ),
                     ],
                     if (!locked) ...[
-                      const SizedBox(width: 2),
+                      const SizedBox(width: 6),
                       GestureDetector(
                         onTap: () => _openExerciseSettings(ex),
                         child: Icon(Icons.settings,
-                            size: 14, color: Colors.grey.shade400),
+                            size: 20, color: Colors.grey.shade400),
                       ),
                       const SizedBox(width: 2),
                       PopupMenuButton<_BB3ExMenuAction>(
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(
-                            minWidth: 28, minHeight: 22),
+                            minWidth: 30, minHeight: 22),
                         child: SizedBox(
                           width: 24,
                           height: 22,
