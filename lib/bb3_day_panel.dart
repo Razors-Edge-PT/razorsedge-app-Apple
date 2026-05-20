@@ -10,6 +10,10 @@ import 'periodization_model_utils.dart';
 import 'exercise_details_screen.dart';
 import 'user_context.dart';
 import 'WES2_screen.dart';
+import 'WES2_widgets/WES2_exercise_settings_dialog.dart';
+import 'WES2_plan_service.dart';
+import 'WES2_hint_service.dart';
+import 'WES2_models.dart';
 
 // ─── BB3DayPanel ─────────────────────────────────────────────────────────────
 //
@@ -50,6 +54,9 @@ class BB3DayPanel extends StatefulWidget {
   final BB3MoveAllCallback onMoveAllToNextDay;
   final bool isInsideBlock;       // whether this day is inside the active block range
   final String? blockId;          // needed for direct savePlannedDay on dispose
+  final void Function()? onBlockSettingsChanged; // fired after settings dialog saves
+  final List<List<BB3Exercise>> allWeekPlannedByDay;
+  final List<List<Map<String, dynamic>>> allWeekCompletedByDay;
 
   const BB3DayPanel({
     super.key,
@@ -69,6 +76,9 @@ class BB3DayPanel extends StatefulWidget {
     required this.onMoveAllToNextDay,
     required this.isInsideBlock,
     this.blockId,
+    this.onBlockSettingsChanged,
+    this.allWeekPlannedByDay = const [],
+    this.allWeekCompletedByDay = const [],
   });
 
   @override
@@ -929,6 +939,227 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     return 0;
   }
 
+  // ── Settings dialog ───────────────────────────────────────────────────────
+  //
+  // Opens Wes2ExerciseSettingsDialog for the given planned exercise.
+  // Computes completedInstanceCount (Task B) and resolvedActiveInstanceOverride
+  // (Task C Level 2) asynchronously before showing the dialog.
+
+  Future<void> _openExerciseSettings(BB3Exercise ex) async {
+    final blockId = widget.blockId;
+    if (blockId == null || blockId.isEmpty) return;
+
+    final exSettings =
+        widget.blockSettings?.exerciseSettings[ex.exerciseId] as Map<String, dynamic>?;
+    final model = (exSettings?['periodizationModel'] as String?) ?? '';
+
+    int totalBlockWeeks = 12;
+    if (widget.blockSettings?.startDate != null &&
+        widget.blockSettings?.endDate != null) {
+      final days = widget.blockSettings!.endDate!
+          .difference(widget.blockSettings!.startDate!)
+          .inDays;
+      totalBlockWeeks = (days / 7).ceil().clamp(1, 100);
+    }
+
+    int? completedCount;
+    int? resolvedInstance;
+
+    if (widget.blockSettings?.startDate != null) {
+      final d = widget.date;
+      final currentWeekStart = DateTime(d.year, d.month, d.day)
+          .subtract(Duration(days: widget.dayIndex));
+      final allWeekPlanned = widget.allWeekPlannedByDay.isNotEmpty
+          ? widget.allWeekPlannedByDay
+          : List.generate(7, (_) => <BB3Exercise>[]);
+      final allWeekCompleted = widget.allWeekCompletedByDay.isNotEmpty
+          ? widget.allWeekCompletedByDay
+          : List.generate(7, (_) => <Map<String, dynamic>>[]);
+
+      try {
+        completedCount =
+            await BB3PlannedExerciseService.getGlobalBlockExposureCount(
+          exerciseId: ex.exerciseId,
+          exerciseName: ex.name,
+          blockStartDate: widget.blockSettings!.startDate!,
+          selectedDate: widget.date,
+          uid: widget.uid,
+          blockId: blockId,
+          currentWeekPlannedByDay: allWeekPlanned,
+          currentWeekCompletedByDay: allWeekCompleted,
+          currentWeekStart: currentWeekStart,
+          currentDayIndexInWeek: widget.dayIndex,
+        );
+      } catch (_) {}
+
+      if (model == 'DUP, By Exposure' || model == 'DUP, Signature') {
+        try {
+          resolvedInstance =
+              await BB3PlannedExerciseService.resolveBb3ModelInstanceIndex(
+            exerciseId: ex.exerciseId,
+            exerciseName: ex.name,
+            periodizationModel: model,
+            blockStartDate: widget.blockSettings!.startDate!,
+            selectedDate: widget.date,
+            uid: widget.uid,
+            blockId: blockId,
+            currentWeekPlannedByDay: allWeekPlanned,
+            currentWeekCompletedByDay: allWeekCompleted,
+            currentWeekStart: currentWeekStart,
+            currentDayIndexInWeek: widget.dayIndex,
+          );
+        } catch (_) {}
+      }
+    }
+
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => Wes2ExerciseSettingsDialog(
+        uid: widget.uid,
+        blockId: blockId,
+        exerciseId: ex.exerciseId,
+        exerciseName: ex.name,
+        weekIndex: widget.weekIndex,
+        dayIndex: widget.dayIndex,
+        totalBlockWeeks: totalBlockWeeks,
+        planService: FirestoreWes2PlanService(),
+        completedInstanceCount: completedCount,
+        resolvedActiveInstanceOverride: resolvedInstance,
+      ),
+    );
+
+    widget.onBlockSettingsChanged?.call();
+  }
+
+  // ── Row hint cascade (Task D) ─────────────────────────────────────────────
+  //
+  // Pre-computes all set hints for one exercise using WES2 cascade:
+  //   Set 0: BB3HintService.getHintsForSet with correct BB3 session index.
+  //   Sets 1+: Wes2HintServiceImpl.computeRowHints cascades from Set 0.
+  // Set 0 is marked FieldOrigin.bb3Hint so computeRowHints never overwrites it.
+  // Returns an empty list for locked (completed) rows — hints are not shown there.
+
+  List<BB3SetHint> _computeRowHintsViaCascade(BB3Exercise ex) {
+    if (widget.blockSettings == null ||
+        widget.blockSettings!.startDate == null) {
+      return List.generate(ex.sets.length, (_) => const BB3SetHint());
+    }
+
+    final exId = ex.exerciseId;
+    final sessionIndex =
+        widget.sessionIndexByExerciseId?[exId] ?? widget.sessionIndex;
+
+    final wCtrls = _weightCtrl[exId];
+    final rCtrls = _repsCtrl[exId];
+    final rirCtrls = _rirCtrl[exId];
+    final double? userW0 = (wCtrls != null && wCtrls.isNotEmpty)
+        ? double.tryParse(wCtrls[0].text.trim())
+        : null;
+    final int? userR0 = (rCtrls != null && rCtrls.isNotEmpty)
+        ? int.tryParse(rCtrls[0].text.trim())
+        : null;
+    final double? userRir0 = (rirCtrls != null && rirCtrls.isNotEmpty)
+        ? double.tryParse(rirCtrls[0].text.trim())
+        : null;
+
+    // Set 0: use correct BB3 session index
+    final set0 = BB3HintService.getHintsForSet(
+      exerciseId: exId,
+      exerciseName: ex.name,
+      fullExerciseSettings: widget.blockSettings!.exerciseSettings,
+      weekIndex: widget.weekIndex,
+      sessionIndex: sessionIndex,
+      setIndex: 0,
+      blockStartDate: widget.blockSettings!.startDate!,
+      blockEndDate: widget.blockSettings!.endDate,
+      selectedDate: widget.date,
+      uid: widget.uid,
+      circuitIndex: ex.circuitIndex,
+      userWeight: userW0,
+      userReps: userR0,
+      userRir: userRir0,
+    );
+
+    if (ex.sets.length <= 1) return [set0];
+
+    final blockId = widget.blockId;
+    if (blockId == null || blockId.isEmpty) {
+      return [set0, ...List.generate(ex.sets.length - 1, (_) => const BB3SetHint())];
+    }
+
+    // Build Wes2ExerciseRow with Set 0 locked as bb3Hint
+    final rawW0 =
+        double.tryParse(set0.weightDisplay.split('–').first.trim());
+    final rawR0 = int.tryParse(set0.repsDisplay);
+    final rawRir0 = double.tryParse(set0.rirDisplay);
+
+    final setStates = <Wes2SetState>[
+      Wes2SetState(
+        setIndex: 0,
+        weight: Wes2FieldState<double>(
+          hintValue: rawW0,
+          hintOrigin: FieldOrigin.bb3Hint,
+          origin: FieldOrigin.bb3Hint,
+          actualValue: userW0,
+        ),
+        reps: Wes2FieldState<int>(
+          hintValue: rawR0,
+          hintOrigin: FieldOrigin.bb3Hint,
+          origin: FieldOrigin.bb3Hint,
+          actualValue: userR0,
+        ),
+        rir: Wes2FieldState<double>(
+          hintValue: rawRir0,
+          hintOrigin: FieldOrigin.bb3Hint,
+          origin: FieldOrigin.bb3Hint,
+          actualValue: userRir0,
+        ),
+      ),
+      for (int i = 1; i < ex.sets.length; i++) Wes2SetState(setIndex: i),
+    ];
+
+    final tempRow = Wes2ExerciseRow(
+      exerciseId: exId,
+      name: ex.name,
+      circuitIndex: ex.circuitIndex,
+      orderIndex: ex.orderIndex,
+      setCount: ex.sets.length,
+      sets: setStates,
+      source: Wes2RowSource.bb3Planned,
+    );
+
+    final hintSvc = Wes2HintServiceImpl(
+      exerciseSettings: widget.blockSettings!.exerciseSettings,
+      blockStartDate: widget.blockSettings!.startDate!,
+      blockEndDate: widget.blockSettings!.endDate,
+      uid: widget.uid,
+    );
+
+    final resultRow = hintSvc.computeRowHints(
+      row: tempRow,
+      blockId: blockId,
+      uid: widget.uid,
+      date: widget.date,
+    );
+
+    return List.generate(ex.sets.length, (i) {
+      if (i == 0) return set0;
+      final s = i < resultRow.sets.length
+          ? resultRow.sets[i]
+          : Wes2SetState(setIndex: i);
+      final w = s.weight.hintValue;
+      final r = s.reps.hintValue;
+      final rir = s.rir.hintValue;
+      return BB3SetHint(
+        weightDisplay: w != null ? _fmtNum(w) : '',
+        repsDisplay: r != null ? r.toString() : '',
+        rirDisplay: rir != null ? _fmtNum(rir) : '',
+      );
+    });
+  }
+
   // ── Exercise card ─────────────────────────────────────────────────────────
   //
   // Collapsed: single compact row — name + all set fields + controls in one line.
@@ -951,6 +1182,11 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     final visibleSetIndex = locked
         ? _topCompletedSetIndex(ex.exerciseId, ex.sets.length - 1)
         : 0;
+
+    // Pre-compute all set hints once (Task D cascade). Locked rows don't show hints.
+    final hints = locked ? <BB3SetHint>[] : _computeRowHintsViaCascade(ex);
+    BB3SetHint hintFor(int si) =>
+        si < hints.length ? hints[si] : const BB3SetHint();
 
     Widget card = Container(
       color: cardColor,
@@ -994,9 +1230,19 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                       const SizedBox(width: 1),
                       ..._setFieldWidgets(
                           theme, ex, visibleSetIndex, locked,
-                          expandedMode: false),
+                          expandedMode: false,
+                          hint: hintFor(visibleSetIndex)),
                       if (!locked) ...[
                         const SizedBox(width: 2),
+                        GestureDetector(
+                          onTap: () => _openExerciseSettings(ex),
+                          child: SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: Icon(Icons.settings,
+                                size: 13, color: Colors.grey.shade400),
+                          ),
+                        ),
                         PopupMenuButton<_BB3ExMenuAction>(
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(
@@ -1095,6 +1341,12 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                       ),
                     ],
                     if (!locked) ...[
+                      const SizedBox(width: 2),
+                      GestureDetector(
+                        onTap: () => _openExerciseSettings(ex),
+                        child: Icon(Icons.settings,
+                            size: 14, color: Colors.grey.shade400),
+                      ),
                       const SizedBox(width: 2),
                       PopupMenuButton<_BB3ExMenuAction>(
                         padding: EdgeInsets.zero,
@@ -1201,7 +1453,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                       ),
                     ),
                     ..._setFieldWidgets(theme, ex, si, locked,
-                        expandedMode: true),
+                        expandedMode: true, hint: hintFor(si)),
                   ],
                 ),
               ),
@@ -1272,6 +1524,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     int setIndex,
     bool locked, {
     required bool expandedMode,
+    required BB3SetHint hint,
   }) {
     final exId = ex.exerciseId;
     final wCtrls = _weightCtrl[exId];
@@ -1318,31 +1571,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     final double? userRir =
         locked ? null : double.tryParse(rirCtrl.text.trim());
 
-    // Hints: always attempt when blockSettings is available.
-    // Outside block range, weekIndex falls outside plan week keys →
-    // getRirFromPlan() returns 1.0 and getRepTargetForSet() returns 8 as
-    // defaults → engine produces history-based weight hints at those defaults.
-    final BB3SetHint hint;
-    if (widget.blockSettings != null) {
-      hint = BB3HintService.getHintsForSet(
-        exerciseId: exId,
-        exerciseName: ex.name,
-        fullExerciseSettings: widget.blockSettings!.exerciseSettings,
-        weekIndex: widget.weekIndex,
-        sessionIndex: widget.sessionIndexByExerciseId?[exId] ?? widget.sessionIndex,
-        setIndex: setIndex,
-        blockStartDate: widget.blockSettings!.startDate ?? widget.date,
-        blockEndDate: widget.blockSettings!.endDate,
-        selectedDate: widget.date,
-        uid: widget.uid,
-        circuitIndex: ex.circuitIndex,
-        userWeight: userWeight,
-        userReps: userReps,
-        userRir: userRir,
-      );
-    } else {
-      hint = const BB3SetHint();
-    }
+    // Hint is pre-computed by _computeRowHintsViaCascade in _buildExerciseCard.
 
     final double? dispW = userWeight ??
         (completedSet != null

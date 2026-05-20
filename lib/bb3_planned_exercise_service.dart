@@ -536,6 +536,213 @@ class BB3PlannedExerciseService {
 
     return daysWithExposure.length;
   }
+
+  // ── Exposure-style session index (DUP, By Exposure / DUP, Signature) ──────
+  //
+  // Level 1: synchronous best-effort for panel hint. Counts current-week days
+  // before currentDayIndex where the exercise appears (union of planned and
+  // completed, no double-count). Call for DUP, By Exposure and DUP, Signature
+  // only — DUP, By Week and non-DUP use getPlannedSessionIndex.
+
+  static int getExposureIndexSync({
+    required List<List<BB3Exercise>> plannedByDay,
+    required List<List<Map<String, dynamic>>> completedByDay,
+    required int currentDayIndex,
+    required String exerciseId,
+    required String exerciseName,
+  }) {
+    final Set<int> daysWithExposure = {};
+    final normName = exerciseName.trim().toLowerCase();
+
+    for (int d = 0; d < currentDayIndex; d++) {
+      if (plannedByDay[d].any((e) =>
+          e.exerciseId == exerciseId ||
+          e.name.trim().toLowerCase() == normName)) {
+        daysWithExposure.add(d);
+        continue;
+      }
+      if (completedByDay[d].any((ex) {
+        final id = (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim();
+        final name = (ex['name'] ?? '').toString().trim().toLowerCase();
+        return id == exerciseId || name == normName;
+      })) {
+        daysWithExposure.add(d);
+      }
+    }
+
+    return daysWithExposure.length;
+  }
+
+  // ── Global block exposure count (Task B — dialog completedInstanceCount) ──
+  //
+  // Block-wide count of workout sessions containing this exercise:
+  //   • [blockStartDate, min(selectedDate, today)]: completed workouts only
+  //   • if selectedDate > today: add planned BB3 appearances from tomorrow
+  //     through selectedDate (remaining current-week days + future weeks)
+
+  static Future<int> getGlobalBlockExposureCount({
+    required String exerciseId,
+    required String exerciseName,
+    required DateTime blockStartDate,
+    required DateTime selectedDate,
+    required String uid,
+    required String blockId,
+    required List<List<BB3Exercise>> currentWeekPlannedByDay,
+    required List<List<Map<String, dynamic>>> currentWeekCompletedByDay,
+    required DateTime currentWeekStart,
+    required int currentDayIndexInWeek,
+  }) =>
+      _countBlockExposures(
+        exerciseId: exerciseId,
+        exerciseName: exerciseName,
+        blockStartDate: blockStartDate,
+        selectedDate: selectedDate,
+        uid: uid,
+        blockId: blockId,
+        currentWeekPlannedByDay: currentWeekPlannedByDay,
+        currentWeekCompletedByDay: currentWeekCompletedByDay,
+        currentWeekStart: currentWeekStart,
+        currentDayIndexInWeek: currentDayIndexInWeek,
+      );
+
+  // ── Model-specific active instance (Task C Level 2 — dialog DUP slot) ─────
+  //
+  // Returns null for DUP, By Week and non-DUP models (caller falls back to
+  // getPlannedSessionIndex). Returns block-wide exposure count for
+  // DUP, By Exposure and DUP, Signature.
+
+  static Future<int?> resolveBb3ModelInstanceIndex({
+    required String exerciseId,
+    required String exerciseName,
+    required String periodizationModel,
+    required DateTime blockStartDate,
+    required DateTime selectedDate,
+    required String uid,
+    required String blockId,
+    required List<List<BB3Exercise>> currentWeekPlannedByDay,
+    required List<List<Map<String, dynamic>>> currentWeekCompletedByDay,
+    required DateTime currentWeekStart,
+    required int currentDayIndexInWeek,
+  }) async {
+    if (periodizationModel != 'DUP, By Exposure' &&
+        periodizationModel != 'DUP, Signature') {
+      return null;
+    }
+    return _countBlockExposures(
+      exerciseId: exerciseId,
+      exerciseName: exerciseName,
+      blockStartDate: blockStartDate,
+      selectedDate: selectedDate,
+      uid: uid,
+      blockId: blockId,
+      currentWeekPlannedByDay: currentWeekPlannedByDay,
+      currentWeekCompletedByDay: currentWeekCompletedByDay,
+      currentWeekStart: currentWeekStart,
+      currentDayIndexInWeek: currentDayIndexInWeek,
+    );
+  }
+
+  // ── Private: shared block exposure counting logic ──────────────────────────
+  //
+  // Step 1: Firestore doc-ID range query on users/{uid}/workouts/{YYYY-MM-DD}
+  //   for [blockStart, min(selectedDate, today)] to count completed sessions.
+  // Step 2: if selectedDate > today, count planned future appearances (remaining
+  //   current-week days + future weeks up to selectedDate).
+
+  static Future<int> _countBlockExposures({
+    required String exerciseId,
+    required String exerciseName,
+    required DateTime blockStartDate,
+    required DateTime selectedDate,
+    required String uid,
+    required String blockId,
+    required List<List<BB3Exercise>> currentWeekPlannedByDay,
+    required List<List<Map<String, dynamic>>> currentWeekCompletedByDay,
+    required DateTime currentWeekStart,
+    required int currentDayIndexInWeek,
+  }) async {
+    final normName = exerciseName.trim().toLowerCase();
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final selNorm = DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
+    final blockStart = DateTime(blockStartDate.year, blockStartDate.month, blockStartDate.day);
+    final windowEnd = selNorm.isBefore(today) ? selNorm : today;
+
+    int count = 0;
+
+    // Step 1: completed workouts in [blockStart, windowEnd]
+    if (!windowEnd.isBefore(blockStart)) {
+      try {
+        final snaps = await _fs
+            .collection('users')
+            .doc(uid)
+            .collection('workouts')
+            .where(FieldPath.documentId,
+                isGreaterThanOrEqualTo: _dateFmt.format(blockStart))
+            .where(FieldPath.documentId,
+                isLessThanOrEqualTo: _dateFmt.format(windowEnd))
+            .get();
+        for (final doc in snaps.docs) {
+          final exercises = (doc.data()['exercises'] as List?) ?? [];
+          if (exercises.any((ex) {
+            if (ex is! Map) return false;
+            final id = (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim();
+            final name = (ex['name'] ?? '').toString().trim().toLowerCase();
+            return id == exerciseId || name == normName;
+          })) {
+            count++;
+          }
+        }
+      } catch (_) {}
+    }
+
+    // Step 2: future planned appearances (only when selectedDate > today)
+    if (selNorm.isAfter(today)) {
+      final tomorrow = today.add(const Duration(days: 1));
+      final weekStartNorm = DateTime(
+          currentWeekStart.year, currentWeekStart.month, currentWeekStart.day);
+
+      // Remaining days in current week after currentDayIndexInWeek
+      for (int d = currentDayIndexInWeek + 1; d < 7; d++) {
+        final dayNorm = weekStartNorm.add(Duration(days: d));
+        if (dayNorm.isAfter(selNorm)) { break; }
+        if (dayNorm.isBefore(tomorrow)) { continue; }
+        if (currentWeekPlannedByDay[d].any((e) =>
+            e.exerciseId == exerciseId ||
+            e.name.trim().toLowerCase() == normName)) {
+          count++;
+        }
+      }
+
+      // Future weeks: nextWeekStart … selNorm
+      var weekStart = weekStartNorm.add(const Duration(days: 7));
+      while (!weekStart.isAfter(selNorm)) {
+        for (int d = 0; d < 7; d++) {
+          final dayNorm = weekStart.add(Duration(days: d));
+          if (dayNorm.isAfter(selNorm)) { break; }
+          if (dayNorm.isBefore(tomorrow)) { continue; }
+          final (:weekIndex, :dayIndex) = dateToWeekDay(blockStart, dayNorm);
+          try {
+            final planned = await getPlannedDay(
+              uid: uid,
+              blockId: blockId,
+              weekIndex: weekIndex,
+              dayIndex: dayIndex,
+              date: dayNorm,
+            );
+            if (planned.any((e) =>
+                e.exerciseId == exerciseId ||
+                e.name.trim().toLowerCase() == normName)) {
+              count++;
+            }
+          } catch (_) {}
+        }
+        weekStart = weekStart.add(const Duration(days: 7));
+      }
+    }
+
+    return count;
+  }
 }
 
 extension _BB3BlockSettingsExt on BB3BlockSettings {

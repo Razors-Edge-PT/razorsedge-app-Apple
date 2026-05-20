@@ -141,6 +141,15 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
   //   workout data (uid + date), not Firestore block documents, so blockId
   //   is irrelevant to hint generation. ✓
 
+  Future<void> _reloadBlockSettings() async {
+    final blockId = _selectedBlockId;
+    if (blockId == null || blockId.isEmpty) return;
+    final settings =
+        await BB3PlannedExerciseService.getBlockSettings(_uid, blockId);
+    if (!mounted) return;
+    setState(() => _blockSettings = settings);
+  }
+
   Future<void> _selectBlock(String blockId, {bool jumpToStart = true}) async {
     final uid = _uid;
     final settings =
@@ -737,19 +746,32 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
         );
 
         // Compute per-exercise session index for this day's panel.
-        // BB3 is planning-forward: counts prior days with the exercise
-        // in either _plannedByDay or _completedByDay (union, no double-count).
+        // DUP, By Exposure and DUP, Signature use exposure-style counting
+        // (getExposureIndexSync). All other models use weekly-reset counting
+        // (getPlannedSessionIndex).
         final sessionIndexByExId = <String, int>{};
         if (isCurrentWeek) {
           for (final ex in _plannedByDay[d]) {
-            sessionIndexByExId[ex.exerciseId] =
-                BB3PlannedExerciseService.getPlannedSessionIndex(
-              plannedByDay: _plannedByDay,
-              completedByDay: _completedByDay,
-              currentDayIndex: d,
-              exerciseId: ex.exerciseId,
-              exerciseName: ex.name,
-            );
+            final exSettings =
+                _blockSettings?.exerciseSettings[ex.exerciseId] as Map<String, dynamic>?;
+            final model = (exSettings?['periodizationModel'] as String?) ?? '';
+            final isExposureModel =
+                model == 'DUP, By Exposure' || model == 'DUP, Signature';
+            sessionIndexByExId[ex.exerciseId] = isExposureModel
+                ? BB3PlannedExerciseService.getExposureIndexSync(
+                    plannedByDay: _plannedByDay,
+                    completedByDay: _completedByDay,
+                    currentDayIndex: d,
+                    exerciseId: ex.exerciseId,
+                    exerciseName: ex.name,
+                  )
+                : BB3PlannedExerciseService.getPlannedSessionIndex(
+                    plannedByDay: _plannedByDay,
+                    completedByDay: _completedByDay,
+                    currentDayIndex: d,
+                    exerciseId: ex.exerciseId,
+                    exerciseName: ex.name,
+                  );
           }
         }
 
@@ -782,6 +804,9 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
           onMoveAllToNextDay: _onMoveAllToNextDay,
           isInsideBlock: isInBlock,
           blockId: _selectedBlockId,
+          onBlockSettingsChanged: _reloadBlockSettings,
+          allWeekPlannedByDay: _plannedByDay,
+          allWeekCompletedByDay: _completedByDay,
         );
       },
     );
