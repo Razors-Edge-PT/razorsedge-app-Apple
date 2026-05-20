@@ -686,7 +686,7 @@ class _Wes2ExerciseSettingsDialogState
                       ),
                       const SizedBox(height: 2),
                       const Text(
-                        'Adds a Vel. field so you can manually record bar speed if you track it.',
+                        'Adds a Vel. fireld so you can manually record bar speed if you track it.',
                         style: TextStyle(fontSize: 11, color: Colors.white54),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
