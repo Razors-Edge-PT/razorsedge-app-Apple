@@ -322,6 +322,45 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
   // _hintIndexCache. _buildDayList reads from this cache synchronously; a cache
   // miss falls back to the within-week date-aware count (getWeeklyInstanceCount).
 
+  // Updates only _dupSigRepCache after a planned-row field save.
+  // Skips getExposureHintIndex (session counts don't change on rep edits).
+  Future<void> _refreshDupSigRepCacheOnly(DateTime weekStart) async {
+    final blockId = _selectedBlockId;
+    final blockSettings = _blockSettings;
+    if (blockId == null || blockId.isEmpty || blockSettings == null) return;
+    if (blockSettings.startDate == null) return;
+    final uid = _uid;
+    final newDupSigCache = <String, int>{};
+
+    for (int d = 0; d < 7; d++) {
+      for (final ex in _plannedByDay[d]) {
+        final exSettings =
+            blockSettings.exerciseSettings[ex.exerciseId] as Map<String, dynamic>?;
+        final model = (exSettings?['periodizationModel'] as String?) ?? '';
+        if (model != 'DUP, Signature') continue;
+        final date = weekStart.add(Duration(days: d));
+        final cacheKey = '${_dateFmt.format(date)}_${ex.exerciseId}';
+        final rep = await BB3PlannedExerciseService.getDupSignatureRepForDate(
+          exerciseId: ex.exerciseId,
+          exerciseName: ex.name,
+          exSettings: exSettings,
+          blockStartDate: blockSettings.startDate!,
+          selectedDate: date,
+          uid: uid,
+          blockId: blockId,
+        );
+        newDupSigCache[cacheKey] = rep;
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _dupSigRepCache
+        ..clear()
+        ..addAll(newDupSigCache);
+    });
+  }
+
   Future<void> _refreshExposureHintCache(DateTime weekStart) async {
     final blockId = _selectedBlockId;
     final blockSettings = _blockSettings;
@@ -430,7 +469,7 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
       exercises: exercises,
     );
 
-    if (mounted) _refreshExposureHintCache(_weekStart);
+    if (mounted) _refreshDupSigRepCacheOnly(_weekStart);
   }
 
   // ── Cross-day drag ────────────────────────────────────────────────────────
