@@ -50,6 +50,10 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
   // Key: "YYYY-MM-DD_<exerciseId>". Populated asynchronously after _loadWeek.
   final Map<String, int> _hintIndexCache = {};
 
+  // Pre-computed DUP Signature rep targets for planned rows.
+  // Key: "YYYY-MM-DD_<exerciseId>". Populated alongside _hintIndexCache.
+  final Map<String, int> _dupSigRepCache = {};
+
   // PageView controller: each page = one week; anchor on a known Monday epoch.
   late final PageController _pageController;
 
@@ -239,6 +243,7 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
 
     setState(() {
       _hintIndexCache.clear();
+      _dupSigRepCache.clear();
       for (int d = 0; d < 7; d++) {
         _loadingByDay[d] = true;
       }
@@ -324,6 +329,7 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
     if (blockSettings.startDate == null) return;
     final uid = _uid;
     final newCache = <String, int>{};
+    final newDupSigCache = <String, int>{};
 
     for (int d = 0; d < 7; d++) {
       for (final ex in _plannedByDay[d]) {
@@ -332,6 +338,8 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
         final model = (exSettings?['periodizationModel'] as String?) ?? '';
         if (model != 'DUP, By Exposure' && model != 'DUP, Signature') continue;
         final date = weekStart.add(Duration(days: d));
+        final cacheKey = '${_dateFmt.format(date)}_${ex.exerciseId}';
+
         final idx = await BB3PlannedExerciseService.getExposureHintIndex(
           exerciseId: ex.exerciseId,
           exerciseName: ex.name,
@@ -340,7 +348,20 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
           uid: uid,
           blockId: blockId,
         );
-        newCache['${_dateFmt.format(date)}_${ex.exerciseId}'] = idx;
+        newCache[cacheKey] = idx;
+
+        if (model == 'DUP, Signature') {
+          final rep = await BB3PlannedExerciseService.getDupSignatureRepForDate(
+            exerciseId: ex.exerciseId,
+            exerciseName: ex.name,
+            exSettings: exSettings,
+            blockStartDate: blockSettings.startDate!,
+            selectedDate: date,
+            uid: uid,
+            blockId: blockId,
+          );
+          newDupSigCache[cacheKey] = rep;
+        }
       }
     }
 
@@ -349,6 +370,9 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
       _hintIndexCache
         ..clear()
         ..addAll(newCache);
+      _dupSigRepCache
+        ..clear()
+        ..addAll(newDupSigCache);
     });
   }
 
@@ -405,6 +429,8 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
       dayIndex: wdDayIndex,
       exercises: exercises,
     );
+
+    if (mounted) _refreshExposureHintCache(_weekStart);
   }
 
   // ── Cross-day drag ────────────────────────────────────────────────────────
@@ -876,6 +902,7 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
           onBlockSettingsChanged: _reloadBlockSettings,
           allWeekPlannedByDay: _plannedByDay,
           allWeekCompletedByDay: _completedByDay,
+          dupSigRepByExId: _dupSigRepCache.isNotEmpty ? _dupSigRepCache : null,
         );
       },
     );

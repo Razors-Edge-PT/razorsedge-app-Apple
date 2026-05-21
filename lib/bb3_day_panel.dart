@@ -57,6 +57,8 @@ class BB3DayPanel extends StatefulWidget {
   final void Function()? onBlockSettingsChanged; // fired after settings dialog saves
   final List<List<BB3Exercise>> allWeekPlannedByDay;
   final List<List<Map<String, dynamic>>> allWeekCompletedByDay;
+  // DUP Signature pre-computed rep targets keyed "YYYY-MM-DD_<exerciseId>".
+  final Map<String, int>? dupSigRepByExId;
 
   const BB3DayPanel({
     super.key,
@@ -79,6 +81,7 @@ class BB3DayPanel extends StatefulWidget {
     this.onBlockSettingsChanged,
     this.allWeekPlannedByDay = const [],
     this.allWeekCompletedByDay = const [],
+    this.dupSigRepByExId,
   });
 
   @override
@@ -1085,6 +1088,11 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
         ? double.tryParse(rirCtrls[0].text.trim())
         : null;
 
+    // DUP Signature pre-computed rep target for this exercise on this date.
+    final dupSigRepKey =
+        '${DateFormat('yyyy-MM-dd').format(widget.date)}_$exId';
+    final dupSigRep = widget.dupSigRepByExId?[dupSigRepKey];
+
     // Set 0: use correct BB3 session index
     final set0 = BB3HintService.getHintsForSet(
       exerciseId: exId,
@@ -1101,6 +1109,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
       userWeight: userW0,
       userReps: userR0,
       userRir: userRir0,
+      dupSigRep: dupSigRep,
     );
 
     if (ex.sets.length <= 1) return [set0];

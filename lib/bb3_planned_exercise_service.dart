@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'bb3_models.dart';
 import 'local_cache/block_plan_cache.dart';
+import 'periodization_model_utils.dart';
 
 // ─── BB3PlannedExerciseService ────────────────────────────────────────────────
 //
@@ -648,6 +649,177 @@ class BB3PlannedExerciseService {
       n++;
     }
     return n;
+  }
+
+  // ── DUP Signature rep target for BB3 planned-row hints ──────────────────
+  //
+  // parseDupSignatureRangeBB3: 3-fallback parse of repTargets for min/max.
+  // computeNextDupSigRep: thin wrapper around REsignatureRepTargets(count=1).
+  // getDupSignatureRepForDate: simulates the DUP Signature rep sequence using
+  //   completed history [blockStart, today] + prior planned instances
+  //   [today, selectedDate−1], returning the next rep target for selectedDate.
+
+  static Map<String, int>? parseDupSignatureRangeBB3(dynamic repTargetsRaw) {
+    if (repTargetsRaw is! Map) return null;
+
+    // 1. repRange.{min,max}
+    final repRange = repTargetsRaw['repRange'];
+    if (repRange is Map) {
+      final mn = int.tryParse(repRange['min']?.toString() ?? '');
+      final mx = int.tryParse(repRange['max']?.toString() ?? '');
+      if (mn != null && mx != null && mn < mx) return {'min': mn, 'max': mx};
+    }
+
+    // 2. week1.{min,max}
+    final week1 = repTargetsRaw['week1'];
+    if (week1 is Map) {
+      final mn = int.tryParse(week1['min']?.toString() ?? '');
+      final mx = int.tryParse(week1['max']?.toString() ?? '');
+      if (mn != null && mx != null && mn < mx) return {'min': mn, 'max': mx};
+
+      // 3. week1.instance1 range string e.g. "6 – 12 reps"
+      final raw = week1['instance1']?.toString();
+      if (raw != null) {
+        final m = RegExp(r'(\d+)\s*[–\-—]\s*(\d+)').firstMatch(raw);
+        if (m != null) {
+          final mn2 = int.tryParse(m.group(1)!);
+          final mx2 = int.tryParse(m.group(2)!);
+          if (mn2 != null && mx2 != null && mn2 < mx2) {
+            return {'min': mn2, 'max': mx2};
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  static int computeNextDupSigRep(List<int> history, int min, int max) {
+    final result = PeriodizationModelUtils.REsignatureRepTargets(
+      min: min,
+      max: max,
+      history: history,
+      count: 1,
+    );
+    return result.isNotEmpty ? result.first : max;
+  }
+
+  static Future<int> getDupSignatureRepForDate({
+    required String exerciseId,
+    required String exerciseName,
+    required Map<String, dynamic>? exSettings,
+    required DateTime blockStartDate,
+    required DateTime selectedDate,
+    required String uid,
+    required String blockId,
+  }) async {
+    final range = parseDupSignatureRangeBB3(exSettings?['repTargets']);
+    if (range == null) return 8;
+    final int min = range['min']!;
+    final int max = range['max']!;
+
+    final normName = exerciseName.trim().toLowerCase();
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final selNorm =
+        DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
+    final blockStart =
+        DateTime(blockStartDate.year, blockStartDate.month, blockStartDate.day);
+
+    // Completed history filtered to [blockStartDate, today].
+    final List<int> completedHistory = [];
+    if (!blockStart.isAfter(today)) {
+      try {
+        final snaps = await _fs
+            .collection('users')
+            .doc(uid)
+            .collection('workouts')
+            .where(FieldPath.documentId,
+                isGreaterThanOrEqualTo: _dateFmt.format(blockStart))
+            .where(FieldPath.documentId,
+                isLessThanOrEqualTo: _dateFmt.format(today))
+            .get();
+        final sortedDocs = List.of(snaps.docs)
+          ..sort((a, b) => a.id.compareTo(b.id));
+        for (final doc in sortedDocs) {
+          final exercises = (doc.data()['exercises'] as List?) ?? [];
+          double topE1rm = 0;
+          int? topEffReps;
+          for (final ex in exercises) {
+            if (ex is! Map) continue;
+            final id =
+                (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim();
+            final name =
+                (ex['name'] ?? '').toString().trim().toLowerCase();
+            if (id != exerciseId && name != normName) continue;
+            final sets = (ex['sets'] as List?) ?? [];
+            for (final s in sets) {
+              if (s is! Map) continue;
+              final w =
+                  ((s['weight'] ?? s['weightKg'] ?? 0) as num).toDouble();
+              final r = ((s['reps'] ?? 0) as num).toDouble();
+              if (w <= 0 || r <= 0) continue;
+              final rir = ((s['rir'] ?? 0) as num).toDouble();
+              final total = r + rir;
+              final e1rm = total <= 6
+                  ? w * (36 / (37 - total))
+                  : w * (1 + 0.0333 * total);
+              if (e1rm > topE1rm) {
+                topE1rm = e1rm;
+                topEffReps = total.floor();
+              }
+            }
+            break;
+          }
+          if (topEffReps != null &&
+              topEffReps >= min - 4 &&
+              topEffReps <= max + 4) {
+            completedHistory.add(topEffReps);
+          }
+        }
+      } catch (_) {}
+    }
+
+    final List<int> runningHistory = List.from(completedHistory);
+
+    // Simulate prior planned instances from today through selectedDate-1.
+    if (selNorm.isAfter(today)) {
+      final planEnd = selNorm.subtract(const Duration(days: 1));
+      DateTime cur = today;
+      while (!cur.isAfter(planEnd)) {
+        final (:weekIndex, :dayIndex) = dateToWeekDay(blockStart, cur);
+        try {
+          final planned = await getPlannedDay(
+            uid: uid,
+            blockId: blockId,
+            weekIndex: weekIndex,
+            dayIndex: dayIndex,
+            date: cur,
+          );
+          BB3Exercise? exInPlan;
+          for (final e in planned) {
+            if (e.exerciseId == exerciseId ||
+                e.name.trim().toLowerCase() == normName) {
+              exInPlan = e;
+              break;
+            }
+          }
+          if (exInPlan != null) {
+            final savedRep =
+                exInPlan.sets.isNotEmpty ? exInPlan.sets[0].reps : null;
+            if (savedRep != null && savedRep > 0) {
+              runningHistory.add(savedRep);
+            } else {
+              runningHistory
+                  .add(computeNextDupSigRep(runningHistory, min, max));
+            }
+          }
+        } catch (_) {}
+        cur = cur.add(const Duration(days: 1));
+      }
+    }
+
+    return computeNextDupSigRep(runningHistory, min, max);
   }
 
   // ── Exposure hint index (BB3 row hints — async, cross-week) ─────────────
