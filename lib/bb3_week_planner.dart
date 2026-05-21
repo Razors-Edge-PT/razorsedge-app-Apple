@@ -46,12 +46,17 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
   bool _refreshing = false;
   int _loadEpoch = 0;
 
+  // Pre-computed sessionIndex for DUP By Exposure / DUP Signature planned rows.
+  // Key: "YYYY-MM-DD_<exerciseId>". Populated asynchronously after _loadWeek.
+  final Map<String, int> _hintIndexCache = {};
+
   // PageView controller: each page = one week; anchor on a known Monday epoch.
   late final PageController _pageController;
 
   // Epoch: a known Monday used to convert between week-start dates and page indices.
   // UTC-based so that DST transitions never cause inDays to round to the wrong week.
   static final DateTime _epochUtc = DateTime.utc(2020, 1, 6);
+  static final _dateFmt = DateFormat('yyyy-MM-dd');
 
   static int _weekToPage(DateTime monday) {
     final m = DateTime.utc(monday.year, monday.month, monday.day);
@@ -233,6 +238,7 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
     debugPrint('[BB3 loadWeek start] epoch=$localEpoch weekStart=$localWeekStart block=$blockId fromServer=$fromServer');
 
     setState(() {
+      _hintIndexCache.clear();
       for (int d = 0; d < 7; d++) {
         _loadingByDay[d] = true;
       }
@@ -299,6 +305,51 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
         setState(() => _loadingByDay[d] = false);
       }
     }));
+
+    // Populate cross-week exposure hint cache after week data is fully loaded.
+    if (mounted) _refreshExposureHintCache(localWeekStart);
+  }
+
+  // ── Exposure hint index cache ─────────────────────────────────────────────
+  //
+  // Async post-load step: queries getExposureHintIndex for every DUP By Exposure
+  // / DUP Signature exercise in the displayed week and stores the result in
+  // _hintIndexCache. _buildDayList reads from this cache synchronously; a cache
+  // miss falls back to the within-week date-aware count (getWeeklyInstanceCount).
+
+  Future<void> _refreshExposureHintCache(DateTime weekStart) async {
+    final blockId = _selectedBlockId;
+    final blockSettings = _blockSettings;
+    if (blockId == null || blockId.isEmpty || blockSettings == null) return;
+    if (blockSettings.startDate == null) return;
+    final uid = _uid;
+    final newCache = <String, int>{};
+
+    for (int d = 0; d < 7; d++) {
+      for (final ex in _plannedByDay[d]) {
+        final exSettings =
+            blockSettings.exerciseSettings[ex.exerciseId] as Map<String, dynamic>?;
+        final model = (exSettings?['periodizationModel'] as String?) ?? '';
+        if (model != 'DUP, By Exposure' && model != 'DUP, Signature') continue;
+        final date = weekStart.add(Duration(days: d));
+        final idx = await BB3PlannedExerciseService.getExposureHintIndex(
+          exerciseId: ex.exerciseId,
+          exerciseName: ex.name,
+          blockStartDate: blockSettings.startDate!,
+          selectedDate: date,
+          uid: uid,
+          blockId: blockId,
+        );
+        newCache['${_dateFmt.format(date)}_${ex.exerciseId}'] = idx;
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _hintIndexCache
+        ..clear()
+        ..addAll(newCache);
+    });
   }
 
   List<Map<String, dynamic>> _extractExercises(Map<String, dynamic> data) {
@@ -746,32 +797,50 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
         );
 
         // Compute per-exercise session index for this day's panel.
-        // DUP, By Exposure and DUP, Signature use exposure-style counting
-        // (getExposureIndexSync). All other models use weekly-reset counting
-        // (getPlannedSessionIndex).
+        //
+        // todayDayIndex maps "today" onto the displayed week's day axis so that
+        // getWeeklyInstanceCount can distinguish past days (need completed+valid)
+        // from today/future days (allow planned). Clamped to [0,7]:
+        //   0 → entire week is in the future (all days treated as future)
+        //   7 → entire week is in the past (all days require completed+valid)
+        //
+        // DUP, By Exposure / DUP, Signature also use the async _hintIndexCache
+        // (cross-week, block-wide) when available; the within-week count below
+        // serves as the fallback until the cache populates.
         final sessionIndexByExId = <String, int>{};
         if (isCurrentWeek) {
+          final now = DateTime.now();
+          final todayNorm = DateTime(now.year, now.month, now.day);
+          final wsNorm =
+              DateTime(weekStart.year, weekStart.month, weekStart.day);
+          final todayDayIndex =
+              todayNorm.difference(wsNorm).inDays.clamp(0, 7);
+
           for (final ex in _plannedByDay[d]) {
             final exSettings =
                 _blockSettings?.exerciseSettings[ex.exerciseId] as Map<String, dynamic>?;
             final model = (exSettings?['periodizationModel'] as String?) ?? '';
             final isExposureModel =
                 model == 'DUP, By Exposure' || model == 'DUP, Signature';
-            sessionIndexByExId[ex.exerciseId] = isExposureModel
-                ? BB3PlannedExerciseService.getExposureIndexSync(
-                    plannedByDay: _plannedByDay,
-                    completedByDay: _completedByDay,
-                    currentDayIndex: d,
-                    exerciseId: ex.exerciseId,
-                    exerciseName: ex.name,
-                  )
-                : BB3PlannedExerciseService.getPlannedSessionIndex(
-                    plannedByDay: _plannedByDay,
-                    completedByDay: _completedByDay,
-                    currentDayIndex: d,
-                    exerciseId: ex.exerciseId,
-                    exerciseName: ex.name,
-                  );
+            final cacheKey = '${_dateFmt.format(date)}_${ex.exerciseId}';
+
+            if (isExposureModel && _hintIndexCache.containsKey(cacheKey)) {
+              final rawCount = _hintIndexCache[cacheKey]!;
+              final patternCount =
+                  BB3PlannedExerciseService.getRepTargetPatternCount(exSettings);
+              sessionIndexByExId[ex.exerciseId] =
+                  patternCount > 0 ? rawCount % patternCount : rawCount;
+            } else {
+              sessionIndexByExId[ex.exerciseId] =
+                  BB3PlannedExerciseService.getWeeklyInstanceCount(
+                plannedByDay: _plannedByDay,
+                completedByDay: _completedByDay,
+                selectedDayIndex: d - 1,
+                todayDayIndex: todayDayIndex,
+                exerciseId: ex.exerciseId,
+                exerciseName: ex.name,
+              );
+            }
           }
         }
 

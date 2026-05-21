@@ -631,6 +631,112 @@ class BB3PlannedExerciseService {
     return count;
   }
 
+  // ── Repeating instance pattern count (for exposure/signature cache wrapping) ──
+  //
+  // Returns how many contiguous instanceN keys exist in repTargets.week1.
+  // Used to wrap raw block-wide exposure counts to the repeating pattern slot:
+  //   wrappedIndex = rawCount % patternCount
+  // Returns 0 when repTargets is absent or has no instance1 (safe no-op for callers).
+
+  static int getRepTargetPatternCount(Map<String, dynamic>? exSettings) {
+    final repTargets = exSettings?['repTargets'];
+    if (repTargets is! Map) return 0;
+    final weekData = repTargets['week1'];
+    if (weekData is! Map) return 0;
+    int n = 0;
+    while (weekData.containsKey('instance${n + 1}')) {
+      n++;
+    }
+    return n;
+  }
+
+  // ── Exposure hint index (BB3 row hints — async, cross-week) ─────────────
+  //
+  // Returns the 0-based sessionIndex to use for BB3 planned-row hints for
+  // DUP, By Exposure and DUP, Signature models. Counts block-wide exposures
+  // that occurred BEFORE selectedDate:
+  //   • Completed valid instances in [blockStartDate, today] (inclusive).
+  //   • Planned instances in [today, selectedDate − 1 day] when future.
+  // Uses a date-string Set so today counts once even if both completed and
+  // planned.
+
+  static Future<int> getExposureHintIndex({
+    required String exerciseId,
+    required String exerciseName,
+    required DateTime blockStartDate,
+    required DateTime selectedDate,
+    required String uid,
+    required String blockId,
+  }) async {
+    final normName = exerciseName.trim().toLowerCase();
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final selNorm =
+        DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
+    final blockStart = DateTime(
+        blockStartDate.year, blockStartDate.month, blockStartDate.day);
+    final Set<String> countedDates = {};
+
+    // Completed valid instances [blockStart, today]
+    if (!blockStart.isAfter(today)) {
+      try {
+        final snaps = await _fs
+            .collection('users')
+            .doc(uid)
+            .collection('workouts')
+            .where(FieldPath.documentId,
+                isGreaterThanOrEqualTo: _dateFmt.format(blockStart))
+            .where(FieldPath.documentId,
+                isLessThanOrEqualTo: _dateFmt.format(today))
+            .get();
+        for (final doc in snaps.docs) {
+          final exercises = (doc.data()['exercises'] as List?) ?? [];
+          if (exercises.any((ex) {
+            if (ex is! Map) return false;
+            final id = (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim();
+            final name = (ex['name'] ?? '').toString().trim().toLowerCase();
+            if (id != exerciseId && name != normName) return false;
+            final sets = (ex['sets'] as List?) ?? [];
+            return sets.any((s) {
+              if (s is! Map) return false;
+              final w = s['weight'] ?? s['weightKg'] ?? 0;
+              final r = s['reps'] ?? 0;
+              return (w is num && w > 0) && (r is num && r > 0);
+            });
+          })) {
+            countedDates.add(doc.id);
+          }
+        }
+      } catch (_) {}
+    }
+
+    // Planned instances [today, selNorm − 1 day] (future selected dates only)
+    if (selNorm.isAfter(today)) {
+      final planEnd = selNorm.subtract(const Duration(days: 1));
+      DateTime cur = today;
+      while (!cur.isAfter(planEnd)) {
+        final (:weekIndex, :dayIndex) = dateToWeekDay(blockStart, cur);
+        try {
+          final planned = await getPlannedDay(
+            uid: uid,
+            blockId: blockId,
+            weekIndex: weekIndex,
+            dayIndex: dayIndex,
+            date: cur,
+          );
+          if (planned.any((e) =>
+              e.exerciseId == exerciseId ||
+              e.name.trim().toLowerCase() == normName)) {
+            countedDates.add(_dateFmt.format(cur));
+          }
+        } catch (_) {}
+        cur = cur.add(const Duration(days: 1));
+      }
+    }
+
+    return countedDates.length;
+  }
+
   // ── Global block exposure count (Task B — dialog completedInstanceCount) ──
   //
   // Block-wide count of workout sessions containing this exercise:

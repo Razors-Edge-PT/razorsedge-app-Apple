@@ -211,9 +211,9 @@ class BB3HintService {
       }
 
       // Only RIR overridden: recompute weight hint at the new intensity.
-      final effectiveRepsRirOnly = (baseReps > 0 && baseReps <= 45)
-          ? baseReps.round()
-          : repTarget;
+      final effectiveRepsRirOnly = repTarget > 0
+          ? repTarget
+          : (baseReps > 0 && baseReps <= 45 ? baseReps.round() : 8);
       return BB3SetHint(
         weightDisplay: _wHint(effectiveRepsRirOnly, userRir!),
         repsDisplay: effectiveRepsRirOnly > 0 ? effectiveRepsRirOnly.toString() : '',
@@ -222,9 +222,11 @@ class BB3HintService {
     }
 
     // ── Baseline hints (no overrides) ──────────────────────────────────────
-    final effectiveReps = (baseReps > 0 && baseReps <= 45)
-        ? baseReps.round()
-        : repTarget;
+    // Prefer the BB3-planned repTarget (session-aware) over the engine's baseReps
+    // which is computed from the exercise's first session and ignores BB3 sessionIndex.
+    final effectiveReps = repTarget > 0
+        ? repTarget
+        : (baseReps > 0 && baseReps <= 45 ? baseReps.round() : 8);
     return BB3SetHint(
       weightDisplay: _wHint(effectiveReps, setRir),
       repsDisplay: effectiveReps > 0 ? effectiveReps.toString() : '',
