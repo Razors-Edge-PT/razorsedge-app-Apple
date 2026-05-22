@@ -250,7 +250,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
         selectedDate: date,
         uid: uid,
         userWeight: constrainedWeight,
-        userReps:   constrainedReps ?? dupSigReps,
+        userReps:   constrainedReps,
+        dupSigRep:  dupSigReps,
         userRir:    constrainedRir,
       );
 
