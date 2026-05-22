@@ -20,6 +20,8 @@ enum FieldOrigin {
 
 enum Wes2FieldKey { weight, reps, rir, velocity }
 
+enum Wes2ExerciseEntryMode { normal, timedBodyweight, timedWeighted }
+
 /// Holds both the user-entered actual value and the computed hint for a
 /// single field. Identity: date + exerciseId + setIndex + fieldKey.
 class Wes2FieldState<T> {

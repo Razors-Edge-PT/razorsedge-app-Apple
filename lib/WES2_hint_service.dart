@@ -95,10 +95,37 @@ class Wes2HintServiceImpl implements Wes2HintService {
       return i < row.sets.length ? row.sets[i] : Wes2SetState(setIndex: i);
     });
 
-    final newSets = List<Wes2SetState>.from(padded);
+    // For timed exercises: pre-convert BB3 planned rep hints from rep units to
+    // seconds (× 5), and suppress BB3 RIR hints, before per-set hint computation.
+    // This ensures _constraintReps returns null (rep-unit BB3 locks do not
+    // constrain the solver) and _mergeInt can apply seconds-based hints correctly.
+    final isTimed = PeriodizationModelUtils.isTimedExercise(
+        id: row.exerciseId, name: row.name);
+    final isWeightedTimed =
+        PeriodizationModelUtils.isWeightedTimedExercise(id: row.exerciseId);
+    final processedPadded = isTimed
+        ? padded.map((s) {
+            var u = s;
+            if (_isBb3Locked(s.reps) && s.reps.hintValue != null) {
+              u = u.copyWith(
+                  reps: u.reps.withHint(
+                      s.reps.hintValue! * 5, FieldOrigin.modelHint));
+            }
+            if (_isBb3Locked(s.rir)) {
+              u = u.copyWith(rir: u.rir.withHint(null, FieldOrigin.empty));
+            }
+            if (!isWeightedTimed && _isBb3Locked(s.weight)) {
+              u = u.copyWith(
+                  weight: u.weight.withHint(null, FieldOrigin.empty));
+            }
+            return u;
+          }).toList()
+        : padded;
+
+    final newSets = List<Wes2SetState>.from(processedPadded);
     newSets[0] = _computeSet1Hints(
       row: row,
-      set: padded[0],
+      set: processedPadded[0],
       weekIndex: weekIndex,
       sessionIndex: sessionIndex,
       date: date,
@@ -163,6 +190,14 @@ class Wes2HintServiceImpl implements Wes2HintService {
     final constrainedWeight = _constraintWeight(set);
     final constrainedReps   = _constraintReps(set);
     final constrainedRir    = _constraintRir(set);
+
+    final bool isTimed = PeriodizationModelUtils.isTimedExercise(
+        id: row.exerciseId, name: row.name);
+    final bool isWeightedTimed =
+        PeriodizationModelUtils.isWeightedTimedExercise(id: row.exerciseId);
+    // true = repsHint came from plan (rep units) → needs × 5 for timed display.
+    // false = repsHint came from history (already seconds) → no conversion.
+    bool repsHintFromPlan = false;
 
     // Plan-level values used as fallback when neither BB3 nor model fills a field.
     var planReps = BB3PlannedExerciseService.getRepTargetForSet(
@@ -277,7 +312,13 @@ class Wes2HintServiceImpl implements Wes2HintService {
     if (constrainedReps == null &&
         ((constrainedRir != null && set.rir.actualValue == null) ||
          (constrainedWeight != null && set.weight.actualValue == null))) {
-      repsHint = set.reps.hintValue ?? (planReps > 0 ? planReps : repsHint);
+      final anchoredVal =
+          set.reps.hintValue ?? (planReps > 0 ? planReps : null);
+      if (anchoredVal != null) {
+        repsHint = anchoredVal;
+        repsHintFromPlan = true; // BB3 hintValue and planReps are rep-unit plan values
+      }
+      // null case: existing repsHint is unchanged (preserves history seconds)
     }
 
     // ── Plan/default fallback ─────────────────────────────────────────────────
@@ -305,6 +346,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
         !_isBb3Locked(set.reps) &&
         planReps > 0) {
       repsHint = planReps;
+      repsHintFromPlan = true;
     }
 
     if (rirHint == null &&
@@ -312,6 +354,16 @@ class Wes2HintServiceImpl implements Wes2HintService {
         !_isBb3Locked(set.rir) &&
         planRir > 0) {
       rirHint = planRir;
+    }
+
+    // Timed exercise adjustments — applied before _applyModelHintToSet:
+    // 1. Convert plan-derived rep target to seconds (history value is already seconds).
+    // 2. Suppress RIR (meaningless for timed exercises).
+    // 3. Suppress weight hint for BW-only timed (weight is never saved).
+    if (isTimed) {
+      if (repsHint != null && repsHintFromPlan) repsHint = repsHint! * 5;
+      rirHint = null;
+      if (!isWeightedTimed) weightHint = null;
     }
 
     Wes2SetState result = _applyModelHintToSet(
@@ -326,7 +378,9 @@ class Wes2HintServiceImpl implements Wes2HintService {
     // progression target E1RM.  BB3-locked RIR is excluded here so its hint
     // value is preserved for the Phase 21C blue cue comparison below.
     // withHint() never touches actualValue, so typing actual RIR still wins.
-    if (set.weight.actualValue != null &&
+    // Skipped for timed exercises — RIR has no meaning in timed mode.
+    if (!isTimed &&
+        set.weight.actualValue != null &&
         set.reps.actualValue != null &&
         set.rir.actualValue == null &&
         !_isBb3Locked(set.rir)) {
@@ -562,6 +616,35 @@ class Wes2HintServiceImpl implements Wes2HintService {
     // Bodyweight exercises store display-added load; E1RM math needs absolute load.
     final isBw = PeriodizationModelUtils.isBodyweightExercise(
         id: row.exerciseId, name: row.name);
+
+    // Timed exercises: bypass the E1RM cascade (seconds-as-reps breaks the math).
+    // Propagate Set 1's already-converted hints to all subsequent sets.
+    // prevSet.reps.hintValue is in seconds (converted by _computeSet1Hints).
+    final bool isTimed = PeriodizationModelUtils.isTimedExercise(
+        id: row.exerciseId, name: row.name);
+    final bool isWeightedTimed =
+        PeriodizationModelUtils.isWeightedTimedExercise(id: row.exerciseId);
+    if (isTimed) {
+      final repsHintSec =
+          (!_isBb3Locked(set.reps) && set.reps.actualValue == null)
+              ? prevSet.reps.hintValue
+              : null;
+      final weightHintFwd = (isWeightedTimed &&
+              !_isBb3Locked(set.weight) &&
+              set.weight.actualValue == null)
+          ? prevSet.weight.hintValue
+          : null;
+      if (repsHintSec != null || weightHintFwd != null) {
+        return _applyModelHintToSet(
+          existing: set,
+          weightHint: weightHintFwd,
+          repsHint: repsHintSec,
+          rirHint: null,
+        );
+      }
+      return set;
+    }
+
     final prevWeightAbs = isBw
         ? PeriodizationModelUtils.toAbsoluteWeight(
             uid: uid,

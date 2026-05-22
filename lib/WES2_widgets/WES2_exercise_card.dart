@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../WES2_controller.dart';
 import '../WES2_models.dart';
 import '../exercise_video_button.dart';
+import '../periodization_model_utils.dart';
 import 'WES2_set_row.dart';
 
 // blueGrey.shade400 and blueGrey.shade700 as compile-time constants.
@@ -90,6 +91,31 @@ class Wes2ExerciseCard extends StatelessWidget {
     this.showVelocityField = false,
   });
 
+  static bool _isCompletedEligible(
+      Wes2ExerciseRow row, Wes2ExerciseEntryMode mode) {
+    switch (mode) {
+      case Wes2ExerciseEntryMode.timedBodyweight:
+        return row.sets.any((s) => s.reps.hasActual);
+      case Wes2ExerciseEntryMode.timedWeighted:
+        return row.sets.any((s) => s.weight.hasActual && s.reps.hasActual);
+      case Wes2ExerciseEntryMode.normal:
+        return row.isCompletedPillEligible;
+    }
+  }
+
+  static Wes2ExerciseEntryMode _resolveEntryMode(String id, String name) {
+    if (PeriodizationModelUtils.isWeightedTimedExercise(id: id)) {
+      return Wes2ExerciseEntryMode.timedWeighted;
+    }
+    if (PeriodizationModelUtils.isTimedExercise(
+        id: id,
+        name: name,
+        type: PeriodizationModelUtils.exerciseTypeById[id])) {
+      return Wes2ExerciseEntryMode.timedBodyweight;
+    }
+    return Wes2ExerciseEntryMode.normal;
+  }
+
   @override
   Widget build(BuildContext context) {
     // Pad sets list to row.setCount — build-time only, no model mutation.
@@ -100,6 +126,15 @@ class Wes2ExerciseCard extends StatelessWidget {
 
     final showVelocity = showVelocityField ||
         row.sets.any((s) => s.velocity.hasActual || s.velocity.hasHint);
+
+    final entryMode = _resolveEntryMode(row.exerciseId, row.name);
+    final wes2Ctrl = Provider.of<Wes2SessionController>(context, listen: false);
+    final bwDisplayText = entryMode == Wes2ExerciseEntryMode.timedBodyweight
+        ? 'BW [${PeriodizationModelUtils.bodyweightKgForDate(
+              uid: wes2Ctrl.actingUid,
+              asOf: wes2Ctrl.selectedDate,
+            ).toStringAsFixed(1)}kg]'
+        : null;
 
     final bool isBb3 = row.source == Wes2RowSource.bb3Planned;
     final bool isDone = row.isMarkedDone;
@@ -275,16 +310,15 @@ class Wes2ExerciseCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const SizedBox(height: 2),
-                  Wes2SetColumnHeaders(showVelocity: showVelocity),
+                  Wes2SetColumnHeaders(
+                      showVelocity: showVelocity, entryMode: entryMode),
                   ...paddedSets.map((s) {
-                    final wes2Ctrl = Provider.of<Wes2SessionController>(
-                      context,
-                      listen: false,
-                    );
                     return Wes2SetRow(
                       key: ValueKey('${row.exerciseId}_${s.setIndex}'),
                       set: s,
                       showVelocity: showVelocity,
+                      entryMode: entryMode,
+                      bwDisplayText: bwDisplayText,
                       baselineRirHint: wes2Ctrl.baselineRirHintFor(
                           row.exerciseId, s.setIndex),
                       onFieldChanged: (fieldKey, rawText) =>
@@ -321,7 +355,7 @@ class Wes2ExerciseCard extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
                 // "Completed?" — inactive; shown when eligible and not yet done.
-                if (row.isCompletedPillEligible && !isDone) ...[
+                if (_isCompletedEligible(row, entryMode) && !isDone) ...[
                   OutlinedButton.icon(
                     style: OutlinedButton.styleFrom(
                       side: const BorderSide(color: Colors.white24),

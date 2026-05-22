@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../WES2_models.dart';
 import '../periodization_model_utils.dart';
@@ -18,13 +20,70 @@ const _kHeaderStyle = TextStyle(
 
 /// Column-label row rendered once above the first set row, matching WES layout.
 /// Widths: Weight=76, Reps=50, RIR=50, E1RM=55, Vel.=45.
+/// Timed BW-only: BW=90, Time=70. Timed weighted: Weight=76, Time=70, E1RM=55.
 class Wes2SetColumnHeaders extends StatelessWidget {
   final bool showVelocity;
+  final Wes2ExerciseEntryMode entryMode;
 
-  const Wes2SetColumnHeaders({super.key, required this.showVelocity});
+  const Wes2SetColumnHeaders({
+    super.key,
+    required this.showVelocity,
+    this.entryMode = Wes2ExerciseEntryMode.normal,
+  });
 
   @override
   Widget build(BuildContext context) {
+    if (entryMode == Wes2ExerciseEntryMode.timedBodyweight) {
+      return const Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 40),
+          SizedBox(
+            width: 90,
+            child: Padding(
+              padding: EdgeInsets.only(left: 3),
+              child: Text('Weight', style: _kHeaderStyle),
+            ),
+          ),
+          SizedBox(width: 4),
+          SizedBox(
+            width: 70,
+            child: Padding(
+              padding: EdgeInsets.only(left: 2),
+              child: Text('Time', style: _kHeaderStyle),
+            ),
+          ),
+        ],
+      );
+    }
+
+    if (entryMode == Wes2ExerciseEntryMode.timedWeighted) {
+      return const Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 40),
+          SizedBox(
+            width: 76,
+            child: Padding(
+              padding: EdgeInsets.only(left: 3),
+              child: Text('Weight', style: _kHeaderStyle),
+            ),
+          ),
+          SizedBox(width: 4),
+          SizedBox(
+            width: 70,
+            child: Padding(
+              padding: EdgeInsets.only(left: 2),
+              child: Text('Time', style: _kHeaderStyle),
+            ),
+          ),
+          SizedBox(width: 4),
+          SizedBox(width: 55, child: Text('E1RM', style: _kHeaderStyle)),
+        ],
+      );
+    }
+
+    // Normal mode
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -72,6 +131,9 @@ class Wes2SetColumnHeaders extends StatelessWidget {
 class Wes2SetRow extends StatefulWidget {
   final Wes2SetState set;
   final bool showVelocity;
+  final Wes2ExerciseEntryMode entryMode;
+  /// Non-null only for timedBodyweight mode. Display-only; never saved as weight.
+  final String? bwDisplayText;
   final void Function(Wes2FieldKey fieldKey, String rawText) onFieldChanged;
   final void Function(Wes2FieldKey fieldKey, String rawText) onFieldUnfocused;
   final VoidCallback? onRemoveSet;
@@ -85,6 +147,8 @@ class Wes2SetRow extends StatefulWidget {
     super.key,
     required this.set,
     required this.showVelocity,
+    this.entryMode = Wes2ExerciseEntryMode.normal,
+    this.bwDisplayText,
     required this.onFieldChanged,
     required this.onFieldUnfocused,
     this.onRemoveSet,
@@ -378,11 +442,188 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
     return GestureDetector(onDoubleTap: onDoubleTap, child: field);
   }
 
+  // ── Timed row builders ───────────────────────────────────────────────────
+
+  Widget _setLabel(Wes2SetState s) => SizedBox(
+        width: 40,
+        height: 36,
+        child: Align(
+          alignment: Alignment.bottomLeft,
+          child: Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 8),
+            child: Text(
+              'Set ${s.setIndex + 1}',
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 12.0,
+                color: Colors.white70,
+              ),
+            ),
+          ),
+        ),
+      );
+
+  Widget _removeAndNoteIcons() => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (widget.onRemoveSet != null) ...[
+            const SizedBox(width: 6),
+            SizedBox(
+              width: 28,
+              height: 36,
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: IconButton(
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints.tightFor(width: 28, height: 28),
+                  icon: const Icon(
+                    Icons.remove_circle_outline,
+                    size: 16,
+                    color: Colors.white38,
+                  ),
+                  tooltip: 'Remove set',
+                  onPressed: widget.onRemoveSet,
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(width: 4),
+          SizedBox(
+            width: 24,
+            height: 36,
+            child: Align(
+              alignment: Alignment.center,
+              child: IconButton(
+                padding: EdgeInsets.zero,
+                constraints:
+                    const BoxConstraints.tightFor(width: 24, height: 24),
+                icon: Icon(
+                  Icons.sticky_note_2,
+                  size: 16,
+                  color: _noteIconColor(),
+                ),
+                tooltip: _noteTooltip(),
+                onPressed: widget.onNoteTap,
+              ),
+            ),
+          ),
+        ],
+      );
+
+  Widget _buildTimedBodyweightRow(Wes2SetState s) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          _setLabel(s),
+          // BW display — context only, not editable, not saved as weight
+          SizedBox(
+            width: 90,
+            height: 36,
+            child: Align(
+              alignment: Alignment.bottomLeft,
+              child: Container(
+                height: 36,
+                padding: const EdgeInsets.only(left: 2, bottom: 8),
+                decoration: const BoxDecoration(
+                  border: Border(
+                    bottom: BorderSide(color: Colors.white30, width: 1),
+                  ),
+                ),
+                child: Text(
+                  widget.bwDisplayText ?? 'BW',
+                  style: _kHintStyle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          _Wes2TimedCell(
+            storedSeconds: s.reps.actualValue,
+            hintSeconds: s.reps.hintValue,
+            width: 70,
+            onChanged: (t) => widget.onFieldChanged(Wes2FieldKey.reps, t),
+            onUnfocused: (t) => widget.onFieldUnfocused(Wes2FieldKey.reps, t),
+          ),
+          _removeAndNoteIcons(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTimedWeightedRow(Wes2SetState s, String? weightHint) {
+    final weightBorderColor = _weightBorderColor();
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          _setLabel(s),
+          _field(
+            ctrl: _weightCtrl,
+            focus: _weightFocus,
+            fieldKey: Wes2FieldKey.weight,
+            hintText: weightHint,
+            width: 76,
+            decimal: true,
+            activeBorderColor: weightBorderColor,
+            onDoubleTap: () =>
+                _acceptHint(_weightCtrl, Wes2FieldKey.weight, weightHint),
+          ),
+          const SizedBox(width: 4),
+          _Wes2TimedCell(
+            storedSeconds: s.reps.actualValue,
+            hintSeconds: s.reps.hintValue,
+            width: 70,
+            onChanged: (t) => widget.onFieldChanged(Wes2FieldKey.reps, t),
+            onUnfocused: (t) => widget.onFieldUnfocused(Wes2FieldKey.reps, t),
+          ),
+          const SizedBox(width: 4),
+          // E1RM placeholder — Pass 2 will wire up the full calculation
+          SizedBox(
+            width: 55,
+            height: 36,
+            child: Align(
+              alignment: Alignment.bottomLeft,
+              child: Container(
+                height: 36,
+                padding: const EdgeInsets.only(left: 2, bottom: 8),
+                decoration: const BoxDecoration(
+                  border: Border(
+                    bottom: BorderSide(color: Colors.white, width: 1),
+                  ),
+                ),
+                alignment: Alignment.bottomLeft,
+                child: const Text(
+                  '—',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ),
+            ),
+          ),
+          _removeAndNoteIcons(),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = widget.set;
     final weightHint =
         s.weight.hintValue != null ? _fmtWeight(s.weight.hintValue!) : null;
+
+    if (widget.entryMode == Wes2ExerciseEntryMode.timedBodyweight) {
+      return _buildTimedBodyweightRow(s);
+    }
+    if (widget.entryMode == Wes2ExerciseEntryMode.timedWeighted) {
+      return _buildTimedWeightedRow(s, weightHint);
+    }
+
     final repsHint =
         s.reps.hintValue != null ? _fmtInt(s.reps.hintValue!) : null;
     final rirHint =
@@ -544,6 +785,162 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ── Timed cell ───────────────────────────────────────────────────────────────
+
+class _Wes2TimedCell extends StatefulWidget {
+  final int? storedSeconds;
+  final int? hintSeconds;
+  final double width;
+  final void Function(String rawText) onChanged;
+  final void Function(String rawText) onUnfocused;
+
+  const _Wes2TimedCell({
+    required this.storedSeconds,
+    required this.hintSeconds,
+    required this.width,
+    required this.onChanged,
+    required this.onUnfocused,
+  });
+
+  @override
+  State<_Wes2TimedCell> createState() => _Wes2TimedCellState();
+}
+
+class _Wes2TimedCellState extends State<_Wes2TimedCell> {
+  int _displaySeconds = 0;
+  int _centiSeconds = 0;
+  bool _running = false;
+  Timer? _ticker;
+
+  static String _fmtStopped(int s) {
+    final m = s ~/ 60;
+    final sec = (s % 60).toString().padLeft(2, '0');
+    return '$m:$sec';
+  }
+
+  static String _fmtRunning(int s, int cs) {
+    final m = s ~/ 60;
+    final sec = (s % 60).toString().padLeft(2, '0');
+    return '$m:$sec.$cs';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _displaySeconds = widget.storedSeconds ?? 0;
+  }
+
+  void _start() {
+    setState(() {
+      _running = true;
+      _displaySeconds = 0;
+      _centiSeconds = 0;
+    });
+    _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      setState(() {
+        _centiSeconds++;
+        if (_centiSeconds >= 10) {
+          _centiSeconds = 0;
+          _displaySeconds++;
+        }
+      });
+    });
+  }
+
+  void _stop() {
+    _ticker?.cancel();
+    _ticker = null;
+    setState(() => _running = false);
+    final text = _displaySeconds > 0 ? _displaySeconds.toString() : '';
+    widget.onChanged(text);
+    widget.onUnfocused(text);
+  }
+
+  void _reset() {
+    _ticker?.cancel();
+    _ticker = null;
+    setState(() {
+      _running = false;
+      _displaySeconds = 0;
+      _centiSeconds = 0;
+    });
+    widget.onChanged('');
+    widget.onUnfocused('');
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final String displayText;
+    final TextStyle displayStyle;
+
+    const timedFieldStyle = TextStyle(color: Colors.white, fontSize: 12);
+    const timedHintStyle = TextStyle(
+        color: Colors.grey, fontStyle: FontStyle.italic, fontSize: 12);
+
+    if (_running) {
+      displayText = _fmtRunning(_displaySeconds, _centiSeconds);
+      displayStyle = timedFieldStyle;
+    } else if (widget.storedSeconds != null) {
+      displayText = _fmtStopped(widget.storedSeconds!);
+      displayStyle = timedFieldStyle;
+    } else if (widget.hintSeconds != null) {
+      displayText = _fmtStopped(widget.hintSeconds!);
+      displayStyle = timedHintStyle;
+    } else {
+      displayText = '0:00';
+      displayStyle = timedHintStyle;
+    }
+
+    return GestureDetector(
+      onTap: _running ? _stop : _start,
+      onLongPress: _reset,
+      child: SizedBox(
+        width: widget.width,
+        height: 36,
+        child: Align(
+          alignment: Alignment.bottomLeft,
+          child: Container(
+            height: 36,
+            padding: const EdgeInsets.only(left: 2, bottom: 8),
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(
+                  color: _running ? Colors.greenAccent : Colors.white,
+                  width: _running ? 1.5 : 1.0,
+                ),
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Icon(
+                  Icons.timer_outlined,
+                  size: 12,
+                  color: _running ? Colors.greenAccent : Colors.white54,
+                ),
+                const SizedBox(width: 2),
+                Text(
+                  displayText,
+                  style: displayStyle,
+                  maxLines: 1,
+                  overflow: TextOverflow.clip,
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

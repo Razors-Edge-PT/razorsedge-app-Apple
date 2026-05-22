@@ -442,6 +442,30 @@ class PeriodizationModelUtils {
     return false;
   }
 
+  static const Set<String> _timedById = {
+    'YrwqLg6c9CJLu7yfLYn0', // Alternating Plank
+    'xU7MNEvnaoSwz5jy3uHw', // Plank
+    'Ei4x9i5mirIUdMxWKZCk', // Side Plank
+    'lGaQiv5BwE1H5eJSkesj', // Weighted Long Lever Plank
+    'DTkkN5pi05RWQyNYhizQ', // Weighted Plank
+  };
+
+  static const Set<String> _weightedTimedById = {
+    'lGaQiv5BwE1H5eJSkesj', // Weighted Long Lever Plank
+    'DTkkN5pi05RWQyNYhizQ', // Weighted Plank
+  };
+
+  static bool isTimedExercise({String? id, String? name, String? type}) {
+    if (id != null && _timedById.contains(id)) return true;
+    if (type?.toLowerCase() == 'timed') return true;
+    return false;
+  }
+
+  static bool isWeightedTimedExercise({String? id}) {
+    if (id != null && _weightedTimedById.contains(id)) return true;
+    return false;
+  }
+
   // 2) Latest BW cache (set once by WES/BB2 on load)
   static final Map<String, double> _latestBwByUid = {};
   static final Map<String, DateTime> _latestBwDateByUid = {};
