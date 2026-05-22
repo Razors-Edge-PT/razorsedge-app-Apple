@@ -106,6 +106,13 @@ class _AppRootState extends State<AppRoot> {
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snap) {
+        // Guard: never treat the async restoration window as signed-out.
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const MaterialApp(
+            home: Scaffold(body: Center(child: CircularProgressIndicator())),
+          );
+        }
+
         final user = snap.data;
 
         // Not logged in → clear memo and show unauthenticated app shell.
@@ -113,7 +120,7 @@ class _AppRootState extends State<AppRoot> {
           _memoUid = null;
           _tokenFuture = null;
           _userContext = null;
-          return const MyApp();
+          return const MyApp(isAuthenticated: false);
         }
 
         // Only fetch token once per uid — prevents spurious WarmupService calls
@@ -149,7 +156,7 @@ class _AppRootState extends State<AppRoot> {
 
             return ChangeNotifierProvider<UserContext>.value(
               value: _userContext!,
-              child: const MyApp(),
+              child: const MyApp(isAuthenticated: true),
             );
           },
         );
@@ -260,7 +267,8 @@ class AuthGate extends StatelessWidget {
 
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final bool isAuthenticated;
+  const MyApp({super.key, required this.isAuthenticated});
 
   @override
   Widget build(BuildContext context) {
@@ -286,17 +294,10 @@ class MyApp extends StatelessWidget {
       themeMode: tc.themeMode,
       navigatorObservers: [routeObserver],
 
-      // ✅ Home is now gated by membership
-      home: StreamBuilder<User?>(
-        stream: FirebaseAuth.instance.authStateChanges(),
-        builder: (context, snap) {
-          if (snap.connectionState == ConnectionState.waiting) {
-            return const Scaffold(body: Center(child: CircularProgressIndicator()));
-          }
-          if (!snap.hasData) return const LoginScreen();
-          return const MembershipGate(child: HomeScreen());
-        },
-      ),
+      // AppRoot is the single auth-state authority — no second authStateChanges() here.
+      home: isAuthenticated
+          ? const MembershipGate(child: HomeScreen())
+          : const LoginScreen(),
 
       routes: {
         '/login': (context) => const LoginScreen(),
