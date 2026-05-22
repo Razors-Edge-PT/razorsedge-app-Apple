@@ -142,6 +142,9 @@ class Wes2SetRow extends StatefulWidget {
   /// Phase 21F: original planned/model RIR hint captured at session load.
   /// Used to compute the green/amber direction cue on the RIR field.
   final double? baselineRirHint;
+  /// Required only for timedWeighted E1RM display. Passed from the exercise card.
+  final String? uid;
+  final DateTime? selectedDate;
 
   const Wes2SetRow({
     super.key,
@@ -155,6 +158,8 @@ class Wes2SetRow extends StatefulWidget {
     this.onNoteTap,
     this.isPlanNoteRead = false,
     this.baselineRirHint,
+    this.uid,
+    this.selectedDate,
   });
 
   @override
@@ -312,6 +317,39 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
         set.reps.actualValue != null &&
         set.rir.actualValue != null;
     return _E1rmDisplay(e1rm.toStringAsFixed(1), isActual: isActual, isHint: !isActual);
+  }
+
+  _E1rmDisplay _resolveTimedWeightedE1rmDisplay(Wes2SetState set) {
+    final seconds = set.reps.actualValue ?? set.reps.hintValue;
+    final addedKg = set.weight.actualValue ?? set.weight.hintValue;
+    if (seconds == null || seconds <= 0 || addedKg == null || widget.uid == null) {
+      return const _E1rmDisplay('—');
+    }
+    final bw = PeriodizationModelUtils.bodyweightKgForDate(
+      uid: widget.uid!,
+      asOf: widget.selectedDate,
+    );
+    final repEquivalent = seconds / 5.0;
+    final absoluteLoad = bw + addedKg;
+    final absoluteTimedE1rm = PeriodizationModelUtils.calculateE1RM(
+      absoluteLoad,
+      repEquivalent,
+      0.0,
+    );
+    final absoluteFiveSecondMax = PeriodizationModelUtils.reverseCalculateWeight(
+      targetE1RM: absoluteTimedE1rm,
+      reps: 1,
+      rir: 0.0,
+    );
+    final displayAdded = absoluteFiveSecondMax - bw;
+    if (displayAdded <= 0) return const _E1rmDisplay('—');
+    final isActual =
+        set.weight.actualValue != null && set.reps.actualValue != null;
+    return _E1rmDisplay(
+      '+${displayAdded.toStringAsFixed(1)}',
+      isActual: isActual,
+      isHint: !isActual,
+    );
   }
 
   /// Phase 21C: blue border for weight — BB3 override hint is locked and the
@@ -583,25 +621,43 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             onUnfocused: (t) => widget.onFieldUnfocused(Wes2FieldKey.reps, t),
           ),
           const SizedBox(width: 4),
-          // E1RM placeholder — Pass 2 will wire up the full calculation
           SizedBox(
             width: 55,
             height: 36,
             child: Align(
               alignment: Alignment.bottomLeft,
-              child: Container(
-                height: 36,
-                padding: const EdgeInsets.only(left: 2, bottom: 8),
-                decoration: const BoxDecoration(
-                  border: Border(
-                    bottom: BorderSide(color: Colors.white, width: 1),
-                  ),
-                ),
-                alignment: Alignment.bottomLeft,
-                child: const Text(
-                  '—',
-                  style: TextStyle(fontSize: 12, color: Colors.grey),
-                ),
+              child: Builder(
+                builder: (context) {
+                  final e1rm = _resolveTimedWeightedE1rmDisplay(s);
+                  return Container(
+                    height: 36,
+                    padding: const EdgeInsets.only(left: 2, bottom: 8),
+                    decoration: const BoxDecoration(
+                      border: Border(
+                        bottom: BorderSide(color: Colors.white, width: 1),
+                      ),
+                    ),
+                    alignment: Alignment.bottomLeft,
+                    child: Text(
+                      e1rm.text,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      strutStyle: const StrutStyle(
+                        fontSize: 12,
+                        height: 1.0,
+                        forceStrutHeight: true,
+                      ),
+                      style: TextStyle(
+                        fontSize: 12,
+                        height: 1.0,
+                        color: e1rm.isActual ? Colors.white : Colors.grey,
+                        fontStyle: e1rm.isHint
+                            ? FontStyle.italic
+                            : FontStyle.normal,
+                      ),
+                    ),
+                  );
+                },
               ),
             ),
           ),

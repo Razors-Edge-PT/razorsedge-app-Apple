@@ -445,6 +445,7 @@ class PeriodizationModelUtils {
   static const Set<String> _timedById = {
     'YrwqLg6c9CJLu7yfLYn0', // Alternating Plank
     'xU7MNEvnaoSwz5jy3uHw', // Plank
+    '8CIXN12uS2xwF4JzVLq3', // Long Lever Plank
     'Ei4x9i5mirIUdMxWKZCk', // Side Plank
     'lGaQiv5BwE1H5eJSkesj', // Weighted Long Lever Plank
     'DTkkN5pi05RWQyNYhizQ', // Weighted Plank

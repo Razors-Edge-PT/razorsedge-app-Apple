@@ -319,6 +319,8 @@ class Wes2ExerciseCard extends StatelessWidget {
                       showVelocity: showVelocity,
                       entryMode: entryMode,
                       bwDisplayText: bwDisplayText,
+                      uid: wes2Ctrl.actingUid,
+                      selectedDate: wes2Ctrl.selectedDate,
                       baselineRirHint: wes2Ctrl.baselineRirHintFor(
                           row.exerciseId, s.setIndex),
                       onFieldChanged: (fieldKey, rawText) =>
