@@ -814,6 +814,7 @@ class _Wes2TimedCell extends StatefulWidget {
 class _Wes2TimedCellState extends State<_Wes2TimedCell> {
   int _displaySeconds = 0;
   int _centiSeconds = 0;
+  bool _active = false;
   bool _running = false;
   Timer? _ticker;
 
@@ -835,10 +836,41 @@ class _Wes2TimedCellState extends State<_Wes2TimedCell> {
     _displaySeconds = widget.storedSeconds ?? 0;
   }
 
-  void _start() {
+  @override
+  void didUpdateWidget(_Wes2TimedCell old) {
+    super.didUpdateWidget(old);
+    if (!_active && !_running && widget.storedSeconds != old.storedSeconds) {
+      _displaySeconds = widget.storedSeconds ?? 0;
+    }
+  }
+
+  void _onTap() {
+    if (!_active) {
+      setState(() => _active = true);
+    } else if (_running) {
+      _stop();
+    } else {
+      _resume();
+    }
+  }
+
+  void _onLongPress() {
+    // Only reset when active and stopped — never while running.
+    if (!_active || _running) return;
+    _ticker?.cancel();
+    _ticker = null;
+    setState(() {
+      _displaySeconds = 0;
+      _centiSeconds = 0;
+    });
+    widget.onChanged('');
+    widget.onUnfocused('');
+  }
+
+  void _resume() {
+    // Preserves _displaySeconds — resumes from current elapsed, not zero.
     setState(() {
       _running = true;
-      _displaySeconds = 0;
       _centiSeconds = 0;
     });
     _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
@@ -861,18 +893,6 @@ class _Wes2TimedCellState extends State<_Wes2TimedCell> {
     widget.onUnfocused(text);
   }
 
-  void _reset() {
-    _ticker?.cancel();
-    _ticker = null;
-    setState(() {
-      _running = false;
-      _displaySeconds = 0;
-      _centiSeconds = 0;
-    });
-    widget.onChanged('');
-    widget.onUnfocused('');
-  }
-
   @override
   void dispose() {
     _ticker?.cancel();
@@ -883,61 +903,84 @@ class _Wes2TimedCellState extends State<_Wes2TimedCell> {
   Widget build(BuildContext context) {
     final String displayText;
     final TextStyle displayStyle;
+    final Color borderColor;
+    final double borderWidth;
+    final Color iconColor;
 
     const timedFieldStyle = TextStyle(color: Colors.white, fontSize: 12);
     const timedHintStyle = TextStyle(
         color: Colors.grey, fontStyle: FontStyle.italic, fontSize: 12);
+    const timedRunningStyle =
+        TextStyle(color: Colors.greenAccent, fontSize: 12);
 
     if (_running) {
       displayText = _fmtRunning(_displaySeconds, _centiSeconds);
+      displayStyle = timedRunningStyle;
+      borderColor = Colors.greenAccent;
+      borderWidth = 1.5;
+      iconColor = Colors.greenAccent;
+    } else if (_active) {
+      displayText = _fmtStopped(_displaySeconds);
       displayStyle = timedFieldStyle;
+      borderColor = Colors.lightBlueAccent;
+      borderWidth = 1.5;
+      iconColor = Colors.lightBlueAccent;
     } else if (widget.storedSeconds != null) {
       displayText = _fmtStopped(widget.storedSeconds!);
       displayStyle = timedFieldStyle;
+      borderColor = Colors.white;
+      borderWidth = 1.0;
+      iconColor = Colors.white54;
     } else if (widget.hintSeconds != null) {
       displayText = _fmtStopped(widget.hintSeconds!);
       displayStyle = timedHintStyle;
+      borderColor = Colors.white24;
+      borderWidth = 1.0;
+      iconColor = Colors.white38;
     } else {
       displayText = '0:00';
       displayStyle = timedHintStyle;
+      borderColor = Colors.white24;
+      borderWidth = 1.0;
+      iconColor = Colors.white38;
     }
 
-    return GestureDetector(
-      onTap: _running ? _stop : _start,
-      onLongPress: _reset,
-      child: SizedBox(
-        width: widget.width,
-        height: 36,
-        child: Align(
-          alignment: Alignment.bottomLeft,
-          child: Container(
-            height: 36,
-            padding: const EdgeInsets.only(left: 2, bottom: 8),
-            decoration: BoxDecoration(
-              border: Border(
-                bottom: BorderSide(
-                  color: _running ? Colors.greenAccent : Colors.white,
-                  width: _running ? 1.5 : 1.0,
+    return TapRegion(
+      onTapOutside: (_) {
+        if (!_active) return;
+        if (_running) _stop();
+        setState(() => _active = false);
+      },
+      child: GestureDetector(
+        onTap: _onTap,
+        onLongPress: _onLongPress,
+        child: SizedBox(
+          width: widget.width,
+          height: 36,
+          child: Align(
+            alignment: Alignment.bottomLeft,
+            child: Container(
+              height: 36,
+              padding: const EdgeInsets.only(left: 2, bottom: 8),
+              decoration: BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(color: borderColor, width: borderWidth),
                 ),
               ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Icon(
-                  Icons.timer_outlined,
-                  size: 12,
-                  color: _running ? Colors.greenAccent : Colors.white54,
-                ),
-                const SizedBox(width: 2),
-                Text(
-                  displayText,
-                  style: displayStyle,
-                  maxLines: 1,
-                  overflow: TextOverflow.clip,
-                ),
-              ],
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Icon(Icons.timer_outlined, size: 12, color: iconColor),
+                  const SizedBox(width: 2),
+                  Text(
+                    displayText,
+                    style: displayStyle,
+                    maxLines: 1,
+                    overflow: TextOverflow.clip,
+                  ),
+                ],
+              ),
             ),
           ),
         ),
