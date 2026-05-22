@@ -265,7 +265,11 @@ class Wes2HintServiceImpl implements Wes2HintService {
             weightFromHistory = true;
           }
         }
-        if (hint.repsDisplay.isNotEmpty) {
+        // For timed exercises, BB3HintService returns the plan rep target (e.g. 9)
+        // as repsDisplay — not history seconds. Accepting it here would overwrite
+        // the already-converted processedPadded seconds value (e.g. 45). The plan
+        // fallback and anchoring block handle timed rep conversion correctly.
+        if (hint.repsDisplay.isNotEmpty && !isTimed) {
           repsHint = int.tryParse(hint.repsDisplay);
         }
         if (hint.rirDisplay.isNotEmpty) {
@@ -312,11 +316,16 @@ class Wes2HintServiceImpl implements Wes2HintService {
     if (constrainedReps == null &&
         ((constrainedRir != null && set.rir.actualValue == null) ||
          (constrainedWeight != null && set.weight.actualValue == null))) {
-      final anchoredVal =
-          set.reps.hintValue ?? (planReps > 0 ? planReps : null);
+      // For timed exercises, set.reps.hintValue is already in seconds after
+      // processedPadded conversion (e.g. 45). Using it with repsHintFromPlan=true
+      // would double-convert (45 × 5 = 225). Use planReps (rep units) directly
+      // so the × 5 timed conversion below produces the correct seconds value.
+      final anchoredVal = isTimed
+          ? (planReps > 0 ? planReps : null)
+          : (set.reps.hintValue ?? (planReps > 0 ? planReps : null));
       if (anchoredVal != null) {
         repsHint = anchoredVal;
-        repsHintFromPlan = true; // BB3 hintValue and planReps are rep-unit plan values
+        repsHintFromPlan = true;
       }
       // null case: existing repsHint is unchanged (preserves history seconds)
     }
