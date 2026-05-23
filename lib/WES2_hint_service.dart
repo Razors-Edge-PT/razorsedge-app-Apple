@@ -238,6 +238,21 @@ class Wes2HintServiceImpl implements Wes2HintService {
     // the provided constraints, preserving the day's target E1RM.
     // When hint.isEmpty (engine failed), fall through to plan-based defaults.
     if (PeriodizationModelUtils.savedWorkoutsList.isNotEmpty) {
+      // BW exercises store display-added load in constrainedWeight; convert to
+      // absolute before passing to BB3HintService so reps solve at the correct
+      // total load. BB3HintService._wHint() already converts weightDisplay back
+      // to display-added, so no second conversion is needed on the result.
+      final isBw = PeriodizationModelUtils.isBodyweightExercise(
+          id: row.exerciseId, name: row.name);
+      final constrainedWeightForEngine = isBw && constrainedWeight != null
+          ? PeriodizationModelUtils.toAbsoluteWeight(
+              uid: uid,
+              displayAddedKg: constrainedWeight,
+              exerciseId: row.exerciseId,
+              exerciseName: row.name,
+              asOfDate: date,
+            )
+          : constrainedWeight;
       final hint = BB3HintService.getHintsForSet(
         exerciseId: row.exerciseId,
         exerciseName: row.name,
@@ -249,7 +264,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
         blockEndDate: blockEndDate,
         selectedDate: date,
         uid: uid,
-        userWeight: constrainedWeight,
+        userWeight: constrainedWeightForEngine,
         userReps:   constrainedReps,
         dupSigRep:  dupSigReps,
         userRir:    constrainedRir,
