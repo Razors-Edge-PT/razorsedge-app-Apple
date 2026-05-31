@@ -143,18 +143,18 @@ class _LoginScreenState extends State<LoginScreen> {
                 child: IntrinsicHeight(
                   child: Column(
                     children: [
-                      const Spacer(flex: 2),
+                      const SizedBox(height: 28),
                       AnimatedOpacity(
                         opacity: keyboardHeight > 0 ? 0.0 : 1.0,
                         duration: const Duration(milliseconds: 300),
                         child: Center(
                           child: Image.asset(
-                            'assets/re_banner.png',
-                            height: 100,
+                            'assets/icon/good_lift_logo2.png',
+                            height: 72,
                           ),
                         ),
                       ),
-                      const Spacer(flex: 1),
+                      const SizedBox(height: 16),
                       Card(
                         elevation: 10,
                         shape: RoundedRectangleBorder(
@@ -375,27 +375,37 @@ class _LoginScreenState extends State<LoginScreen> {
                       // NEW: Create Account option
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                        child: TextButton(
-                          onPressed: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => const CreateNewAccountScreen(),
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              backgroundColor: Colors.blueAccent,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
                               ),
-                            );
-                          },
-                          child: const Text(
-                            "Don't have an account? Create one",
-                            style: TextStyle(
-                              color: Colors.blueAccent,
-                              fontSize: 16,
+                            ),
+                            onPressed: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => const CreateNewAccountScreen(),
+                                ),
+                              );
+                            },
+                            child: const Text(
+                              'New here? Create your account',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 17,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ),
                         ),
                       ),
 
-
-                      const Spacer(flex: 3),
+                      const SizedBox(height: 24),
                     ],
                   ),
                 ),

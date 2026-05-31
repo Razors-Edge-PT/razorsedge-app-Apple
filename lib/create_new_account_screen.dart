@@ -79,6 +79,11 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
   bool? _usernameAvailableFlag; // null = unknown, true = available, false = taken
   Timer? _usernameDebounce;
 
+  final FocusNode _emailFocusNode = FocusNode();
+  bool _emailChecking = false;
+  bool? _emailAvailableFlag; // null = unknown, true = available, false = taken
+  String? _emailInlineError;
+
 
   @override
   void dispose() {
@@ -94,7 +99,7 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
     _dobDayNode.dispose();
     _dobMonthNode.dispose();
     _dobYearNode.dispose();
-
+    _emailFocusNode.dispose();
 
     super.dispose();
   }
@@ -344,6 +349,37 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
     }
   }
 
+  void _onEmailFocusChange() {
+    if (!_emailFocusNode.hasFocus) {
+      final email = _emailController.text.trim();
+      if (RegExp(r'^[^@]+@[^@]+\.[^@]+').hasMatch(email)) {
+        _checkEmailAvailability(email);
+      }
+    }
+  }
+
+  Future<void> _checkEmailAvailability(String email) async {
+    setState(() {
+      _emailChecking = true;
+      _emailInlineError = null;
+    });
+    try {
+      // ignore: deprecated_member_use
+      final methods = await FirebaseAuth.instance.fetchSignInMethodsForEmail(email);
+      if (!mounted) return;
+      final taken = methods.isNotEmpty;
+      setState(() {
+        _emailAvailableFlag = !taken;
+        _emailInlineError = taken ? 'This email is already in use.' : null;
+      });
+    } catch (_) {
+      // silent failure — validator and server-side check handle final enforcement
+      if (mounted) setState(() => _emailAvailableFlag = null);
+    } finally {
+      if (mounted) setState(() => _emailChecking = false);
+    }
+  }
+
   void _continueToOnboarding() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -370,6 +406,11 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
       // Optional: if your availability flag exists, block if it's explicitly false
       if (_usernameAvailableFlag == false) {
         setState(() { _errorMessage = 'That username is taken by your nemesis. Please choose another.'; _isLoading = false; });
+        return;
+      }
+
+      if (_emailAvailableFlag == false) {
+        setState(() { _errorMessage = 'This email is already in use.'; _isLoading = false; });
         return;
       }
 
@@ -402,6 +443,7 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
   void initState() {
     super.initState();
     _ensureAnonAuthForAvailability();
+    _emailFocusNode.addListener(_onEmailFocusChange);
   }
 
 
@@ -429,18 +471,18 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                 child: IntrinsicHeight(
                   child: Column(
                     children: [
-                      const Spacer(flex: 2),
+                      const SizedBox(height: 20),
                       AnimatedOpacity(
                         opacity: keyboardHeight > 0 ? 0.0 : 1.0,
                         duration: const Duration(milliseconds: 300),
                         child: Center(
                           child: Image.asset(
-                            'assets/re_banner.png',
-                            height: 100,
+                            'assets/icon/good_lift_logo2.png',
+                            height: 64,
                           ),
                         ),
                       ),
-                      const Spacer(flex: 1),
+                      const SizedBox(height: 12),
                       Card(
                         elevation: 10,
                         shape: RoundedRectangleBorder(
@@ -456,11 +498,20 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 const Text(
-                                  "Create Account",
+                                  'Build your training profile',
                                   style: TextStyle(
-                                      fontSize: 24,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.black54),
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF1A237E),
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                const Text(
+                                  'GoodLift uses this to set up your starting plan.',
+                                  style: TextStyle(
+                                    fontSize: 13.5,
+                                    color: Colors.black54,
+                                  ),
                                 ),
                                 const SizedBox(height: 16),
 
@@ -530,7 +581,14 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                   const SizedBox(height: 6),
                                   const Align(
                                     alignment: Alignment.centerLeft,
-                                    child: Text('Nice — available!', style: TextStyle(color: Colors.green)),
+                                    child: Text(
+                                      'Nice — available!',
+                                      style: TextStyle(
+                                        color: Colors.green,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
                                   ),
                                 ],
 
@@ -772,9 +830,12 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                 DropdownButtonFormField<String>(
                                   value: _selectedSex,
                                   style: const TextStyle(color: Colors.black87),
+                                  dropdownColor: Colors.white,
                                   decoration: InputDecoration(
                                     labelText: 'Sex',
                                     labelStyle: const TextStyle(color: Colors.blueAccent),
+                                    filled: true,
+                                    fillColor: Colors.white,
                                     enabledBorder: OutlineInputBorder(
                                       borderRadius: BorderRadius.circular(12),
                                       borderSide: const BorderSide(color: Colors.blueAccent),
@@ -812,8 +873,17 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                 // Email
                                 TextFormField(
                                   controller: _emailController,
+                                  focusNode: _emailFocusNode,
                                   keyboardType: TextInputType.emailAddress,
                                   style: const TextStyle(color: Colors.black54),
+                                  onChanged: (v) {
+                                    if (_emailAvailableFlag != null || _emailInlineError != null) {
+                                      setState(() {
+                                        _emailAvailableFlag = null;
+                                        _emailInlineError = null;
+                                      });
+                                    }
+                                  },
                                   decoration: InputDecoration(
                                     labelText: 'Email',
                                     labelStyle: const TextStyle(color: Colors.blueAccent),
@@ -821,6 +891,20 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                     hintStyle: TextStyle(
                                         color: Colors.blueAccent.withOpacity(0.6),
                                         fontSize: 16),
+                                    suffixIcon: _emailChecking
+                                        ? const Padding(
+                                            padding: EdgeInsets.all(12),
+                                            child: SizedBox(
+                                              width: 16, height: 16,
+                                              child: CircularProgressIndicator(strokeWidth: 2),
+                                            ),
+                                          )
+                                        : (_emailAvailableFlag == null
+                                            ? null
+                                            : Icon(
+                                                _emailAvailableFlag! ? Icons.check_circle : Icons.error,
+                                                color: _emailAvailableFlag! ? Colors.green : Colors.redAccent,
+                                              )),
                                     enabledBorder: OutlineInputBorder(
                                       borderRadius: BorderRadius.circular(12),
                                       borderSide:
@@ -848,9 +932,21 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                         .hasMatch(value)) {
                                       return 'Enter a valid email';
                                     }
+                                    if (_emailAvailableFlag == false)
+                                      return 'This email is already in use.';
                                     return null;
                                   },
                                 ),
+                                if (_emailInlineError != null) ...[
+                                  const SizedBox(height: 6),
+                                  Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: Text(
+                                      _emailInlineError!,
+                                      style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                                    ),
+                                  ),
+                                ],
                                 const SizedBox(height: 12),
 
                                 // Password
@@ -1005,7 +1101,7 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                         ),
                       ),
 
-                      const Spacer(flex: 3),
+                      const SizedBox(height: 24),
                     ],
                   ),
                 ),
@@ -2496,11 +2592,19 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     const Text(
-                      "Tell us more pls!",
+                      'Set your training priorities',
                       style: TextStyle(
-                        fontSize: 24,
+                        fontSize: 22,
                         fontWeight: FontWeight.w700,
-                        color: Colors.blueAccent,
+                        color: Color(0xFF1A237E),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Rank what matters most so GoodLift can build around it.',
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        color: Colors.black54,
                       ),
                     ),
                     const SizedBox(height: 16),
@@ -3446,7 +3550,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                       spacing: 8, runSpacing: 8,
                       children: [
                         for (final entry in const [
-                          ['Typical gym in NZ', 'commercial'],
+                          ['Typical commercial gym', 'commercial'],
                           ['Powerlifting gym', 'powerlifting'],
                           ['Home gym', 'home'],
                          // ['Travelling', 'travelling'],
@@ -3893,20 +3997,27 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
                     SizedBox(
                       width: double.infinity,
-                      child: ElevatedButton(
+                      child: OutlinedButton(
                         onPressed: _saving ? null : (_uiIsValid() ? _finish : null),
-                        style: ElevatedButton.styleFrom(
+                        style: OutlinedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 14),
-                          backgroundColor: Colors.blueAccent,
+                          side: const BorderSide(color: Colors.blueAccent),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          foregroundColor: Colors.blueAccent,
                         ),
                         child: _saving
-                            ? const CircularProgressIndicator(color: Colors.white)
-                            : Text(isEditMode ? 'Save Changes' : 'Finish', style: const TextStyle(fontSize: 18)),
+                            ? const CircularProgressIndicator(color: Colors.blueAccent)
+                            : Text(
+                          isEditMode ? 'Save Changes' : 'Finish',
+                          style: const TextStyle(
+                            fontSize: 18,
+                            color: Colors.blueAccent,
+                          ),
+                        ),
                       ),
 
                     ),
-                    const SizedBox(height: 6)
+                    SizedBox(height: MediaQuery.of(context).padding.bottom + 28)
                   ],
                 ),
 
@@ -4023,7 +4134,6 @@ class _GoalsRankerState extends State<_GoalsRanker> {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        // --- Main "Important" Area (custom drag + insert slots) ---
         Container(
           decoration: BoxDecoration(
             color: Colors.white.withOpacity(.9),
@@ -4037,73 +4147,55 @@ class _GoalsRankerState extends State<_GoalsRanker> {
               ),
             ],
           ),
-          padding: const EdgeInsets.fromLTRB(4, 4, 2, 6),
-          child: SizedBox(
-            height: 598,
-            child: Column(
-              children: [
-                // Top insert slot (drop here to put item at index 0)
-                _MainInsertSlot(
-                  onAccept: (item) {
-                    setState(() {
-                      notImportantGoals.remove(item);
-                      mainGoals.remove(item);
-                      mainGoals.insert(0, item);
-                      widget.onChanged(mainGoals, notImportantGoals);
-                    });
-                  },
-                ),
-
-                // For each goal: draggable tile + insert slot after it
-                for (int i = 0; i < mainGoals.length; i++) ...[
-                  LongPressDraggable<String>(
-                    data: mainGoals[i],
-                    feedback: Material(
-                      color: Colors.transparent,
-                      child: Card(
-                        elevation: 6,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          side: BorderSide(color: Colors.blueGrey.shade200),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-                          child: Text(
-                            mainGoals[i],
-                            style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w600),
-                          ),
-                        ),
+          child: ReorderableListView(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            padding: EdgeInsets.zero,
+            buildDefaultDragHandles: false,
+            onReorder: (oldIndex, newIndex) {
+              setState(() {
+                if (newIndex > oldIndex) newIndex--;
+                final item = mainGoals.removeAt(oldIndex);
+                mainGoals.insert(newIndex, item);
+                widget.onChanged(mainGoals, notImportantGoals);
+              });
+            },
+            children: [
+              for (int i = 0; i < mainGoals.length; i++)
+                ReorderableDelayedDragStartListener(
+                  key: ValueKey(mainGoals[i]),
+                  index: i,
+                  child: ListTile(
+                    dense: true,
+                    visualDensity: const VisualDensity(horizontal: 0, vertical: -2),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                    tileColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      side: BorderSide(color: Colors.blueGrey.shade100),
+                    ),
+                    leading: const Icon(Icons.drag_handle, color: Colors.black45),
+                    title: Text(
+                      mainGoals[i],
+                      style: const TextStyle(
+                        fontSize: 15.5,
+                        color: Colors.black87,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-                    childWhenDragging: Opacity(
-                      opacity: 0.4,
-                      child: _GoalTile(label: mainGoals[i]),
-                    ),
-                    child: _GoalTile(label: mainGoals[i]),
                   ),
-
-                  // Insert slot after this item (drop here to place at i+1)
-                  _MainInsertSlot(
-                    onAccept: (item) {
-                      setState(() {
-                        notImportantGoals.remove(item);
-                        mainGoals.remove(item);
-                        final insertAt = (i + 1).clamp(0, mainGoals.length);
-                        mainGoals.insert(insertAt, item);
-                        widget.onChanged(mainGoals, notImportantGoals);
-                      });
-                    },
-                  ),
-                ],
-              ],
-            ),
+                ),
+            ],
           ),
-
         ),
+
+        /* ANTI-GOALS SECTION — commented out for now.
+           To re-enable: uncomment this block and remove this comment wrapper.
+           Future copy: "Drag here any goals you explicitly don't want to work on right now"
+           State: notImportantGoals is preserved and always saved to 'goalsNotImportant' on finish.
 
         const SizedBox(height: 11),
 
-        // --- Not Important Drop Area ---
         DragTarget<String>(
           onAccept: (item) {
             setState(() {
@@ -4135,58 +4227,33 @@ class _GoalsRankerState extends State<_GoalsRanker> {
                 children: [
                   Text(
                     _unimportantHeader,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                    ),
+                    style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black87),
                   ),
-
                   const SizedBox(height: 6),
                   if (notImportantGoals.isEmpty)
                     const Text(
-                      '🦉 Drag and drop any goals here you don’t give two hoots about.',
+                      'Drag here any goals you explicitly don\'t want to work on right now',
                       style: TextStyle(color: Colors.black54, fontSize: 13),
                     ),
                   for (final item in notImportantGoals)
-                    LongPressDraggable<String>(
-                      data: item,
-                      feedback: Material(
-                        color: Colors.transparent,
-                        child: Card(
-                          elevation: 4,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                            child: Text(item, style: const TextStyle(fontSize: 14)),
-                          ),
-                        ),
-                      ),
-                      childWhenDragging: Opacity(
-                        opacity: 0.5,
-                        child: ListTile(
-                          dense: true,
-                          title: Text(item),
-                          leading: const Icon(Icons.remove_circle_outline, color: Colors.grey),
-                        ),
-                      ),
-                      child: ListTile(
-                        dense: true,
-                        title: Text(item),
-                        leading: const Icon(Icons.remove_circle_outline, color: Colors.grey),
-                        // quick tap to move back up (adds to end of main list)
-                        onTap: () {
-                          setState(() {
-                            notImportantGoals.remove(item);
-                            if (!mainGoals.contains(item)) mainGoals.add(item);
-                            widget.onChanged(mainGoals, notImportantGoals);
-                          });
-                        },
-                      ),
+                    ListTile(
+                      dense: true,
+                      title: Text(item),
+                      leading: const Icon(Icons.remove_circle_outline, color: Colors.grey),
+                      onTap: () {
+                        setState(() {
+                          notImportantGoals.remove(item);
+                          if (!mainGoals.contains(item)) mainGoals.add(item);
+                          widget.onChanged(mainGoals, notImportantGoals);
+                        });
+                      },
                     ),
                 ],
               ),
             );
           },
         ),
+        */
       ],
     );
   }
