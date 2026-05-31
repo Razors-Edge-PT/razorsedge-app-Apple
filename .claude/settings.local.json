@@ -37,7 +37,11 @@
       "Bash(findstr /i \"WES2\\\\|error\")",
       "PowerShell(flutter analyze *)",
       "Bash(dart analyze *)",
-      "Bash(grep -v \"^$\")"
+      "Bash(grep -v \"^$\")",
+      "Bash(Remove-Item \"C:\\\\Projects\\\\RE-test\\\\lib\\\\workout_entry_screen.dart\" -Force)",
+      "Bash(Remove-Item \"C:\\\\Projects\\\\RE-test\\\\lib\\\\Camp_BB2.dart\" -Force)",
+      "Bash(Remove-Item \"C:\\\\Projects\\\\RE-test\\\\lib\\\\block_data_loader.dart\" -Force)",
+      "Bash(Write-Output \"Deleted\")"
     ]
   }
 }
