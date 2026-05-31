@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'workout_entry_screen.dart';
 import 'workout_model.dart'; // Import Workout and Exercise models
 import 'exercise_details_screen.dart'; // Import the ExerciseDetailsScreen
 import 'package:firebase_auth/firebase_auth.dart';
@@ -80,20 +79,7 @@ class _WorkoutDetailsScreenState extends State<WorkoutDetailsScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text('Workout: ${widget.workout.name}'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.edit),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => WorkoutPage(workout: widget.workout),
-                ),
-              );
-            },
-          ),
-
-        ],
+        actions: const [],
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),

@@ -3,7 +3,7 @@ import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'template_model.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'workout_entry_screen.dart';
+import 'WES2_screen.dart';
 import 'periodization_model_utils.dart';
 import 'package:uuid/uuid.dart';
 import 'WorkoutSummaryScreen.dart';
@@ -2050,11 +2050,8 @@ class _WeekPlannerState extends State<WeekPlanner> {
                             final result = await Navigator.push(
                               context,
                               MaterialPageRoute(
-                                builder: (context) => WorkoutPage(
-                                  prefilledExercisesWithCircuits: prefilled,
-                                  isNewWorkout: true,
+                                builder: (context) => Wes2Screen(
                                   initialDate: workoutDate,
-                                  initialWorkoutName: formattedWorkoutName,
                                 ),
                               ),
                             );

@@ -7,7 +7,6 @@ import 'main.dart';
 import 'planned_blocks_screen.dart';
 import 'package:provider/provider.dart';
 import 'block_planner.dart';
-import 'Camp_BB2.dart';
 import 'bb3_week_planner.dart';
 import 'templates.dart';
 import 'exercises.dart';
@@ -90,19 +89,6 @@ class AppDrawer extends StatelessWidget {
                 ),
                 settings: RouteSettings(
                   arguments: {'newBlock': true}, // 👈 preserve your arguments
-                ),
-              ),
-            );
-          }),
-
-          _drawerTile(context, Icons.calendar_month, 'Week Planner', () {
-            final userContext = UserContext.of(context, listen: false);
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                  value: userContext,
-                  child: const Camp_BB2(), // Assuming this is your Week Planner screen
                 ),
               ),
             );

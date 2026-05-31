@@ -1,7 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'workout_entry_screen.dart';
 import 'workout_model.dart';
 import 'app_drawer.dart';
 import 'package:table_calendar/table_calendar.dart';
@@ -10,7 +9,6 @@ import 'package:provider/provider.dart';
 import 'user_context.dart';
 import 'coach_home_screen.dart';
 import 'approve_requests_screen.dart';
-import 'Camp_BB2.dart';
 import 'bb3_week_planner.dart';
 import 'WES2_screen.dart';
 import 'core_exercises.dart';
@@ -2718,111 +2716,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                             left: 50,
                                             child: Text(
                                               'Week\nPlanner',
-                                              textAlign: TextAlign.center,
-                                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                                height: 1.3,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                              maxLines: 2,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-
-                              SizedBox(
-                                width: kFeatureCardWidth,
-                                child: GestureDetector(
-                                  onTap: () {
-                                    final userContext = UserContext.of(context, listen: false);
-
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                          value: userContext,
-                                          child: const Camp_BB2(), // your week planner screen
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                  child: Card(
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(12),
-                                      child: Stack(
-                                        children: [
-                                          Positioned(
-                                            top: 0,
-                                            left: 0,
-                                            child: Icon(
-                                              Icons.calendar_month,
-                                              size: 48,
-                                              color: Theme.of(context).colorScheme.secondary,
-                                            ),
-                                          ),
-                                          Positioned(
-                                            bottom: 0,
-                                            right: 0,
-                                            left: 50,
-                                            child: Text(
-                                              'Previous\nWeeks',
-                                              textAlign: TextAlign.center,
-                                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                                height: 1.3,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                              maxLines: 2,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-
-                              SizedBox(
-                                width: kFeatureCardWidth,
-                                child: GestureDetector(
-                                  onTap: () {
-                                    final userContext = UserContext.of(context, listen: false);
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                          value: userContext,
-                                          child: const WorkoutPage(),
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                  child: Card(
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(12),
-                                      child: Stack(
-                                        children: [
-                                          Positioned(
-                                            top: 0,
-                                            left: 0,
-                                            child: Icon(
-                                              Icons.history_toggle_off,
-                                              size: 48,
-                                              color: Theme.of(context).colorScheme.secondary,
-                                            ),
-                                          ),
-                                          Positioned(
-                                            bottom: 0,
-                                            right: 0,
-                                            left: 50,
-                                            child: Text(
-                                              'WES\noriginal',
                                               textAlign: TextAlign.center,
                                               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                                 height: 1.3,

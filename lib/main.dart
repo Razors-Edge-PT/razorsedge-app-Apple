@@ -11,13 +11,12 @@ import 'exercises.dart';
 import 'home_screen.dart';
 import 'login_screen.dart';
 import 'templates.dart';
-import 'workout_entry_screen.dart';
 import 'week_planner.dart'; // Update path if needed
 import 'planned_blocks_screen.dart';
 import 'Block_Planner.dart';
 import 'SavedWorkoutsScreen.dart';
-import 'Camp_BB2.dart';
 import 'bb3_week_planner.dart';
+import 'WES2_screen.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -305,13 +304,13 @@ class MyApp extends StatelessWidget {
 
         '/exercises': (context) => const ExercisesScreen(),
         '/templates': (context) => const TemplatesScreen(),
-        '/workouts': (context) => const WorkoutPage(),
-        '/week_planner': (context) => const Camp_BB2(),         // ✅ Only once
+        '/workouts': (context) => const Wes2Screen(),
+        '/week_planner': (context) => const BB3WeekPlanner(),
         '/body_weight_tracker': (context) => const BodyWeightTracker(),
         '/planned_blocks': (context) => const PlannedBlocksScreen(),
         '/block_builder': (context) => const Block_Planner(),
-        '/workout_entry': (c) => const WorkoutPage(),
-        '/week_planner_b': (c) => const Camp_BB2(),
+        '/workout_entry': (c) => const Wes2Screen(),
+        '/week_planner_b': (c) => const BB3WeekPlanner(),
         '/saved_workouts': (c) => const SavedWorkoutsScreen(),
         '/body_weight': (c) => const BodyWeightTracker(),
         '/coach_home': (context) => const CoachHomeScreen(),

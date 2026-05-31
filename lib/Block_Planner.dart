@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:localtest222/Camp_BB2.dart';
 import 'template_model.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'workout_entry_screen.dart';
+import 'bb3_week_planner.dart';
 import 'periodization_model_utils.dart';
 import 'core_exercises.dart';
 import 'dart:convert';
@@ -1853,7 +1852,7 @@ class _BlockPlannerState extends State<Block_Planner> {
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (context) => Camp_BB2(blockId: blockIdToUse!),
+              builder: (context) => const BB3WeekPlanner(),
             ),
           );
         },
