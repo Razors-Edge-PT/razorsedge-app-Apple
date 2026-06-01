@@ -1976,16 +1976,12 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
                 int cmp(String a, String b) =>
                     (_exerciseIdToName[a] ?? '').toLowerCase()
                         .compareTo((_exerciseIdToName[b] ?? '').toLowerCase());
-                final aboveDividerIds = {
-                  ..._templateCandidateIds,
-                  ..._templateExerciseIds,
-                };
                 final inTemplates = exercises
-                    .where((id) => aboveDividerIds.contains(id))
+                    .where((id) => _templateExerciseIds.contains(id))
                     .toList()
                   ..sort(cmp);
                 final notInTemplates = exercises
-                    .where((id) => !aboveDividerIds.contains(id))
+                    .where((id) => !_templateExerciseIds.contains(id))
                     .toList()
                   ..sort(cmp);
                 final showDivider =
