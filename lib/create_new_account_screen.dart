@@ -1592,10 +1592,9 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
         if (isFemale) ...femaleSpecificExercises else ...maleSpecificExercises,
       ];
 
-      // Load all exercise IDs for block.exercises/plannedExercises
-      final allExerciseIds = await loadAllExerciseIds();
       // Sex-derived candidate pool for templateCandidateExerciseIds
       final candidateIds = computeTemplateCandidateIds(isFemale: isFemale);
+      debugPrint('✅ [Onboarding] First-login: using candidateIds=${candidateIds.length}, no full exercise scan');
 
       // ── Block 2 exercise adjustments (sex-specific ± tweaks) ─────────────────────
 // Base = all exercises from Block 1. Then apply -exclusions +additions.
@@ -1659,13 +1658,12 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
 
 
-      // Helper to build a block payload
+      // Helper to build a block payload (lightweight sentinel — no full exercise arrays)
       Map<String, dynamic> buildBlock({
         required String name,
         required bool isActive,
         required DateTime start,
         required DateTime end,
-        required List<String> exerciseIds,
         required List<String> candidateExerciseIds,
       }) {
         return {
@@ -1675,8 +1673,8 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
           'startDate': Timestamp.fromDate(start),
           'endDate': Timestamp.fromDate(end),
           'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
-          'exercises': exerciseIds,
-          'plannedExercises': exerciseIds,
+          'allExercisesAvailable': true,
+          'excludedExerciseIds': <String>[],
           'templateCandidateExerciseIds': candidateExerciseIds,
           'plannedExerciseDetails': {
             'blockMeta': {
@@ -1694,7 +1692,6 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
         isActive: true,
         start: startDate1,
         end: endDate1,
-        exerciseIds: allExerciseIds,
         candidateExerciseIds: candidateIds,
       );
 
@@ -1721,7 +1718,6 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
           .set({
         'blockId': block1Id,
         'blockName': block1Name,
-        'plannedExercises': allExerciseIds,
         'templateCandidateExerciseIds': candidateIds,
         'plannedExerciseDetails': {
           'blockMeta': {
@@ -1738,45 +1734,35 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       swPtr.stop();
       print('📌 [Home] Set current_block pointer → $block1Id (${swPtr.elapsed.inMilliseconds} ms)');
 
-      // Scaffold weeks & days for Block 1
-      final swScaffold1 = Stopwatch()..start();
+      // Eagerly write week_0 so WES2/BB3 can read the current week immediately.
       {
-        final batch = FirebaseFirestore.instance.batch();
-        for (int week = 0; week < 26; week++) {
-          final weekRef = block1Ref.collection('weeks').doc('week_$week');
-          batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
-
-          final daysRef = weekRef.collection('days');
-          for (int day = 0; day < 7; day++) {
-            final currentDate = startDate1.add(Duration(days: week * 7 + day));
-            final weekday = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day];
-            final monthName = [
-              'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'
-            ][currentDate.month - 1];
-
-            final dayRef = daysRef.doc('day_$day');
-            batch.set(dayRef, {
-              'date': Timestamp.fromDate(currentDate),
-              'circuitStartIndices': [0],
-              'exercises': [],
-              'workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}',
-              'exists': true,
-            }, SetOptions(merge: true));
-          }
+        const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        const weekdays = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+        final week0Ref = block1Ref.collection('weeks').doc('week_0');
+        final eagerBatch = FirebaseFirestore.instance.batch();
+        eagerBatch.set(week0Ref, {'exists': true}, SetOptions(merge: true));
+        for (int day = 0; day < 7; day++) {
+          final date = startDate1.add(Duration(days: day));
+          eagerBatch.set(week0Ref.collection('days').doc('day_$day'), {
+            'date': Timestamp.fromDate(date),
+            'circuitStartIndices': [0],
+            'exercises': [],
+            'workoutName': '${weekdays[day]} ${date.day} ${months[date.month - 1]} - Week 1',
+            'exists': true,
+          }, SetOptions(merge: true));
         }
-        batch.set(block1Ref, {'scaffoldReady': true}, SetOptions(merge: true));
-        await batch.commit();
+        await eagerBatch.commit();
+        debugPrint('🧱 [Onboarding] Block 1 week_0 ready (eager)');
       }
-      swScaffold1.stop();
-      print('🧱 [Home] Block 1 scaffold ready (${swScaffold1.elapsed.inMilliseconds} ms)');
+      // Defer weeks 1–25 for Block 1 to background.
+      unawaited(scaffoldBlockInBackground(block1Ref, startDate1, startWeek: 1));
 
       // ── Create Block 2 (upcoming, not active) ───────────────────────────────
       final block2Payload = buildBlock(
         name: block2Name,
-        isActive: false, // keep only 1 active block
+        isActive: false,
         start: startDate2,
         end: endDate2,
-        exerciseIds: allExerciseIds,
         candidateExerciseIds: candidateIds,
       );
 
@@ -1784,46 +1770,21 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       final block2Ref = await blocksRef.add(block2Payload);
       swCreate2.stop();
       final block2Id = block2Ref.id;
-      print('✅ [Home] Block 2 created id=$block2Id (${swCreate2.elapsed.inMilliseconds} ms)');
+      print('✅ [Onboarding] Block 2 created id=$block2Id (${swCreate2.elapsed.inMilliseconds} ms)');
 
-      await BlockExerciseDefaultsRepository.seedDefaultsForBlock(
-        uid: uid,
-        blockId: block2Id,
-        exerciseIds: block2ExerciseIds,
-      );
-
-
-      // Scaffold weeks & days for Block 2
-      final swScaffold2 = Stopwatch()..start();
-      {
-        final batch = FirebaseFirestore.instance.batch();
-        for (int week = 0; week < 26; week++) {
-          final weekRef = block2Ref.collection('weeks').doc('week_$week');
-          batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
-
-          final daysRef = weekRef.collection('days');
-          for (int day = 0; day < 7; day++) {
-            final currentDate = startDate2.add(Duration(days: week * 7 + day));
-            final weekday = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day];
-            final monthName = [
-              'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'
-            ][currentDate.month - 1];
-
-            final dayRef = daysRef.doc('day_$day');
-            batch.set(dayRef, {
-              'date': Timestamp.fromDate(currentDate),
-              'circuitStartIndices': [0],
-              'exercises': [],
-              'workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}',
-              'exists': true,
-            }, SetOptions(merge: true));
-          }
+      // Defer Block 2 seed + full scaffold to background — block doc is already created.
+      unawaited(() async {
+        try {
+          await BlockExerciseDefaultsRepository.seedDefaultsForBlock(
+            uid: uid,
+            blockId: block2Id,
+            exerciseIds: block2ExerciseIds,
+          );
+          await scaffoldBlockInBackground(block2Ref, startDate2);
+        } catch (e, st) {
+          debugPrint('❌ [Onboarding] Block 2 background init failed: $e\n$st');
         }
-        batch.set(block2Ref, {'scaffoldReady': true}, SetOptions(merge: true));
-        await batch.commit();
-      }
-      swScaffold2.stop();
-      print('🧱 [Home] Block 2 scaffold ready (${swScaffold2.elapsed.inMilliseconds} ms)');
+      }());
 
       debugPrint('🧪[B3 pre-add] seed=${seededExerciseIds.length} adj=${block3ExerciseIds.length} '
           'hasAdd(EFbQl9i9NdYi13F3DqHr)=${block3ExerciseIds.contains('EFbQl9i9NdYi13F3DqHr')} '
@@ -1836,63 +1797,31 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
       final block3Payload = buildBlock(
         name: block3Name,
-        isActive: false, // keep only 1 active block
+        isActive: false,
         start: startDate3,
         end: endDate3,
-        exerciseIds: allExerciseIds,
         candidateExerciseIds: candidateIds,
       );
 
       final swCreate3 = Stopwatch()..start();
       final block3Ref = await blocksRef.add(block3Payload);
-      final _savedB3 = await block3Ref.get();
-      final _savedPlanned = List<String>.from((_savedB3.data() ?? const {})['plannedExercises'] ?? const <String>[]);
-      debugPrint('🔎[B3 saved] planned=${_savedPlanned.length} '
-          'hasAdd(EFbQl9i9NdYi13F3DqHr)=${_savedPlanned.contains('EFbQl9i9NdYi13F3DqHr')} '
-          'hasEx(eyh76KELuuO805rZBpMa)=${_savedPlanned.contains('eyh76KELuuO805rZBpMa')}');
-
       swCreate3.stop();
       final block3Id = block3Ref.id;
-      print('✅ [Home] Block 3 created id=$block3Id (${swCreate3.elapsed.inMilliseconds} ms)');
+      print('✅ [Onboarding] Block 3 created id=$block3Id (${swCreate3.elapsed.inMilliseconds} ms)');
 
-      await BlockExerciseDefaultsRepository.seedDefaultsForBlock(
-        uid: uid,
-        blockId: block3Id,
-        exerciseIds: block3ExerciseIds,
-      );
-
-
-// Scaffold weeks & days for Block 3
-      final swScaffold3 = Stopwatch()..start();
-      {
-        final batch = FirebaseFirestore.instance.batch();
-        for (int week = 0; week < 26; week++) {
-          final weekRef = block3Ref.collection('weeks').doc('week_$week');
-          batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
-
-          final daysRef = weekRef.collection('days');
-          for (int day = 0; day < 7; day++) {
-            final currentDate = startDate3.add(Duration(days: week * 7 + day));
-            final weekday = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day];
-            final monthName = [
-              'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'
-            ][currentDate.month - 1];
-
-            final dayRef = daysRef.doc('day_$day');
-            batch.set(dayRef, {
-              'date': Timestamp.fromDate(currentDate),
-              'circuitStartIndices': [0],
-              'exercises': [],
-              'workoutName': '$weekday ${currentDate.day} $monthName - Week ${week + 1}',
-              'exists': true,
-            }, SetOptions(merge: true));
-          }
+      // Defer Block 3 seed + full scaffold to background — block doc is already created.
+      unawaited(() async {
+        try {
+          await BlockExerciseDefaultsRepository.seedDefaultsForBlock(
+            uid: uid,
+            blockId: block3Id,
+            exerciseIds: block3ExerciseIds,
+          );
+          await scaffoldBlockInBackground(block3Ref, startDate3);
+        } catch (e, st) {
+          debugPrint('❌ [Onboarding] Block 3 background init failed: $e\n$st');
         }
-        batch.set(block3Ref, {'scaffoldReady': true}, SetOptions(merge: true));
-        await batch.commit();
-      }
-      swScaffold3.stop();
-      print('🧱 [Home] Block 3 scaffold ready (${swScaffold3.elapsed.inMilliseconds} ms)');
+      }());
 
     }
 

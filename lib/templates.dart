@@ -56,6 +56,9 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   // which template cards are currently expanded
   final Set<String> _expandedTemplateIds = {};
 
+  // Cached full exercise list — loaded once per TemplatesScreen session on first picker open.
+  List<Map<String, String>>? _cachedAllExercises;
+
   // 🔁 block-aware grouping
   String? _activeBlockId;
   final Map<String, Map<String, dynamic>> _blockMetaById = {}; // blockId -> {startDate, endDate, name?}
@@ -176,19 +179,20 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       plannedModeAvailable = false;
     }
 
-    // 2) load all exercises
-    final snapshot =
-    await FirebaseFirestore.instance.collection('exercises').get();
-
-    final allExercises = snapshot.docs.map((doc) {
-      final data = doc.data();
-      return <String, String>{
-        'id': doc.id,
-        'name': (data['name'] ?? '').toString(),
-        'category': (data['category'] ?? 'Other').toString(),
-      };
-    }).toList();
-
+    // 2) load all exercises (cache per session — fetch once, reuse on repeat opens)
+    if (_cachedAllExercises == null) {
+      final snapshot =
+          await FirebaseFirestore.instance.collection('exercises').get();
+      _cachedAllExercises = snapshot.docs.map((doc) {
+        final data = doc.data();
+        return <String, String>{
+          'id': doc.id,
+          'name': (data['name'] ?? '').toString(),
+          'category': (data['category'] ?? 'Other').toString(),
+        };
+      }).toList();
+    }
+    final allExercises = _cachedAllExercises!;
 
     bool showPlannedOnly = plannedModeAvailable; // default ON if available
     String searchQuery = '';
@@ -460,18 +464,20 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       plannedModeAvailable = false;
     }
 
-    // ---- Load all exercises
-    final snapshot =
-    await FirebaseFirestore.instance.collection('exercises').get();
-
-    final allExercises = snapshot.docs.map((doc) {
-      final data = doc.data();
-      return <String, String>{
-        'id': doc.id,
-        'name': (data['name'] ?? '').toString(),
-        'category': (data['category'] ?? 'Other').toString(),
-      };
-    }).toList();
+    // ---- Load all exercises (reuse cached list if available)
+    if (_cachedAllExercises == null) {
+      final snapshot =
+          await FirebaseFirestore.instance.collection('exercises').get();
+      _cachedAllExercises = snapshot.docs.map((doc) {
+        final data = doc.data();
+        return <String, String>{
+          'id': doc.id,
+          'name': (data['name'] ?? '').toString(),
+          'category': (data['category'] ?? 'Other').toString(),
+        };
+      }).toList();
+    }
+    final allExercises = _cachedAllExercises!;
 
     bool showPlannedOnly = plannedModeAvailable; // default ON if available
     String searchQuery = '';

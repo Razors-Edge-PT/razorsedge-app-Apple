@@ -62,6 +62,7 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
   List<String> _templateCandidateIds = const [];
   bool _hasLocalEdits = false;
   bool _routeSubscribed = false;
+  bool _allExercisesAvailable = false;
 
   String get userId => UserContext.of(context, listen: false).currentUid;
 
@@ -180,6 +181,8 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
 
     final data = doc.data()!;
 
+    _allExercisesAvailable = data['allExercisesAvailable'] == true;
+
     final loaded = List<String>.from(data['exercises'] ?? const <String>[]);
     final u = loaded.toSet().length;
     if (u != loaded.length) {
@@ -198,6 +201,8 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
       for (final id in loadedExercises) {
         if (!fixed.contains(id)) fixed.add(id);
       }
+      // allExercisesAvailable blocks: exercises list is populated by _loadBlockFromFirestore
+      // once _exerciseIdToName is ready (post-frame). Leave as-is here if empty.
       exercises = fixed;
 
 // 🔧 Self-heal corrupted blocks (safe, idempotent)
@@ -472,25 +477,28 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
     if (!doc.exists) return;
 
     final data = doc.data()!;
+    _allExercisesAvailable = data['allExercisesAvailable'] == true;
+
     setState(() {
       _blockStartDate = (data['startDate'] as Timestamp).toDate();
       _blockEndDate = (data['endDate'] as Timestamp).toDate();
       final loadedExercises = List<String>.from(data['exercises'] ?? const <String>[]);
-      final fixed = <String>[];
+      final deduped = <String>[];
       for (final id in loadedExercises) {
-        if (!fixed.contains(id)) fixed.add(id);
+        if (!deduped.contains(id)) deduped.add(id);
+      }
+      var fixed = deduped;
+
+      // For allExercisesAvailable blocks, populate exercises from the already-loaded
+      // _exerciseIdToName map (populated by loadExercisesFromFirestore which ran first).
+      if (_allExercisesAvailable && fixed.isEmpty && _exerciseIdToName.isNotEmpty) {
+        final excluded = Set<String>.from(
+          (data['excludedExerciseIds'] as List?)?.map((e) => e.toString()) ?? const [],
+        );
+        fixed = _exerciseIdToName.keys.where((id) => !excluded.contains(id)).toList();
+        debugPrint('🧩 [BP] allExercisesAvailable: populated ${fixed.length} exercises from collection');
       }
       exercises = fixed;
-
-// Optional: write the cleaned list back to Firestore immediately (self-heal)
-      if (fixed.length != loadedExercises.length) {
-        FirebaseFirestore.instance
-            .collection('planned_blocks')
-            .doc(userId)
-            .collection('blocks')
-            .doc(blockId)
-            .update({'exercises': fixed}).catchError((_) {});
-      }
 
       selectedDays = List<String>.from(data['selectedDays'] ?? []);
 
@@ -575,19 +583,26 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
     // ✅ Capture messenger BEFORE any awaits (safe ancestor lookup)
     final messenger = ScaffoldMessenger.of(context);
 
-    await blockDocRef.set({
+    // For allExercisesAvailable blocks, write excludedExerciseIds instead of large arrays.
+    Map<String, dynamic> blockPayload = {
       'name': _blockNameController.text.trim().isEmpty
           ? 'Unnamed Block'
           : _blockNameController.text.trim(),
       'startDate': _blockStartDate,
       'endDate': _blockEndDate,
-      'exercises': exercises,
       'exerciseSettings': exerciseSettings,
       'selectedDays': selectedDays,
       'isActive': setActive,
       'createdAt': FieldValue.serverTimestamp(),
       if (_templateCandidateIds.isNotEmpty) 'templateCandidateExerciseIds': _templateCandidateIds,
-    }, SetOptions(merge: true));
+    };
+    if (_allExercisesAvailable) {
+      final allIds = _exerciseIdToName.keys.toSet();
+      blockPayload['excludedExerciseIds'] = allIds.difference(exercises.toSet()).toList();
+    } else {
+      blockPayload['exercises'] = exercises;
+    }
+    await blockDocRef.set(blockPayload, SetOptions(merge: true));
 
     if (!mounted) return;
 
@@ -1444,7 +1459,14 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
     );
 
 
-    for (final exercise in exercises) {
+    // For allExercisesAvailable blocks, only save exercises that have settings
+    // (candidates + any manually added exercises healed by ensureExerciseDefaults).
+    // This avoids iterating 100+ IDs and creating null-filled detail entries.
+    final exercisesToSave = _allExercisesAvailable
+        ? exerciseSettings.keys.toList()
+        : exercises;
+
+    for (final exercise in exercisesToSave) {
       final entry = Map<String, dynamic>.from(exerciseSettings[exercise] ?? {});
       print("🧾 [SAVE] pre-normalize increments for $exercise → "
           "${jsonEncode(entry['increments'])}");
@@ -1574,24 +1596,37 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
       print("📅 Saved blockMeta to plannedExerciseDetails");
     }
 
-    // 🧹 Remove details for exercises that were deleted (keep blockMeta)
-    existingDetails.removeWhere((k, v) => k != 'blockMeta' && !exercises.contains(k));
-
+    // 🧹 Remove details for exercises that were deleted (keep blockMeta).
+    // For allExercisesAvailable blocks, prune against exercisesToSave (settings-keyed list).
+    existingDetails.removeWhere(
+      (k, v) => k != 'blockMeta' && !exercisesToSave.contains(k),
+    );
 
     print("📤 Saving plannedExerciseDetails:\n${jsonEncode(existingDetails)}");
     print("📤 Saving exerciseSettings:\n${jsonEncode(existingSettings)}");
 
-    await docRef.set({
-      'exercises': exercises,
-      'plannedExercises': exercises,
-      'plannedExerciseDetails': existingDetails,
-      'exerciseSettings':       existingSettings,
-    }, SetOptions(merge: true));
+    if (_allExercisesAvailable) {
+      // Lightweight save: write excludedExerciseIds instead of large arrays.
+      // exercises list is all IDs minus excluded; invert the diff to get excluded.
+      final allIds = _exerciseIdToName.keys.toSet();
+      final excluded = allIds.difference(exercises.toSet()).toList();
+      await docRef.set({
+        'excludedExerciseIds': excluded,
+        'plannedExerciseDetails': existingDetails,
+        'exerciseSettings': existingSettings,
+      }, SetOptions(merge: true));
+    } else {
+      await docRef.set({
+        'exercises': exercises,
+        'plannedExercises': exercises,
+        'plannedExerciseDetails': existingDetails,
+        'exerciseSettings': existingSettings,
+      }, SetOptions(merge: true));
+    }
 
-
-    // 🧹 Schema hygiene: remove explicitRepTargets from Firestore (kept only in local state)
+    // 🧹 Schema hygiene: remove explicitRepTargets (only clean exercises with settings)
     final cleanup = <String, dynamic>{};
-    for (final ex in exercises) {
+    for (final ex in exercisesToSave) {
       cleanup['exerciseSettings.$ex.explicitRepTargets'] = FieldValue.delete();
     }
     await docRef.update(cleanup).catchError((_) {
@@ -1722,13 +1757,20 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
     if (data == null) return;
 
     // ✅ Restore planned exercise IDs (only if no local edits)
-    if (data.containsKey('plannedExercises') && !_hasLocalEdits) {
-      final remote = List<String>.from(data['plannedExercises'] ?? const <String>[]);
-
-      setState(() {
-        exercises = remote;
-      });
-      debugPrint('📋 [BP.load] Applied plannedExercises from block ($blockIdToUse): ${exercises.length}');
+    if (!_hasLocalEdits) {
+      if (data['allExercisesAvailable'] == true && _exerciseIdToName.isNotEmpty) {
+        // Sentinel block: derive exercise list from loaded collection minus exclusions.
+        final excluded = Set<String>.from(
+          (data['excludedExerciseIds'] as List?)?.map((e) => e.toString()) ?? const [],
+        );
+        final allAvail = _exerciseIdToName.keys.where((id) => !excluded.contains(id)).toList();
+        setState(() => exercises = allAvail);
+        debugPrint('📋 [BP.load] allExercisesAvailable: ${exercises.length} exercises');
+      } else if (data.containsKey('plannedExercises')) {
+        final remote = List<String>.from(data['plannedExercises'] ?? const <String>[]);
+        setState(() => exercises = remote);
+        debugPrint('📋 [BP.load] Applied plannedExercises from block ($blockIdToUse): ${exercises.length}');
+      }
     }
 
     // ✅ Restore detailed settings, skipping blockMeta and guarding local edits

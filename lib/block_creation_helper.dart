@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 
 /// Shared block-creation constants and helpers.
 /// Used by home_screen, planned_blocks_screen, create_new_account_screen, Block_Planner.
@@ -12,6 +13,42 @@ DateTime blockEndDate(DateTime start) =>
 Future<List<String>> loadAllExerciseIds() async {
   final snap = await FirebaseFirestore.instance.collection('exercises').get();
   return snap.docs.map((d) => d.id).toList();
+}
+
+/// Scaffolds week/day subcollection docs for an already-created block document.
+/// Never creates block docs — only subcollection docs under the supplied [blockRef].
+/// Fire-and-forget safe: catches all errors, sets scaffoldReady on success, idempotent.
+Future<void> scaffoldBlockInBackground(
+  DocumentReference<Map<String, dynamic>> blockRef,
+  DateTime startDate, {
+  int startWeek = 0,
+  int totalWeeks = 26,
+}) async {
+  try {
+    debugPrint('🧱 [scaffold] start: ${blockRef.id} weeks $startWeek–${totalWeeks - 1}');
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const weekdays = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+    final batch = FirebaseFirestore.instance.batch();
+    for (int week = startWeek; week < totalWeeks; week++) {
+      final weekRef = blockRef.collection('weeks').doc('week_$week');
+      batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
+      for (int day = 0; day < 7; day++) {
+        final date = startDate.add(Duration(days: week * 7 + day));
+        batch.set(weekRef.collection('days').doc('day_$day'), {
+          'date': Timestamp.fromDate(date),
+          'circuitStartIndices': [0],
+          'exercises': [],
+          'workoutName': '${weekdays[day]} ${date.day} ${months[date.month - 1]} - Week ${week + 1}',
+          'exists': true,
+        }, SetOptions(merge: true));
+      }
+    }
+    batch.set(blockRef, {'scaffoldReady': true}, SetOptions(merge: true));
+    await batch.commit();
+    debugPrint('🧱 [scaffold] done: ${blockRef.id}');
+  } catch (e, st) {
+    debugPrint('❌ [scaffold] failed for ${blockRef.id}: $e\n$st');
+  }
 }
 
 /// Sex-derived candidate pool for templateCandidateExerciseIds.

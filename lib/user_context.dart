@@ -156,13 +156,22 @@ class UserContext extends ChangeNotifier {
     return false;
   }
 
-  // Fetch from server quietly; if different, update+persist+notify; also kick warmup
-  Future<void> _refreshFromServerInBackground(String uid) async {
+  // Fetch from server quietly; if different, update+persist+notify; also kick warmup.
+  // [_attempt] is internal — callers always use the default.
+  Future<void> _refreshFromServerInBackground(String uid, {int attempt = 1}) async {
     // ⚠️ MUST NOT throw; never block UI
     try {
       final repo = BlockRepository();
       final id = await repo.fetchActiveBlockId(uid);
-      if (id == null || id.isEmpty) return;
+      if (id == null || id.isEmpty) {
+        if (attempt < 3) {
+          debugPrint('⚠️ [UC] no active block for $uid (attempt $attempt/2) — retry in 4s');
+          await Future.delayed(const Duration(seconds: 4));
+          return _refreshFromServerInBackground(uid, attempt: attempt + 1);
+        }
+        debugPrint('⚠️ [UC] no active block for $uid after $attempt attempts — stopping');
+        return;
+      }
 
       // Load meta (dates)
       final fs = FirebaseFirestore.instance;

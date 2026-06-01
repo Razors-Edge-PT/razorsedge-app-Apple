@@ -927,6 +927,26 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         builder: (context, controller, _) {
           final uc = UserContext.of(context); // listen:true → rebuilds on athlete switch
           final actingUid = uc.currentUid;
+
+          // Guard: if WES2 opened before activeBlockId was available (new-user race),
+          // re-init identity and reload once UserContext publishes a non-null blockId.
+          if (_controller.activeBlockId == null &&
+              uc.activeBlockId != null &&
+              uc.activeBlockId!.isNotEmpty) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              _controller.initIdentity(
+                actorUid: uc.actorUid,
+                actingUid: uc.currentUid,
+                isCoach: uc.isCoach,
+                activeBlockId: uc.activeBlockId,
+                blockStartDate: uc.blockStartDate,
+                blockEndDate: uc.blockEndDate,
+              );
+              _loadDay();
+            });
+          }
+
           if (_fetchedForUid != actingUid) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (mounted && _fetchedForUid != actingUid) _fetchAthleteUsername(actingUid);
