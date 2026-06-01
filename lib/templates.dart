@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'block_exercise_defaults_repository.dart';
 
 import 'block_repository.dart'; // 👈 to get active block id + meta
 import 'template_bootstrapper.dart';
@@ -155,9 +158,18 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
             .doc(_activeBlockId!)
             .get();
 
-        final List<dynamic> plannedList =
-            plannedDoc.data()?['plannedExercises'] ?? [];
-        plannedExerciseIds = plannedList.cast<String>().toSet();
+        final blockData = plannedDoc.data();
+        // 3-step planned-only fallback (templateCandidateExerciseIds → exerciseSettings.keys → plannedExercises)
+        final candidateList = (blockData?['templateCandidateExerciseIds'] as List?)
+            ?.map((e) => e.toString()).toSet() ?? const <String>{};
+        final settingsMap = blockData?['exerciseSettings'] as Map<String, dynamic>? ?? {};
+        final legacyPlanned = (blockData?['plannedExercises'] as List?)
+            ?.map((e) => e.toString()).toSet() ?? const <String>{};
+        plannedExerciseIds = candidateList.isNotEmpty
+            ? candidateList
+            : settingsMap.isNotEmpty
+                ? settingsMap.keys.toSet()
+                : legacyPlanned;
         plannedModeAvailable = plannedExerciseIds.isNotEmpty;
       }
     } catch (_) {
@@ -396,6 +408,20 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       template.id,
       List<Map<String, dynamic>>.from(template.exercises),
     );
+
+    // Fire-and-forget: ensure exerciseSettings exist for newly added template exercises.
+    if (_activeBlockId != null) {
+      for (final ex in selected) {
+        final exId = (ex['id'] ?? '').toString();
+        if (exId.isNotEmpty) {
+          unawaited(BlockExerciseDefaultsRepository.ensureExerciseDefaults(
+            uid: userId,
+            blockId: _activeBlockId!,
+            exerciseId: exId,
+          ));
+        }
+      }
+    }
   }
 
   Future<void> _showExercisePickerDialogForChip(
@@ -416,9 +442,18 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
             .doc(_activeBlockId!)
             .get();
 
-        final List<dynamic> plannedList =
-            plannedDoc.data()?['plannedExercises'] ?? [];
-        plannedExerciseIds = plannedList.cast<String>().toSet();
+        final blockData = plannedDoc.data();
+        // 3-step planned-only fallback (templateCandidateExerciseIds → exerciseSettings.keys → plannedExercises)
+        final candidateList = (blockData?['templateCandidateExerciseIds'] as List?)
+            ?.map((e) => e.toString()).toSet() ?? const <String>{};
+        final settingsMap = blockData?['exerciseSettings'] as Map<String, dynamic>? ?? {};
+        final legacyPlanned = (blockData?['plannedExercises'] as List?)
+            ?.map((e) => e.toString()).toSet() ?? const <String>{};
+        plannedExerciseIds = candidateList.isNotEmpty
+            ? candidateList
+            : settingsMap.isNotEmpty
+                ? settingsMap.keys.toSet()
+                : legacyPlanned;
         plannedModeAvailable = plannedExerciseIds.isNotEmpty;
       }
     } catch (_) {

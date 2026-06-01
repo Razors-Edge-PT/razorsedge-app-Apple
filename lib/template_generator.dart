@@ -1522,29 +1522,67 @@ class TemplateGenerator {
 // 🆕 Fetch planned exercise IDs from Block Planner → /users/{uid}/block_planner/current_block
   static Future<Set<String>> _fetchPlannedExerciseIds(String uid) async {
     try {
-      final doc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .collection('block_planner')
-          .doc('current_block')
-          .get();
+      final db = FirebaseFirestore.instance;
 
-      if (!doc.exists) {
-        debugPrint('🧩 [GEN] planned-only: current_block missing for uid=$uid');
-        return const {};
+      // Read current_block pointer
+      final ptrDoc = await db.collection('users').doc(uid)
+          .collection('block_planner').doc('current_block').get();
+      final ptrData = ptrDoc.data();
+
+      // Step 1: templateCandidateExerciseIds (new explicit field)
+      final candidateList = (ptrData?['templateCandidateExerciseIds'] as List?)
+          ?.map((e) => e.toString()).toSet() ?? const <String>{};
+      if (candidateList.isNotEmpty) {
+        debugPrint('🧩 [GEN] step1: templateCandidateExerciseIds → ${candidateList.length} ids');
+        return candidateList;
       }
 
-      final data = doc.data();
-      if (data == null) return const {};
+      // Step 2: template-used IDs for active block
+      final activeBlockId = ptrData?['blockId'] as String?;
+      if (activeBlockId != null) {
+        final templatesSnap = await db.collection('users').doc(uid)
+            .collection('templates').get();
+        final usedIds = <String>{};
+        for (final doc in templatesSnap.docs) {
+          if (doc.data()['blockId'] == activeBlockId) {
+            final exList = doc.data()['exercises'] as List? ?? [];
+            for (final ex in exList) {
+              if (ex is Map && ex['exerciseId'] != null) {
+                usedIds.add(ex['exerciseId'].toString());
+              }
+            }
+          }
+        }
+        if (usedIds.isNotEmpty) {
+          debugPrint('🧩 [GEN] step2: template-used IDs → ${usedIds.length} ids');
+          return usedIds;
+        }
+      }
 
-      // plannedExercises is expected to be an array of exercise IDs
-      final list = (data['plannedExercises'] as List?)?.map((e) => e.toString()).toList() ?? const [];
-      final ids = Set<String>.from(list);
+      // Step 3: exerciseSettings.keys from active block doc
+      if (activeBlockId != null) {
+        final blockDoc = await db.collection('planned_blocks').doc(uid)
+            .collection('blocks').doc(activeBlockId).get();
+        final settings = blockDoc.data()?['exerciseSettings'] as Map<String, dynamic>? ?? {};
+        if (settings.isNotEmpty) {
+          debugPrint('🧩 [GEN] step3: exerciseSettings.keys → ${settings.length} ids');
+          return settings.keys.toSet();
+        }
 
-      debugPrint('🧩 [GEN] planned-only: fetched ${ids.length} planned exercise ids');
-      return ids;
+        // Step 4: legacy plannedExercises (only useful for old blocks before exerciseSettings existed)
+        final legacyList = (blockDoc.data()?['plannedExercises'] as List?)
+            ?.map((e) => e.toString()).toList() ?? const [];
+        if (legacyList.isNotEmpty) {
+          debugPrint('🧩 [GEN] step4: legacy plannedExercises → ${legacyList.length} ids');
+          return Set<String>.from(legacyList);
+        }
+      }
+
+      // Step 5: empty → generator falls back to full library (existing behaviour)
+      debugPrint('🧩 [GEN] all steps empty → returning empty (generator uses full library)');
+      return const {};
     } catch (e, st) {
-      debugPrint('❌ [GEN] planned-only fetch failed: $e\n$st');
+      debugPrint('❌ [GEN] _fetchPlannedExerciseIds failed: $e\n$st');
       return const {};
     }
   }

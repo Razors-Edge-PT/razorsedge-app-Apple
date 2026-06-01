@@ -22,6 +22,7 @@ import 'exercise_details_screen.dart';
 import 'top_sets_screen.dart';
 import 'periodization_model_utils.dart';
 import 'progression_engine.dart';
+import 'block_exercise_defaults_repository.dart';
 
 enum _Wes2AppBarMenuAction { timer, templates, deleteAll }
 
@@ -1251,14 +1252,23 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   /// Applies a picker result to the controller, local draft, and Firestore.
   /// Immediate path: day loaded — persists via saveManualExercise now.
   /// Queue path (loading/idle): deferred to consumeFlushedExercises in _loadDay.
-  void _addExerciseFromPicker(
-      ({String exerciseId, String name, int circuitIndex}) result) {
+  Future<void> _addExerciseFromPicker(
+      ({String exerciseId, String name, int circuitIndex}) result) async {
     final added = _controller.addExercise(
       result.exerciseId,
       result.name,
       circuitIndex: result.circuitIndex,
     );
     if (!added) return;
+    // Await defaults so hints are correct immediately after adding.
+    final activeBlockId = _controller.activeBlockId;
+    if (activeBlockId != null && activeBlockId.isNotEmpty) {
+      await BlockExerciseDefaultsRepository.ensureExerciseDefaults(
+        uid: _controller.actingUid,
+        blockId: activeBlockId,
+        exerciseId: result.exerciseId,
+      );
+    }
     _saveDraftNow();
     if (_controller.loadState == Wes2LoadState.loaded) {
       final rowIdx =
@@ -1286,7 +1296,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       initialCircuitIndex: 0,
     );
     if (result == null) return;
-    _addExerciseFromPicker(result);
+    await _addExerciseFromPicker(result);
   }
 
   /// Per-circuit header "Add Exercise" button — pre-selects that circuit.
@@ -1298,7 +1308,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       initialCircuitIndex: targetCircuitIndex,
     );
     if (result == null) return;
-    _addExerciseFromPicker(result);
+    await _addExerciseFromPicker(result);
   }
 
   /// Bottom "Add Circuit" button — pre-selects a new circuit index.
@@ -1313,7 +1323,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       initialCircuitIndex: nextCircuitIndex,
     );
     if (result == null) return;
-    _addExerciseFromPicker(result);
+    await _addExerciseFromPicker(result);
   }
 
   Future<void> _saveManualExerciseSilently({

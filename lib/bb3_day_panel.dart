@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'bb3_models.dart';
+import 'block_exercise_defaults_repository.dart';
 import 'bb3_hint_service.dart';
 import 'bb3_planned_exercise_service.dart';
 import 'bb3_template_picker.dart';
@@ -59,6 +60,7 @@ class BB3DayPanel extends StatefulWidget {
   final List<List<Map<String, dynamic>>> allWeekCompletedByDay;
   // DUP Signature pre-computed rep targets keyed "YYYY-MM-DD_<exerciseId>".
   final Map<String, int>? dupSigRepByExId;
+  final List<String>? templateCandidateIds;
 
   const BB3DayPanel({
     super.key,
@@ -82,6 +84,7 @@ class BB3DayPanel extends StatefulWidget {
     this.allWeekPlannedByDay = const [],
     this.allWeekCompletedByDay = const [],
     this.dupSigRepByExId,
+    this.templateCandidateIds,
   });
 
   @override
@@ -2039,11 +2042,29 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
         allExercises: widget.allExercises,
         alreadyPresentIds: _alreadyPresentExIds,
         blockSettings: widget.blockSettings,
+        templateCandidateIds: widget.templateCandidateIds,
       ),
     );
     if (selected == null || selected.isEmpty || !mounted) return;
+
     for (final ex in selected) {
       _addExercise(ex);
+    }
+
+    // Await defaults for all newly added exercises so hints are correct immediately.
+    if (widget.blockId != null && widget.blockId!.isNotEmpty) {
+      for (final ex in selected) {
+        final exId = (ex['id'] ?? ex['exerciseId'] ?? '').toString().trim();
+        if (exId.isNotEmpty) {
+          await BlockExerciseDefaultsRepository.ensureExerciseDefaults(
+            uid: widget.uid,
+            blockId: widget.blockId!,
+            exerciseId: exId,
+          );
+        }
+      }
+      // Notify parent to reload block settings so hints use fresh exerciseSettings.
+      widget.onBlockSettingsChanged?.call();
     }
   }
 
@@ -2140,12 +2161,26 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
         allExercises: widget.allExercises,
         alreadyPresentIds: blockedIds,
         blockSettings: widget.blockSettings,
+        templateCandidateIds: widget.templateCandidateIds,
         multiSelect: false,
         title: 'Replace Exercise',
       ),
     );
     if (result == null || result.isEmpty || !mounted) return;
     _replaceExercise(oldEx, result.first);
+
+    // Heal defaults for the new exercise
+    if (widget.blockId != null && widget.blockId!.isNotEmpty) {
+      final newId = (result.first['id'] ?? result.first['exerciseId'] ?? '').toString().trim();
+      if (newId.isNotEmpty) {
+        await BlockExerciseDefaultsRepository.ensureExerciseDefaults(
+          uid: widget.uid,
+          blockId: widget.blockId!,
+          exerciseId: newId,
+        );
+        widget.onBlockSettingsChanged?.call();
+      }
+    }
   }
 
   void _replaceExercise(BB3Exercise oldEx, Map<String, dynamic> replacementMap) {
@@ -2474,6 +2509,7 @@ class _BB3AddExercisePicker extends StatefulWidget {
   final BB3BlockSettings? blockSettings;
   final bool multiSelect;
   final String title;
+  final List<String>? templateCandidateIds;
 
   const _BB3AddExercisePicker({
     required this.allExercises,
@@ -2481,6 +2517,7 @@ class _BB3AddExercisePicker extends StatefulWidget {
     this.blockSettings,
     this.multiSelect = true,
     this.title = 'Add Exercise',
+    this.templateCandidateIds,
   });
 
   @override
@@ -2510,10 +2547,15 @@ class _BB3AddExercisePickerState extends State<_BB3AddExercisePicker> {
   @override
   void initState() {
     super.initState();
-    if (widget.blockSettings != null) {
+    // 3-step planned-only fallback
+    final candidates = widget.templateCandidateIds;
+    if (candidates != null && candidates.isNotEmpty) {
+      _plannedIds = candidates.toSet();
+    } else if (widget.blockSettings != null &&
+        widget.blockSettings!.exerciseSettings.isNotEmpty) {
       _plannedIds = widget.blockSettings!.exerciseSettings.keys.toSet();
-      _showPlannedOnly = _plannedIds.isNotEmpty;
     }
+    _showPlannedOnly = _plannedIds.isNotEmpty;
     _expandedCategories = {..._categoryOrder, 'Other'};
   }
 

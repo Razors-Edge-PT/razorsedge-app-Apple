@@ -9,6 +9,7 @@ import 'block_repository.dart';
 import 'block_planner_repository.dart';
 import 'dart:async';
 import 'block_exercise_defaults_repository.dart';
+import 'block_creation_helper.dart';
 
 
 
@@ -195,15 +196,15 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
         // DateTime.weekday: Mon=1 ... Sun=7
         final startDate1 = today.subtract(Duration(days: today.weekday - DateTime.monday));
 
-        // 8 weeks = 56 days total. If start is day 0, last day is start + 55.
-        final endDate1 = startDate1.add(const Duration(days: 55));
+        // 26 weeks = 182 days total. If start is day 0, last day is start + 181.
+        final endDate1 = startDate1.add(const Duration(days: 181));
 
         // Next blocks start the day after the previous ends
         final startDate2 = endDate1.add(const Duration(days: 1));
-        final endDate2   = startDate2.add(const Duration(days: 55));
+        final endDate2   = startDate2.add(const Duration(days: 181));
 
         final startDate3 = endDate2.add(const Duration(days: 1));
-        final endDate3   = startDate3.add(const Duration(days: 55));
+        final endDate3   = startDate3.add(const Duration(days: 181));
 
         debugPrint('📅 [Home] Block1 start=${startDate1.toIso8601String()} end=${endDate1.toIso8601String()} (today=${today.toIso8601String()})');
 
@@ -289,6 +290,11 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
           if (isFemale) ...femaleSpecificExercises else ...maleSpecificExercises,
         ];
 
+        // Load all exercise IDs for block.exercises/plannedExercises
+        final allExerciseIds = await loadAllExerciseIds();
+        // Sex-derived candidate pool for templateCandidateExerciseIds
+        final candidateIds = computeTemplateCandidateIds(isFemale: isFemale);
+
         // ── Block 2 exercise adjustments (sex-specific ± tweaks) ─────────────────────
 // Base = all exercises from Block 1. Then apply -exclusions +additions.
 
@@ -358,6 +364,7 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
           required DateTime start,
           required DateTime end,
           required List<String> exerciseIds,
+          required List<String> candidateExerciseIds,
         }) {
           return {
             'name': name,
@@ -368,6 +375,7 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
             'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
             'exercises': exerciseIds,
             'plannedExercises': exerciseIds,
+            'templateCandidateExerciseIds': candidateExerciseIds,
             'plannedExerciseDetails': {
               'blockMeta': {
                 'blockStartDate': start.toIso8601String(),
@@ -384,7 +392,8 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
           isActive: true,
           start: startDate1,
           end: endDate1,
-          exerciseIds: seededExerciseIds,
+          exerciseIds: allExerciseIds,
+          candidateExerciseIds: candidateIds,
         );
 
         final swCreate1 = Stopwatch()..start();
@@ -410,7 +419,8 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
             .set({
           'blockId': block1Id,
           'blockName': block1Name,
-          'plannedExercises': seededExerciseIds,
+          'plannedExercises': allExerciseIds,
+          'templateCandidateExerciseIds': candidateIds,
           'plannedExerciseDetails': {
             'blockMeta': {
               'blockStartDate': startDate1.toIso8601String(),
@@ -430,7 +440,7 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
         final swScaffold1 = Stopwatch()..start();
         {
           final batch = FirebaseFirestore.instance.batch();
-          for (int week = 0; week < 8; week++) {
+          for (int week = 0; week < 26; week++) {
             final weekRef = block1Ref.collection('weeks').doc('week_$week');
             batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
 
@@ -464,7 +474,8 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
           isActive: false, // keep only 1 active block
           start: startDate2,
           end: endDate2,
-          exerciseIds: block2ExerciseIds, // ✅ now uses sex-specific adjusted list
+          exerciseIds: allExerciseIds,
+          candidateExerciseIds: candidateIds,
         );
 
         final swCreate2 = Stopwatch()..start();
@@ -484,7 +495,7 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
         final swScaffold2 = Stopwatch()..start();
         {
           final batch = FirebaseFirestore.instance.batch();
-          for (int week = 0; week < 8; week++) {
+          for (int week = 0; week < 26; week++) {
             final weekRef = block2Ref.collection('weeks').doc('week_$week');
             batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
 
@@ -526,7 +537,8 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
           isActive: false, // keep only 1 active block
           start: startDate3,
           end: endDate3,
-          exerciseIds: block3ExerciseIds,
+          exerciseIds: allExerciseIds,
+          candidateExerciseIds: candidateIds,
         );
 
         final swCreate3 = Stopwatch()..start();
@@ -552,7 +564,7 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
         final swScaffold3 = Stopwatch()..start();
         {
           final batch = FirebaseFirestore.instance.batch();
-          for (int week = 0; week < 8; week++) {
+          for (int week = 0; week < 26; week++) {
             final weekRef = block3Ref.collection('weeks').doc('week_$week');
             batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
 

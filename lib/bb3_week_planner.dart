@@ -41,6 +41,7 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
   List<BB3BlockSettings> _allBlocks = [];
   List<Map<String, dynamic>> _allExercises = [];
   List<Template> _templates = [];
+  List<String>? _templateCandidateIds;
 
   bool _loadingBlocks = false;
   bool _refreshing = false;
@@ -165,6 +166,18 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
         await BB3PlannedExerciseService.getBlockSettings(uid, blockId);
     if (!mounted) return;
 
+    // Read templateCandidateExerciseIds for picker fallback
+    List<String>? candidateIds;
+    try {
+      final blockDoc = await FirebaseFirestore.instance
+          .collection('planned_blocks').doc(uid)
+          .collection('blocks').doc(blockId).get();
+      final rawList = blockDoc.data()?['templateCandidateExerciseIds'] as List?;
+      if (rawList != null && rawList.isNotEmpty) {
+        candidateIds = rawList.map((e) => e.toString()).toList();
+      }
+    } catch (_) {}
+
     // jumpToStart=true (manual block switch via dropdown): jump to the block's
     // start week so the user immediately sees week 1 of what they selected.
     // jumpToStart=false (auto-select on boot): stay on the current calendar
@@ -178,6 +191,7 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
       _selectedBlockId = blockId;
       _blockSettings = settings;
       _weekStart = newWeekStart;
+      _templateCandidateIds = candidateIds;
     });
 
     // Animate page controller to the new week (no rebuild needed — setState
@@ -942,6 +956,7 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
           allWeekPlannedByDay: _plannedByDay,
           allWeekCompletedByDay: _completedByDay,
           dupSigRepByExId: _dupSigRepCache.isNotEmpty ? _dupSigRepCache : null,
+          templateCandidateIds: _templateCandidateIds,
         );
       },
     );

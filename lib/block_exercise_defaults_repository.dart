@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 
 /// Shared defaults + seeding logic for Block Planner / WES.
 /// This is the "headless" version of BP's _seedDefaultsFor + getDefaultSettings,
@@ -553,6 +554,83 @@ class BlockExerciseDefaultsRepository {
     }, SetOptions(merge: true));
 
     print('✅ [DefaultsRepo] Defaults seeded for block=$blockId');
+  }
+
+  // ---------------------------------------------------------------------------
+  // 5b) LAZY HEALER: ensure a single exercise has defaults in a block doc
+  // ---------------------------------------------------------------------------
+
+  /// Checks whether [exerciseId] already has exerciseSettings in [blockId].
+  /// If not, fetches exercise metadata and seeds defaults — same structure as
+  /// seedDefaultsForBlock but for a single exercise.
+  /// Idempotent: no-op if settings already exist.
+  static Future<void> ensureExerciseDefaults({
+    required String uid,
+    required String blockId,
+    required String exerciseId,
+  }) async {
+    if (exerciseId.isEmpty || blockId.isEmpty) return;
+
+    final docRef = FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(uid)
+        .collection('blocks')
+        .doc(blockId);
+
+    // 1. Check whether settings already exist — skip if so.
+    final snap = await docRef.get();
+    final existing = snap.data()?['exerciseSettings'] as Map<String, dynamic>? ?? {};
+    if (existing.containsKey(exerciseId)) return;
+
+    // 2. Fetch exercise metadata.
+    final exDoc = await FirebaseFirestore.instance
+        .collection('exercises')
+        .doc(exerciseId)
+        .get();
+    if (!exDoc.exists) return;
+
+    final d = exDoc.data()!;
+    final name = (d['name'] as String?) ?? '';
+    final category = (d['category'] as String?) ?? 'Other';
+    String bodyPart = '';
+    final bp = d['bodyPart'];
+    if (bp is List && bp.isNotEmpty) bodyPart = bp.first.toString();
+    if (bp is String) bodyPart = bp;
+
+    // 3. Compute defaults using the same logic as seedDefaultsForBlock.
+    final defaults = getDefaultSettings(name, category, bodyPart);
+    if (defaults.isEmpty) return;
+
+    final repTargets = defaults['repTargets'];
+    final savedTargets = repTargets is Map<String, Map<String, String>>
+        ? repTargets
+        : _convertToMap(repTargets);
+
+    final detailPayload = {
+      'periodizationModel': defaults['periodizationModel'],
+      'repTargets': savedTargets,
+      'rirPlan': defaults['rirPlan'],
+      'rirModel': defaults['rirModel'],
+      'progressionModel': defaults['progressionModel'],
+      'increments': defaults['increments'],
+      'weeklyFrequency': defaults['weeklyFrequency'],
+      'maxWeightXReps': '',
+      'notes': '',
+    };
+
+    final settingsPayload = {
+      ...detailPayload,
+      'defaultSets': defaults['defaultSets'],
+      'modelSpecificRepTargets': defaults['modelSpecificRepTargets'],
+    };
+
+    // 4. Merge into block doc (additive — never overwrites existing data).
+    await docRef.set({
+      'plannedExerciseDetails': {exerciseId: detailPayload},
+      'exerciseSettings': {exerciseId: settingsPayload},
+    }, SetOptions(merge: true));
+
+    debugPrint('🩹 [DefaultsRepo] healed defaults for $exerciseId in block=$blockId');
   }
 
   // ---------------------------------------------------------------------------

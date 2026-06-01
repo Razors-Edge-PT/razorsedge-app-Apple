@@ -11,6 +11,7 @@ import 'demographics_cache.dart';
 import 'block_repository.dart';
 import 'block_planner_repository.dart';
 import 'block_exercise_defaults_repository.dart';
+import 'block_creation_helper.dart';
 
 import 'package:localtest222/login_screen.dart';
 import 'periodization_model_utils.dart';
@@ -1497,15 +1498,15 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       // DateTime.weekday: Mon=1 ... Sun=7
       final startDate1 = today.subtract(Duration(days: today.weekday - DateTime.monday));
 
-      // 8 weeks = 56 days total. If start is day 0, last day is start + 55.
-      final endDate1 = startDate1.add(const Duration(days: 55));
+      // 26 weeks = 182 days total. If start is day 0, last day is start + 181.
+      final endDate1 = startDate1.add(const Duration(days: 181));
 
       // Next blocks start the day after the previous ends
       final startDate2 = endDate1.add(const Duration(days: 1));
-      final endDate2   = startDate2.add(const Duration(days: 55));
+      final endDate2   = startDate2.add(const Duration(days: 181));
 
       final startDate3 = endDate2.add(const Duration(days: 1));
-      final endDate3   = startDate3.add(const Duration(days: 55));
+      final endDate3   = startDate3.add(const Duration(days: 181));
 
       debugPrint('📅 [Home] Block1 start=${startDate1.toIso8601String()} end=${endDate1.toIso8601String()} (today=${today.toIso8601String()})');
 
@@ -1591,6 +1592,11 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
         if (isFemale) ...femaleSpecificExercises else ...maleSpecificExercises,
       ];
 
+      // Load all exercise IDs for block.exercises/plannedExercises
+      final allExerciseIds = await loadAllExerciseIds();
+      // Sex-derived candidate pool for templateCandidateExerciseIds
+      final candidateIds = computeTemplateCandidateIds(isFemale: isFemale);
+
       // ── Block 2 exercise adjustments (sex-specific ± tweaks) ─────────────────────
 // Base = all exercises from Block 1. Then apply -exclusions +additions.
 
@@ -1660,6 +1666,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
         required DateTime start,
         required DateTime end,
         required List<String> exerciseIds,
+        required List<String> candidateExerciseIds,
       }) {
         return {
           'name': name,
@@ -1670,6 +1677,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
           'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
           'exercises': exerciseIds,
           'plannedExercises': exerciseIds,
+          'templateCandidateExerciseIds': candidateExerciseIds,
           'plannedExerciseDetails': {
             'blockMeta': {
               'blockStartDate': start.toIso8601String(),
@@ -1686,7 +1694,8 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
         isActive: true,
         start: startDate1,
         end: endDate1,
-        exerciseIds: seededExerciseIds,
+        exerciseIds: allExerciseIds,
+        candidateExerciseIds: candidateIds,
       );
 
       final swCreate1 = Stopwatch()..start();
@@ -1712,7 +1721,8 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
           .set({
         'blockId': block1Id,
         'blockName': block1Name,
-        'plannedExercises': seededExerciseIds,
+        'plannedExercises': allExerciseIds,
+        'templateCandidateExerciseIds': candidateIds,
         'plannedExerciseDetails': {
           'blockMeta': {
             'blockStartDate': startDate1.toIso8601String(),
@@ -1732,7 +1742,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       final swScaffold1 = Stopwatch()..start();
       {
         final batch = FirebaseFirestore.instance.batch();
-        for (int week = 0; week < 8; week++) {
+        for (int week = 0; week < 26; week++) {
           final weekRef = block1Ref.collection('weeks').doc('week_$week');
           batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
 
@@ -1766,7 +1776,8 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
         isActive: false, // keep only 1 active block
         start: startDate2,
         end: endDate2,
-        exerciseIds: block2ExerciseIds, // ✅ now uses sex-specific adjusted list
+        exerciseIds: allExerciseIds,
+        candidateExerciseIds: candidateIds,
       );
 
       final swCreate2 = Stopwatch()..start();
@@ -1786,7 +1797,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       final swScaffold2 = Stopwatch()..start();
       {
         final batch = FirebaseFirestore.instance.batch();
-        for (int week = 0; week < 8; week++) {
+        for (int week = 0; week < 26; week++) {
           final weekRef = block2Ref.collection('weeks').doc('week_$week');
           batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
 
@@ -1828,7 +1839,8 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
         isActive: false, // keep only 1 active block
         start: startDate3,
         end: endDate3,
-        exerciseIds: block3ExerciseIds,
+        exerciseIds: allExerciseIds,
+        candidateExerciseIds: candidateIds,
       );
 
       final swCreate3 = Stopwatch()..start();
@@ -1854,7 +1866,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       final swScaffold3 = Stopwatch()..start();
       {
         final batch = FirebaseFirestore.instance.batch();
-        for (int week = 0; week < 8; week++) {
+        for (int week = 0; week < 26; week++) {
           final weekRef = block3Ref.collection('weeks').doc('week_$week');
           batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
 
@@ -2269,7 +2281,13 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
 
       if (!mounted) return;
-      Navigator.pushReplacementNamed(context, '/home');
+      // In edit mode, recompute templateCandidateExerciseIds for the active block
+      final entryFrom2 = (ModalRoute.of(context)?.settings.arguments as Map?)?['entryFrom']?.toString() ?? 'onboarding';
+      final isEditMode2 = entryFrom2 == 'templates' || entryFrom2 == 'drawer';
+      if (isEditMode2) {
+        await _recomputeTemplateCandidatesForActiveBlock();
+      }
+      if (mounted) Navigator.pushReplacementNamed(context, '/home');
     } catch (e, st) {
       debugPrint('❌ [Onboarding Finish] $e\n$st');
       if (!mounted) return;
@@ -2278,6 +2296,44 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       );
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// Updates templateCandidateExerciseIds on the active block and current_block pointer.
+  /// SCOPE: this pass updates only the active block and the current_block pointer.
+  /// Upcoming/future blocks retain their creation-time templateCandidateExerciseIds.
+  /// Do NOT extend this write to future blocks without a separate approved plan.
+  Future<void> _recomputeTemplateCandidatesForActiveBlock() async {
+    try {
+      final actingUid = context.read<UserContext>().currentUid;
+      final db = FirebaseFirestore.instance;
+
+      // Read sex from user doc
+      final userSnap = await db.collection('users').doc(actingUid).get();
+      final sexRaw = (userSnap.data()?['sex'] as String?)?.trim().toUpperCase() ?? 'N';
+      final isFemale = sexRaw == 'F' || sexRaw == 'N';
+      final candidateIds = computeTemplateCandidateIds(isFemale: isFemale);
+
+      // Read active block ID from current_block pointer
+      final ptrSnap = await db.collection('users').doc(actingUid)
+          .collection('block_planner').doc('current_block').get();
+      final activeBlockId = ptrSnap.data()?['blockId'] as String?;
+
+      // Update active block doc (additive — does NOT mutate exercises or plannedExercises)
+      if (activeBlockId != null && activeBlockId.isNotEmpty) {
+        await db.collection('planned_blocks').doc(actingUid)
+            .collection('blocks').doc(activeBlockId)
+            .set({'templateCandidateExerciseIds': candidateIds}, SetOptions(merge: true));
+      }
+
+      // Mirror to current_block pointer
+      await db.collection('users').doc(actingUid)
+          .collection('block_planner').doc('current_block')
+          .set({'templateCandidateExerciseIds': candidateIds}, SetOptions(merge: true));
+
+      debugPrint('✅ [Onboarding] recomputeTemplateCandidates → ${candidateIds.length} ids for $actingUid');
+    } catch (e, st) {
+      debugPrint('⚠️ [Onboarding] recomputeTemplateCandidatesForActiveBlock failed: $e\n$st');
     }
   }
 

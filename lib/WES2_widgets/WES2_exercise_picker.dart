@@ -111,10 +111,20 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
           .get();
       if (!mounted) return;
       final data = doc.data();
+      // 3-step planned-only fallback
+      final candidateList = (data?['templateCandidateExerciseIds'] as List?)
+          ?.map((e) => e.toString()).toSet() ?? const <String>{};
       final settings = data?['exerciseSettings'] as Map<String, dynamic>? ?? {};
+      final legacyPlanned = (data?['plannedExercises'] as List?)
+          ?.map((e) => e.toString()).toSet() ?? const <String>{};
+      final resolvedIds = candidateList.isNotEmpty
+          ? candidateList
+          : settings.isNotEmpty
+              ? settings.keys.toSet()
+              : legacyPlanned;
       setState(() {
-        _plannedIds = settings.keys.toSet();
-        _showPlannedOnly = _plannedIds.isNotEmpty;
+        _plannedIds = resolvedIds;
+        _showPlannedOnly = resolvedIds.isNotEmpty;
         _loadingPlanned = false;
       });
     } catch (_) {

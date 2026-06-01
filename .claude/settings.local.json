@@ -42,7 +42,8 @@
       "Bash(Remove-Item \"C:\\\\Projects\\\\RE-test\\\\lib\\\\Camp_BB2.dart\" -Force)",
       "Bash(Remove-Item \"C:\\\\Projects\\\\RE-test\\\\lib\\\\block_data_loader.dart\" -Force)",
       "Bash(Write-Output \"Deleted\")",
-      "Bash(dir C:\\\\Projects\\\\RE-test\\\\assets\\\\icon *)"
+      "Bash(dir C:\\\\Projects\\\\RE-test\\\\assets\\\\icon *)",
+      "Bash(git *)"
     ]
   }
 }

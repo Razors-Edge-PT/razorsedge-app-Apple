@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'template_model.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'block_creation_helper.dart';
 import 'bb3_week_planner.dart';
 import 'periodization_model_utils.dart';
 import 'core_exercises.dart';
@@ -57,6 +58,7 @@ class _BlockPlannerState extends State<Block_Planner> {
   bool _isSavedBlock = false;
   bool _didRunInitOnce = false;
   bool _initialBlockIsActive = false;
+  List<String> _templateCandidateIds = const [];
   bool _hasLocalEdits = false;
 
   String get userId => UserContext.of(context, listen: false).currentUid;
@@ -338,63 +340,24 @@ class _BlockPlannerState extends State<Block_Planner> {
 
 
       } else if (args != null && args['newBlock'] == true) {
-        // ✅ New block = local draft with default exercise IDs (no pointer hydration)
+        // ✅ New block = local draft with all exercise IDs from Firestore (no pointer hydration)
 
-        const defaultExerciseIds = <String>[
-          'AmfUWbF1DH3I7qPAdh5k',
-          'kTs5fLSTKjUkUZL10iii',
-          'heeBViVINHO6tUScSd6y',
-          'y5q9OU9OBzZQMkfPzFrf',
-          'v2XlZUvFfBUhogOdKtJ8',
-          'lVDG90yN6Z8aPjRNV2wc',
-          '2yJSfLMfOnNDSeZ7DqZT',
-          '9siQpXF2KLCj7M9kCy2m',
-          '1XOIXxeLFhgmgjZS9Cyq',
-          'Url65Q2RxZa00dkDpUdl',
-          'JbthLLjMF6xRvvaUY8PU',
-          'ETm055bydWtUCxTMu3MR',
-          'wIcMsf2J9cswJRs1GuYX',
-          'QkEgE8gnIva2kkNJEfxw',
-          'ZKpGshMxFl2dxNmYSATj',
-          'ci3KpMTEacH4bw8ZumJW',
-          'spGqXXReJNHMcc62YgZX',
-          'WPb8rtRTupKIBzgydB5k',
-          '0dZrCqZ8M7Q1sAn0zeeb',
-          'zn5PgKNRrWo1MTE4wnCy',
-          'E6jPE8YYR0KA3xtVaKJo',
-          'QacImADmlpljltUvB0dD',
-          'eeEXnmSXv90q0rUgGECq',
-          'KPewxxYYrhsOp84lIQr5',
-          'P88Vj5pBydqmiEzFowag',
-          'uY8uJaSFK9czKIX4TLc4',
-          'FtayDmR5BVnGS1FXlXLL',
-          'OJaMXFKgMnM0X5xttBE1',
-          '6SGWrCKfe7KQLThRYXQ6',
-          'Z1LpfaEBvHBDMsJ54pgw',
-          'z5gs1ilr4DpKlSZaRNG5',
-          'LVMQEQl6ZWBcgEUdk2tP',
-          'ISXQqOEXLjMrPEs0xjgJ',
-          'ocNWJv7xLrlinGmjG6cV',
-          'eyh76KELuuO805rZBpMa',
-          'RdsGazgdH0xgpjek0n3u',
-          'xWpCQO504iGfU3LKLZlD',
-          'XM9026peNIu0R8qh7UqY',
-        ];
+        final allExIds = await loadAllExerciseIds();
 
         setState(() {
-          exercises = defaultExerciseIds.toSet().toList(); // defensive de-dupe
+          exercises = allExIds.toSet().toList(); // defensive de-dupe
           selectedDays = const ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
           _isSavedBlock = false;
           _isNewBlock = true;
         });
 
 
-        // ✅ Default dates for a NEW draft block: start = Monday just gone, length = 9 weeks
+        // ✅ Default dates for a NEW draft block: start = Monday just gone, length = 26 weeks
         final now = DateTime.now();
         final today = DateTime(now.year, now.month, now.day); // date-only
         final start =
         today.subtract(Duration(days: today.weekday - DateTime.monday));
-        final end = start.add(const Duration(days: 62)); // 9 weeks = 63 days, inclusive end
+        final end = blockEndDate(start); // 26 weeks
 
         setState(() {
           _blockStartDate = start;
@@ -424,6 +387,11 @@ class _BlockPlannerState extends State<Block_Planner> {
               : (u2 != null && u2.isNotEmpty)
               ? u2
               : (fallback.isNotEmpty ? fallback : 'Block');
+
+          // Compute sex-specific candidate IDs
+          final sexRaw = (udata['sex'] as String?)?.trim().toUpperCase() ?? 'N';
+          final isFemale2 = sexRaw == 'F' || sexRaw == 'N';
+          _templateCandidateIds = computeTemplateCandidateIds(isFemale: isFemale2);
         }
 
         final months = const ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -438,8 +406,8 @@ class _BlockPlannerState extends State<Block_Planner> {
 
 
 
-        // ✅ Apply existing per-exercise defaults (same path as picker Save)
-        await _seedDefaultsFor(_idsWithoutSettings(exercises));
+        // ✅ Apply defaults for candidate exercises only (same path as picker Save)
+        await _seedDefaultsFor(_templateCandidateIds);
 
         if (!mounted) return;
 
@@ -594,6 +562,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       'selectedDays': selectedDays,
       'isActive': setActive,
       'createdAt': FieldValue.serverTimestamp(),
+      if (_templateCandidateIds.isNotEmpty) 'templateCandidateExerciseIds': _templateCandidateIds,
     }, SetOptions(merge: true));
 
     if (!mounted) return;
@@ -1623,6 +1592,7 @@ class _BlockPlannerState extends State<Block_Planner> {
           'blockStartDate': _blockStartDate?.toIso8601String() ?? '',
           'blockEndDate': _blockEndDate?.toIso8601String() ?? '',
         },
+        if (_templateCandidateIds.isNotEmpty) 'templateCandidateExerciseIds': _templateCandidateIds,
       }, SetOptions(merge: true));
 
       print('📌 Updated current_block → ID: $blockIdToUse');

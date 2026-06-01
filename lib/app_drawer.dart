@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../SavedWorkoutsScreen.dart';
@@ -12,6 +13,7 @@ import 'templates.dart';
 import 'exercises.dart';
 import 'body_weight_tracker.dart';
 import 'user_settings.dart';
+import 'create_new_account_screen.dart';
 
 
 
@@ -102,6 +104,38 @@ class AppDrawer extends StatelessWidget {
                 builder: (_) => ChangeNotifierProvider<UserContext>.value(
                   value: userContext,
                   child: const BB3WeekPlanner(),
+                ),
+              ),
+            );
+          }),
+
+          _drawerTile(context, Icons.tune, 'Training Preferences', () async {
+            final userContext = UserContext.of(context, listen: false);
+            final email = FirebaseAuth.instance.currentUser?.email ?? '';
+            final db = FirebaseFirestore.instance;
+            String? sex;
+            String? dob;
+            try {
+              final snap = await db.collection('users').doc(userContext.currentUid).get();
+              sex = snap.data()?['sex']?.toString();
+              dob = snap.data()?['dob']?.toString();
+            } catch (_) {}
+            if (!context.mounted) return;
+            await Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                  value: userContext,
+                  child: OnboardingPageTwo(
+                    email: email,
+                    password: 'edit-mode',
+                    sex: sex,
+                    username: null,
+                    fullName: null,
+                    dob: dob,
+                  ),
+                ),
+                settings: const RouteSettings(
+                  arguments: {'entryFrom': 'drawer'},
                 ),
               ),
             );

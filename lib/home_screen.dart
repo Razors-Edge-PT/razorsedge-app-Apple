@@ -25,6 +25,7 @@ import 'main.dart';
 import 'leaderboard_page.dart';
 import 'template_bootstrapper.dart';
 import 'block_exercise_defaults_repository.dart';
+import 'block_creation_helper.dart';
 import 'templates.dart';
 import 'planned_blocks_screen.dart';
 import 'local_cache/block_plan_cache.dart';
@@ -876,7 +877,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       // DateTime.weekday: Mon=1 ... Sun=7
       final startDate1 = today.subtract(Duration(days: today.weekday - DateTime.monday));
 
-      // 21 weeks = 182 days total. If start is day 0, last day is start + 181.
+      // 26 weeks = 182 days total. If start is day 0, last day is start + 181.
       final endDate1 = startDate1.add(const Duration(days: 181));
 
       // Next blocks start the day after the previous ends
@@ -969,6 +970,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         if (isFemale) ...femaleSpecificExercises else ...maleSpecificExercises,
       ];
 
+      // Load all exercise IDs for block.exercises/plannedExercises
+      final allExerciseIds = await loadAllExerciseIds();
+      // Sex-derived candidate pool for templateCandidateExerciseIds
+      final candidateIds = computeTemplateCandidateIds(isFemale: isFemale);
+
       // ── Block 2 exercise adjustments (sex-specific ± tweaks) ─────────────────────
 // Base = all exercises from Block 1. Then apply -exclusions +additions.
 
@@ -1038,6 +1044,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         required DateTime start,
         required DateTime end,
         required List<String> exerciseIds,
+        required List<String> candidateExerciseIds,
       }) {
         return {
           'name': name,
@@ -1048,6 +1055,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
           'exercises': exerciseIds,
           'plannedExercises': exerciseIds,
+          'templateCandidateExerciseIds': candidateExerciseIds,
           'plannedExerciseDetails': {
             'blockMeta': {
               'blockStartDate': start.toIso8601String(),
@@ -1064,7 +1072,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         isActive: true,
         start: startDate1,
         end: endDate1,
-        exerciseIds: seededExerciseIds,
+        exerciseIds: allExerciseIds,
+        candidateExerciseIds: candidateIds,
       );
 
       final swCreate1 = Stopwatch()..start();
@@ -1099,7 +1108,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           .set({
         'blockId': block1Id,
         'blockName': block1Name,
-        'plannedExercises': seededExerciseIds,
+        'plannedExercises': allExerciseIds,
+        'templateCandidateExerciseIds': candidateIds,
         'plannedExerciseDetails': {
           'blockMeta': {
             'blockStartDate': startDate1.toIso8601String(),
@@ -1119,7 +1129,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       final swScaffold1 = Stopwatch()..start();
       {
         final batch = FirebaseFirestore.instance.batch();
-        for (int week = 0; week < 8; week++) {
+        for (int week = 0; week < 26; week++) {
           final weekRef = block1Ref.collection('weeks').doc('week_$week');
           batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
 
@@ -1153,7 +1163,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         isActive: false, // keep only 1 active block
         start: startDate2,
         end: endDate2,
-        exerciseIds: block2ExerciseIds, // ✅ now uses sex-specific adjusted list
+        exerciseIds: allExerciseIds,
+        candidateExerciseIds: candidateIds,
       );
 
       final swCreate2 = Stopwatch()..start();
@@ -1173,7 +1184,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       final swScaffold2 = Stopwatch()..start();
       {
         final batch = FirebaseFirestore.instance.batch();
-        for (int week = 0; week < 8; week++) {
+        for (int week = 0; week < 26; week++) {
           final weekRef = block2Ref.collection('weeks').doc('week_$week');
           batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
 
@@ -1215,7 +1226,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         isActive: false, // keep only 1 active block
         start: startDate3,
         end: endDate3,
-        exerciseIds: block3ExerciseIds,
+        exerciseIds: allExerciseIds,
+        candidateExerciseIds: candidateIds,
       );
 
       final swCreate3 = Stopwatch()..start();
@@ -1241,7 +1253,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       final swScaffold3 = Stopwatch()..start();
       {
         final batch = FirebaseFirestore.instance.batch();
-        for (int week = 0; week < 8; week++) {
+        for (int week = 0; week < 26; week++) {
           final weekRef = block3Ref.collection('weeks').doc('week_$week');
           batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
 
