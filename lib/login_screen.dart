@@ -145,18 +145,21 @@ class _LoginScreenState extends State<LoginScreen> {
                 child: IntrinsicHeight(
                   child: Column(
                     children: [
-                      const SizedBox(height: 28),
+                      const SizedBox(height: 8),
                       AnimatedOpacity(
                         opacity: keyboardHeight > 0 ? 0.0 : 1.0,
                         duration: const Duration(milliseconds: 300),
-                        child: Center(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
                           child: Image.asset(
-                            'assets/icon/good_lift_logo2.png',
-                            height: 72,
+                            'assets/icon/goodlift_logo_log_in.png',
+                            width: MediaQuery.of(context).size.width,
+                            height: 135,
+                            fit: BoxFit.contain,
                           ),
                         ),
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 8),
                       Card(
                         elevation: 10,
                         shape: RoundedRectangleBorder(
