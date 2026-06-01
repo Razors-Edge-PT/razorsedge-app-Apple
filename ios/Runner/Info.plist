@@ -30,6 +30,8 @@
     <string>We need access to your camera so you can take and upload photos (for example, a profile picture or training-related photo).</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>We need access to your microphone only if you record audio while capturing video.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>GoodLift only uses location if required by a device or service feature you choose to use.</string>
 
 	<key>FacebookAppID</key>
 	<string>1635600397499645</string>
