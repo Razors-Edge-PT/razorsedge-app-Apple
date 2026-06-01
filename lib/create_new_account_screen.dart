@@ -1960,8 +1960,39 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       // 1) Create account now (if not already signed in)
       final auth = FirebaseAuth.instance;
       UserCredential? cred;
+      final current = auth.currentUser;
 
-      if (auth.currentUser == null) {
+      if (current?.isAnonymous == true) {
+        // Upgrade the anonymous session to a real email/password account.
+        // Preserves the UID so any data written during signup stays valid.
+        final emailCred = EmailAuthProvider.credential(
+          email: widget.email,
+          password: widget.password,
+        );
+        try {
+          cred = await current!.linkWithCredential(emailCred);
+          final username = (widget.username ?? '').trim();
+          if (username.isNotEmpty) {
+            await cred.user?.updateDisplayName(username);
+          }
+        } on FirebaseAuthException catch (linkErr) {
+          if (linkErr.code == 'credential-already-in-use' ||
+              linkErr.code == 'email-already-in-use') {
+            // Email already belongs to another account — do not write to Firestore.
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'That email is already in use. Please go back and log in instead.',
+                  ),
+                ),
+              );
+            }
+            return; // outer finally resets _saving
+          }
+          rethrow; // let outer catch handle unexpected errors
+        }
+      } else if (current == null) {
         cred = await auth.createUserWithEmailAndPassword(
           email: widget.email,
           password: widget.password,

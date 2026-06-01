@@ -100,10 +100,13 @@ class _AppRootState extends State<AppRoot> {
   Future<IdTokenResult>? _tokenFuture;
   UserContext? _userContext;
 
+  // Cached stream — avoids re-subscribing on every widget-tree rebuild.
+  late final Stream<User?> _authStream = FirebaseAuth.instance.authStateChanges();
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<User?>(
-      stream: FirebaseAuth.instance.authStateChanges(),
+      stream: _authStream,
       builder: (context, snap) {
         // Guard: never treat the async restoration window as signed-out.
         if (snap.connectionState == ConnectionState.waiting) {
@@ -114,8 +117,9 @@ class _AppRootState extends State<AppRoot> {
 
         final user = snap.data;
 
-        // Not logged in → clear memo and show unauthenticated app shell.
-        if (user == null) {
+        // Not logged in, OR anonymous (signup availability-check sessions should
+        // not grant access to the authenticated app shell).
+        if (user == null || user.isAnonymous) {
           _memoUid = null;
           _tokenFuture = null;
           _userContext = null;

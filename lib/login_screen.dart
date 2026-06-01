@@ -73,7 +73,9 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
-      final googleUser = await GoogleSignIn().signIn();
+      final googleSignIn = GoogleSignIn();
+      await googleSignIn.signOut(); // clears cached selection → forces account picker every time
+      final googleUser = await googleSignIn.signIn();
       if (googleUser == null) {
         setState(() => _isLoading = false);
         return;
