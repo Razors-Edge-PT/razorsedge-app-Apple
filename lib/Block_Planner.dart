@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'main.dart' show routeObserver;
 import 'template_model.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'block_creation_helper.dart';
@@ -43,7 +44,7 @@ class Block_Planner extends StatefulWidget {
 
 }
 
-class _BlockPlannerState extends State<Block_Planner> {
+class _BlockPlannerState extends State<Block_Planner> with RouteAware {
   final TextEditingController _blockNameController = TextEditingController();
   List<String> exercises = [];
   final Map<String, String> _exerciseIdToName = {}; // id ➔ name
@@ -60,6 +61,7 @@ class _BlockPlannerState extends State<Block_Planner> {
   bool _initialBlockIsActive = false;
   List<String> _templateCandidateIds = const [];
   bool _hasLocalEdits = false;
+  bool _routeSubscribed = false;
 
   String get userId => UserContext.of(context, listen: false).currentUid;
 
@@ -127,6 +129,7 @@ class _BlockPlannerState extends State<Block_Planner> {
       }
     });
 
+    routeObserver.unsubscribe(this);
     super.dispose();
   }
 
@@ -146,6 +149,19 @@ class _BlockPlannerState extends State<Block_Planner> {
 
     _didRunInitOnce = true;
     _scaffoldMessenger ??= ScaffoldMessenger.maybeOf(context);
+
+    if (!_routeSubscribed) {
+      final route = ModalRoute.of(context);
+      if (route != null) {
+        routeObserver.subscribe(this, route);
+        _routeSubscribed = true;
+      }
+    }
+  }
+
+  @override
+  void didPopNext() {
+    _loadTemplateExerciseIds();
   }
 
   Future<void> _loadExistingBlock(String blockId) async {
@@ -205,6 +221,13 @@ class _BlockPlannerState extends State<Block_Planner> {
 
       _initialBlockIsActive = data['isActive'] ?? false;
     });
+
+    final candidates = List<String>.from(
+        data['templateCandidateExerciseIds'] ?? const <String>[]);
+    if (candidates.isNotEmpty) {
+      setState(() => _templateCandidateIds = candidates);
+    }
+
     _loadTemplateExerciseIds();
   }
 
@@ -224,8 +247,9 @@ class _BlockPlannerState extends State<Block_Planner> {
         matchedTemplates++;
         final exList = data['exercises'] as List? ?? [];
         for (final ex in exList) {
-          if (ex is Map && ex['exerciseId'] != null) {
-            ids.add(ex['exerciseId'].toString());
+          if (ex is Map) {
+            final exId = (ex['exerciseId'] ?? ex['id'])?.toString();
+            if (exId != null && exId.isNotEmpty) ids.add(exId);
           }
         }
       }
@@ -1910,12 +1934,16 @@ class _BlockPlannerState extends State<Block_Planner> {
                 int cmp(String a, String b) =>
                     (_exerciseIdToName[a] ?? '').toLowerCase()
                         .compareTo((_exerciseIdToName[b] ?? '').toLowerCase());
+                final aboveDividerIds = {
+                  ..._templateCandidateIds,
+                  ..._templateExerciseIds,
+                };
                 final inTemplates = exercises
-                    .where((id) => _templateExerciseIds.contains(id))
+                    .where((id) => aboveDividerIds.contains(id))
                     .toList()
                   ..sort(cmp);
                 final notInTemplates = exercises
-                    .where((id) => !_templateExerciseIds.contains(id))
+                    .where((id) => !aboveDividerIds.contains(id))
                     .toList()
                   ..sort(cmp);
                 final showDivider =
