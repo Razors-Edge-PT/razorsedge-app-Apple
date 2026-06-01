@@ -1,16 +1,18 @@
+import 'dart:async' show unawaited;
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'template_details.dart'; // 👈 unchanged
-import 'exercise_model.dart';
 import 'template_model.dart';
 import 'template_utils.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'block_repository.dart';
+import 'block_exercise_defaults_repository.dart';
 import 'user_context.dart';
 import 'package:provider/provider.dart';
 import 'main.dart' show showAppSnack;
+import 'WES2_widgets/WES2_exercise_picker.dart';
 
 
 
@@ -31,21 +33,12 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
   final List<_EditableCircuit> _circuits = <_EditableCircuit>[];
 
   // ---- from your old screen
-  bool _plannedOnly = false;
   bool _isLoading = true;
   String? _activeBlockId;
   // ---- blocks for dropdown
   List<Map<String, String>> _blocks = []; // [{id, name}]
   String? _selectedBlockId;
   String? _selectedBlockName;
-
-
-  List<Exercise> exercises = []; // fetched from Firestore
-  Set<String> _plannedExerciseIds = {}; // planned exercise IDs (from block)
-
-  // id/name helpers (local)
-  final Map<String, Exercise> _exerciseById = {};
-  final Map<String, String> _idByName = {}; // name -> id
 
   // Generate a unique ID (unchanged)
   final generatedId =
@@ -64,7 +57,6 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
 
   Future<void> _initLoad() async {
     await _fetchActiveBlockAndPlannedExercises();
-    await _fetchExercises();
     setState(() => _isLoading = false);
   }
 
@@ -115,61 +107,8 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
     }
 
     _blocks = loadedBlocks;
-
-    // 4) pull planned exercises from ACTIVE block only
-    if (_activeBlockId == null) return;
-
-    final docSnap = await FirebaseFirestore.instance
-        .collection('planned_blocks')
-        .doc(userId) // ✅ selected athlete
-        .collection('blocks')
-        .doc(_activeBlockId!)
-        .get();
-
-
-    if (docSnap.exists && docSnap.data()!.containsKey('plannedExercises')) {
-      final List<dynamic> plannedList = docSnap.data()!['plannedExercises'];
-      _plannedExerciseIds = plannedList.cast<String>().toSet();
-    }
   }
 
-
-  Future<void> _fetchExercises() async {
-    try {
-      final querySnapshot =
-      await FirebaseFirestore.instance.collection('exercises').get();
-
-      final exerciseList = querySnapshot.docs
-          .map((doc) => Exercise(
-        id: doc.id,
-        name: doc.get('name'),
-        bodyPart: doc.get('bodyPart'),
-        category: doc.get('category'),
-      ))
-          .toList();
-
-      exercises = exerciseList;
-
-      _exerciseById
-        ..clear()
-        ..addEntries(exercises.map((e) => MapEntry(e.id, e)));
-
-      _idByName
-        ..clear()
-        ..addEntries(exercises.map((e) => MapEntry(e.name, e.id)));
-    } catch (error) {
-      // Keep UI usable even if this fails
-    }
-  }
-
-  // ----- UI helpers: filtered list for the picker -----
-  List<Exercise> _displayedExercises() {
-    if (_plannedOnly) {
-      final set = _plannedExerciseIds;
-      return exercises.where((e) => set.contains(e.id)).toList();
-    }
-    return exercises;
-  }
 
   // ----- Circuit UI -----
   @override
@@ -183,31 +122,14 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final displayed = _displayedExercises();
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Design Workout'),
         actions: [
-          Row(
-            children: [
-              const Text('Planned Only', style: TextStyle(fontSize: 12)),
-              Switch(
-                value: _plannedOnly,
-                onChanged: (value) {
-                  setState(() {
-                    _plannedOnly = value;
-                  });
-                },
-              ),
-              IconButton(
-                icon: const Icon(Icons.save),
-                onPressed: _submitTemplate,
-
-              ),
-            ],
+          IconButton(
+            icon: const Icon(Icons.save),
+            onPressed: _submitTemplate,
           ),
-          const SizedBox(width: 8),
         ],
       ),
       body: _isLoading
@@ -341,7 +263,7 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
                 },
                 buildDefaultDragHandles: false,
                 itemBuilder: (context, index) =>
-                    _buildCircuitCard(context, index, displayed),
+                    _buildCircuitCard(context, index),
               ),
             ),
           ],
@@ -350,11 +272,7 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
     );
   }
 
-  Widget _buildCircuitCard(
-      BuildContext context,
-      int index,
-      List<Exercise> displayedExercises,
-      ) {
+  Widget _buildCircuitCard(BuildContext context, int index) {
     final circuit = _circuits[index];
     final theme = Theme.of(context);
 
@@ -411,7 +329,7 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
               child: FilledButton.tonalIcon(
                 icon: const Icon(Icons.fitness_center),
                 label: const Text('Choose exercises'),
-                onPressed: () => _openExercisePickerForCircuit(index, displayedExercises),
+                onPressed: () => _openExercisePickerForCircuit(index),
               ),
             ),
           ],
@@ -569,119 +487,48 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
     });
   }
 
-  // -------- Picker (uses only material; no extra imports)
-  Future<void> _openExercisePickerForCircuit(
-      int circuitIndex,
-      List<Exercise> displayedExercises,
-      ) async {
-    final circuit = _circuits[circuitIndex];
-
-    // Initial selection: names already in the circuit
-    final initialSelection = circuit.exercises.map((e) => e.name).toSet();
-
-    final selectedNames = await _showExercisePickerDialog(
-      context: context,
-      allExercises: displayedExercises,
-      initialSelection: initialSelection,
-    );
-
-    if (!mounted || selectedNames == null) return;
-
-    setState(() {
-      // Update circuit to exactly match the selection (keep alphabetical consistency)
-      final keep = selectedNames.toSet();
-      circuit.exercises.removeWhere((e) => !keep.contains(e.name));
-
-      final existing = circuit.exercises.map((e) => e.name).toSet();
-      final toAdd = selectedNames.where((n) => !existing.contains(n)).toList()
-        ..sort();
-      for (final name in toAdd) {
-        circuit.exercises.add(_EditableExercise(name: name));
+  // -------- Picker — delegates to WES2 picker bottom sheet
+  Future<void> _openExercisePickerForCircuit(int circuitIndex) async {
+    // Whole-template exclusion: hide exercises already added anywhere
+    final excludedIds = <String>{};
+    for (final c in _circuits) {
+      for (final ex in c.exercises) {
+        if (ex.id.isNotEmpty) excludedIds.add(ex.id);
       }
-    });
-  }
-
-  Future<Set<String>?> _showExercisePickerDialog({
-    required BuildContext context,
-    required List<Exercise> allExercises,
-    required Set<String> initialSelection,
-  }) async {
-    // Group by category (same categories you used)
-    final grouped = <String, List<Exercise>>{};
-    for (final e in allExercises) {
-      final cat = e.category ?? 'Other';
-      grouped.putIfAbsent(cat, () => []).add(e);
     }
 
-    // Custom category order
-    final List<String> customCategoryOrder = [
-      'Horizontal Press',
-      'Horizontal Pull',
-      'Vertical Press',
-      'Vertical Pull',
-      'Lateral Raise',
-      'Arm Extension',
-      'Arm Curl',
-      'Squat Pattern',
-      'Hip Hinge',
-      'Leg Extension',
-      'Leg Curl',
-      'Hip Abduction/adduction',
-      'Calf Raise',
-      'Core',
-      'Other',
-    ];
-
-    final selection = initialSelection.toSet();
-
-    return showDialog<Set<String>>(
+    final result = await showModalBottomSheet<
+        ({String exerciseId, String name, int circuitIndex})>(
       context: context,
-      builder: (ctx) {
-        return AlertDialog(
-          title: const Text('Select exercises'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: ListView(
-              children: [
-                for (final category in customCategoryOrder)
-                  if (grouped.containsKey(category))
-                    ExpansionTile(
-                      title: Text(category),
-                      children: [
-                        for (final e in (grouped[category]!..sort((a,b) => a.name.compareTo(b.name))))
-                          StatefulBuilder(
-                            builder: (context, setStateTile) => CheckboxListTile(
-                              title: Text(e.name),
-                              value: selection.contains(e.name),
-                              onChanged: (val) {
-                                setStateTile(() {
-                                  if (val == true) {
-                                    selection.add(e.name);
-                                  } else {
-                                    selection.remove(e.name);
-                                  }
-                                });
-                              },
-                            ),
-                          ),
-                      ],
-                    ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, null),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, selection),
-              child: const Text('Done'),
-            ),
-          ],
-        );
-      },
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => Wes2ExercisePicker(
+        excludedIds: excludedIds,
+        actingUid: userId,
+        activeBlockId: _selectedBlockId ?? _activeBlockId,
+        availableCircuits: List.generate(_circuits.length, (i) => i),
+        initialCircuitIndex: circuitIndex,
+        titleOverride: 'Add Exercise to Circuit ${circuitIndex + 1}',
+      ),
     );
+
+    if (!mounted || result == null) return;
+
+    final targetIndex = result.circuitIndex.clamp(0, _circuits.length - 1);
+    setState(() {
+      _circuits[targetIndex].exercises.add(
+        _EditableExercise(id: result.exerciseId, name: result.name),
+      );
+    });
+
+    final blockId = _selectedBlockId ?? _activeBlockId;
+    if (blockId != null && blockId.isNotEmpty) {
+      unawaited(BlockExerciseDefaultsRepository.ensureExerciseDefaults(
+        uid: userId,
+        blockId: blockId,
+        exerciseId: result.exerciseId,
+      ));
+    }
   }
 
   // ----- Save (uses your existing addTemplateToFirestore and navigation)
@@ -699,6 +546,7 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
         final exerciseName = ex.name.trim();
         if (exerciseName.isEmpty) continue;
         exerciseMaps.add({
+          'exerciseId': ex.id,
           'name': exerciseName,
           'circuitIndex': circuitIndex,
         });
@@ -783,6 +631,7 @@ class _EditableCircuit {
 }
 
 class _EditableExercise {
-  const _EditableExercise({this.name = ''});
+  const _EditableExercise({this.id = '', this.name = ''});
+  final String id;
   final String name;
 }
