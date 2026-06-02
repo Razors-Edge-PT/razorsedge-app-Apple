@@ -209,7 +209,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
     // DUP Signature: override planReps with history-aware rep target from exerciseSettings.
     int? dupSigReps;
     if (exSettings?['periodizationModel'] == 'DUP, Signature') {
-      dupSigReps = _computeDupSignatureReps(exSettings, weekIndex, row.name);
+      dupSigReps = _computeDupSignatureReps(exSettings, weekIndex, row.exerciseId, row.name);
       if (dupSigReps != null) planReps = dupSigReps;
     }
     final planRir = BB3PlannedExerciseService.getRirFromPlan(
@@ -1242,9 +1242,15 @@ class Wes2HintServiceImpl implements Wes2HintService {
   /// Returns the DUP Signature rep target for Set 1 using exerciseSettings min/max
   /// and history derived from savedWorkoutsList (the same source WES2 already uses).
   /// Returns null when min/max are missing or invalid — never throws.
+  ///
+  /// [exerciseId] is the canonical Firestore exercise doc ID for the current row.
+  /// Match priority: exerciseId when the workout doc carries one; name fallback
+  /// only for legacy rows that have no id field. This mirrors the key strategy
+  /// in _rebuildTopSetsFromSavedWorkouts so DUP Signature history is consistent.
   int? _computeDupSignatureReps(
     Map<String, dynamic>? exSettings,
     int weekIndex,
+    String exerciseId,
     String exerciseName,
   ) {
     final range = _parseDupSignatureRange(exSettings?['repTargets']);
@@ -1270,7 +1276,15 @@ class Wes2HintServiceImpl implements Wes2HintService {
       if (exercisesRaw is! List) continue;
       for (final ex in exercisesRaw) {
         final exMap = asStringMap(ex);
-        if (exMap == null || exMap['name'] != exerciseName) continue;
+        if (exMap == null) continue;
+        // exerciseId-first: use the workout doc's id when present so exercises
+        // that share a display name but differ by id don't contaminate each other.
+        final docExId = (exMap['exerciseId'] ?? exMap['id'] ?? '').toString().trim();
+        final docName = (exMap['name'] ?? '').toString().trim();
+        final matchesExercise = docExId.isNotEmpty
+            ? docExId == exerciseId
+            : docName == exerciseName;
+        if (!matchesExercise) continue;
         final setsRaw = exMap['sets'];
         final sets = setsRaw is List ? setsRaw : const <dynamic>[];
         double bestE1rm = 0.0;

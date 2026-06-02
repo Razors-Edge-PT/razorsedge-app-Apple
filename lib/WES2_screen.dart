@@ -503,6 +503,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   /// are included so pre-WES2 history is not silently dropped; once the coach
   /// switches athletes and _refreshHistoryForHints stamps fresh entries, the
   /// un-stamped legacy entries age out naturally as the block window advances.
+  ///
+  /// Key strategy: use exerciseId when the workout document carries one;
+  /// fall back to exercise name only for genuinely legacy rows that have no id.
+  /// This prevents exercises that share a display name but have different
+  /// canonical IDs from contaminating each other's top-set history.
   void _rebuildTopSetsFromSavedWorkouts(String actingUid) {
     double parseD(dynamic v) {
       if (v == null) return 0.0;
@@ -516,6 +521,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     }
 
     int skippedForeignUid = 0;
+    int keyedById = 0;
+    int keyedByName = 0;
     final newMap = <String, List<Map<String, dynamic>>>{};
     for (final w in PeriodizationModelUtils.savedWorkoutsList) {
       // Skip entries explicitly stamped for a different athlete.
@@ -533,8 +540,13 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       if (exs is! List) continue;
       for (final ex in exs) {
         if (ex is! Map) continue;
-        final name = (ex['name'] ?? '').toString().trim();
-        if (name.isEmpty) continue;
+        // exerciseId-first keying: exercises that share a display name but have
+        // different canonical IDs each get their own isolated history bucket.
+        final exerciseId = (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim();
+        final name       = (ex['name'] ?? '').toString().trim();
+        // Must have at least one usable identity token.
+        if (exerciseId.isEmpty && name.isEmpty) continue;
+        final key = exerciseId.isNotEmpty ? exerciseId : name;
         final sets = ex['sets'];
         if (sets is! List) continue;
         double bestE1rm = 0;
@@ -551,7 +563,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             best = {'weight': w2, 'reps': r, 'rir': rir, 'date': wDate};
           }
         }
-        if (best != null) newMap.putIfAbsent(name, () => []).add(best);
+        if (best != null) {
+          newMap.putIfAbsent(key, () => []).add(best);
+          if (exerciseId.isNotEmpty) { keyedById++; } else { keyedByName++; }
+        }
       }
     }
     for (final list in newMap.values) {
@@ -571,6 +586,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     debugPrint('[WES2][topSets] uid=$actingUid '
         'savedList=${PeriodizationModelUtils.savedWorkoutsList.length} '
         'topSetKeys=${newMap.length} '
+        'byId=$keyedById byName=$keyedByName '
         'skippedForeignUid=$skippedForeignUid');
   }
 

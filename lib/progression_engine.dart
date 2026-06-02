@@ -505,7 +505,11 @@ class ProgressionEngine {
 
         // ✅ fallback
         maxWeightByReps: _exerciseSettings[exerciseId]?['maxWeightByReps'],
-        topSetHistory: PeriodizationModelUtils.topSetsByExercise[exerciseName],
+        // exerciseId-first lookup: history is now keyed by exerciseId when the
+        // workout document carried one. Fall back to name for legacy rows that
+        // were stored without an id (they remain under a name key).
+        topSetHistory: PeriodizationModelUtils.topSetsByExercise[exerciseId]
+            ?? PeriodizationModelUtils.topSetsByExercise[exerciseName],
         weekIndex: (blockStartDate == null || _selectedDate == null)
             ? 0 // safe default until initialized
             : PeriodizationModelUtils.getWeekIndexForDate(
