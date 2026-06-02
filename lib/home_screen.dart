@@ -30,6 +30,7 @@ import 'block_creation_helper.dart';
 import 'templates.dart';
 import 'planned_blocks_screen.dart';
 import 'local_cache/block_plan_cache.dart';
+import 'onboarding_prefs.dart';
 import 'package:intl/intl.dart';
 
 
@@ -50,6 +51,9 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with RouteAware {
   late final UserContext _uc;
   bool _ucBound = false;
+
+  // Onboarding cue state — default true so no cue flashes before prefs load
+  bool _wpDone = true;
 
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   static const double kFeatureCardWidth = 150;
@@ -199,6 +203,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         }
       });
     });
+
+    // Load onboarding cue state (non-blocking; defaults keep Home safe until this resolves)
+    unawaited(_loadOnboardingState());
 
     // 🔧 One-time default template bootstrap (non-blocking) — gated on users + fitness_onboarding
     // 🚫 Auth stability guard — do NOT attach Firestore listeners if auth is unstable
@@ -1289,12 +1296,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   @override
   void didPopNext() {
-    // If our State is gone, do nothing
     if (!mounted) return;
 
     // Run after the current frame so the tree is stable again
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
+
+      // Refresh onboarding cue (picks up wpDemoComplete if just set in Templates)
+      unawaited(_loadOnboardingState());
 
       // 🟢 Existing logic — re-fetch whichever feed is active
       if (_feedOwnersResolved) {
@@ -1815,6 +1824,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     }
   }
 
+  Future<void> _loadOnboardingState() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || !mounted) return;
+    final done = await OnboardingPrefs.getWpDone(uid);
+    if (!mounted) return;
+    setState(() => _wpDone = done);
+  }
+
   Widget _buildQACard({
     required IconData icon,
     required String label,
@@ -1824,7 +1841,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }) {
     return SizedBox(
       width: kFeatureCardWidth,
-      height: 120,
+      height: 130,
       child: GestureDetector(
         onTap: onTap,
         child: Card(
@@ -2279,7 +2296,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     children: [
                       //Quick Access — two-row synchronized horizontal scroll
                       SizedBox(
-                        height: 260,
+                        height: !_wpDone ? 296.0 : 280.0,
                         child: SingleChildScrollView(
                           scrollDirection: Axis.horizontal,
                           child: Row(
@@ -2298,7 +2315,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                     ));
                                   },
                                   iconWidget: SizedBox(
-                                    width: 52, height: 52,
+                                    width: 52, height: 56,
                                     child: Stack(clipBehavior: Clip.none, children: [
                                       Icon(Icons.fitness_center, size: 44,
                                           color: Theme.of(context).colorScheme.secondary),
@@ -2316,16 +2333,20 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                               ),
                               // Column 2: Workout Planner / Profile
                               _buildQAColumn(
-                                _buildQACard(
-                                  icon: Icons.view_list,
-                                  label: 'Workout\nPlanner',
-                                  onTap: () {
-                                    final uc = UserContext.of(context, listen: false);
-                                    Navigator.push(context, MaterialPageRoute(
-                                      builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                        value: uc, child: const TemplatesScreen()),
-                                    ));
-                                  },
+                                _GlowingCueWrapper(
+                                  active: !_wpDone,
+                                  label: 'Tap here first',
+                                  child: _buildQACard(
+                                    icon: Icons.view_list,
+                                    label: 'Workout\nPlanner',
+                                    onTap: () {
+                                      final uc = UserContext.of(context, listen: false);
+                                      Navigator.push(context, MaterialPageRoute(
+                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                          value: uc, child: const TemplatesScreen()),
+                                      ));
+                                    },
+                                  ),
                                 ),
                                 _buildQACard(
                                   icon: Icons.person_outline,
@@ -2390,7 +2411,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                         ));
                                       },
                                     )
-                                  : const SizedBox(width: kFeatureCardWidth, height: 120),
+                                  : const SizedBox(width: kFeatureCardWidth, height: 130),
                               ),
                             ],
                           ),
@@ -2807,10 +2828,89 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
                         ],
 
+                      SizedBox(height: MediaQuery.of(context).padding.bottom + 24),
 
                     ],
                   ),
                 ),
+    );
+  }
+}
+
+// ── Glowing cue wrapper ────────────────────────────────────────────────────────
+// Wraps a Quick Access card with an animated colour-cycling glow border and a
+// small label above it. Renders the child unchanged when active is false.
+class _GlowingCueWrapper extends StatefulWidget {
+  final bool active;
+  final String label;
+  final Widget child;
+  const _GlowingCueWrapper({
+    required this.active,
+    required this.label,
+    required this.child,
+  });
+
+  @override
+  State<_GlowingCueWrapper> createState() => _GlowingCueWrapperState();
+}
+
+class _GlowingCueWrapperState extends State<_GlowingCueWrapper>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.active) return widget.child;
+
+    final cs = Theme.of(context).colorScheme;
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (_, __) {
+        final color = Color.lerp(cs.secondary, cs.tertiary, _ctrl.value)!;
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              widget.label,
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+                color: color.withOpacity(0.9),
+              ),
+            ),
+            const SizedBox(height: 2),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: color, width: 1.5),
+                boxShadow: [
+                  BoxShadow(
+                    color: color.withOpacity(0.4),
+                    blurRadius: 8,
+                    spreadRadius: 1,
+                  ),
+                ],
+              ),
+              child: widget.child,
+            ),
+          ],
+        );
+      },
     );
   }
 }

@@ -136,6 +136,7 @@ flutter:
     - assets/branding/anatomy/female_anatomy.png
     - assets/exercise_dump_20251109_112626.json
     - assets/exercise_videos/
+    - assets/screen_recordings/
     - assets/icon/Logo_beta.png
     - assets/icon/good_lift_logo2.png
     - assets/icon/goodlift_logo_log_in.png

@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'onboarding_prefs.dart';
+import 'wp_demo_player.dart';
 import 'package:provider/provider.dart';
 import 'block_exercise_defaults_repository.dart';
 
@@ -74,6 +76,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   final Set<String> _expandedUpcomingBlockIds = {};
 
   bool _loadingBlocks = true;
+  bool _wpDemoShownThisSession = false; // prevents double auto-show within one session
 
   // when you hover/drop we can give a little highlight
   String? _draggingOverTemplateId;
@@ -93,7 +96,58 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   void initState() {
     super.initState();
     _loadBlocksThenTemplates();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowWpDemo());
   }
+
+  // ── Workout Planner demo ──────────────────────────────────────────────────
+
+  /// Auto-shows the video demo once per session if the logged-in user has not
+  /// yet completed it.
+  Future<void> _maybeShowWpDemo() async {
+    if (_wpDemoShownThisSession || !mounted) return;
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    final done = await OnboardingPrefs.getWpDone(uid);
+    if (done || !mounted) return;
+    _wpDemoShownThisSession = true;
+    await _showWpDemoPlayer();
+  }
+
+  Future<void> _showWpDemoPlayer() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || !mounted) return;
+    await showGeneralDialog<void>(
+      context: context,
+      barrierColor: Colors.black87,
+      barrierDismissible: false,
+      pageBuilder: (_, __, ___) => WpDemoPlayer(actorUid: uid),
+    );
+  }
+
+  Widget _buildWpDemoMenuButton() {
+    return PopupMenuButton<String>(
+      icon: const Icon(Icons.more_vert, size: 14, color: Colors.white38),
+      iconSize: 14,
+      padding: EdgeInsets.zero,
+      splashRadius: 14,
+      tooltip: '',
+      itemBuilder: (_) => const [
+        PopupMenuItem<String>(
+          value: 'demo',
+          height: 36,
+          child: Text(
+            'View workout planner demo',
+            style: TextStyle(fontSize: 13),
+          ),
+        ),
+      ],
+      onSelected: (val) {
+        if (val == 'demo') _showWpDemoPlayer();
+      },
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
 
   Future<void> editTemplateName(Template template) async {
     final controller = TextEditingController(text: template.name);
@@ -1330,6 +1384,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                 ),
 
                 const SizedBox(width: 6),
+                _buildWpDemoMenuButton(),
+                const SizedBox(width: 2),
 
                 // 🔽 RIGHT SIDE (fixed width)
                 Container(
