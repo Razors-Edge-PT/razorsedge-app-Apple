@@ -110,17 +110,20 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     final done = await OnboardingPrefs.getWpDone(uid);
     if (done || !mounted) return;
     _wpDemoShownThisSession = true;
-    await _showWpDemoPlayer();
+    await _showWpDemoPlayer(autoCloseAfterCompletion: true);
   }
 
-  Future<void> _showWpDemoPlayer() async {
+  Future<void> _showWpDemoPlayer({bool autoCloseAfterCompletion = false}) async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null || !mounted) return;
     await showGeneralDialog<void>(
       context: context,
       barrierColor: Colors.black87,
       barrierDismissible: false,
-      pageBuilder: (_, __, ___) => WpDemoPlayer(actorUid: uid),
+      pageBuilder: (_, __, ___) => WpDemoPlayer(
+        actorUid: uid,
+        autoCloseAfterCompletion: autoCloseAfterCompletion,
+      ),
     );
   }
 
