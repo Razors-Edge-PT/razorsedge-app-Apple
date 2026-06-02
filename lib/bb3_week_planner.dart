@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import 'bb3_day_panel.dart';
 import 'bb3_models.dart';
 import 'bb3_planned_exercise_service.dart';
+import 'planned_only_resolver.dart';
 import 'template_model.dart';
 import 'user_context.dart';
 
@@ -166,16 +167,11 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
         await BB3PlannedExerciseService.getBlockSettings(uid, blockId);
     if (!mounted) return;
 
-    // Read templateCandidateExerciseIds for picker fallback
+    // Resolve planned-only IDs: templateCandidateExerciseIds ∪ template-used IDs for this block.
     List<String>? candidateIds;
     try {
-      final blockDoc = await FirebaseFirestore.instance
-          .collection('planned_blocks').doc(uid)
-          .collection('blocks').doc(blockId).get();
-      final rawList = blockDoc.data()?['templateCandidateExerciseIds'] as List?;
-      if (rawList != null && rawList.isNotEmpty) {
-        candidateIds = rawList.map((e) => e.toString()).toList();
-      }
+      final resolved = await resolvePlannedOnlyIds(uid: uid, blockId: blockId);
+      if (resolved.isNotEmpty) candidateIds = resolved.toList();
     } catch (_) {}
 
     // jumpToStart=true (manual block switch via dropdown): jump to the block's

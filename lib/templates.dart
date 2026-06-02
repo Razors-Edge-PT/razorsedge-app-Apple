@@ -7,6 +7,7 @@ import 'onboarding_prefs.dart';
 import 'wp_demo_player.dart';
 import 'package:provider/provider.dart';
 import 'block_exercise_defaults_repository.dart';
+import 'planned_only_resolver.dart';
 
 import 'block_repository.dart'; // 👈 to get active block id + meta
 import 'template_bootstrapper.dart';
@@ -210,28 +211,11 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     bool plannedModeAvailable = false;
 
     try {
-      if (_activeBlockId != null) {
-        final plannedDoc = await FirebaseFirestore.instance
-            .collection('planned_blocks')
-            .doc(userId)
-            .collection('blocks')
-            .doc(_activeBlockId!)
-            .get();
-
-        final blockData = plannedDoc.data();
-        // 3-step planned-only fallback (templateCandidateExerciseIds → exerciseSettings.keys → plannedExercises)
-        final candidateList = (blockData?['templateCandidateExerciseIds'] as List?)
-            ?.map((e) => e.toString()).toSet() ?? const <String>{};
-        final settingsMap = blockData?['exerciseSettings'] as Map<String, dynamic>? ?? {};
-        final legacyPlanned = (blockData?['plannedExercises'] as List?)
-            ?.map((e) => e.toString()).toSet() ?? const <String>{};
-        plannedExerciseIds = candidateList.isNotEmpty
-            ? candidateList
-            : settingsMap.isNotEmpty
-                ? settingsMap.keys.toSet()
-                : legacyPlanned;
-        plannedModeAvailable = plannedExerciseIds.isNotEmpty;
-      }
+      plannedExerciseIds = await resolvePlannedOnlyIds(
+        uid: userId,
+        blockId: _activeBlockId,
+      );
+      plannedModeAvailable = plannedExerciseIds.isNotEmpty;
     } catch (_) {
       plannedModeAvailable = false;
     }
@@ -495,28 +479,11 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     bool plannedModeAvailable = false;
 
     try {
-      if (_activeBlockId != null) {
-        final plannedDoc = await FirebaseFirestore.instance
-            .collection('planned_blocks')
-            .doc(userId)
-            .collection('blocks')
-            .doc(_activeBlockId!)
-            .get();
-
-        final blockData = plannedDoc.data();
-        // 3-step planned-only fallback (templateCandidateExerciseIds → exerciseSettings.keys → plannedExercises)
-        final candidateList = (blockData?['templateCandidateExerciseIds'] as List?)
-            ?.map((e) => e.toString()).toSet() ?? const <String>{};
-        final settingsMap = blockData?['exerciseSettings'] as Map<String, dynamic>? ?? {};
-        final legacyPlanned = (blockData?['plannedExercises'] as List?)
-            ?.map((e) => e.toString()).toSet() ?? const <String>{};
-        plannedExerciseIds = candidateList.isNotEmpty
-            ? candidateList
-            : settingsMap.isNotEmpty
-                ? settingsMap.keys.toSet()
-                : legacyPlanned;
-        plannedModeAvailable = plannedExerciseIds.isNotEmpty;
-      }
+      plannedExerciseIds = await resolvePlannedOnlyIds(
+        uid: userId,
+        blockId: _activeBlockId,
+      );
+      plannedModeAvailable = plannedExerciseIds.isNotEmpty;
     } catch (_) {
       plannedModeAvailable = false;
     }

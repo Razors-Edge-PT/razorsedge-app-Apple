@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import '../planned_only_resolver.dart';
 
 /// WES2 exercise picker bottom sheet.
 /// Opens immediately; fetches exercises and planned IDs asynchronously inside.
@@ -103,25 +104,11 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
       return;
     }
     try {
-      final doc = await FirebaseFirestore.instance
-          .collection('planned_blocks')
-          .doc(widget.actingUid)
-          .collection('blocks')
-          .doc(widget.activeBlockId)
-          .get();
+      final resolvedIds = await resolvePlannedOnlyIds(
+        uid: widget.actingUid,
+        blockId: widget.activeBlockId,
+      );
       if (!mounted) return;
-      final data = doc.data();
-      // 3-step planned-only fallback
-      final candidateList = (data?['templateCandidateExerciseIds'] as List?)
-          ?.map((e) => e.toString()).toSet() ?? const <String>{};
-      final settings = data?['exerciseSettings'] as Map<String, dynamic>? ?? {};
-      final legacyPlanned = (data?['plannedExercises'] as List?)
-          ?.map((e) => e.toString()).toSet() ?? const <String>{};
-      final resolvedIds = candidateList.isNotEmpty
-          ? candidateList
-          : settings.isNotEmpty
-              ? settings.keys.toSet()
-              : legacyPlanned;
       setState(() {
         _plannedIds = resolvedIds;
         _showPlannedOnly = resolvedIds.isNotEmpty;

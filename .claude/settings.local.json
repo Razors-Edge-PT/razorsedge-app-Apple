@@ -43,7 +43,9 @@
       "Bash(Remove-Item \"C:\\\\Projects\\\\RE-test\\\\lib\\\\block_data_loader.dart\" -Force)",
       "Bash(Write-Output \"Deleted\")",
       "Bash(dir C:\\\\Projects\\\\RE-test\\\\assets\\\\icon *)",
-      "Bash(git *)"
+      "Bash(git *)",
+      "Bash(Select-String -Pattern \"error|planned_only_resolver|WES2_exercise_picker|bb3_week_planner|templates\\\\.dart\")",
+      "Bash(Select-String -Pattern \"error|planned_only\")"
     ]
   }
 }

@@ -464,6 +464,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       final freshData = snap.docs.map((doc) {
         final data = Map<String, dynamic>.from(doc.data());
         data['date'] ??= doc.id;
+        data['_uid'] = uid; // uid-stamp so cross-athlete entries can be filtered
         return data;
       }).toList();
 
@@ -488,7 +489,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       });
 
       PeriodizationModelUtils.savedWorkoutsList = merged;
-      _rebuildTopSetsFromSavedWorkouts();
+      _rebuildTopSetsFromSavedWorkouts(uid);
       _lastHistoryRefreshKey = key;
     } catch (_) {
       // Server fetch failed; savedWorkoutsList is unchanged.
@@ -497,9 +498,12 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   }
 
   /// Rebuilds PeriodizationModelUtils.topSetsByExercise from the current
-  /// savedWorkoutsList. Called after _refreshHistoryForHints patches in fresh
-  /// server data so ProgressionEngine → BB3HintService sees updated history.
-  void _rebuildTopSetsFromSavedWorkouts() {
+  /// savedWorkoutsList, filtered to [actingUid] only.
+  /// Entries without a '_uid' stamp (loaded by WarmupService or legacy paths)
+  /// are included so pre-WES2 history is not silently dropped; once the coach
+  /// switches athletes and _refreshHistoryForHints stamps fresh entries, the
+  /// un-stamped legacy entries age out naturally as the block window advances.
+  void _rebuildTopSetsFromSavedWorkouts(String actingUid) {
     double parseD(dynamic v) {
       if (v == null) return 0.0;
       if (v is num) return v.toDouble();
@@ -511,8 +515,18 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       return null;
     }
 
+    int skippedForeignUid = 0;
     final newMap = <String, List<Map<String, dynamic>>>{};
     for (final w in PeriodizationModelUtils.savedWorkoutsList) {
+      // Skip entries explicitly stamped for a different athlete.
+      // Un-stamped entries (no '_uid' key) are kept for backwards compatibility
+      // with WarmupService and other loaders that pre-date this stamp.
+      final entryUid = w['_uid'] as String?;
+      if (entryUid != null && entryUid != actingUid) {
+        skippedForeignUid++;
+        continue;
+      }
+
       final wDate = parseDate(w['date']);
       if (wDate == null) continue;
       final exs = w['exercises'];
@@ -553,6 +567,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     PeriodizationModelUtils.topSetsByExercise
       ..clear()
       ..addAll(newMap);
+
+    debugPrint('[WES2][topSets] uid=$actingUid '
+        'savedList=${PeriodizationModelUtils.savedWorkoutsList.length} '
+        'topSetKeys=${newMap.length} '
+        'skippedForeignUid=$skippedForeignUid');
   }
 
   /// Returns true if [date] (midnight-normalised) is strictly before
