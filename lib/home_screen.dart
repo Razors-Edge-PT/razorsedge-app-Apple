@@ -13,6 +13,7 @@ import 'bb3_week_planner.dart';
 import 'WES2_screen.dart';
 import 'core_exercises.dart';
 import 'profile_page.dart';
+import 'user_settings.dart';
 import 'warmup_service.dart';
 import 'dart:async';
 import 'directMessages.dart';
@@ -46,8 +47,6 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-enum HomeSection { calendar, topLifts }
-
 class _HomeScreenState extends State<HomeScreen> with RouteAware {
   late final UserContext _uc;
   bool _ucBound = false;
@@ -79,8 +78,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   String? _actingAsEmail;
   String? _lastWarmUid;
-
-  HomeSection _currentSection = HomeSection.calendar;
 
   // ── Home FEED ─────────────────────────────────────────────────────────
   final ScrollController _homeScrollCtrl = ScrollController();
@@ -1818,35 +1815,61 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     }
   }
 
-  Widget _buildFeatureCard(IconData icon, String label, String route) {
-    return GestureDetector(
-      onTap: () => Navigator.pushNamed(context, route),
-      child: Card(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        elevation: 3,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Align(
-                alignment: Alignment.topLeft,
-                child: Icon(icon, size: 45, color: Theme.of(context).colorScheme.secondary),
-              ),
-              Align(
-                alignment: Alignment.bottomRight,
-                child: Text(label,
-                    textAlign: TextAlign.right,
-                    style: const TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w600)),
-              )
-            ],
+  Widget _buildQACard({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+    Color? iconColor,
+    Widget? iconWidget,
+  }) {
+    return SizedBox(
+      width: kFeatureCardWidth,
+      height: 120,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Card(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Stack(
+              children: [
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  child: iconWidget ??
+                      Icon(icon, size: 44,
+                          color: iconColor ?? Theme.of(context).colorScheme.secondary),
+                ),
+                Positioned(
+                  bottom: 0,
+                  right: 0,
+                  left: 44,
+                  child: Text(
+                    label,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      height: 1.3,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
+
+  Widget _buildQAColumn(Widget top, Widget bottom) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [top, const SizedBox(height: 8), bottom],
+    );
+  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -2254,460 +2277,136 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      //Quick Access
+                      //Quick Access — two-row synchronized horizontal scroll
                       SizedBox(
-                        height: 125,
-                        child: // in your HomeScreen.build():
-                            SingleChildScrollView(
+                        height: 260,
+                        child: SingleChildScrollView(
                           scrollDirection: Axis.horizontal,
                           child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-
-                              if (UserContext.of(context).isCoach)
-                              SizedBox(
-                                width: kFeatureCardWidth,
-                                height: 125,
-                                child: GestureDetector(
+                              // Column 1: Enter Workout / Body Weight Tracker
+                              _buildQAColumn(
+                                _buildQACard(
+                                  icon: Icons.fitness_center,
+                                  label: 'Enter\nWorkout',
                                   onTap: () {
-                                    final userContext = context.read<UserContext>();
-                                    Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                          value: userContext,
-                                          child: const CoachHomeScreen(),
-                                        ),
-                                      ),
-                                    );
+                                    final uc = UserContext.of(context, listen: false);
+                                    Navigator.push(context, MaterialPageRoute(
+                                      builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                        value: uc, child: const Wes2Screen()),
+                                    ));
                                   },
-
-                                  child: Card(
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(12),
-                                      child: Stack(
-                                        children: [
-                                          // ✅ Top-left icon
-                                          const Positioned(
-                                            top: 0,
-                                            left: 0,
-                                            child: Icon(
-                                              Icons.supervisor_account,
-                                              size: 48,
-                                              color: Colors.amberAccent,
-                                            ),
-                                          ),
-                                          // ✅ Bottom-right text
-                                          Positioned(
-                                            bottom: 0,
-                                            right: 0,
-                                            left: 50,
-                                            child: Text(
-                                              'Coach\nDashboard',
-                                              textAlign: TextAlign.center,
-                                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                                height: 1.3,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                              maxLines: 2,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
+                                  iconWidget: SizedBox(
+                                    width: 52, height: 52,
+                                    child: Stack(clipBehavior: Clip.none, children: [
+                                      Icon(Icons.fitness_center, size: 44,
+                                          color: Theme.of(context).colorScheme.secondary),
+                                      Positioned(right: -2, bottom: -2,
+                                          child: Icon(Icons.bolt, size: 20,
+                                              color: Theme.of(context).colorScheme.tertiary)),
+                                    ]),
                                   ),
                                 ),
-                              ),
-
-                              SizedBox(
-                                width: kFeatureCardWidth,
-                                child: GestureDetector(
-                                  onTap: () {
-                                    final userContext = UserContext.of(context, listen: false);
-
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                          value: userContext,
-                                          child: const Wes2Screen(), // <- Your workout entry screen
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                  child: Card(
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(12),
-                                      child: Stack(
-                                        children: [
-                                          Positioned(
-                                            top: 0,
-                                            left: 0,
-                                            child: SizedBox(
-                                              width: 56,
-                                              height: 56,
-                                              child: Stack(
-                                                clipBehavior: Clip.none,
-                                                children: [
-                                                  Icon(
-                                                    Icons.fitness_center,
-                                                    size: 48,
-                                                    color: Theme.of(context).colorScheme.secondary,
-                                                  ),
-                                                  Positioned(
-                                                    right: -2,
-                                                    bottom: -2,
-                                                    child: Icon(
-                                                      Icons.bolt,
-                                                      size: 24,
-                                                      color: Theme.of(context).colorScheme.tertiary,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                          ),
-                                          Positioned(
-                                            bottom: 0,
-                                            right: 0,
-                                            left: 50,
-                                            child: Text(
-                                              'Enter\nWorkout',
-                                              textAlign: TextAlign.center,
-                                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                                height: 1.3,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                              maxLines: 2,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-
-                              SizedBox(
-                                width: kFeatureCardWidth,
-                                height: 125,
-                                child: GestureDetector(
+                                _buildQACard(
+                                  icon: Icons.monitor_weight,
+                                  label: 'Body\nWeight\nTracker',
                                   onTap: () => Navigator.pushNamed(context, '/body_weight'),
-                                  child: Card(
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(12),
-                                      child: Stack(
-                                        children: [
-                                          // ✅ Top-left icon
-                                          Positioned(
-                                            top: 0,
-                                            left: 0,
-                                            child: Icon(
-                                              Icons.monitor_weight,
-                                              size: 48,
-                                              color: Theme.of(context).colorScheme.secondary,
-                                            ),
-                                          ),
-                                          // ✅ Bottom-right text
-                                          Positioned(
-                                            bottom: 0,
-                                            right: 0,
-                                            left: 50, // ⬅️ slight left constraint so text doesn't run under the icon
-                                            child: Text(
-                                              'Body\nWeight\nTracker',
-                                              textAlign: TextAlign.center,
-                                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                                height: 1.3,
-                                                fontWeight: FontWeight.bold, // ✅ Make it bold
-                                              ),
-                                              maxLines: 3,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-
-
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
                                 ),
                               ),
-
-                              SizedBox(
-                                width: kFeatureCardWidth,
-                                child: GestureDetector(
+                              // Column 2: Workout Planner / Profile
+                              _buildQAColumn(
+                                _buildQACard(
+                                  icon: Icons.view_list,
+                                  label: 'Workout\nPlanner',
                                   onTap: () {
-                                    final userContext = UserContext.of(context, listen: false);
-
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                          value: userContext,
-                                          child: const TemplatesScreen(), // Workout Planner
-                                        ),
-                                      ),
-                                    );
+                                    final uc = UserContext.of(context, listen: false);
+                                    Navigator.push(context, MaterialPageRoute(
+                                      builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                        value: uc, child: const TemplatesScreen()),
+                                    ));
                                   },
-                                  child: Card(
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(12),
-                                      child: Stack(
-                                        children: [
-                                          Positioned(
-                                            top: 0,
-                                            left: 0,
-                                            child: Icon(
-                                              Icons.view_list,
-                                              size: 48,
-                                              color: Theme.of(context).colorScheme.secondary,
-                                            ),
-                                          ),
-                                          Positioned(
-                                            bottom: 0,
-                                            right: 0,
-                                            left: 50,
-                                            child: Text(
-                                              'Workout\nPlanner',
-                                              textAlign: TextAlign.center,
-                                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                                height: 1.3,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                              maxLines: 2,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
                                 ),
-                              ),
-
-                              SizedBox(
-                                width: kFeatureCardWidth,
-                                child: GestureDetector(
+                                _buildQACard(
+                                  icon: Icons.person_outline,
+                                  label: 'Profile',
                                   onTap: () {
-                                    final userContext = UserContext.of(context, listen: false);
-
-                                    Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                          value: userContext,
-                                          child: const PlannedBlocksScreen(),
-                                        ),
-                                      ),
-                                    );
+                                    final uc = UserContext.of(context, listen: false);
+                                    Navigator.of(context).push(MaterialPageRoute(
+                                      builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                        value: uc, child: const ProfilePage()),
+                                    ));
                                   },
-                                  child: Card(
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(12),
-                                      child: Stack(
-                                        children: [
-                                          Positioned(
-                                            top: 0,
-                                            left: 0,
-                                            child: Icon(
-                                              Icons.track_changes, // 🎯 Planned Blocks
-                                              size: 48,
-                                              color: Theme.of(context).colorScheme.secondary,
-                                            ),
-                                          ),
-                                          Positioned(
-                                            bottom: 0,
-                                            right: 0,
-                                            left: 50,
-                                            child: Text(
-                                              'Planned\nBlocks',
-                                              textAlign: TextAlign.center,
-                                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                                height: 1.3,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                              maxLines: 2,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
                                 ),
                               ),
-
-//if (!UserContext.of(context).isCoach)
-                              SizedBox(
-                                width: kFeatureCardWidth,
-                                height: 125,
-                                child: GestureDetector(
+                              // Column 3: Planned Blocks / Week Planner
+                              _buildQAColumn(
+                                _buildQACard(
+                                  icon: Icons.track_changes,
+                                  label: 'Planned\nBlocks',
                                   onTap: () {
-                                    final userContext = context.read<UserContext>();
-                                    Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                          value: userContext,
-                                          child: const ApproveRequestsScreen(),
-                                        ),
-                                      ),
-                                    );
+                                    final uc = UserContext.of(context, listen: false);
+                                    Navigator.of(context).push(MaterialPageRoute(
+                                      builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                        value: uc, child: const PlannedBlocksScreen()),
+                                    ));
                                   },
-                                  child: Card(
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
-
-                                      child: Stack(
-                                        children: [
-                                          Positioned(
-                                            top: 2,
-                                            left: 0,
-                                            child: Icon(
-                                              Icons.diversity_3,
-                                              size: 48,
-                                              color: Theme.of(context).colorScheme.secondary,
-                                            ),
-                                          ),
-                                          Positioned(
-                                            bottom: 0,
-                                            right: 0,
-                                            left: 50,
-                                            child: Text(
-                                              'Your\nConnections',
-                                              textAlign: TextAlign.center,
-                                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                                height: 1.3,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                              maxLines: 2,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
                                 ),
-                              ),
-
-
-
-
-                              SizedBox(
-                                width: kFeatureCardWidth,
-                                child: GestureDetector(
+                                _buildQACard(
+                                  icon: Icons.calendar_view_week,
+                                  label: 'Week\nPlanner',
                                   onTap: () {
-                                    final userContext = UserContext.of(context, listen: false);
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                          value: userContext,
-                                          child: const BB3WeekPlanner(),
-                                        ),
-                                      ),
-                                    );
+                                    final uc = UserContext.of(context, listen: false);
+                                    Navigator.push(context, MaterialPageRoute(
+                                      builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                        value: uc, child: const BB3WeekPlanner()),
+                                    ));
                                   },
-                                  child: Card(
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(12),
-                                      child: Stack(
-                                        children: [
-                                          Positioned(
-                                            top: 0,
-                                            left: 0,
-                                            child: Icon(
-                                              Icons.calendar_view_week,
-                                              size: 48,
-                                              color: Theme.of(context).colorScheme.secondary,
-                                            ),
-                                          ),
-                                          Positioned(
-                                            bottom: 0,
-                                            right: 0,
-                                            left: 50,
-                                            child: Text(
-                                              'Week\nPlanner',
-                                              textAlign: TextAlign.center,
-                                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                                height: 1.3,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                              maxLines: 2,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
                                 ),
                               ),
-
-                              SizedBox(
-                                width: kFeatureCardWidth,
-                                child: _buildFeatureCard(
-                                  Icons.history,
-                                  'Workout\nHistory',
-                                  '/saved_workouts',
+                              // Column 4: Settings / Coach Dashboard (coach only)
+                              _buildQAColumn(
+                                _buildQACard(
+                                  icon: Icons.settings_outlined,
+                                  label: 'Settings',
+                                  onTap: () {
+                                    final uc = UserContext.of(context, listen: false);
+                                    Navigator.of(context).push(MaterialPageRoute(
+                                      builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                        value: uc, child: const UserSettingsScreen()),
+                                    ));
+                                  },
                                 ),
+                                UserContext.of(context).isCoach
+                                  ? _buildQACard(
+                                      icon: Icons.supervisor_account,
+                                      label: 'Coach\nDashboard',
+                                      iconColor: Colors.amberAccent,
+                                      onTap: () {
+                                        final uc = context.read<UserContext>();
+                                        Navigator.of(context).push(MaterialPageRoute(
+                                          builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                            value: uc, child: const CoachHomeScreen()),
+                                        ));
+                                      },
+                                    )
+                                  : const SizedBox(width: kFeatureCardWidth, height: 120),
                               ),
-
                             ],
                           ),
                         ),
                       ),
 
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                        children: HomeSection.values.map((section) {
-                          final isSelected = section == _currentSection;
-                          final label = section == HomeSection.calendar
-                              ? 'Training Calendar'
-                              : 'Top Lifts';
-                          return GestureDetector(
-                            onTap: () =>
-                                setState(() => _currentSection = section),
-                            child: Container(
-                              margin: const EdgeInsets.symmetric(horizontal: 8),
-                              padding: const EdgeInsets.symmetric(
-                                  vertical: 6, horizontal: 12),
-                              decoration: BoxDecoration(
-                                border: Border(
-                                  bottom: BorderSide(
-                                    color: isSelected
-                                        ? Theme.of(context).colorScheme.secondary
-                                        : Colors.transparent,
-                                    width: 2,
-                                  ),
-                                ),
-                              ),
-                              child: Text(
-                                label,
-                                style: TextStyle(
-                                  color: isSelected
-                                      ? Colors.white
-                                      : Colors.white54,
-                                  fontWeight: isSelected
-                                      ? FontWeight.bold
-                                      : FontWeight.normal,
-                                ),
-                              ),
-                            ),
-                          );
-                        }).toList(),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Training Calendar',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
                       ),
-
-                      const SizedBox(height: 2),
-                      // Training Calendar
-                      if (_currentSection == HomeSection.calendar) ...[
+                      const SizedBox(height: 4),
                         TableCalendar(
                           firstDay: DateTime.utc(2020, 1, 1),
                           lastDay: DateTime.utc(2100, 12, 31),
@@ -3107,8 +2806,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                           const SizedBox(height: 140),
 
                         ],
-
-                      ],
 
 
                     ],
