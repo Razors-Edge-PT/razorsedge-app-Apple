@@ -4,11 +4,14 @@ import 'package:flutter/material.dart';
 class Wes2TopActionsBar extends StatelessWidget {
   final void Function() onAddExercise;
   final VoidCallback? onLoadTemplate;
+  /// When true, draws a glowing border + "Tap here" label above Load Template.
+  final bool highlightLoadTemplate;
 
   const Wes2TopActionsBar({
     super.key,
     required this.onAddExercise,
     this.onLoadTemplate,
+    this.highlightLoadTemplate = false,
   });
 
   @override
@@ -36,24 +39,60 @@ class Wes2TopActionsBar extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           Expanded(
-            child: ElevatedButton.icon(
-              icon: const Icon(Icons.layers_outlined, size: 16),
-              label: const Text(
-                'Load Template',
-                style: TextStyle(fontSize: 14),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Theme.of(context).colorScheme.secondary,
-                foregroundColor: Theme.of(context).colorScheme.onSecondary,
-                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 8),
-              ),
-              onPressed: onLoadTemplate,
-            ),
+            child: _buildLoadTemplateButton(context),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildLoadTemplateButton(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final button = ElevatedButton.icon(
+      icon: const Icon(Icons.layers_outlined, size: 16),
+      label: const Text(
+        'Load Template',
+        style: TextStyle(fontSize: 14),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: cs.secondary,
+        foregroundColor: cs.onSecondary,
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 8),
+      ),
+      onPressed: onLoadTemplate,
+    );
+
+    if (!highlightLoadTemplate) return button;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          'Tap here',
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            color: cs.secondary,
+          ),
+        ),
+        const SizedBox(height: 2),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: cs.secondary, width: 1.5),
+            boxShadow: [
+              BoxShadow(
+                color: cs.secondary.withValues(alpha: 0.35),
+                blurRadius: 6,
+                spreadRadius: 1,
+              ),
+            ],
+          ),
+          child: button,
+        ),
+      ],
     );
   }
 }

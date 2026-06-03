@@ -78,7 +78,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   String? _lastHistoryRefreshKey;
 
   // ── Tutorial state (Phase 2 onboarding) ──────────────────────────────────
-  // 0 = inactive; 1/2/3 = active step. Uses FirebaseAuth actor UID, NOT athlete.
+  // 0=inactive 1=loadTemplateCue 2=firstTemplateCue 3=weight 4=reps 5=rir
+  // Uses FirebaseAuth actor UID, NOT the impersonated athlete.
   int _tutorialStep = 0;
 
   // ── Day timer state (Phase 17) ─────────────────────────────────────────────
@@ -105,7 +106,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   }
 
   Future<void> _onTutorialStepDismiss() async {
-    if (_tutorialStep < 3) {
+    if (_tutorialStep < 5) {
       setState(() => _tutorialStep++);
     } else {
       final uid = FirebaseAuth.instance.currentUser?.uid;
@@ -1187,8 +1188,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     return Column(
       children: [
         Wes2TopActionsBar(
-            onAddExercise: _onAddExercise,
-            onLoadTemplate: _showTemplatePicker),
+          onAddExercise: _onAddExercise,
+          onLoadTemplate: _showTemplatePicker,
+          highlightLoadTemplate: _tutorialStep == 1,
+        ),
         if (controller.hasPendingExerciseAdds &&
             (controller.loadState == Wes2LoadState.loading ||
                 controller.loadState == Wes2LoadState.idle))
@@ -1199,9 +1202,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
               style: TextStyle(fontSize: 12, color: Colors.white54),
             ),
           ),
-        if (_tutorialStep > 0)
+        if (_tutorialStep >= 3)
           Wes2TutorialBanner(
-            step: _tutorialStep,
+            step: _tutorialStep - 2, // 3→1(weight) 4→2(reps) 5→3(RIR)
             onDismiss: _onTutorialStepDismiss,
           ),
         Expanded(child: _buildContentArea(context, controller)),
@@ -1294,7 +1297,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
                 ? () => _onOpenExercisePlanNoteDialog(row, combinedNote)
                 : null,
             showVelocityField: _shouldShowVelocityField(row),
-            tutorialStep: isFirstCard ? _tutorialStep : 0,
+            tutorialStep: isFirstCard
+                ? (_tutorialStep >= 3 ? _tutorialStep - 2 : 0)
+                : 0,
           ));
           isFirstCard = false;
         }
@@ -1791,6 +1796,12 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
   Future<void> _showTemplatePicker() async {
     if (_controller.actingUid.isEmpty) return;
+
+    // Tutorial: capture whether we're at the load-template cue step.
+    final wasAtLoadStep = _tutorialStep == 1;
+    // Advance to step 2 before opening picker so the first-template highlight renders.
+    if (wasAtLoadStep && mounted) setState(() => _tutorialStep = 2);
+
     final templateId = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
@@ -1798,10 +1809,23 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       builder: (_) => Wes2TemplatePicker(
         uid: _controller.actingUid,
         activeBlockId: _controller.activeBlockId,
+        highlightFirstTemplate: wasAtLoadStep,
       ),
     );
-    if (templateId == null || !mounted) return;
+
+    if (!mounted) return;
+    if (templateId == null) {
+      // Picker dismissed without selection — restore Load Template cue.
+      if (wasAtLoadStep) setState(() => _tutorialStep = 1);
+      return;
+    }
+
     await _onLoadTemplate(templateId);
+
+    // Advance to weight tutorial once template is successfully loaded.
+    if (mounted && wasAtLoadStep && _tutorialStep == 2) {
+      setState(() => _tutorialStep = 3);
+    }
   }
 
   // ── Delete Day (Phase 18b) ────────────────────────────────────────────────

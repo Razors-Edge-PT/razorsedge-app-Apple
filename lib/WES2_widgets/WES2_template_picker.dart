@@ -14,11 +14,14 @@ class _PickerData {
 class Wes2TemplatePicker extends StatefulWidget {
   final String uid;
   final String? activeBlockId;
+  /// When true, draws a highlight + label on the first listed template.
+  final bool highlightFirstTemplate;
 
   const Wes2TemplatePicker({
     super.key,
     required this.uid,
     this.activeBlockId,
+    this.highlightFirstTemplate = false,
   });
 
   @override
@@ -206,12 +209,14 @@ class _Wes2TemplatePickerState extends State<Wes2TemplatePicker> {
         itemCount: all.length,
         itemBuilder: (_, i) => _TemplateListTile(
           template: all[i],
+          highlight: i == 0 && widget.highlightFirstTemplate,
           onTap: () => Navigator.of(context).pop(all[i].id),
         ),
       );
     }
 
     final sections = <Widget>[];
+    int sectionCount = 0;
 
     if (activeGroup.isNotEmpty) {
       final label = activeBlockName ?? 'Active Block';
@@ -219,8 +224,10 @@ class _Wes2TemplatePickerState extends State<Wes2TemplatePicker> {
         title: label,
         templates: _sorted(activeGroup),
         initiallyExpanded: true,
+        highlightFirstItem: widget.highlightFirstTemplate && sectionCount == 0,
         onSelect: (id) => Navigator.of(context).pop(id),
       ));
+      sectionCount++;
     }
 
     for (final blockId in otherGroups.keys) {
@@ -229,8 +236,10 @@ class _Wes2TemplatePickerState extends State<Wes2TemplatePicker> {
         title: label,
         templates: _sorted(otherGroups[blockId]!),
         initiallyExpanded: false,
+        highlightFirstItem: widget.highlightFirstTemplate && sectionCount == 0,
         onSelect: (id) => Navigator.of(context).pop(id),
       ));
+      sectionCount++;
     }
 
     if (unassigned.isNotEmpty) {
@@ -238,6 +247,7 @@ class _Wes2TemplatePickerState extends State<Wes2TemplatePicker> {
         title: 'Other Templates',
         templates: _sorted(unassigned),
         initiallyExpanded: true,
+        highlightFirstItem: widget.highlightFirstTemplate && sectionCount == 0,
         onSelect: (id) => Navigator.of(context).pop(id),
       ));
     }
@@ -254,12 +264,14 @@ class _GroupSection extends StatefulWidget {
   final String title;
   final List<Template> templates;
   final bool initiallyExpanded;
+  final bool highlightFirstItem;
   final void Function(String templateId) onSelect;
 
   const _GroupSection({
     required this.title,
     required this.templates,
     required this.initiallyExpanded,
+    this.highlightFirstItem = false,
     required this.onSelect,
   });
 
@@ -309,10 +321,11 @@ class _GroupSectionState extends State<_GroupSection> {
           ),
         ),
         if (_expanded)
-          ...widget.templates.map(
-            (t) => _TemplateListTile(
-              template: t,
-              onTap: () => widget.onSelect(t.id),
+          ...widget.templates.asMap().entries.map(
+            (entry) => _TemplateListTile(
+              template: entry.value,
+              highlight: widget.highlightFirstItem && entry.key == 0,
+              onTap: () => widget.onSelect(entry.value.id),
             ),
           ),
         const Divider(height: 1),
@@ -324,7 +337,12 @@ class _GroupSectionState extends State<_GroupSection> {
 class _TemplateListTile extends StatelessWidget {
   final Template template;
   final VoidCallback onTap;
-  const _TemplateListTile({required this.template, required this.onTap});
+  final bool highlight;
+  const _TemplateListTile({
+    required this.template,
+    required this.onTap,
+    this.highlight = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -337,7 +355,8 @@ class _TemplateListTile extends StatelessWidget {
     final more = ex.length > 3 ? '...' : '';
     final subtitle =
         names.isNotEmpty ? names + more : '${ex.length} exercises';
-    return InkWell(
+
+    final tile = InkWell(
       onTap: onTap,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
@@ -368,6 +387,41 @@ class _TemplateListTile extends StatelessWidget {
             const Icon(Icons.chevron_right, size: 18, color: Colors.white38),
           ],
         ),
+      ),
+    );
+
+    if (!highlight) return tile;
+
+    final cs = Theme.of(context).colorScheme;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border.all(color: cs.secondary, width: 1.5),
+        borderRadius: BorderRadius.circular(4),
+        boxShadow: [
+          BoxShadow(
+            color: cs.secondary.withValues(alpha: 0.30),
+            blurRadius: 6,
+            spreadRadius: 1,
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(28, 6, 28, 0),
+            child: Text(
+              'Tap to start first workout',
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+                color: cs.secondary,
+              ),
+            ),
+          ),
+          tile,
+        ],
       ),
     );
   }
