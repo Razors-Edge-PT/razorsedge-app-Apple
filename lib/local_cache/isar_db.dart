@@ -2,7 +2,6 @@
 import 'dart:io';
 import 'package:isar_community/isar.dart';
 import 'package:path_provider/path_provider.dart';
-import 'isar_wes_init.dart';
 import 'isar_claude_bullet_snapshot.dart';
 import 'isar_block_plan.dart';
 
@@ -26,7 +25,6 @@ class IsarDb {
     _isar = await Isar.open(
       [
         BlockDaySchema,
-        WESInitSnapshotSchema,
         ClaudeBulletSnapshotSchema,
       ],
 

@@ -188,6 +188,12 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
       v % 1 == 0 ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
   static String _fmtInt(int v) => v.toString();
   static String _fmtDouble(double v) => v.toStringAsFixed(1);
+  /// Velocity: preserve up to 3 decimal places, strip trailing zeros.
+  /// 0.734 → "0.734", 0.700 → "0.7", 1.000 → "1".
+  static String _fmtVelocity(double v) {
+    final s = v.toStringAsFixed(3);
+    return s.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
+  }
 
   static String _fromActual<T extends Object>(
     Wes2FieldState<T> f,
@@ -210,7 +216,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
       text: _fromActual(widget.set.rir, _fmtDouble),
     );
     _velocityCtrl = TextEditingController(
-      text: _fromActual(widget.set.velocity, _fmtDouble),
+      text: _fromActual(widget.set.velocity, _fmtVelocity),
     );
     _weightFocus = FocusNode()..addListener(_onWeightFocusChange);
     _repsFocus = FocusNode()..addListener(_onRepsFocusChange);
@@ -271,7 +277,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
       _velocityFocus,
       old.set.velocity.actualValue,
       widget.set.velocity.actualValue,
-      _fmtDouble,
+      _fmtVelocity,
     );
   }
 
@@ -703,7 +709,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
         ? Theme.of(context).colorScheme.secondary
         : null;
     final velocityHint =
-        s.velocity.hintValue != null ? _fmtDouble(s.velocity.hintValue!) : null;
+        s.velocity.hintValue != null ? _fmtVelocity(s.velocity.hintValue!) : null;
 
     return Padding(
       padding: const EdgeInsets.only(top: 2),
