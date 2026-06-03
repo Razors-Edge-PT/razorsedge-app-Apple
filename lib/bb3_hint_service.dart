@@ -241,10 +241,18 @@ class BB3HintService {
     // ── Baseline hints (no overrides) ──────────────────────────────────────
     // DUP Signature supplies a pre-computed rep target; fall back to the
     // BB3-planned repTarget, then engine baseReps as a last resort.
+    // When the Engine returned reps that differ from the plan target, a
+    // progression model (Smart Progression, Add Reps) intentionally chose
+    // different reps for E1RM progression.  Use Engine's reps in that case so
+    // the displayed hint reflects the actual progressive combination selected.
+    final int _baseRepsRounded =
+        (baseReps > 0 && baseReps <= 45) ? baseReps.round() : 0;
+    final bool _modelAdjustedReps =
+        _baseRepsRounded > 0 && repTarget > 0 && _baseRepsRounded != repTarget;
     final effectiveReps = dupSigRep ??
-        (repTarget > 0
-            ? repTarget
-            : (baseReps > 0 && baseReps <= 45 ? baseReps.round() : 8));
+        (_modelAdjustedReps
+            ? _baseRepsRounded
+            : (repTarget > 0 ? repTarget : (_baseRepsRounded > 0 ? _baseRepsRounded : 8)));
     return BB3SetHint(
       weightDisplay: _wHint(effectiveReps, setRir),
       repsDisplay: effectiveReps > 0 ? effectiveReps.toString() : '',

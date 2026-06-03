@@ -605,9 +605,21 @@ class ProgressionEngine {
 // write back absolute weight as before
     progressed['weight'] = snapped;
 
-// ✅ also persist the plan-derived reps & rir so they exist even without overrides
-    progressed['reps'] = repTarget.toInt();
+// Persist reps and RIR.
+// Smart Progression and Add Reps select reps as part of E1RM progression; preserve
+// their returned value. Other models return repTarget anyway, so no behaviour change.
+    final modelReps = (progressed['reps'] as num?)?.toInt();
+    final shouldPreserveReps =
+        (progressionModel == ProgressionModelType.smartProgression ||
+         progressionModel == ProgressionModelType.addRepsProgressionModel) &&
+        modelReps != null && modelReps > 0;
+    progressed['reps'] = shouldPreserveReps ? modelReps! : repTarget.toInt();
     progressed['rir']  = rir;
+
+    if (shouldPreserveReps && modelReps != repTarget.toInt()) {
+      print('[ENGINE][reps-preserve] model=$progressionModelName '
+          'returnedReps=$modelReps planReps=${repTarget.toInt()}');
+    }
 
     // Cache and return
     progressed['exerciseName'] = exerciseName;
