@@ -70,6 +70,8 @@ class Wes2ExerciseCard extends StatelessWidget {
   final VoidCallback? onOpenExercisePlanNote;
   final bool isExercisePlanNoteRead;
   final bool showVelocityField;
+  /// Tutorial step to highlight on the first set row (0 = inactive).
+  final int tutorialStep;
 
   const Wes2ExerciseCard({
     super.key,
@@ -89,6 +91,7 @@ class Wes2ExerciseCard extends StatelessWidget {
     this.onOpenExercisePlanNote,
     this.isExercisePlanNoteRead = false,
     this.showVelocityField = false,
+    this.tutorialStep = 0,
   });
 
   static bool _isCompletedEligible(
@@ -344,6 +347,8 @@ class Wes2ExerciseCard extends StatelessWidget {
                           : () => onNoteTap!(s.setIndex),
                       isPlanNoteRead:
                           wes2Ctrl.isPlanNoteRead(row.exerciseId, s.setIndex),
+                      // Tutorial highlight only on first set row; all others inactive.
+                      tutorialStep: s.setIndex == 0 ? tutorialStep : 0,
                     );
                   }),
                 ],

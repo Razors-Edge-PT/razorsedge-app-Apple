@@ -145,6 +145,9 @@ class Wes2SetRow extends StatefulWidget {
   /// Required only for timedWeighted E1RM display. Passed from the exercise card.
   final String? uid;
   final DateTime? selectedDate;
+  /// Active tutorial step (1=weight, 2=reps, 3=RIR). 0 = inactive — no change
+  /// to rendering. Only set on the first set row of the first exercise card.
+  final int tutorialStep;
 
   const Wes2SetRow({
     super.key,
@@ -160,6 +163,7 @@ class Wes2SetRow extends StatefulWidget {
     this.baselineRirHint,
     this.uid,
     this.selectedDate,
+    this.tutorialStep = 0,
   });
 
   @override
@@ -687,6 +691,11 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
     final rirBorderColor = _rirBorderColor();
     final weightBorderColor = _weightBorderColor();
     final repsBorderColor = _repsBorderColor();
+    // Tutorial highlight takes priority over existing border colours on the targeted
+    // field while tutorialStep > 0. Reverts exactly to existing logic when 0.
+    final tutorialHighlight = widget.tutorialStep > 0
+        ? Theme.of(context).colorScheme.secondary
+        : null;
     final velocityHint =
         s.velocity.hintValue != null ? _fmtDouble(s.velocity.hintValue!) : null;
 
@@ -721,7 +730,9 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             hintText: weightHint,
             width: 76,
             decimal: true,
-            activeBorderColor: weightBorderColor,
+            activeBorderColor: widget.tutorialStep == 1
+                ? tutorialHighlight
+                : weightBorderColor,
             onDoubleTap: () => _acceptHint(_weightCtrl, Wes2FieldKey.weight, weightHint),
           ),
           const SizedBox(width: 4),
@@ -731,7 +742,9 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             fieldKey: Wes2FieldKey.reps,
             hintText: repsHint,
             width: 50,
-            activeBorderColor: repsBorderColor,
+            activeBorderColor: widget.tutorialStep == 2
+                ? tutorialHighlight
+                : repsBorderColor,
             onDoubleTap: () => _acceptHint(_repsCtrl, Wes2FieldKey.reps, repsHint),
           ),
           const SizedBox(width: 4),
@@ -742,7 +755,9 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             hintText: rirHint,
             width: 50,
             decimal: true,
-            activeBorderColor: rirBorderColor,
+            activeBorderColor: widget.tutorialStep == 3
+                ? tutorialHighlight
+                : rirBorderColor,
             onDoubleTap: () => _acceptHint(_rirCtrl, Wes2FieldKey.rir, rirHint),
           ),
           const SizedBox(width: 4),

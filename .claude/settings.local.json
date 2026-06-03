@@ -45,7 +45,8 @@
       "Bash(dir C:\\\\Projects\\\\RE-test\\\\assets\\\\icon *)",
       "Bash(git *)",
       "Bash(Select-String -Pattern \"error|planned_only_resolver|WES2_exercise_picker|bb3_week_planner|templates\\\\.dart\")",
-      "Bash(Select-String -Pattern \"error|planned_only\")"
+      "Bash(Select-String -Pattern \"error|planned_only\")",
+      "PowerShell(Set-Location \"C:\\\\Projects\\\\RE-test\"; $out = flutter analyze lib/onboarding_prefs.dart lib/home_screen.dart lib/WES2_widgets/WES2_tutorial_banner.dart lib/WES2_widgets/WES2_exercise_card.dart lib/WES2_widgets/WES2_set_row.dart lib/WES2_screen.dart 2>&1; $out | Where-Object { $_ -notmatch \"^  info\" } | Select-Object -Last 40)"
     ]
   }
 }

@@ -3,15 +3,7 @@ import 'dart:io';
 import 'package:isar_community/isar.dart';
 import 'package:path_provider/path_provider.dart';
 import 'isar_wes_init.dart';
-import 'workout_day_cache.dart'; // <-- brings in WorkoutDayCacheSchema
-import 'autosave_queue_db.dart'; // ← ADD
-// ADD THIS IMPORT near your other local_cache imports
-import 'isar_bb2_merged_day.dart';
 import 'isar_claude_bullet_snapshot.dart';
-
-
-
-
 import 'isar_block_plan.dart';
 
 class IsarDb {
@@ -35,10 +27,6 @@ class IsarDb {
       [
         BlockDaySchema,
         WESInitSnapshotSchema,
-        WorkoutDayCacheSchema,
-        AutosaveJobSchema,
-        LastSaveHashSchema,
-        BB2MergedDaySchema, // ← ADD
         ClaudeBulletSnapshotSchema,
       ],
 

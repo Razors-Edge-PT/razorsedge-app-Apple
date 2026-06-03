@@ -19,7 +19,6 @@ import 'dart:async';
 import 'directMessages.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:path_provider/path_provider.dart';
-import 'warmupBB2.dart';
 import 'post_service.dart';
 import 'feed_post_card.dart';
 import 'main.dart';
@@ -29,9 +28,7 @@ import 'block_exercise_defaults_repository.dart';
 import 'block_creation_helper.dart';
 import 'templates.dart';
 import 'planned_blocks_screen.dart';
-import 'local_cache/block_plan_cache.dart';
 import 'onboarding_prefs.dart';
-import 'package:intl/intl.dart';
 
 
 
@@ -53,7 +50,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   bool _ucBound = false;
 
   // Onboarding cue state — default true so no cue flashes before prefs load
-  bool _wpDone = true;
+  bool _wpDone  = true;
+  bool _wesDone = true;
 
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   static const double kFeatureCardWidth = 150;
@@ -73,10 +71,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   //Profile image
   bool _avatarPersistInProgress = false;
   String? _avatarLastUrlSaved;
-
-  //Warm ups
-  bool _bb2WarmupScheduled = false;     // first-time warmup
-
 
 
 
@@ -154,10 +148,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     //   selectedDate: _warmDate,
     // ));
 
-    debugPrint('🏁 [HOME] Triggering WarmupBB2 for $actingUid');
-
-
-
     // Delay the email fetch until after build
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadAthleteEmail();
@@ -188,18 +178,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         final uid = uc.actingAsUid;
         final bid = uc.activeBlockId;
         if (uid.isNotEmpty && bid != null && bid.isNotEmpty) {
-          // ✅ Roll forward missed BB2 plans into the next available days
-          await _rollForwardMissedBB2Plans(uid: uid, blockId: bid);
           // Self-heal sparse rirPlan for existing users (no-op if already complete).
           unawaited(BlockExerciseDefaultsRepository.healActiveBlockRirPlan(
             uid: uid,
             blockId: bid,
           ));
-        }
-
-        // 🔥 Prewarm BB2 current week (server-based merged cache for first-paint correctness)
-        if (actingUid.isNotEmpty) {
-          unawaited(WarmupBB2.runForActiveBlock(uid: actingUid));
         }
       });
     });
@@ -317,406 +300,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       // (Keep your templates watcher block below if you want live counts)
     }
   }
-// ─────────────────────────────────────────────────────────────
-// BB2 Roll-forward: move missed planned days forward (chain push)
-// Planned day exists: exercises.length > 0
-// Completed day blocks ONLY if any set has reps>0 AND weight>0
-// ─────────────────────────────────────────────────────────────
-  Future<void> _rollForwardMissedBB2Plans({
-    required String uid,
-    required String blockId,
-  }) async {
-    // Must have block dates (same local-date semantics you confirmed)
-    final DateTime? bs = _uc.blockStartDate;
-    final DateTime? be = _uc.blockEndDate;
-    if (bs == null || be == null) {
-      debugPrint('⚠️ [ROLL] abort: blockStartDate/endDate missing');
-      return;
-    }
-
-    // Normalize to local date-only
-    DateTime _d0(DateTime d) => DateTime(d.year, d.month, d.day);
-
-    final blockStart = _d0(bs);
-    final blockEnd   = _d0(be);
-    final today      = _d0(DateTime.now());
-
-    // Only meaningful if today is within the block window at all
-    if (today.isBefore(blockStart)) {
-      debugPrint('ℹ️ [ROLL] today before blockStart → nothing to roll');
-      return;
-    }
-
-    // Clamp scan end to block end
-    final scanEnd = today.isBefore(blockEnd) ? today : blockEnd;
-
-    int _daysBetween(DateTime a, DateTime b) => _d0(b).difference(_d0(a)).inDays;
-
-    final int lastOffsetInclusive = _daysBetween(blockStart, scanEnd);
-    final int todayOffset = _daysBetween(blockStart, today);
-
-    // 🔒 Optional once-per-day guard (COMMENTED OUT FOR TESTING)
-    // Search-bar anchor: "[ROLL GUARD]"
-    /*
-  try {
-    final prefs = await SharedPreferences.getInstance();
-    final key = 'bb2.rollForward.lastRun.$uid';
-    final stamp = DateFormat('yyyy-MM-dd').format(today);
-    final last = prefs.getString(key);
-    if (last == stamp) {
-      debugPrint('🛑 [ROLL GUARD] already ran today ($stamp) for uid=$uid');
-      return;
-    }
-    await prefs.setString(key, stamp);
-  } catch (e) {
-    debugPrint('⚠️ [ROLL GUARD] prefs failed: $e');
-  }
-  */
-
-    debugPrint('🧠 [ROLL] start uid=$uid block=$blockId '
-        'range=0..$lastOffsetInclusive todayOffset=$todayOffset');
-    // 🔁 Keep WES super-cache (Isar) in sync with roll-forward writes
-    Future<void> _isarPutOffset(int offset, List<Map<String, dynamic>> exercises) async {
-      try {
-        final int w = offset ~/ 7;
-        final int d = offset % 7;
-        await BlockPlanCache.putDay(
-          uid: uid,
-          blockId: blockId,
-          weekIndex: w,
-          dayIndex: d,
-          exercises: exercises,
-          updatedAt: DateTime.now(),
-        );
-        debugPrint('🧊 [ROLL] ISAR put week_$w/day_$d ex=${exercises.length}');
-      } catch (e) {
-        debugPrint('⚠️ [ROLL] ISAR put failed (non-fatal) off=$offset → $e');
-      }
-    }
-
-    // Firestore refs
-    final blocksRoot = FirebaseFirestore.instance
-        .collection('planned_blocks')
-        .doc(uid)
-        .collection('blocks')
-        .doc(blockId);
-
-    final workoutsCol = FirebaseFirestore.instance
-        .collection('users')
-        .doc(uid)
-        .collection('workouts');
-
-    String _ymd(DateTime d) => DateFormat('yyyy-MM-dd').format(_d0(d));
-
-    DocumentReference<Map<String, dynamic>> _dayRefForOffset(int offset) {
-      final w = offset ~/ 7;
-      final d = offset % 7;
-      return blocksRoot
-          .collection('weeks')
-          .doc('week_$w')
-          .collection('days')
-          .doc('day_$d');
-    }
-
-    DocumentReference<Map<String, dynamic>> _weekRefForOffset(int offset) {
-      final w = offset ~/ 7;
-      return blocksRoot.collection('weeks').doc('week_$w');
-    }
-
-    // 1) Load planned day docs (cache-first ok; but server preferred for correctness)
-    final plannedByOffset = <int, Map<String, dynamic>>{};
-    {
-      final futures = <Future<DocumentSnapshot<Map<String, dynamic>>>>[];
-      for (int off = 0; off <= lastOffsetInclusive; off++) {
-        futures.add(_dayRefForOffset(off).get(const GetOptions(source: Source.server)));
-      }
-      final snaps = await Future.wait(futures);
-      for (int i = 0; i < snaps.length; i++) {
-        final s = snaps[i];
-        if (!s.exists) continue;
-        final data = s.data();
-        if (data == null) continue;
-        plannedByOffset[i] = Map<String, dynamic>.from(data);
-      }
-    }
-
-    bool _isPlannedDay(Map<String, dynamic>? dayDoc) {
-      if (dayDoc == null) return false;
-      final ex = dayDoc['exercises'];
-      if (ex is List) return ex.isNotEmpty;
-      return false;
-    }
-
-    // 2) Load completion status for each day (workouts/{yyyy-MM-dd})
-    final completed = <int, bool>{};
-    {
-      final futures = <Future<DocumentSnapshot<Map<String, dynamic>>>>[];
-      final keys = <String>[];
-      for (int off = 0; off <= lastOffsetInclusive; off++) {
-        final date = blockStart.add(Duration(days: off));
-        final key = _ymd(date);
-        keys.add(key);
-        futures.add(workoutsCol.doc(key).get(const GetOptions(source: Source.server)));
-      }
-
-      final snaps = await Future.wait(futures);
-      for (int i = 0; i < snaps.length; i++) {
-        final snap = snaps[i];
-        bool isDone = false;
-
-        if (snap.exists) {
-          final data = snap.data() ?? const {};
-          final exs = (data['exercises'] is List)
-              ? List<Map<String, dynamic>>.from(data['exercises'] as List)
-              : const <Map<String, dynamic>>[];
-
-          // Completed day definition: any set anywhere has reps>0 AND weight>0
-          for (final ex in exs) {
-            final sets = (ex['sets'] is List)
-                ? List<Map<String, dynamic>>.from(ex['sets'] as List)
-                : const <Map<String, dynamic>>[];
-
-            for (final s in sets) {
-              final dynamic repsRaw = s['reps'];
-              final dynamic wRaw = s['weight'];
-
-              final int reps = (repsRaw is num)
-                  ? repsRaw.toInt()
-                  : int.tryParse('${repsRaw ?? ''}'.trim()) ?? 0;
-
-              final double w = (wRaw is num)
-                  ? wRaw.toDouble()
-                  : double.tryParse('${wRaw ?? ''}'.trim()) ?? 0.0;
-
-              if (reps > 0 && w > 0.0) {
-                isDone = true;
-                break;
-              }
-            }
-
-            if (isDone) break;
-          }
-
-        }
-
-        completed[i] = isDone;
-      }
-    }
-
-    // Helper: ensure week doc exists (so day writes don't fail)
-    Future<void> _ensureWeekExistsForOffset(int offset) async {
-      final weekRef = _weekRefForOffset(offset);
-      final s = await weekRef.get(const GetOptions(source: Source.server));
-      if (!s.exists) {
-        final int w = offset ~/ 7;
-        await weekRef.set({
-          'exists': true,
-          'startDate': Timestamp.fromDate(blockStart.add(Duration(days: w * 7))),
-          'endDate': Timestamp.fromDate(blockStart.add(Duration(days: (w + 1) * 7 - 1))),
-          'createdAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      } else {
-        await weekRef.set({'exists': true}, SetOptions(merge: true));
-      }
-    }
-
-    // Helper: write a planned day payload to an offset (updates date/workoutName)
-    Future<void> _writePlannedToOffset(int offset, Map<String, dynamic> payload) async {
-      await _ensureWeekExistsForOffset(offset);
-
-      final DateTime date = blockStart.add(Duration(days: offset));
-      final int w = offset ~/ 7;
-
-      final String workoutName =
-          "${DateFormat('EEE d MMM').format(date)} - Week ${w + 1}";
-
-      final out = <String, dynamic>{
-        'exercises': payload['exercises'] ?? const [],
-        'circuitStartIndices': payload['circuitStartIndices'] ?? [0],
-        'date': Timestamp.fromDate(_d0(date)),
-        'workoutName': workoutName,
-      };
-
-      await _dayRefForOffset(offset).set(out, SetOptions(merge: false));
-
-// ✅ Mirror to Isar so WES sees it immediately
-      final raw = out['exercises'];
-      final List<Map<String, dynamic>> exList =
-      (raw is List)
-          ? raw.map((e) => Map<String, dynamic>.from(e as Map)).toList()
-          : <Map<String, dynamic>>[];
-
-      await _isarPutOffset(offset, exList);
-
-
-    }
-
-    // Helper: clear a planned day (set exercises empty; keep other fields consistent)
-    Future<void> _clearPlannedAtOffset(int offset) async {
-      await _ensureWeekExistsForOffset(offset);
-      final DateTime date = blockStart.add(Duration(days: offset));
-      final int w = offset ~/ 7;
-      final String workoutName =
-          "${DateFormat('EEE d MMM').format(date)} - Week ${w + 1}";
-
-      await _dayRefForOffset(offset).set({
-        'exercises': [],
-        'circuitStartIndices': [0],
-        'date': Timestamp.fromDate(_d0(date)),
-        'workoutName': workoutName,
-      }, SetOptions(merge: false));
-      // ✅ Mirror clear to Isar
-      await _isarPutOffset(offset, const <Map<String, dynamic>>[]);
-
-    }
-
-    // 3) Identify missed planned days BEFORE today that are not completed
-    final missedOffsets = <int>[];
-    for (int off = 0; off < todayOffset && off <= lastOffsetInclusive; off++) {
-      if (completed[off] == true) continue;
-      final dayDoc = plannedByOffset[off];
-      if (_isPlannedDay(dayDoc)) missedOffsets.add(off);
-    }
-
-    if (missedOffsets.isEmpty) {
-      debugPrint('✅ [ROLL] no missed planned days before today');
-      return;
-    }
-
-    debugPrint('📦 [ROLL] missedOffsets=$missedOffsets');
-
-    // 4) STABLE reschedule that preserves order:
-    //    queue = (missed before today) + (existing future plans), both in chronological order
-    final int maxOffset = _daysBetween(blockStart, blockEnd);
-
-    // Build the queue (payloads) in correct order
-    final List<Map<String, dynamic>> queue = [];
-
-    // A) Missed plans before today (keep order)
-    for (final off in missedOffsets) {
-      Map<String, dynamic>? data = plannedByOffset[off];
-      if (!_isPlannedDay(data)) {
-        final s = await _dayRefForOffset(off).get(const GetOptions(source: Source.server));
-        data = s.data();
-      }
-      if (_isPlannedDay(data)) {
-        queue.add(Map<String, dynamic>.from(data!));
-      }
-    }
-
-    // B) Existing future plans (today..end), keep order, skip completed days
-    final futurePlannedOffsetsToClear = <int>[];
-    for (int off = todayOffset; off <= maxOffset; off++) {
-      if (completed[off] == true) continue;
-
-      Map<String, dynamic>? dayDoc = plannedByOffset[off];
-
-      // ✅ IMPORTANT: we only preloaded up to "today", so for future offsets
-      // we must fetch from server or we will overwrite existing plans.
-      if (!_isPlannedDay(dayDoc)) {
-        final s = await _dayRefForOffset(off)
-            .get(const GetOptions(source: Source.server));
-        dayDoc = s.data();
-      }
-
-      if (_isPlannedDay(dayDoc)) {
-        queue.add(Map<String, dynamic>.from(dayDoc!));
-        futurePlannedOffsetsToClear.add(off);
-        debugPrint('🧪 [ROLL] queued existing future plan off=$off date=${_ymd(blockStart.add(Duration(days: off)))}');
-
-
-      }
-    }
-
-
-    if (queue.isEmpty) {
-      debugPrint('✅ [ROLL] queue empty after read (nothing to move)');
-      return;
-    }
-
-    debugPrint('📦 [ROLL] reschedule queue size=${queue.length} '
-        '(missed=${missedOffsets.length}, future=${futurePlannedOffsetsToClear.length})');
-
-    // 5) Clear sources that will be re-packed
-    for (final off in missedOffsets) {
-      await _clearPlannedAtOffset(off);
-    }
-    for (final off in futurePlannedOffsetsToClear) {
-      await _clearPlannedAtOffset(off);
-    }
-
-    // 6) Pack forward from todayOffset into earliest valid (not completed) slots
-    int dest = todayOffset;
-
-    for (final payload in queue) {
-      while (dest <= maxOffset) {
-        // 🔒 HARD BLOCK: never write into a completed WES day
-        bool isDone = completed[dest] == true;
-
-        if (!isDone) {
-          // If this offset wasn't preloaded, check server directly
-          final date = blockStart.add(Duration(days: dest));
-          final key = _ymd(date);
-          final snap = await workoutsCol
-              .doc(key)
-              .get(const GetOptions(source: Source.server));
-          debugPrint('🧪 [ROLL] dest=$dest key=$key snapExists=${snap.exists}');
-          if (snap.exists) debugPrint('🧪 [ROLL] exercisesLen=${(snap.data()?['exercises'] as List?)?.length ?? 0}');
-
-
-          if (snap.exists) {
-            final data = snap.data() ?? const {};
-            final exs = (data['exercises'] is List)
-                ? List<Map<String, dynamic>>.from(data['exercises'] as List)
-                : const <Map<String, dynamic>>[];
-
-            for (final ex in exs) {
-              final sets = (ex['sets'] is List)
-                  ? List<Map<String, dynamic>>.from(ex['sets'] as List)
-                  : const <Map<String, dynamic>>[];
-              for (final s in sets) {
-                final int reps = (s['reps'] is num)
-                    ? (s['reps'] as num).toInt()
-                    : 0;
-                final double w = (s['weight'] is num)
-                    ? (s['weight'] as num).toDouble()
-                    : 0.0;
-                if (reps > 0 && w > 0.0) {
-                  isDone = true;
-                  break;
-                }
-              }
-              if (isDone) break;
-            }
-          }
-        }
-
-        if (isDone) {
-          dest++;
-          continue;
-        }
-
-        // ✅ safe slot
-        break;
-      }
-
-      if (dest > maxOffset) {
-        debugPrint('🧯 [ROLL] hit block end; dropping remaining queued plans');
-        break;
-      }
-
-      await _writePlannedToOffset(dest, payload);
-      debugPrint('✅ [ROLL] placed queued plan → offset $dest');
-      dest++;
-    }
-
-
-    debugPrint('✅ [ROLL] finished uid=$uid block=$blockId');
-
-  }
-
-
-
   Future<void> _persistAvatarLocalIfNeeded(BuildContext context, {
     required String uid,
     required String photoURL,
@@ -1216,17 +799,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       // Keep your existing warm
       unawaited(WarmupService.instance.warmWES(newUid));
 
-      // ✅ Roll-forward + RIR heal after switch (post-frame so block meta has a chance to hydrate)
+      // RIR heal after switch (post-frame so block meta has a chance to hydrate)
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         final bid = uc.activeBlockId;
         if (bid != null && bid.isNotEmpty) {
-          await _rollForwardMissedBB2Plans(uid: newUid, blockId: bid);
           unawaited(BlockExerciseDefaultsRepository.healActiveBlockRirPlan(
             uid: newUid,
             blockId: bid,
           ));
-        } else {
-          debugPrint('⚠️ [ROLL] skip on switch: activeBlockId missing');
         }
       });
     }
@@ -1246,25 +826,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     final ModalRoute<dynamic>? route = ModalRoute.of(context);
     if (route != null) {
       routeObserver.subscribe(this, route); // 👈 subscribe
-    }
-    // First time this page becomes active → schedule a one-shot warmup post-frame
-    if (!_bb2WarmupScheduled) {
-      _bb2WarmupScheduled = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        final userContext = UserContext.maybeOf(context, listen: false);
-        if (userContext == null) {
-          debugPrint('🟥 [HOME:initState] UserContext not found above HomeScreen (provider scope issue).');
-          return;
-        }
-        final actingUid = userContext.actingAsUid.isNotEmpty
-            ? userContext.actingAsUid
-            : userContext.actorUid;
-
-        debugPrint('🏁 [HOME] First-show: schedule WarmupBB2 for $actingUid');
-        if (actingUid.isNotEmpty) {
-          unawaited(WarmupBB2.runForActiveBlock(uid: actingUid));
-        }
-      });
     }
   }
 
@@ -1314,13 +875,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         }
       }
 
-      // 🔥 Warm up BB2 cache on resume
-      final userContext = Provider.of<UserContext>(context, listen: false);
-      final actingUid = userContext.actingAsUid;
-      debugPrint('🔁 [HOME] didPopNext: resume WarmupBB2 for $actingUid');
-      if (actingUid.isNotEmpty) {
-        unawaited(WarmupBB2.runForActiveBlock(uid: actingUid));
-      }
     });
   }
 
@@ -1827,9 +1381,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   Future<void> _loadOnboardingState() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null || !mounted) return;
-    final done = await OnboardingPrefs.getWpDone(uid);
+    final wp  = await OnboardingPrefs.getWpDone(uid);
+    final wes = await OnboardingPrefs.getWesDone(uid);
     if (!mounted) return;
-    setState(() => _wpDone = done);
+    setState(() {
+      _wpDone  = wp;
+      _wesDone = wes;
+    });
   }
 
   Widget _buildQACard({
@@ -2296,7 +1854,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     children: [
                       //Quick Access — two-row synchronized horizontal scroll
                       SizedBox(
-                        height: !_wpDone ? 296.0 : 280.0,
+                        height: (!_wpDone || !_wesDone) ? 296.0 : 280.0,
                         child: SingleChildScrollView(
                           scrollDirection: Axis.horizontal,
                           child: Row(
@@ -2304,17 +1862,20 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                             children: [
                               // Column 1: Enter Workout / Body Weight Tracker
                               _buildQAColumn(
-                                _buildQACard(
-                                  icon: Icons.fitness_center,
-                                  label: 'Enter\nWorkout',
-                                  onTap: () {
-                                    final uc = UserContext.of(context, listen: false);
-                                    Navigator.push(context, MaterialPageRoute(
-                                      builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                        value: uc, child: const Wes2Screen()),
-                                    ));
-                                  },
-                                  iconWidget: SizedBox(
+                                _GlowingCueWrapper(
+                                  active: _wpDone && !_wesDone,
+                                  label: 'Tap here',
+                                  child: _buildQACard(
+                                    icon: Icons.fitness_center,
+                                    label: 'Enter\nWorkout',
+                                    onTap: () {
+                                      final uc = UserContext.of(context, listen: false);
+                                      Navigator.push(context, MaterialPageRoute(
+                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                          value: uc, child: const Wes2Screen()),
+                                      ));
+                                    },
+                                    iconWidget: SizedBox(
                                     width: 52, height: 56,
                                     child: Stack(clipBehavior: Clip.none, children: [
                                       Icon(Icons.fitness_center, size: 44,
@@ -2325,6 +1886,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                     ]),
                                   ),
                                 ),
+                              ),
                                 _buildQACard(
                                   icon: Icons.monitor_weight,
                                   label: 'Body\nWeight\nTracker',
@@ -2890,7 +2452,7 @@ class _GlowingCueWrapperState extends State<_GlowingCueWrapper>
               style: TextStyle(
                 fontSize: 10,
                 fontWeight: FontWeight.w600,
-                color: color.withOpacity(0.9),
+                color: color.withValues(alpha: 0.9),
               ),
             ),
             const SizedBox(height: 2),
@@ -2900,7 +2462,7 @@ class _GlowingCueWrapperState extends State<_GlowingCueWrapper>
                 border: Border.all(color: color, width: 1.5),
                 boxShadow: [
                   BoxShadow(
-                    color: color.withOpacity(0.4),
+                    color: color.withValues(alpha: 0.4),
                     blurRadius: 8,
                     spreadRadius: 1,
                   ),

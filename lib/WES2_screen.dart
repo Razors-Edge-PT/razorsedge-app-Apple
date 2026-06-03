@@ -1,9 +1,12 @@
 import 'dart:async';
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'onboarding_prefs.dart';
 import 'user_context.dart';
+import 'WES2_widgets/WES2_tutorial_banner.dart';
 import 'WES2_controller.dart';
 import 'WES2_models.dart';
 import 'WES2_plan_service.dart';
@@ -74,6 +77,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   // Composite key uid|blockId|date — prevents redundant server history refreshes.
   String? _lastHistoryRefreshKey;
 
+  // ── Tutorial state (Phase 2 onboarding) ──────────────────────────────────
+  // 0 = inactive; 1/2/3 = active step. Uses FirebaseAuth actor UID, NOT athlete.
+  int _tutorialStep = 0;
+
   // ── Day timer state (Phase 17) ─────────────────────────────────────────────
   bool _timerVisible = false;
   bool _timerRunning = false;
@@ -84,6 +91,30 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   // ── Automatic workout duration (separate from manual floating timer) ────────
   int _workoutDurationMilliseconds = 0;
   DateTime? _workoutDurationSegmentStartedAt;
+
+  // ── Tutorial helpers ──────────────────────────────────────────────────────
+
+  Future<void> _loadTutorialState() async {
+    // Uses Firebase Auth UID (logged-in actor), never the impersonated athlete.
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    final wpDone  = await OnboardingPrefs.getWpDone(uid);
+    final wesDone = await OnboardingPrefs.getWesDone(uid);
+    if (!wpDone || wesDone || !mounted) return;
+    setState(() => _tutorialStep = 1);
+  }
+
+  Future<void> _onTutorialStepDismiss() async {
+    if (_tutorialStep < 3) {
+      setState(() => _tutorialStep++);
+    } else {
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid != null) await OnboardingPrefs.setWesDone(uid);
+      if (mounted) setState(() => _tutorialStep = 0);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
 
   Future<void> _fetchAthleteUsername(String uid) async {
     try {
@@ -146,6 +177,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     if (!_loadStarted) {
       _loadStarted = true;
       _loadDay();
+      unawaited(_loadTutorialState());
     }
   }
 
@@ -1167,6 +1199,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
               style: TextStyle(fontSize: 12, color: Colors.white54),
             ),
           ),
+        if (_tutorialStep > 0)
+          Wes2TutorialBanner(
+            step: _tutorialStep,
+            onDismiss: _onTutorialStepDismiss,
+          ),
         Expanded(child: _buildContentArea(context, controller)),
       ],
     );
@@ -1197,6 +1234,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         // Build flat item list: circuit headers inserted when circuitIndex changes.
         final items = <Widget>[];
         int? prevCi;
+        bool isFirstCard = true;
         for (final row in rows) {
           if (prevCi == null || row.circuitIndex != prevCi) {
             final ci = row.circuitIndex;
@@ -1256,7 +1294,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
                 ? () => _onOpenExercisePlanNoteDialog(row, combinedNote)
                 : null,
             showVelocityField: _shouldShowVelocityField(row),
+            tutorialStep: isFirstCard ? _tutorialStep : 0,
           ));
+          isFirstCard = false;
         }
 
         items.add(Wes2BottomActionsRow(
