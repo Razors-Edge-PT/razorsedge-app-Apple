@@ -141,6 +141,24 @@ class BB3HintService {
     final isBw = PeriodizationModelUtils.isBodyweightExercise(
         id: exerciseId, name: exerciseName);
 
+    // ── Local increment grid from this exercise's own settings (exerciseId-keyed).
+    // The Engine already used this same grid; we must snap the same way here so
+    // the reverse-calculated weight is not re-rounded through a name-based lookup
+    // that can miss the settings and fall back to the wrong step size.
+    final _localValidWeights = PeriodizationModelUtils.expandIncrementOptions(
+      PeriodizationModelUtils.incMapFromRaw(exSettings?['increments']),
+    );
+
+    // Snaps [target] to the nearest value in the local grid.
+    // Falls back to the global 2.5-step grid when no settings are present,
+    // matching the Engine's own expandIncrementOptions(incMapFromRaw(null)) default.
+    double _snapToGrid(double target) {
+      if (_localValidWeights.isEmpty) return target;
+      return _localValidWeights.reduce(
+        (a, b) => (a - target).abs() < (b - target).abs() ? a : b,
+      );
+    }
+
     // ── Shared helper: build the weight display string for a given reps/RIR ──
     String _wHint(int reps, double rir) {
       double abs = PeriodizationModelUtils.reverseCalculateWeight(
@@ -148,10 +166,7 @@ class BB3HintService {
         reps: reps,
         rir: rir,
       );
-      abs = PeriodizationModelUtils.roundToNearestValidIncrement(
-        targetWeight: abs,
-        exerciseName: exerciseName,
-      );
+      abs = _snapToGrid(abs);
       if (isBw) {
         final added = PeriodizationModelUtils.toDisplayAddedWeight(
           uid: uid,
@@ -159,11 +174,7 @@ class BB3HintService {
           exerciseName: exerciseName,
           asOfDate: selectedDate,
         );
-        final rounded = PeriodizationModelUtils.roundToNearestValidIncrement(
-          targetWeight: added,
-          exerciseName: exerciseName,
-        );
-        return _formatWeight(rounded);
+        return _formatWeight(_snapToGrid(added));
       }
       return _formatWeight(abs);
     }

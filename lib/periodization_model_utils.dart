@@ -1524,11 +1524,15 @@ class PeriodizationModelUtils {
       return defaultWeight;
     }
 
-    // Valid increment grid (same helper Smart/AddReps use)
-    final validWeights = roundToAllValidIncrements(
-      baseWeight: defaultWeight,
-      exerciseName: exerciseName,
-    )..sort();
+    // Use the increments passed in by the caller (already built by the Engine
+    // via expandIncrementOptions, keyed by exerciseId with a safe 2.5 kg default).
+    // Do not re-derive from roundToAllValidIncrements: its name-keyed settings
+    // lookup falls back to [20.0, 22.5, ...], producing a broken grid with a
+    // 20 kg gap that forces the center far above the true implied weight.
+    final validWeights = (increments.isNotEmpty
+        ? List<double>.from(increments)
+        : [0.0, 2.5, 5.0, 7.5, 10.0])
+      ..sort();
 
     // Optional: used-combo guard (weight×repTarget×rir)
     final usedCombos =
@@ -1731,10 +1735,15 @@ class PeriodizationModelUtils {
             'plannedRIR=${rirValue.toStringAsFixed(1)})'
     );
 
-    final validWeights = roundToAllValidIncrements(
-      baseWeight: defaultWeight,
-      exerciseName: exerciseName,
-    );
+    // Use the increments passed in by the caller (already built by the Engine
+    // via expandIncrementOptions, keyed by exerciseId with a safe 2.5 kg default).
+    // Do not re-derive from roundToAllValidIncrements: its name-keyed settings
+    // lookup falls back to [20.0, 22.5, ...], producing a broken grid with a
+    // 20 kg gap that forces the center far above the true implied weight.
+    final validWeights = (increments.isNotEmpty
+        ? List<double>.from(increments)
+        : [0.0, 2.5, 5.0, 7.5, 10.0])
+      ..sort();
 
     // [ADD PRINT] —— are SP’s internal candidates consistent with router-provided increments near default?
     final bool _gridsDifferNearDefault = (() {
@@ -1961,11 +1970,15 @@ class PeriodizationModelUtils {
 
     final double baseE1RM = baseE1RMNullable;
 
-    // 🎯 Valid increment grid from planner context
-    final validWeights = roundToAllValidIncrements(
-      baseWeight: defaultWeight,
-      exerciseName: exerciseName,
-    )..sort();
+    // Use the increments passed in by the caller (already built by the Engine
+    // via expandIncrementOptions, keyed by exerciseId with a safe 2.5 kg default).
+    // Do not re-derive from roundToAllValidIncrements: its name-keyed settings
+    // lookup falls back to [20.0, 22.5, ...], producing a broken grid with a
+    // 20 kg gap that forces the center far above the true implied weight.
+    final validWeights = (increments.isNotEmpty
+        ? List<double>.from(increments)
+        : [0.0, 2.5, 5.0, 7.5, 10.0])
+      ..sort();
 
     // 🔍 Avoid repeating identical combos
     final usedCombos =
@@ -2022,10 +2035,10 @@ class PeriodizationModelUtils {
         rir: rirValue,
       );
 
-      final valid = roundToAllValidIncrements(
-        baseWeight: estWeight,
-        exerciseName: exerciseName,
-      )..sort();
+      final valid = (increments.isNotEmpty
+          ? List<double>.from(increments)
+          : [0.0, 2.5, 5.0, 7.5, 10.0])
+        ..sort();
 
       final below = valid.where((w) => w <= estWeight).toList();
       final above = valid.where((w) => w > estWeight).toList();
