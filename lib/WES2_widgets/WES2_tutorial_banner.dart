@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 const List<String> _kTexts = [
   'Enter a weight you can do for this exercise at the given rep target.',
   'Double tap to accept suggestion, type in to enter something different.',
-  'Enter how many reps you want to leave in reserve. 0 means no reps left, 2 means you could have done 2 more.',
+  'For RIR, enter how many reps you had left in reserve, after you finish the set. 0 means no reps left, 2 means you could have done 2 more.',
 ];
 
 const List<String> _kButtons = ['Got it →', 'Got it →', 'Done'];

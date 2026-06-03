@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 /// Top action bar with "Add Exercise" and optional "Load Template" buttons.
@@ -69,14 +71,7 @@ class Wes2TopActionsBar extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          'Tap here',
-          style: TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.w600,
-            color: cs.secondary,
-          ),
-        ),
+        _NudgingCueLabel(text: 'Tap here', color: cs.secondary),
         const SizedBox(height: 2),
         DecoratedBox(
           decoration: BoxDecoration(
@@ -93,6 +88,81 @@ class Wes2TopActionsBar extends StatelessWidget {
           child: button,
         ),
       ],
+    );
+  }
+}
+
+// ── Nudging cue label ─────────────────────────────────────────────────────────
+// Gently bobs upward ~4 px every 2 seconds to draw attention without
+// distracting from the button below it.
+class _NudgingCueLabel extends StatefulWidget {
+  final String text;
+  final Color color;
+  const _NudgingCueLabel({required this.text, required this.color});
+
+  @override
+  State<_NudgingCueLabel> createState() => _NudgingCueLabelState();
+}
+
+class _NudgingCueLabelState extends State<_NudgingCueLabel>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _offsetAnim;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+    _offsetAnim = TweenSequence<double>([
+      TweenSequenceItem(
+        tween: Tween(begin: 0.0, end: -4.0)
+            .chain(CurveTween(curve: Curves.easeOut)),
+        weight: 50,
+      ),
+      TweenSequenceItem(
+        tween: Tween(begin: -4.0, end: 0.0)
+            .chain(CurveTween(curve: Curves.easeIn)),
+        weight: 50,
+      ),
+    ]).animate(_ctrl);
+
+    // Initial nudge shortly after the label first appears.
+    Future.delayed(const Duration(milliseconds: 600), () {
+      if (mounted) _ctrl.forward(from: 0);
+    });
+    // Repeat every 2 seconds thereafter.
+    _timer = Timer.periodic(const Duration(milliseconds: 1500), (_) {
+      if (mounted) _ctrl.forward(from: 0);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _offsetAnim,
+      builder: (_, child) => Transform.translate(
+        offset: Offset(0, _offsetAnim.value),
+        child: child,
+      ),
+      child: Text(
+        widget.text,
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w600,
+          color: widget.color,
+        ),
+      ),
     );
   }
 }
