@@ -1864,7 +1864,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                               _buildQAColumn(
                                 _GlowingCueWrapper(
                                   active: _wpDone && !_wesDone,
-                                  label: 'Tap here',
+                                  label: 'Tap here next',
                                   child: _buildQACard(
                                     icon: Icons.fitness_center,
                                     label: 'Enter\nWorkout',
