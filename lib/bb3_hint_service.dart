@@ -161,13 +161,16 @@ class BB3HintService {
 
     // ── Shared helper: build the weight display string for a given reps/RIR ──
     String _wHint(int reps, double rir) {
-      double abs = PeriodizationModelUtils.reverseCalculateWeight(
+      final double abs = PeriodizationModelUtils.reverseCalculateWeight(
         targetE1RM: targetE1rm,
         reps: reps,
         rir: rir,
       );
-      abs = _snapToGrid(abs);
       if (isBw) {
+        // For BW exercises the increment grid is defined for the display-added
+        // load (weight above bodyweight), not the absolute load.  Convert to
+        // display weight first, then snap — snapping abs first would introduce
+        // a rounding error whenever bodyweight is not a multiple of the step.
         final added = PeriodizationModelUtils.toDisplayAddedWeight(
           uid: uid,
           absoluteKg: abs,
@@ -176,7 +179,7 @@ class BB3HintService {
         );
         return _formatWeight(_snapToGrid(added));
       }
-      return _formatWeight(abs);
+      return _formatWeight(_snapToGrid(abs));
     }
 
     final rirDisplay = setRir > 0

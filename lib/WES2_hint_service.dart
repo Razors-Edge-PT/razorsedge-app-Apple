@@ -320,6 +320,9 @@ class Wes2HintServiceImpl implements Wes2HintService {
             reps: repsForWeight,
             rir: rirForWeight,
             exerciseName: row.name,
+            localValidWeights: PeriodizationModelUtils.expandIncrementOptions(
+              PeriodizationModelUtils.incMapFromRaw(exSettings?['increments']),
+            ),
           );
           if (best != null) weightHint = best;
         }
@@ -638,6 +641,16 @@ class Wes2HintServiceImpl implements Wes2HintService {
 
     final prevRir = prevSet.rir.actualValue ?? prevSet.rir.hintValue ?? 0.0;
 
+    // Local increment grid from this exercise's own settings (exerciseId-keyed),
+    // matching the Engine and BB3HintService snapping convention.
+    final _sNValidWeights = PeriodizationModelUtils.expandIncrementOptions(
+      PeriodizationModelUtils.incMapFromRaw(exSettings?['increments']),
+    );
+    double _sNSnap(double t) => _sNValidWeights.isEmpty
+        ? t
+        : _sNValidWeights.reduce(
+            (a, b) => (a - t).abs() < (b - t).abs() ? a : b);
+
     // Bodyweight exercises store display-added load; E1RM math needs absolute load.
     final isBw = PeriodizationModelUtils.isBodyweightExercise(
         id: row.exerciseId, name: row.name);
@@ -720,20 +733,18 @@ class Wes2HintServiceImpl implements Wes2HintService {
         rir: thisRir,
       );
       if (raw > 0) {
-        final rounded = PeriodizationModelUtils.roundToNearestValidIncrement(
-          targetWeight: raw,
-          exerciseName: row.name,
-        );
-        // reverseCalculateWeight returns absolute load; BW display is added load.
+        // BW: convert absolute → display weight first, then snap the display value.
+        // Non-BW: snap the absolute weight directly.
+        // Both use the local exerciseId-keyed grid (_sNSnap), not the name-based PMU helper.
         weightHint = isBw
-            ? PeriodizationModelUtils.toDisplayAddedWeight(
+            ? _sNSnap(PeriodizationModelUtils.toDisplayAddedWeight(
                 uid: uid,
-                absoluteKg: rounded,
+                absoluteKg: raw,
                 exerciseId: row.exerciseId,
                 exerciseName: row.name,
                 asOfDate: date,
-              )
-            : rounded;
+              ))
+            : _sNSnap(raw);
       }
     } else if (cwt != null) {
       // Weight constraint: solve reps unless locked by BB3 or user actual.
@@ -772,19 +783,15 @@ class Wes2HintServiceImpl implements Wes2HintService {
           rir: thisRir,
         );
         if (rawW > 0) {
-          final rounded = PeriodizationModelUtils.roundToNearestValidIncrement(
-            targetWeight: rawW,
-            exerciseName: row.name,
-          );
           weightHint = isBw
-              ? PeriodizationModelUtils.toDisplayAddedWeight(
+              ? _sNSnap(PeriodizationModelUtils.toDisplayAddedWeight(
                   uid: uid,
-                  absoluteKg: rounded,
+                  absoluteKg: rawW,
                   exerciseId: row.exerciseId,
                   exerciseName: row.name,
                   asOfDate: date,
-                )
-              : rounded;
+                ))
+              : _sNSnap(rawW);
         }
         // Pass existing hint so _mergeInt keeps it instead of clearing (Issue 2 fix).
         repsHint = set.reps.hintValue;
@@ -804,19 +811,15 @@ class Wes2HintServiceImpl implements Wes2HintService {
           rir: thisRir,
         );
         if (rawW > 0) {
-          final rounded = PeriodizationModelUtils.roundToNearestValidIncrement(
-            targetWeight: rawW,
-            exerciseName: row.name,
-          );
           weightHint = isBw
-              ? PeriodizationModelUtils.toDisplayAddedWeight(
+              ? _sNSnap(PeriodizationModelUtils.toDisplayAddedWeight(
                   uid: uid,
-                  absoluteKg: rounded,
+                  absoluteKg: rawW,
                   exerciseId: row.exerciseId,
                   exerciseName: row.name,
                   asOfDate: date,
-                )
-              : rounded;
+                ))
+              : _sNSnap(rawW);
         }
         repsHint = midRep;
       }
@@ -894,10 +897,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
           rir: thisRir,
         );
         if (rawFreeW > 0) {
-          final freeW = PeriodizationModelUtils.roundToNearestValidIncrement(
-            targetWeight: rawFreeW,
-            exerciseName: row.name,
-          );
+          final freeW = _sNSnap(rawFreeW);
           if ((freeW - set.weight.hintValue!).abs() >= 0.25) {
             weightCue = true;
           }
@@ -966,25 +966,33 @@ class Wes2HintServiceImpl implements Wes2HintService {
   /// Picks the valid-increment weight whose E1RM is closest to [targetE1rm].
   /// Evaluates the nearest rounded increment plus one step below and one above,
   /// returning the candidate with the smallest absolute E1RM difference.
+  ///
+  /// [localValidWeights] is the exerciseId-keyed sorted increment list from the
+  /// caller's exSettings.  When non-empty it is used for all snapping; when empty
+  /// the call falls back to the global name-based PMU helper.
   static double? _closestE1rmWeight({
     required double targetE1rm,
     required double rawWeight,
     required int reps,
     required double rir,
     required String exerciseName,
+    List<double> localValidWeights = const [],
   }) {
     if (targetE1rm <= 0 || rawWeight <= 0) return null;
 
-    final nearest = PeriodizationModelUtils.roundToNearestValidIncrement(
-      targetWeight: rawWeight,
-      exerciseName: exerciseName,
-    );
+    double _snap(double t) {
+      if (localValidWeights.isNotEmpty) {
+        return localValidWeights.reduce(
+          (a, b) => (a - t).abs() < (b - t).abs() ? a : b);
+      }
+      return PeriodizationModelUtils.roundToNearestValidIncrement(
+        targetWeight: t, exerciseName: exerciseName);
+    }
 
-    // Find the step size by rounding the next value just above nearest.
-    final nextUp = PeriodizationModelUtils.roundToNearestValidIncrement(
-      targetWeight: nearest + 0.01,
-      exerciseName: exerciseName,
-    );
+    final nearest = _snap(rawWeight);
+
+    // Find the step size by snapping the value just above nearest.
+    final nextUp = _snap(nearest + 0.01);
     final step = nextUp - nearest;
     if (step <= 0) return nearest;
 
