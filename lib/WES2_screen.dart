@@ -1960,7 +1960,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     _saveDraftNow();
     // ignore: discarded_futures
     _loadAndApplyHints();
-    _showUndoSnackBar('Exercise replaced');
+    if (row.hasAnyExecutionValue) _showUndoSnackBar('Exercise replaced');
     // ignore: discarded_futures
     _replaceExerciseSilently(
       uid: _controller.actingUid,
