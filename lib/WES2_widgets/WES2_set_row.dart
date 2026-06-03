@@ -148,6 +148,9 @@ class Wes2SetRow extends StatefulWidget {
   /// Active tutorial step (1=weight, 2=reps, 3=RIR). 0 = inactive — no change
   /// to rendering. Only set on the first set row of the first exercise card.
   final int tutorialStep;
+  /// Fires when the reps hint is double-tap accepted (field was empty + hint
+  /// was filled). Only wired on the first set row when tutorial is at reps step.
+  final VoidCallback? onTutorialRepsAccepted;
 
   const Wes2SetRow({
     super.key,
@@ -164,6 +167,7 @@ class Wes2SetRow extends StatefulWidget {
     this.uid,
     this.selectedDate,
     this.tutorialStep = 0,
+    this.onTutorialRepsAccepted,
   });
 
   @override
@@ -442,6 +446,8 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
     ctrl.selection = TextSelection.collapsed(offset: hint.length);
     widget.onFieldChanged(fieldKey, hint);
     widget.onFieldUnfocused(fieldKey, hint);
+    // Notify tutorial logic of a genuine reps double-tap accept (after save).
+    if (fieldKey == Wes2FieldKey.reps) widget.onTutorialRepsAccepted?.call();
   }
 
   Widget _field({

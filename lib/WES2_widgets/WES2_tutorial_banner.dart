@@ -16,11 +16,15 @@ const List<String> _kButtons = ['Got it →', 'Got it →', 'Done'];
 class Wes2TutorialBanner extends StatefulWidget {
   final int step;
   final VoidCallback onDismiss;
+  /// When non-null, a compact "← back" button is shown to the left of the
+  /// dismiss button. Pass null to hide it (e.g. at the first field step).
+  final VoidCallback? onBack;
 
   const Wes2TutorialBanner({
     super.key,
     required this.step,
     required this.onDismiss,
+    this.onBack,
   });
 
   @override
@@ -124,6 +128,23 @@ class _Wes2TutorialBannerState extends State<Wes2TutorialBanner>
               ),
             ),
             const SizedBox(width: 8),
+            // Back button — hidden at first field step (onBack == null)
+            if (widget.onBack != null) ...[
+              TextButton(
+                onPressed: widget.onBack,
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  foregroundColor: cs.secondary.withValues(alpha: 0.65),
+                ),
+                child: const Text(
+                  '← back',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
+                ),
+              ),
+              const SizedBox(width: 2),
+            ],
             // Dismiss button
             TextButton(
               onPressed: widget.onDismiss,

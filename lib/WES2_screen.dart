@@ -115,6 +115,14 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     }
   }
 
+  void _onTutorialStepBack() {
+    if (_tutorialStep > 3 && mounted) setState(() => _tutorialStep--);
+  }
+
+  void _onRepsTutorialAccepted() {
+    if (_tutorialStep == 4 && mounted) setState(() => _tutorialStep = 5);
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
 
   Future<void> _fetchAthleteUsername(String uid) async {
@@ -835,6 +843,19 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     Wes2FieldKey fieldKey,
     String rawText,
   ) {
+    // ── Tutorial auto-advancement (additive — does not alter save variables) ─
+    if (rawText.trim().isNotEmpty) {
+      if (_tutorialStep == 3 && fieldKey == Wes2FieldKey.weight) {
+        // Weight entered → advance to reps cue.
+        if (mounted) setState(() => _tutorialStep = 4);
+      } else if (_tutorialStep == 5 && fieldKey == Wes2FieldKey.rir) {
+        // RIR entered → complete tutorial.
+        final uid = FirebaseAuth.instance.currentUser?.uid;
+        if (uid != null) unawaited(OnboardingPrefs.setWesDone(uid));
+        if (mounted) setState(() => _tutorialStep = 0);
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
     final text = rawText.trim();
     final dynamic value;
     if (text.isEmpty) {
@@ -1206,6 +1227,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
           Wes2TutorialBanner(
             step: _tutorialStep - 2, // 3→1(weight) 4→2(reps) 5→3(RIR)
             onDismiss: _onTutorialStepDismiss,
+            onBack: _tutorialStep >= 4 ? _onTutorialStepBack : null,
           ),
         Expanded(child: _buildContentArea(context, controller)),
       ],
@@ -1300,6 +1322,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             tutorialStep: isFirstCard
                 ? (_tutorialStep >= 3 ? _tutorialStep - 2 : 0)
                 : 0,
+            onTutorialRepsAccepted: (isFirstCard && _tutorialStep == 4)
+                ? _onRepsTutorialAccepted
+                : null,
           ));
           isFirstCard = false;
         }

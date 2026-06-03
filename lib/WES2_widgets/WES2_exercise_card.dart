@@ -72,6 +72,9 @@ class Wes2ExerciseCard extends StatelessWidget {
   final bool showVelocityField;
   /// Tutorial step to highlight on the first set row (0 = inactive).
   final int tutorialStep;
+  /// Forwarded to the first set row only. Fires when the reps hint is
+  /// double-tap accepted while the tutorial is at the reps step.
+  final VoidCallback? onTutorialRepsAccepted;
 
   const Wes2ExerciseCard({
     super.key,
@@ -92,6 +95,7 @@ class Wes2ExerciseCard extends StatelessWidget {
     this.isExercisePlanNoteRead = false,
     this.showVelocityField = false,
     this.tutorialStep = 0,
+    this.onTutorialRepsAccepted,
   });
 
   static bool _isCompletedEligible(
@@ -347,8 +351,10 @@ class Wes2ExerciseCard extends StatelessWidget {
                           : () => onNoteTap!(s.setIndex),
                       isPlanNoteRead:
                           wes2Ctrl.isPlanNoteRead(row.exerciseId, s.setIndex),
-                      // Tutorial highlight only on first set row; all others inactive.
+                      // Tutorial highlight + reps callback: first set row only.
                       tutorialStep: s.setIndex == 0 ? tutorialStep : 0,
+                      onTutorialRepsAccepted:
+                          s.setIndex == 0 ? onTutorialRepsAccepted : null,
                     );
                   }),
                 ],
