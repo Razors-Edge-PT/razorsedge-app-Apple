@@ -28,6 +28,8 @@ import 'coach_home_screen.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:facebook_app_events/facebook_app_events.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:async';
 import 'membership_gate.dart';
 import 'theme_controller.dart';
 import 'app_theme.dart';
@@ -74,6 +76,9 @@ void showAppSnack(String message) {
 
 
 
+// Auth lifecycle phases for the root state machine.
+enum _AuthPhase { loading, restoring, tokenPending, authenticated, unauthenticated }
+
 class AppRoot extends StatefulWidget {
   const AppRoot({super.key});
 
@@ -81,10 +86,11 @@ class AppRoot extends StatefulWidget {
   State<AppRoot> createState() => _AppRootState();
 }
 
-/// Memoizes UserContext and the token future so that widget-tree rebuilds caused
-/// by theme changes (ThemeController notifying) do NOT recreate UserContext or
-/// retrigger WarmupService / Isar side effects.
 class _AppRootState extends State<AppRoot> {
+  // SharedPreferences key written true only on an explicit user-initiated logout.
+  // Prevents treating Firebase Auth's transient null on cold-start as a real logout.
+  static const _kExplicitLogout = 'goodlift_explicit_logout';
+
   static const _devCoachUids = {
     'yoVAqScwLMQLAgNHh8v9IK49fBw2', // Richard Razorsedge
     'wuiMe7phxYQh0MM39bfnhgv20yS2',
@@ -95,76 +101,201 @@ class _AppRootState extends State<AppRoot> {
     'ykx0RvDMc5OIuZ2R4kqWMhGbrGV2', // Google Play reviewer
   };
 
-  // Memoized per authenticated uid — reset on sign-out or uid change.
+  _AuthPhase _phase = _AuthPhase.loading;
+
+  // Monotonically increasing counter; each auth event captures its own gen value.
+  // Guards every async continuation so stale async chains are dropped when a
+  // newer auth event supersedes them.
+  int _authGen = 0;
+
+  // Memoized per uid — reset on sign-out or uid change.
   String? _memoUid;
   Future<IdTokenResult>? _tokenFuture;
   UserContext? _userContext;
 
-  // Cached stream — avoids re-subscribing on every widget-tree rebuild.
-  late final Stream<User?> _authStream = FirebaseAuth.instance.authStateChanges();
+  StreamSubscription<User?>? _authSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _authSub = FirebaseAuth.instance.authStateChanges().listen(_onAuthEvent);
+  }
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    super.dispose();
+  }
+
+  // ─── auth stream handler ──────────────────────────────────────────────────
+
+  Future<void> _onAuthEvent(User? user) async {
+    final gen = ++_authGen;
+    debugPrint(
+      '[AUTHROOT] authStateChanges uid=${user?.uid} '
+      'isAnon=${user?.isAnonymous} gen=$gen',
+    );
+    if (user != null && !user.isAnonymous) {
+      await _handleValidUser(user, gen);
+    } else {
+      await _handleNullOrAnon(gen);
+    }
+  }
+
+  // ─── valid-user path ──────────────────────────────────────────────────────
+
+  Future<void> _handleValidUser(User user, int gen) async {
+    if (gen != _authGen || !mounted) return;
+
+    // Clear explicit-logout flag whenever Firebase confirms a real user.
+    final prefs = await SharedPreferences.getInstance();
+    if (gen != _authGen || !mounted) return;
+    await prefs.setBool(_kExplicitLogout, false);
+
+    // Memoize per uid so WarmupService is not re-triggered on provider rebuilds.
+    if (user.uid != _memoUid) {
+      _memoUid = user.uid;
+      _tokenFuture = user.getIdTokenResult();
+      _userContext = null;
+    }
+
+    if (_userContext == null) {
+      if (mounted) setState(() => _phase = _AuthPhase.tokenPending);
+      try {
+        final token = await _tokenFuture!;
+        if (gen != _authGen || !mounted) return;
+        if (_userContext == null) {
+          final isCoach =
+              (token.claims?['isCoach'] == true) ||
+              _devCoachUids.contains(user.uid);
+          ensureMembershipDoc(user.uid);
+          upsertUserLookup();
+          _userContext = UserContext(actorUid: user.uid, isCoach: isCoach);
+          _userContext!.bootstrapBlockMeta(uid: user.uid);
+        }
+      } catch (e) {
+        debugPrint('[AUTHROOT] getIdTokenResult failed: $e — falling back to uid-only coach check');
+        if (gen != _authGen || !mounted) return;
+        if (_userContext == null) {
+          final isCoach = _devCoachUids.contains(user.uid);
+          ensureMembershipDoc(user.uid);
+          upsertUserLookup();
+          _userContext = UserContext(actorUid: user.uid, isCoach: isCoach);
+          _userContext!.bootstrapBlockMeta(uid: user.uid);
+        }
+      }
+    }
+
+    if (gen != _authGen || !mounted) return;
+    setState(() => _phase = _AuthPhase.authenticated);
+  }
+
+  // ─── null / anon path with restore grace period ──────────────────────────
+
+  Future<void> _handleNullOrAnon(int gen) async {
+    if (!mounted) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    if (gen != _authGen || !mounted) return;
+
+    final explicitLogout = prefs.getBool(_kExplicitLogout) ?? false;
+    debugPrint('[AUTHNULL] gen=$gen explicitLogout=$explicitLogout phase=$_phase');
+
+    if (explicitLogout) {
+      // User pressed logout — show Login immediately.
+      _clearMemo();
+      setState(() => _phase = _AuthPhase.unauthenticated);
+      return;
+    }
+
+    // Unexpected null (cold-start race, token refresh, Play Integrity delay).
+    // Do NOT show Login yet — run a multi-step restore check first.
+    debugPrint('[AUTHRESTORE] starting restore grace period gen=$gen');
+    setState(() => _phase = _AuthPhase.restoring);
+
+    // Step 1: synchronous currentUser read.
+    var current = FirebaseAuth.instance.currentUser;
+    debugPrint('[AUTHRESTORE] step1 currentUser=${current?.uid}');
+    if (current != null && !current.isAnonymous) {
+      await _handleValidUser(current, gen);
+      return;
+    }
+
+    // Step 2: brief pause, then re-read.
+    await Future.delayed(const Duration(milliseconds: 1500));
+    if (gen != _authGen || !mounted) return;
+    current = FirebaseAuth.instance.currentUser;
+    debugPrint('[AUTHRESTORE] step2 currentUser(1.5s)=${current?.uid}');
+    if (current != null && !current.isAnonymous) {
+      await _handleValidUser(current, gen);
+      return;
+    }
+
+    // Step 3: wait for idTokenChanges to emit a real user (up to 3 s).
+    // Catches the case where Firebase Auth finishes loading the cached user
+    // slightly after authStateChanges already emitted null.
+    debugPrint('[AUTHRESTORE] step3 waiting on idTokenChanges (3s timeout)');
+    try {
+      final restored = await FirebaseAuth.instance
+          .idTokenChanges()
+          .where((u) => u != null && !u.isAnonymous)
+          .first
+          .timeout(const Duration(seconds: 3));
+      if (gen != _authGen || !mounted) return;
+      if (restored != null && !restored.isAnonymous) {
+        debugPrint('[AUTHRESTORE] idTokenChanges uid=${restored.uid}');
+        await _handleValidUser(restored, gen);
+        return;
+      }
+    } catch (_) {
+      debugPrint('[AUTHRESTORE] idTokenChanges timed out or errored');
+    }
+
+    // Step 4: final synchronous check before giving up.
+    if (gen != _authGen || !mounted) return;
+    current = FirebaseAuth.instance.currentUser;
+    debugPrint('[AUTHRESTORE] step4 final currentUser=${current?.uid}');
+    if (current != null && !current.isAnonymous) {
+      await _handleValidUser(current, gen);
+      return;
+    }
+
+    debugPrint('[AUTHNULL] all restore checks confirm no user — showing Login');
+    _clearMemo();
+    setState(() => _phase = _AuthPhase.unauthenticated);
+  }
+
+  void _clearMemo() {
+    _memoUid = null;
+    _tokenFuture = null;
+    _userContext = null;
+  }
+
+  // ─── build ────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<User?>(
-      stream: _authStream,
-      builder: (context, snap) {
-        // Guard: never treat the async restoration window as signed-out.
-        if (snap.connectionState == ConnectionState.waiting) {
+    debugPrint('[AUTHROOT] build phase=$_phase');
+    switch (_phase) {
+      case _AuthPhase.loading:
+      case _AuthPhase.restoring:
+      case _AuthPhase.tokenPending:
+        return const MaterialApp(
+          home: Scaffold(body: Center(child: CircularProgressIndicator())),
+        );
+      case _AuthPhase.unauthenticated:
+        return const MyApp(isAuthenticated: false);
+      case _AuthPhase.authenticated:
+        if (_userContext == null) {
           return const MaterialApp(
             home: Scaffold(body: Center(child: CircularProgressIndicator())),
           );
         }
-
-        final user = snap.data;
-
-        // Not logged in, OR anonymous (signup availability-check sessions should
-        // not grant access to the authenticated app shell).
-        if (user == null || user.isAnonymous) {
-          _memoUid = null;
-          _tokenFuture = null;
-          _userContext = null;
-          return const MyApp(isAuthenticated: false);
-        }
-
-        // Only fetch token once per uid — prevents spurious WarmupService calls
-        // on widget-tree rebuilds triggered by theme/provider changes.
-        if (user.uid != _memoUid) {
-          _memoUid = user.uid;
-          _tokenFuture = user.getIdTokenResult();
-          _userContext = null; // will be created after token resolves
-        }
-
-        return FutureBuilder<IdTokenResult>(
-          future: _tokenFuture,
-          builder: (context, tokenSnap) {
-            if (tokenSnap.connectionState == ConnectionState.waiting || !tokenSnap.hasData) {
-              return const MaterialApp(
-                home: Scaffold(body: Center(child: CircularProgressIndicator())),
-              );
-            }
-
-            // Create UserContext exactly once per uid.
-            if (_userContext == null) {
-              final token = tokenSnap.data!;
-              final isCoach =
-                  (token.claims?['isCoach'] == true) ||
-                  _devCoachUids.contains(user.uid);
-
-              ensureMembershipDoc(user.uid);
-              upsertUserLookup();
-
-              _userContext = UserContext(actorUid: user.uid, isCoach: isCoach);
-              _userContext!.bootstrapBlockMeta(uid: user.uid);
-            }
-
-            return ChangeNotifierProvider<UserContext>.value(
-              value: _userContext!,
-              child: const MyApp(isAuthenticated: true),
-            );
-          },
+        return ChangeNotifierProvider<UserContext>.value(
+          value: _userContext!,
+          child: const MyApp(isAuthenticated: true),
         );
-      },
-    );
+    }
   }
 }
 

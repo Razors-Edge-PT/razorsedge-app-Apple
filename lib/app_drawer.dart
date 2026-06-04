@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../SavedWorkoutsScreen.dart';
 import 'user_context.dart';
 import 'coach_home_screen.dart';
@@ -213,6 +214,9 @@ class AppDrawer extends StatelessWidget {
           }),
 
           _drawerTile(context, Icons.logout, 'Logout', () async {
+            debugPrint('[AUTHLOGOUT] drawer logout');
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setBool('goodlift_explicit_logout', true);
             await FirebaseAuth.instance.signOut();
             Navigator.pushReplacementNamed(context, '/login');
           }),

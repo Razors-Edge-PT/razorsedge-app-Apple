@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -66,16 +67,21 @@ class MembershipGate extends StatelessWidget {
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
 
-    // If somehow we have no logged-in user here, punt back to login.
+    // Defensive: if auth state is transiently null here, return LoginScreen
+    // directly — do NOT wrap in a new MaterialApp (would create a nested
+    // Navigator that AppRoot cannot unwind).
     if (user == null) {
-      return const MaterialApp(home: LoginScreen());
+      debugPrint('[MEMBERSHIP] currentUser null — falling back to LoginScreen');
+      return const LoginScreen();
     }
 
     final uid = user.uid;
-    ensureMembershipDoc(uid); // 🔧 guarantee /profile/membership exists for brand-new users
+    debugPrint('[MEMBERSHIP] uid=$uid');
+    ensureMembershipDoc(uid); // guarantee /profile/membership exists for brand-new users
 
     // 1) Free / comped users: always allowed in.
     if (freeMembershipUids.contains(uid)) {
+      debugPrint('[MEMBERSHIP] free-membership uid — access granted');
       return child;
     }
 
@@ -104,8 +110,10 @@ class MembershipGate extends StatelessWidget {
         final bool isActive = data['active'] == true;
 
         if (isActive) {
+          debugPrint('[MEMBERSHIP] active — access granted');
           return child;
         } else {
+          debugPrint('[MEMBERSHIP] inactive — showing MembershipInactiveScreen');
           return const MembershipInactiveScreen();
         }
       },
@@ -277,9 +285,10 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
   }
 
   Future<void> _logout(BuildContext context) async {
+    debugPrint('[AUTHLOGOUT] MembershipInactiveScreen logout');
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('goodlift_explicit_logout', true);
     await FirebaseAuth.instance.signOut();
-
-    // Ensures app returns to login screen cleanly.
     Navigator.pushReplacementNamed(context, '/login');
   }
 

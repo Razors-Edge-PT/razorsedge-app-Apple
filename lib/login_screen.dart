@@ -53,8 +53,8 @@ class _LoginScreenState extends State<LoginScreen> {
         password: _passwordController.text.trim(),
       );
 
-      await _upsertUserDoc(cred.user);        // <— add this
-
+      await _upsertUserDoc(cred.user);
+      debugPrint('[AUTHLOGIN] email sign-in uid=${cred.user?.uid}');
       Navigator.pushReplacementNamed(context, '/home');
     } on FirebaseAuthException catch (e) {
       setState(() => _errorMessage = e.message);
@@ -89,8 +89,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
       final cred = await FirebaseAuth.instance.signInWithCredential(credential);
 
-      await _upsertUserDoc(cred.user);        // <— add this
-
+      await _upsertUserDoc(cred.user);
+      debugPrint('[AUTHLOGIN] Google sign-in uid=${cred.user?.uid}');
       Navigator.pushReplacementNamed(context, '/home');
     } on FirebaseAuthException catch (e) {
       setState(() => _errorMessage = e.message);
