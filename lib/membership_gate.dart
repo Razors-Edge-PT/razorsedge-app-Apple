@@ -403,10 +403,10 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
                   // GoodLift branding
                   Image.asset(
                     'assets/InApp/transparent_good_lift_logo_inApp.png',
-                    height: 48,
+                    height: 90,
                     fit: BoxFit.contain,
                   ),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 22),
 
                   // Premium card
                   Container(
@@ -431,13 +431,13 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
                         ),
                       ],
                     ),
-                    padding: const EdgeInsets.all(24),
+                    padding: const EdgeInsets.all(22),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         // Headline
                         const Text(
-                          'You logged your first set. Now unlock GoodLift.',
+                          'You logged your first workout. Now unlock GoodLift.',
                           style: TextStyle(
                             fontSize: 22,
                             fontWeight: FontWeight.bold,
@@ -478,25 +478,13 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
                         // iOS → Apple IAP via StoreKit
                         // else → website / Stripe via _openWebsiteWithUid
                         // _startCheckout kept as fallback for non-IAP testing (dev / v1.1)
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton(
-                            onPressed: _iapLoading
-                                ? null
-                                : Platform.isIOS
-                                    ? () => _startApplePurchase(context)
-                                    : _openWebsiteWithUid,
-                            child: _iapLoading && Platform.isIOS
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white,
-                                    ),
-                                  )
-                                : const Text('Start GoodLift Membership'),
-                          ),
+                        _AnimatedMembershipCta(
+                          onPressed: _iapLoading
+                              ? null
+                              : Platform.isIOS
+                                  ? () => _startApplePurchase(context)
+                                  : _openWebsiteWithUid,
+                          showLoadingSpinner: _iapLoading && Platform.isIOS,
                         ),
                         const SizedBox(height: 12),
                         // Trust copy
@@ -523,23 +511,6 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
                           ? null
                           : () => InAppPurchase.instance.restorePurchases(),
                       child: const Text('Restore purchases'),
-                    ),
-                    const SizedBox(height: 8),
-                    // Second CTA on iOS — both buttons call _startApplePurchase
-                    ElevatedButton(
-                      onPressed: _iapLoading
-                          ? null
-                          : () => _startApplePurchase(context),
-                      child: _iapLoading
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : const Text('Start GoodLift Membership'),
                     ),
                     const SizedBox(height: 16),
                     // Apple subscription legal disclosure (required by App Store guidelines)
@@ -584,7 +555,7 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
                     ),
                   ],
 
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 16),
 
                   // Footer: logout always visible; delete account iOS only
                   Row(
@@ -592,7 +563,7 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
                     children: [
                       TextButton.icon(
                         onPressed: () => _logout(context),
-                        icon: const Icon(Icons.logout, size: 16),
+                        icon: const Icon(Icons.logout, size: 20),
                         label: const Text('Log out'),
                       ),
                       if (Platform.isIOS) ...[
@@ -650,6 +621,126 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
           ),
         )
         .toList();
+  }
+}
+
+/// Animated wrapper for the primary membership CTA.
+/// Applies a subtle scale bump every 1.5 s and a slow glow pulse over 3 s.
+/// Scale bump is suppressed while the button is disabled or loading.
+class _AnimatedMembershipCta extends StatefulWidget {
+  final VoidCallback? onPressed;
+  final bool showLoadingSpinner;
+
+  const _AnimatedMembershipCta({
+    required this.onPressed,
+    required this.showLoadingSpinner,
+  });
+
+  @override
+  State<_AnimatedMembershipCta> createState() => _AnimatedMembershipCtaState();
+}
+
+class _AnimatedMembershipCtaState extends State<_AnimatedMembershipCta>
+    with TickerProviderStateMixin {
+  late final AnimationController _scaleController;
+  late final AnimationController _glowController;
+  late final Animation<double> _scaleAnim;
+
+  @override
+  void initState() {
+    super.initState();
+
+    // Scale bump: 1500 ms total period (250 ms rise + 250 ms fall + 1000 ms pause).
+    _scaleController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    )..repeat();
+
+    _scaleAnim = TweenSequence<double>([
+      TweenSequenceItem(
+        tween: Tween<double>(begin: 1.0, end: 1.025)
+            .chain(CurveTween(curve: Curves.easeOut)),
+        weight: 250,
+      ),
+      TweenSequenceItem(
+        tween: Tween<double>(begin: 1.025, end: 1.0)
+            .chain(CurveTween(curve: Curves.easeIn)),
+        weight: 250,
+      ),
+      TweenSequenceItem(
+        tween: ConstantTween<double>(1.0),
+        weight: 1000,
+      ),
+    ]).animate(_scaleController);
+
+    // Glow pulse: 3 s ping-pong between dim primary and soft secondary.
+    _glowController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 3000),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _scaleController.dispose();
+    _glowController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final primaryColor = Theme.of(context).colorScheme.primary;
+    final secondaryColor = Theme.of(context).colorScheme.secondary;
+
+    return AnimatedBuilder(
+      animation: Listenable.merge([_scaleController, _glowController]),
+      builder: (context, child) {
+        // Scale bump: held at 1.0 while disabled to avoid bouncing during load.
+        final scale = widget.onPressed != null ? _scaleAnim.value : 1.0;
+
+        // Glow: slow lerp between dim primary and soft secondary.
+        final glowT = _glowController.value;
+        final glowColor = Color.lerp(
+          primaryColor.withValues(alpha: 0.22),
+          secondaryColor.withValues(alpha: 0.40),
+          glowT,
+        )!;
+
+        return Transform.scale(
+          scale: scale,
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              boxShadow: [
+                BoxShadow(
+                  color: glowColor,
+                  blurRadius: 12.0 + glowT * 8.0,
+                  spreadRadius: glowT * 2.0,
+                ),
+              ],
+            ),
+            child: child,
+          ),
+        );
+      },
+      // child is static — only builder rebuilds on each animation tick.
+      child: SizedBox(
+        width: double.infinity,
+        child: ElevatedButton(
+          onPressed: widget.onPressed,
+          child: widget.showLoadingSpinner
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : const Text('Start GoodLift Membership'),
+        ),
+      ),
+    );
   }
 }
 

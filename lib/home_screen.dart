@@ -2417,8 +2417,11 @@ class _GlowingCueWrapper extends StatefulWidget {
 }
 
 class _GlowingCueWrapperState extends State<_GlowingCueWrapper>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late final AnimationController _ctrl;
+  late final AnimationController _nudgeCtrl;
+  late final Animation<double> _nudgeAnim;
+  Timer? _nudgeTimer;
 
   @override
   void initState() {
@@ -2427,11 +2430,37 @@ class _GlowingCueWrapperState extends State<_GlowingCueWrapper>
       vsync: this,
       duration: const Duration(seconds: 2),
     )..repeat(reverse: true);
+
+    _nudgeCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+    _nudgeAnim = TweenSequence<double>([
+      TweenSequenceItem(
+        tween: Tween(begin: 0.0, end: -4.0)
+            .chain(CurveTween(curve: Curves.easeOut)),
+        weight: 50,
+      ),
+      TweenSequenceItem(
+        tween: Tween(begin: -4.0, end: 0.0)
+            .chain(CurveTween(curve: Curves.easeIn)),
+        weight: 50,
+      ),
+    ]).animate(_nudgeCtrl);
+
+    Future.delayed(const Duration(milliseconds: 600), () {
+      if (mounted) _nudgeCtrl.forward(from: 0);
+    });
+    _nudgeTimer = Timer.periodic(const Duration(milliseconds: 1500), (_) {
+      if (mounted) _nudgeCtrl.forward(from: 0);
+    });
   }
 
   @override
   void dispose() {
+    _nudgeTimer?.cancel();
     _ctrl.dispose();
+    _nudgeCtrl.dispose();
     super.dispose();
   }
 
@@ -2447,12 +2476,19 @@ class _GlowingCueWrapperState extends State<_GlowingCueWrapper>
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              widget.label,
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w600,
-                color: color.withValues(alpha: 0.9),
+            AnimatedBuilder(
+              animation: _nudgeAnim,
+              builder: (_, child) => Transform.translate(
+                offset: Offset(0, _nudgeAnim.value),
+                child: child,
+              ),
+              child: Text(
+                widget.label,
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  color: color.withValues(alpha: 0.9),
+                ),
               ),
             ),
             const SizedBox(height: 2),

@@ -435,25 +435,10 @@ class _AppRootState extends State<AppRoot> {
       case _AuthPhase.loading:
       case _AuthPhase.restoring:
       case _AuthPhase.tokenPending:
-        final phaseLabel = _phase == _AuthPhase.loading
-            ? 'Starting GoodLift...'
-            : _phase == _AuthPhase.restoring
-                ? 'Restoring your session...'
-                : 'Checking your session...';
-        return MaterialApp(
+        return const MaterialApp(
           home: Scaffold(
             body: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const CircularProgressIndicator(),
-                  const SizedBox(height: 16),
-                  Text(
-                    phaseLabel,
-                    style: const TextStyle(fontSize: 14, color: Colors.black54),
-                  ),
-                ],
-              ),
+              child: CircularProgressIndicator(),
             ),
           ),
         );

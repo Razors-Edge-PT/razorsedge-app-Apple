@@ -1625,7 +1625,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
           Expanded(
             child: Text(
               text,
-              style: const TextStyle(color: Colors.white70, fontSize: 12.5),
+              style: const TextStyle(color: Colors.white70, fontSize: 14.5),
             ),
           ),
           const SizedBox(width: 8),
