@@ -105,20 +105,28 @@ class MembershipGate extends StatelessWidget {
         }
 
         if (!snap.hasData || !snap.data!.exists) {
-          // No membership doc yet → treat as inactive.
-          return const MembershipInactiveScreen();
+          // No doc → brand-new user, no real set logged yet → pass through.
+          debugPrint('[MEMBERSHIP] no doc — new user, access granted');
+          return child;
         }
 
         final data = snap.data!.data() ?? {};
-        final bool isActive = data['active'] == true;
 
-        if (isActive) {
+        // Check 2: active membership.
+        if (data['active'] == true) {
           debugPrint('[MEMBERSHIP] active — access granted');
           return child;
-        } else {
-          debugPrint('[MEMBERSHIP] inactive — showing MembershipInactiveScreen');
-          return const MembershipInactiveScreen();
         }
+
+        // Check 3: no real set logged yet → still in free-trial window.
+        if (data['firstRealSetLogged'] != true) {
+          debugPrint('[MEMBERSHIP] firstRealSetLogged not set — free-trial access granted');
+          return child;
+        }
+
+        // Check 4: real set logged but inactive → paywall.
+        debugPrint('[MEMBERSHIP] firstRealSetLogged=true inactive — showing paywall');
+        return const MembershipInactiveScreen();
       },
     );
   }
@@ -383,184 +391,265 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('GOODLIFT'),
-        centerTitle: true,
-        automaticallyImplyLeading: false, // no back button trap
-      ),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
           child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 500),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.lock_outline, size: 64),
-                const SizedBox(height: 16),
-                const Text(
-                  'Membership required',
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 500),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // GoodLift branding
+                  Image.asset(
+                    'assets/InApp/transparent_good_lift_logo_inApp.png',
+                    height: 48,
+                    fit: BoxFit.contain,
                   ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  'Your GOODLIFT membership is inactive.\n\n'
-                      'To activate your account and unlock your training plan, '
-                      'tap the button below to start your subscription.',
-                  style: TextStyle(fontSize: 15),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 24),
+                  const SizedBox(height: 32),
 
-                // iOS  → Apple IAP via StoreKit
-                // else → existing website / Stripe flow
-                /* _startCheckout kept as fallback for non-IAP testing (dev / v1.1) */
-                ElevatedButton(
-                  onPressed: _iapLoading
-                      ? null
-                      : Platform.isIOS
-                          ? () => _startApplePurchase(context)
-                          : _openWebsiteWithUid,
-                  child: _iapLoading && Platform.isIOS
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
+                  // Premium card
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.surface,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .primary
+                            .withValues(alpha: 0.4),
+                        width: 1,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .primary
+                              .withValues(alpha: 0.15),
+                          blurRadius: 24,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Headline
+                        const Text(
+                          'You logged your first set. Now unlock GoodLift.',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
                           ),
-                        )
-                      : const Text('Activate membership'),
-                ),
-
-                if (Platform.isIOS) ...[
-                  const SizedBox(height: 16),
-                  const Text(
-                    'GoodLift Membership — \$29 per month, includes full access to GoodLift training.',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    'GoodLift Membership is an auto-renewable monthly subscription. '
-                    'Your subscription provides access to all training features during each billing period. '
-                    'Payment will be charged to your Apple ID at confirmation of purchase. '
-                    'The subscription automatically renews unless cancelled at least 24 hours before the end of the current period. '
-                    'You can manage or cancel your subscription in your Apple ID account settings.',
-                    style: TextStyle(fontSize: 14),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 12),
-                  GestureDetector(
-                    onTap: () async {
-                      final uri = Uri.parse(
-                          'https://www.apple.com/legal/internet-services/itunes/dev/stdeula/');
-                      await launchUrl(uri, mode: LaunchMode.externalApplication);
-                    },
-                    child: const Text(
-                      'Terms of Use',
-                      style: TextStyle(
-                        color: Colors.blue,
-                        decoration: TextDecoration.underline,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  GestureDetector(
-                    onTap: () async {
-                      final uri = Uri.parse(
-                          'https://www.razorsedgept.com/goodlift-privacy');
-                      await launchUrl(uri, mode: LaunchMode.externalApplication);
-                    },
-                    child: const Text(
-                      'Privacy Policy',
-                      style: TextStyle(
-                        color: Colors.blue,
-                        decoration: TextDecoration.underline,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  ElevatedButton(
-                    onPressed: _iapLoading
-                        ? null
-                        : () => _startApplePurchase(context),
-                    child: _iapLoading
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 12),
+                        // Subheadline
+                        Text(
+                          'GoodLift uses your workouts, rep targets, RIR and '
+                          'training history to guide what to do next.',
+                          style: TextStyle(
+                            fontSize: 15,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurface
+                                .withValues(alpha: 0.7),
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 20),
+                        // Value bullets
+                        ..._buildBullets(),
+                        const SizedBox(height: 24),
+                        // Price line — iOS only, shown when App Store product is loaded
+                        if (Platform.isIOS && _productDetails != null) ...[
+                          Text(
+                            '${_productDetails!.price} / month',
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
                             ),
-                          )
-                        : const Text('Activate membership'),
-                  ),
-                ],
-
-                if (Platform.isIOS) ...[
-                  const SizedBox(height: 8),
-                  TextButton(
-                    onPressed: _iapLoading
-                        ? null
-                        : () => InAppPurchase.instance.restorePurchases(),
-                    child: const Text('Restore purchases'),
-                  ),
-                ],
-
-                const SizedBox(height: 20),
-
-                // 🔴 Logout button so user isn't trapped on this screen
-                ElevatedButton.icon(
-                  onPressed: () => _logout(context),
-                  icon: const Icon(Icons.logout, color: Colors.white),
-                  label: const Text('Log out'),
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 16),
+                        ],
+                        // Primary CTA
+                        // iOS → Apple IAP via StoreKit
+                        // else → website / Stripe via _openWebsiteWithUid
+                        // _startCheckout kept as fallback for non-IAP testing (dev / v1.1)
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed: _iapLoading
+                                ? null
+                                : Platform.isIOS
+                                    ? () => _startApplePurchase(context)
+                                    : _openWebsiteWithUid,
+                            child: _iapLoading && Platform.isIOS
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Text('Start GoodLift Membership'),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        // Trust copy
+                        Text(
+                          'Cancel anytime. Your training data stays saved.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurface
+                                .withValues(alpha: 0.55),
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
                     ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
                   ),
-                ),
 
-                if (Platform.isIOS) ...[
-                  const SizedBox(height: 12),
-                  ElevatedButton.icon(
-                    onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (_) => const AccountDeletionScreen()),
+                  // iOS-only: restore + second CTA + legal text
+                  if (Platform.isIOS) ...[
+                    const SizedBox(height: 16),
+                    TextButton(
+                      onPressed: _iapLoading
+                          ? null
+                          : () => InAppPurchase.instance.restorePurchases(),
+                      child: const Text('Restore purchases'),
                     ),
-                    icon: const Icon(Icons.delete_forever, color: Colors.white),
-                    label: const Text('Delete Account'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
+                    const SizedBox(height: 8),
+                    // Second CTA on iOS — both buttons call _startApplePurchase
+                    ElevatedButton(
+                      onPressed: _iapLoading
+                          ? null
+                          : () => _startApplePurchase(context),
+                      child: _iapLoading
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Text('Start GoodLift Membership'),
+                    ),
+                    const SizedBox(height: 16),
+                    // Apple subscription legal disclosure (required by App Store guidelines)
+                    const Text(
+                      'GoodLift Membership is an auto-renewable monthly subscription. '
+                      'Your subscription provides access to all training features during each billing period. '
+                      'Payment will be charged to your Apple ID at confirmation of purchase. '
+                      'The subscription automatically renews unless cancelled at least 24 hours before the end of the current period. '
+                      'You can manage or cancel your subscription in your Apple ID account settings.',
+                      style: TextStyle(fontSize: 14),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 12),
+                    GestureDetector(
+                      onTap: () async {
+                        final uri = Uri.parse(
+                            'https://www.apple.com/legal/internet-services/itunes/dev/stdeula/');
+                        await launchUrl(uri, mode: LaunchMode.externalApplication);
+                      },
+                      child: const Text(
+                        'Terms of Use',
+                        style: TextStyle(
+                          color: Colors.blue,
+                          decoration: TextDecoration.underline,
+                        ),
                       ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
+                    ),
+                    const SizedBox(height: 6),
+                    GestureDetector(
+                      onTap: () async {
+                        final uri = Uri.parse(
+                            'https://www.razorsedgept.com/goodlift-privacy');
+                        await launchUrl(uri, mode: LaunchMode.externalApplication);
+                      },
+                      child: const Text(
+                        'Privacy Policy',
+                        style: TextStyle(
+                          color: Colors.blue,
+                          decoration: TextDecoration.underline,
+                        ),
                       ),
                     ),
+                  ],
+
+                  const SizedBox(height: 24),
+
+                  // Footer: logout always visible; delete account iOS only
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      TextButton.icon(
+                        onPressed: () => _logout(context),
+                        icon: const Icon(Icons.logout, size: 16),
+                        label: const Text('Log out'),
+                      ),
+                      if (Platform.isIOS) ...[
+                        const SizedBox(width: 16),
+                        TextButton.icon(
+                          onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => const AccountDeletionScreen()),
+                          ),
+                          icon: const Icon(Icons.delete_forever,
+                              size: 16, color: Colors.redAccent),
+                          label: const Text(
+                            'Delete Account',
+                            style: TextStyle(color: Colors.redAccent),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ],
-              ],
+              ),
             ),
           ),
         ),
-        ),
       ),
     );
+  }
+
+  List<Widget> _buildBullets() {
+    const bullets = [
+      'Know what to lift next',
+      'Keep your workouts structured',
+      'Track reps, weight, RIR and progress',
+      'Built for lifters who want measurable progression',
+    ];
+    return bullets
+        .map(
+          (text) => Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.check_circle_outline,
+                    size: 18, color: Colors.greenAccent),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    text,
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        )
+        .toList();
   }
 }
 

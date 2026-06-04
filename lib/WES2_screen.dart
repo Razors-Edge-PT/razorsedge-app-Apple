@@ -82,6 +82,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   // Uses FirebaseAuth actor UID, NOT the impersonated athlete.
   int _tutorialStep = 0;
 
+  // ── Settings cog tutorial cue (session-only) ─────────────────────────────
+  // Set to true the moment the settings panel is opened. Resets when the
+  // Wes2Screen widget is disposed (i.e. not persisted across sessions).
+  bool _cogCueDismissed = false;
+
   // ── Day timer state (Phase 17) ─────────────────────────────────────────────
   bool _timerVisible = false;
   bool _timerRunning = false;
@@ -92,6 +97,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   // ── Automatic workout duration (separate from manual floating timer) ────────
   int _workoutDurationMilliseconds = 0;
   DateTime? _workoutDurationSegmentStartedAt;
+
+  // ── First-real-set paywall flag (written once per session after confirmed save) ─
+  bool _firstRealSetWritten = false;
 
   // ── Tutorial helpers ──────────────────────────────────────────────────────
 
@@ -886,6 +894,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
   /// Calls [_repository.saveFieldPatch] and silently swallows any error.
   /// UI state and local draft are intentionally left intact on failure.
+  /// After a confirmed write, checks whether this is the first real set
+  /// (weight > 0 AND reps > 0 on the same set) and writes the paywall flag.
   Future<void> _saveFieldSilently({
     required String uid,
     required DateTime date,
@@ -903,9 +913,52 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         fieldKey: fieldKey,
         value: value,
       );
+      // First-real-set detection: runs only after a confirmed Firestore write.
+      // Only triggered by weight or reps edits with a non-null value.
+      if (!_firstRealSetWritten &&
+          value != null &&
+          (fieldKey == Wes2FieldKey.weight || fieldKey == Wes2FieldKey.reps)) {
+        final currentIdx =
+            _controller.rows.indexWhere((r) => r.exerciseId == row.exerciseId);
+        if (currentIdx != -1) {
+          final currentRow = _controller.rows[currentIdx];
+          for (final s in currentRow.sets) {
+            final w = s.weight.actualValue;
+            final r = s.reps.actualValue;
+            if (w != null && w > 0 && r != null && r > 0) {
+              _firstRealSetWritten = true;
+              await _markFirstRealSetLogged();
+              break;
+            }
+          }
+        }
+      }
     } catch (_) {
       // Silent failure for Phase 8.
       // Retry queue and error indicator deferred to a future phase.
+    }
+  }
+
+  /// Writes firstRealSetLogged: true to the actor's membership doc.
+  /// Uses actorUid (logged-in account UID) — never the impersonated athlete.
+  /// Resets [_firstRealSetWritten] on failure so the next confirmed save retries.
+  Future<void> _markFirstRealSetLogged() async {
+    final actorUid = _controller.actorUid;
+    if (actorUid.isEmpty) return;
+    try {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(actorUid)
+          .collection('profile')
+          .doc('membership')
+          .set({
+        'firstRealSetLogged': true,
+        'firstRealSetLoggedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      debugPrint('[WES2] firstRealSetLogged written for actorUid=$actorUid');
+    } catch (e) {
+      debugPrint('[WES2] firstRealSetLogged write failed: $e');
+      _firstRealSetWritten = false; // allow retry on next confirmed save
     }
   }
 
@@ -1256,6 +1309,14 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         final setsLogged =
             rows.expand((r) => r.sets).where((s) => s.hasAnyActual).length;
 
+        final qualifyingWrSets = rows
+            .expand((r) => r.sets)
+            .where((s) => s.weight.hasActual && s.reps.hasActual)
+            .length;
+        final showCogCue = _tutorialStep == 0 &&
+            !_cogCueDismissed &&
+            qualifyingWrSets >= 2;
+
         // Build flat item list: circuit headers inserted when circuitIndex changes.
         final items = <Widget>[];
         int? prevCi;
@@ -1325,6 +1386,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             onTutorialRepsAccepted: (isFirstCard && _tutorialStep == 4)
                 ? _onRepsTutorialAccepted
                 : null,
+            showCogCue: isFirstCard && showCogCue,
           ));
           isFirstCard = false;
         }
@@ -1716,6 +1778,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       resolvedActiveInstance = cogRes?.instanceNumber;
     }
 
+    if (!_cogCueDismissed && mounted) setState(() => _cogCueDismissed = true);
     final saved = await showDialog<bool>(
       context: context,
       builder: (_) => Wes2ExerciseSettingsDialog(

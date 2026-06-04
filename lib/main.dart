@@ -28,6 +28,7 @@ import 'coach_home_screen.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:facebook_app_events/facebook_app_events.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'auth_debug.dart';
@@ -91,6 +92,7 @@ class _AppRootState extends State<AppRoot> {
   // SharedPreferences key written true only on an explicit user-initiated logout.
   // Prevents treating Firebase Auth's transient null on cold-start as a real logout.
   static const _kExplicitLogout = 'goodlift_explicit_logout';
+  static const _kLastLoginProvider = 'goodlift_last_login_provider';
 
   static const _devCoachUids = {
     'yoVAqScwLMQLAgNHh8v9IK49fBw2', // Richard Razorsedge
@@ -134,6 +136,20 @@ class _AppRootState extends State<AppRoot> {
       } else {
         await _handleNullOrAnon(gen);
       }
+    });
+
+    // Hard cap: guarantee restoring/tokenPending cannot spin forever.
+    // Fires 12 s after launch; a no-op unless _phase is still stuck.
+    Future.delayed(const Duration(seconds: 12), () async {
+      if (!mounted) return;
+      if (_phase != _AuthPhase.restoring && _phase != _AuthPhase.tokenPending) return;
+      final gen = ++_authGen;
+      final phaseLabel = _phase.name;
+      await writeAuthBreadcrumb(
+          'AUTHWATCHDOG hardCap phase=$phaseLabel forcingLogin gen=$gen');
+      debugPrint('[AUTHWATCHDOG] hardCap phase=$phaseLabel forcingLogin gen=$gen');
+      _clearMemo();
+      setState(() => _phase = _AuthPhase.unauthenticated);
     });
   }
 
@@ -236,17 +252,6 @@ class _AppRootState extends State<AppRoot> {
     debugPrint('[AUTHRESTORE] starting restore grace period gen=$gen');
     setState(() => _phase = _AuthPhase.restoring);
 
-    // Hard cap: guarantee restoring never displays longer than 10 s for this
-    // gen. Auto-disarms if a newer gen takes ownership of _authGen.
-    final capGen = gen;
-    Future.delayed(const Duration(seconds: 10), () {
-      if (!mounted || _authGen != capGen) return;
-      debugPrint('[AUTHRESTORE] hard cap reached gen=$capGen — forcing unauthenticated');
-      unawaited(writeAuthBreadcrumb('restoreHardCap showLogin gen=$capGen'));
-      _clearMemo();
-      setState(() => _phase = _AuthPhase.unauthenticated);
-    });
-
     // Step 1: synchronous currentUser read.
     var current = FirebaseAuth.instance.currentUser;
     debugPrint('[AUTHRESTORE] step1 currentUser=${current?.uid}');
@@ -294,9 +299,33 @@ class _AppRootState extends State<AppRoot> {
       return;
     }
 
+    // Step 5: silent Google restore — only when last provider was Google.
+    // signInWithCredential fires authStateChanges() as a side-effect, advancing
+    // _authGen before _trySilentGoogleRestore returns. The function still returns
+    // the user on success; we handle gen state here in the caller.
+    if (gen != _authGen || !mounted) return;
+    final silentlyRestored = await _trySilentGoogleRestore(gen);
+    if (silentlyRestored != null && !silentlyRestored.isAnonymous) {
+      if (gen == _authGen && mounted) {
+        await writeAuthBreadcrumb(
+            'silentGoogleRestore returnedUser handleValidUser gen=$gen');
+        await _handleValidUser(silentlyRestored, gen);
+      } else {
+        await writeAuthBreadcrumb(
+            'silentGoogleRestore returnedUser newerGenOwnsRouting gen=$gen currentGen=$_authGen');
+        debugPrint(
+            '[AUTHRESTORE] silentGoogleRestore succeeded — gen=$_authGen owns routing, not falling to Login');
+      }
+      return;
+    }
+
     debugPrint('[AUTHNULL] all restore checks confirm no user — showing Login');
     await writeAuthBreadcrumb('allRestoreChecksFailed showLogin gen=$gen');
-    if (gen != _authGen || !mounted) return;
+    if (gen != _authGen || !mounted) {
+      await writeAuthBreadcrumb(
+          'allRestoreChecksFailed skipped stale gen=$gen currentGen=$_authGen');
+      return;
+    }
     _clearMemo();
     setState(() => _phase = _AuthPhase.unauthenticated);
   }
@@ -305,6 +334,96 @@ class _AppRootState extends State<AppRoot> {
     _memoUid = null;
     _tokenFuture = null;
     _userContext = null;
+  }
+
+  // ─── silent Google restore ────────────────────────────────────────────────
+  // Returns the signed-in Firebase User on success, null otherwise.
+  //
+  // Key invariant: after signInWithCredential resolves successfully we do NOT
+  // gate on gen != _authGen. signInWithCredential fires authStateChanges() as a
+  // side-effect, incrementing _authGen before this continuation resumes. That is
+  // expected, not a failure — the credential exchange succeeded. The caller
+  // (step 5 in _handleNullOrAnon) is responsible for routing based on gen state.
+
+  Future<User?> _trySilentGoogleRestore(int gen) async {
+    var step = 'init';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (gen != _authGen || !mounted) return null;
+
+      final lastProvider = prefs.getString(_kLastLoginProvider);
+      if (lastProvider != 'google') {
+        await writeAuthBreadcrumb(
+            'silentGoogleRestore skipped lastProvider=$lastProvider gen=$gen');
+        return null;
+      }
+
+      await writeAuthBreadcrumb('silentGoogleRestore start gen=$gen');
+
+      step = 'signInSilently';
+      await writeAuthBreadcrumb(
+          'silentGoogleRestore signInSilently start gen=$gen');
+      final googleUser = await GoogleSignIn()
+          .signInSilently()
+          .timeout(const Duration(seconds: 4));
+      if (gen != _authGen || !mounted) return null;
+
+      if (googleUser == null) {
+        await writeAuthBreadcrumb('silentGoogleRestore noAccount gen=$gen');
+        debugPrint('[AUTHRESTORE] silentGoogleRestore: no Google account returned');
+        return null;
+      }
+
+      step = 'authTokens';
+      await writeAuthBreadcrumb(
+          'silentGoogleRestore authTokens start gen=$gen');
+      final googleAuth =
+          await googleUser.authentication.timeout(const Duration(seconds: 4));
+      if (gen != _authGen || !mounted) return null;
+
+      final credential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+
+      step = 'firebaseCredential';
+      await writeAuthBreadcrumb(
+          'silentGoogleRestore firebaseCredential start gen=$gen');
+      final cred = await FirebaseAuth.instance
+          .signInWithCredential(credential)
+          .timeout(const Duration(seconds: 6));
+
+      // signInWithCredential succeeded — do NOT return null because gen
+      // advanced. authStateChanges() fires as a side-effect and increments
+      // _authGen; that is the expected path, not a fault. Log it and return.
+      if (gen != _authGen) {
+        await writeAuthBreadcrumb(
+            'silentGoogleRestore success uid=${cred.user?.uid} gen=$gen currentGen=$_authGen — authStateChanges advanced gen');
+        debugPrint(
+            '[AUTHRESTORE] silentGoogleRestore success uid=${cred.user?.uid} — authStateChanges advanced gen to $_authGen');
+      }
+      await prefs.setBool(_kExplicitLogout, false);
+      await writeAuthBreadcrumb(
+          'silentGoogleRestore success uid=${cred.user?.uid} gen=$gen');
+      debugPrint(
+          '[AUTHRESTORE] silentGoogleRestore success uid=${cred.user?.uid}');
+      return cred.user;
+    } on TimeoutException {
+      await writeAuthBreadcrumb(
+          'silentGoogleRestore timeout step=$step gen=$gen');
+      debugPrint('[AUTHRESTORE] silentGoogleRestore timeout at step=$step');
+      return null;
+    } on FirebaseAuthException catch (e) {
+      await writeAuthBreadcrumb(
+          'silentGoogleRestore FirebaseAuthException ${e.code} gen=$gen');
+      debugPrint('[AUTHRESTORE] silentGoogleRestore FirebaseAuthException: $e');
+      return null;
+    } catch (e) {
+      await writeAuthBreadcrumb(
+          'silentGoogleRestore error step=$step gen=$gen');
+      debugPrint('[AUTHRESTORE] silentGoogleRestore error at step=$step: $e');
+      return null;
+    }
   }
 
   // ─── build ────────────────────────────────────────────────────────────────

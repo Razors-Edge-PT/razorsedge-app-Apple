@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../WES2_controller.dart';
@@ -75,6 +77,9 @@ class Wes2ExerciseCard extends StatelessWidget {
   /// Forwarded to the first set row only. Fires when the reps hint is
   /// double-tap accepted while the tutorial is at the reps step.
   final VoidCallback? onTutorialRepsAccepted;
+  /// When true, draws a glowing circular ring + bouncing "tap here" label
+  /// above the settings cog icon. Default false — no visual change.
+  final bool showCogCue;
 
   const Wes2ExerciseCard({
     super.key,
@@ -96,6 +101,7 @@ class Wes2ExerciseCard extends StatelessWidget {
     this.showVelocityField = false,
     this.tutorialStep = 0,
     this.onTutorialRepsAccepted,
+    this.showCogCue = false,
   });
 
   static bool _isCompletedEligible(
@@ -252,12 +258,15 @@ class Wes2ExerciseCard extends StatelessWidget {
               icon: const Icon(Icons.bar_chart, size: 20, color: Colors.white70),
               onPressed: onTopSets,
             ),
-            IconButton(
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints.tightFor(width: 32, height: 32),
-              icon: const Icon(Icons.settings, size: 20, color: Colors.grey),
-              onPressed: onSettings,
-            ),
+            if (showCogCue)
+              _CogCueWrapper(onPressed: onSettings)
+            else
+              IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+                icon: const Icon(Icons.settings, size: 20, color: Colors.grey),
+                onPressed: onSettings,
+              ),
             PopupMenuButton<_ExerciseCardMenuAction>(
               padding: EdgeInsets.zero,
               icon: const Icon(Icons.more_vert, size: 18),
@@ -423,6 +432,116 @@ class Wes2ExerciseCard extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(top: 2),
       child: card,
+    );
+  }
+}
+
+// ── Settings cog tutorial cue ─────────────────────────────────────────────────
+
+/// Wraps the settings IconButton with a bouncing "tap here" label and a
+/// glowing circular border. Rendered only on the first exercise card when
+/// the session-level condition is met. Stateless outer widget; animation
+/// lives inside _CogNudgingLabel.
+class _CogCueWrapper extends StatelessWidget {
+  final VoidCallback? onPressed;
+  const _CogCueWrapper({required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.secondary;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _CogNudgingLabel(color: color),
+        Container(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(color: color, width: 1.5),
+            boxShadow: [
+              BoxShadow(
+                color: color.withValues(alpha: 0.35),
+                blurRadius: 6,
+                spreadRadius: 1,
+              ),
+            ],
+          ),
+          child: IconButton(
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+            icon: const Icon(Icons.settings, size: 20, color: Colors.grey),
+            onPressed: onPressed,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Bouncing "tap here" label. Nudges upward 4 px every 1.5 seconds.
+class _CogNudgingLabel extends StatefulWidget {
+  final Color color;
+  const _CogNudgingLabel({required this.color});
+
+  @override
+  State<_CogNudgingLabel> createState() => _CogNudgingLabelState();
+}
+
+class _CogNudgingLabelState extends State<_CogNudgingLabel>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _offsetAnim;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+    _offsetAnim = TweenSequence<double>([
+      TweenSequenceItem(
+        tween: Tween(begin: 0.0, end: -4.0)
+            .chain(CurveTween(curve: Curves.easeOut)),
+        weight: 50,
+      ),
+      TweenSequenceItem(
+        tween: Tween(begin: -4.0, end: 0.0)
+            .chain(CurveTween(curve: Curves.easeIn)),
+        weight: 50,
+      ),
+    ]).animate(_ctrl);
+    Future.delayed(const Duration(milliseconds: 600), () {
+      if (mounted) _ctrl.forward(from: 0);
+    });
+    _timer = Timer.periodic(const Duration(milliseconds: 1500), (_) {
+      if (mounted) _ctrl.forward(from: 0);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _offsetAnim,
+      builder: (_, child) => Transform.translate(
+        offset: Offset(0, _offsetAnim.value),
+        child: child,
+      ),
+      child: Text(
+        'tap here',
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w600,
+          color: widget.color,
+        ),
+      ),
     );
   }
 }
