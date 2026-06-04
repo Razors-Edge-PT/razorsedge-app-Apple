@@ -30,6 +30,7 @@ import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:facebook_app_events/facebook_app_events.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
+import 'auth_debug.dart';
 import 'membership_gate.dart';
 import 'theme_controller.dart';
 import 'app_theme.dart';
@@ -135,6 +136,10 @@ class _AppRootState extends State<AppRoot> {
       '[AUTHROOT] authStateChanges uid=${user?.uid} '
       'isAnon=${user?.isAnonymous} gen=$gen',
     );
+    // Fire-and-forget — breadcrumb is diagnostic only, must not block routing.
+    unawaited(writeAuthBreadcrumb(
+      'authStateChanges uid=${user?.uid} isAnon=${user?.isAnonymous}',
+    ));
     if (user != null && !user.isAnonymous) {
       await _handleValidUser(user, gen);
     } else {
@@ -187,6 +192,7 @@ class _AppRootState extends State<AppRoot> {
     }
 
     if (gen != _authGen || !mounted) return;
+    await writeAuthBreadcrumb('authenticated uid=${user.uid}');
     setState(() => _phase = _AuthPhase.authenticated);
   }
 
@@ -202,12 +208,13 @@ class _AppRootState extends State<AppRoot> {
     debugPrint('[AUTHNULL] gen=$gen explicitLogout=$explicitLogout phase=$_phase');
 
     if (explicitLogout) {
-      // User pressed logout — show Login immediately.
+      await writeAuthBreadcrumb('nullEvent explicitLogout=true showLogin gen=$gen');
       _clearMemo();
       setState(() => _phase = _AuthPhase.unauthenticated);
       return;
     }
 
+    await writeAuthBreadcrumb('nullEvent explicitLogout=false startRestore gen=$gen');
     // Unexpected null (cold-start race, token refresh, Play Integrity delay).
     // Do NOT show Login yet — run a multi-step restore check first.
     debugPrint('[AUTHRESTORE] starting restore grace period gen=$gen');
@@ -261,6 +268,7 @@ class _AppRootState extends State<AppRoot> {
     }
 
     debugPrint('[AUTHNULL] all restore checks confirm no user — showing Login');
+    await writeAuthBreadcrumb('allRestoreChecksFailed showLogin gen=$gen');
     _clearMemo();
     setState(() => _phase = _AuthPhase.unauthenticated);
   }

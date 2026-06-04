@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'auth_debug.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -72,6 +73,7 @@ class MembershipGate extends StatelessWidget {
     // Navigator that AppRoot cannot unwind).
     if (user == null) {
       debugPrint('[MEMBERSHIP] currentUser null — falling back to LoginScreen');
+      unawaited(writeAuthBreadcrumb('MEMBERSHIP currentUser null fallback to LoginScreen'));
       return const LoginScreen();
     }
 
@@ -288,6 +290,7 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
     debugPrint('[AUTHLOGOUT] MembershipInactiveScreen logout');
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('goodlift_explicit_logout', true);
+    await writeAuthBreadcrumb('AUTHLOGOUT membershipInactive uid=${FirebaseAuth.instance.currentUser?.uid}');
     await FirebaseAuth.instance.signOut();
     Navigator.pushReplacementNamed(context, '/login');
   }

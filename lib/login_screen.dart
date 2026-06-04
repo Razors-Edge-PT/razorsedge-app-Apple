@@ -4,6 +4,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'auth_debug.dart';
 import 'create_new_account_screen.dart';
 import 'template_generator.dart';
 
@@ -23,6 +25,48 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
   bool _obscurePassword = true;
   String? _errorMessage;
+
+  // ── Diagnostics (temporary, remove once release auth bug is resolved) ──
+  bool _diagLoaded = false;
+  String? _diagCurrentUser;
+  bool? _diagExplicitLogout;
+  String? _diagLastBreadcrumb;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDiagnostics();
+  }
+
+  Future<void> _loadDiagnostics() async {
+    final user = FirebaseAuth.instance.currentUser;
+    final prefs = await SharedPreferences.getInstance();
+    final explicitLogout = prefs.getBool('goodlift_explicit_logout') ?? false;
+    final lastCrumb = await readAuthBreadcrumb();
+
+    final userDesc = user == null
+        ? 'null'
+        : user.isAnonymous
+            ? 'anon:${user.uid}'
+            : 'uid:${user.uid}';
+
+    debugPrint(
+      '[AUTHLOGIN_CHECK] LoginScreen.initState '
+      'currentUser=$userDesc explicitLogout=$explicitLogout',
+    );
+    if (user != null && !user.isAnonymous) {
+      debugPrint('[AUTHBUG] LoginScreen opened while Firebase currentUser exists: ${user.uid}');
+      await writeAuthBreadcrumb('AUTHBUG LoginScreen opened with currentUser=${user.uid}');
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _diagCurrentUser = userDesc;
+      _diagExplicitLogout = explicitLogout;
+      _diagLastBreadcrumb = lastCrumb;
+      _diagLoaded = true;
+    });
+  }
 
   Future<void> _upsertUserDoc(User? user) async {
     if (user == null) return;
@@ -54,7 +98,10 @@ class _LoginScreenState extends State<LoginScreen> {
       );
 
       await _upsertUserDoc(cred.user);
-      debugPrint('[AUTHLOGIN] email sign-in uid=${cred.user?.uid}');
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('goodlift_explicit_logout', false);
+      await writeAuthBreadcrumb('AUTHLOGIN email uid=${cred.user?.uid}');
+      debugPrint('[AUTHLOGIN] email sign-in uid=${cred.user?.uid} — explicit logout flag cleared');
       Navigator.pushReplacementNamed(context, '/home');
     } on FirebaseAuthException catch (e) {
       setState(() => _errorMessage = e.message);
@@ -90,7 +137,10 @@ class _LoginScreenState extends State<LoginScreen> {
       final cred = await FirebaseAuth.instance.signInWithCredential(credential);
 
       await _upsertUserDoc(cred.user);
-      debugPrint('[AUTHLOGIN] Google sign-in uid=${cred.user?.uid}');
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('goodlift_explicit_logout', false);
+      await writeAuthBreadcrumb('AUTHLOGIN google uid=${cred.user?.uid}');
+      debugPrint('[AUTHLOGIN] Google sign-in uid=${cred.user?.uid} — explicit logout flag cleared');
       Navigator.pushReplacementNamed(context, '/home');
     } on FirebaseAuthException catch (e) {
       setState(() => _errorMessage = e.message);
@@ -112,6 +162,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
       final cred = await FirebaseAuth.instance.signInWithProvider(appleProvider);
       await _upsertUserDoc(cred.user);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('goodlift_explicit_logout', false);
+      await writeAuthBreadcrumb('AUTHLOGIN apple uid=${cred.user?.uid}');
+      debugPrint('[AUTHLOGIN] Apple sign-in uid=${cred.user?.uid} — explicit logout flag cleared');
       Navigator.pushReplacementNamed(context, '/home');
     } on FirebaseAuthException catch (e) {
       setState(() => _errorMessage = e.message);
@@ -377,7 +431,48 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                         ),
                       ),
-                      // NEW: Create Account option
+                      // ── Auth diagnostics (temporary — remove once release auth bug resolved) ──
+                      if (_diagLoaded) ...[
+                        const SizedBox(height: 8),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          child: Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.shade100,
+                              border: Border.all(color: Colors.amber.shade700),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Auth Diagnostics',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.amber.shade900,
+                                  ),
+                                ),
+                                Text(
+                                  'currentUser: $_diagCurrentUser',
+                                  style: const TextStyle(fontSize: 10),
+                                ),
+                                Text(
+                                  'explicitLogout: $_diagExplicitLogout',
+                                  style: const TextStyle(fontSize: 10),
+                                ),
+                                Text(
+                                  'lastBreadcrumb:\n${_diagLastBreadcrumb ?? "none"}',
+                                  style: const TextStyle(fontSize: 10),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                      // Create Account option
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 20.0),
                         child: SizedBox(
