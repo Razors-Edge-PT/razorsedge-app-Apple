@@ -28,7 +28,6 @@ import 'coach_home_screen.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:facebook_app_events/facebook_app_events.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'auth_debug.dart';
@@ -92,7 +91,6 @@ class _AppRootState extends State<AppRoot> {
   // SharedPreferences key written true only on an explicit user-initiated logout.
   // Prevents treating Firebase Auth's transient null on cold-start as a real logout.
   static const _kExplicitLogout = 'goodlift_explicit_logout';
-  static const _kLastLoginProvider = 'goodlift_last_login_provider';
 
   static const _devCoachUids = {
     'yoVAqScwLMQLAgNHh8v9IK49fBw2', // Richard Razorsedge
@@ -122,6 +120,21 @@ class _AppRootState extends State<AppRoot> {
   void initState() {
     super.initState();
     _authSub = FirebaseAuth.instance.authStateChanges().listen(_onAuthEvent);
+    // Watchdog: if authStateChanges never emits within 2 s (Play Integrity / cold-start
+    // race), manually kick the auth path so _phase never stays loading forever.
+    Future.delayed(const Duration(seconds: 2), () async {
+      if (!mounted || _phase != _AuthPhase.loading) return;
+      final gen = ++_authGen;
+      final user = FirebaseAuth.instance.currentUser;
+      await writeAuthBreadcrumb(
+          'AUTHWATCHDOG startup phaseStillLoading currentUser=${user?.uid} gen=$gen');
+      debugPrint('[AUTHWATCHDOG] startup triggered gen=$gen user=${user?.uid}');
+      if (user != null && !user.isAnonymous) {
+        await _handleValidUser(user, gen);
+      } else {
+        await _handleNullOrAnon(gen);
+      }
+    });
   }
 
   @override
@@ -169,7 +182,7 @@ class _AppRootState extends State<AppRoot> {
     if (_userContext == null) {
       if (mounted) setState(() => _phase = _AuthPhase.tokenPending);
       try {
-        final token = await _tokenFuture!;
+        final token = await _tokenFuture!.timeout(const Duration(seconds: 5));
         if (gen != _authGen || !mounted) return;
         if (_userContext == null) {
           final isCoach =
@@ -182,6 +195,7 @@ class _AppRootState extends State<AppRoot> {
         }
       } catch (e) {
         debugPrint('[AUTHROOT] getIdTokenResult failed: $e — falling back to uid-only coach check');
+        await writeAuthBreadcrumb('AUTHROOT token timeout/fail fallback uid=${user.uid} gen=$gen');
         if (gen != _authGen || !mounted) return;
         if (_userContext == null) {
           final isCoach = _devCoachUids.contains(user.uid);
@@ -221,6 +235,17 @@ class _AppRootState extends State<AppRoot> {
     // Do NOT show Login yet — run a multi-step restore check first.
     debugPrint('[AUTHRESTORE] starting restore grace period gen=$gen');
     setState(() => _phase = _AuthPhase.restoring);
+
+    // Hard cap: guarantee restoring never displays longer than 10 s for this
+    // gen. Auto-disarms if a newer gen takes ownership of _authGen.
+    final capGen = gen;
+    Future.delayed(const Duration(seconds: 10), () {
+      if (!mounted || _authGen != capGen) return;
+      debugPrint('[AUTHRESTORE] hard cap reached gen=$capGen — forcing unauthenticated');
+      unawaited(writeAuthBreadcrumb('restoreHardCap showLogin gen=$capGen'));
+      _clearMemo();
+      setState(() => _phase = _AuthPhase.unauthenticated);
+    });
 
     // Step 1: synchronous currentUser read.
     var current = FirebaseAuth.instance.currentUser;
@@ -269,16 +294,9 @@ class _AppRootState extends State<AppRoot> {
       return;
     }
 
-    // Step 5: silent Google restore — only runs when last provider was Google.
-    if (gen != _authGen || !mounted) return;
-    final silentlyRestored = await _trySilentGoogleRestore(gen);
-    if (silentlyRestored != null && !silentlyRestored.isAnonymous) {
-      await _handleValidUser(silentlyRestored, gen);
-      return;
-    }
-
     debugPrint('[AUTHNULL] all restore checks confirm no user — showing Login');
     await writeAuthBreadcrumb('allRestoreChecksFailed showLogin gen=$gen');
+    if (gen != _authGen || !mounted) return;
     _clearMemo();
     setState(() => _phase = _AuthPhase.unauthenticated);
   }
@@ -287,58 +305,6 @@ class _AppRootState extends State<AppRoot> {
     _memoUid = null;
     _tokenFuture = null;
     _userContext = null;
-  }
-
-  // ─── silent Google restore ────────────────────────────────────────────────
-
-  Future<User?> _trySilentGoogleRestore(int gen) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      if (gen != _authGen || !mounted) return null;
-
-      final lastProvider = prefs.getString(_kLastLoginProvider);
-      if (lastProvider != 'google') {
-        await writeAuthBreadcrumb('silentGoogleRestore skipped lastProvider=$lastProvider gen=$gen');
-        return null;
-      }
-
-      final googleUser = await GoogleSignIn().signInSilently();
-      if (gen != _authGen || !mounted) return null;
-
-      if (googleUser == null) {
-        await writeAuthBreadcrumb('silentGoogleRestore noAccount gen=$gen');
-        debugPrint('[AUTHRESTORE] silentGoogleRestore: no Google account returned');
-        return null;
-      }
-
-      final googleAuth = await googleUser.authentication;
-      if (gen != _authGen || !mounted) return null;
-
-      final accessTokenPresent = googleAuth.accessToken != null;
-      final idTokenPresent = googleAuth.idToken != null;
-      debugPrint('[AUTHRESTORE] silentGoogleRestore accessTokenPresent=$accessTokenPresent idTokenPresent=$idTokenPresent');
-
-      final credential = GoogleAuthProvider.credential(
-        accessToken: googleAuth.accessToken,
-        idToken: googleAuth.idToken,
-      );
-
-      final cred = await FirebaseAuth.instance.signInWithCredential(credential);
-      if (gen != _authGen || !mounted) return null;
-
-      await prefs.setBool(_kExplicitLogout, false);
-      await writeAuthBreadcrumb('silentGoogleRestore success uid=${cred.user?.uid} gen=$gen');
-      debugPrint('[AUTHRESTORE] silentGoogleRestore success uid=${cred.user?.uid}');
-      return cred.user;
-    } on FirebaseAuthException catch (e) {
-      await writeAuthBreadcrumb('silentGoogleRestore FirebaseAuthException ${e.code} gen=$gen');
-      debugPrint('[AUTHRESTORE] silentGoogleRestore FirebaseAuthException: $e');
-      return null;
-    } catch (e) {
-      await writeAuthBreadcrumb('silentGoogleRestore error gen=$gen');
-      debugPrint('[AUTHRESTORE] silentGoogleRestore error: $e');
-      return null;
-    }
   }
 
   // ─── build ────────────────────────────────────────────────────────────────
@@ -350,8 +316,27 @@ class _AppRootState extends State<AppRoot> {
       case _AuthPhase.loading:
       case _AuthPhase.restoring:
       case _AuthPhase.tokenPending:
-        return const MaterialApp(
-          home: Scaffold(body: Center(child: CircularProgressIndicator())),
+        final phaseLabel = _phase == _AuthPhase.loading
+            ? 'Starting GoodLift...'
+            : _phase == _AuthPhase.restoring
+                ? 'Restoring your session...'
+                : 'Checking your session...';
+        return MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 16),
+                  Text(
+                    phaseLabel,
+                    style: const TextStyle(fontSize: 14, color: Colors.black54),
+                  ),
+                ],
+              ),
+            ),
+          ),
         );
       case _AuthPhase.unauthenticated:
         return const MyApp(isAuthenticated: false);
