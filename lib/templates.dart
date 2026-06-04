@@ -21,6 +21,14 @@ import 'template_model.dart'; // Import Exercise model
 import 'package:provider/provider.dart';
 import 'user_context.dart';
 
+enum _WpTutorialPhase {
+  inactive,
+  expandArrow,
+  dragCue,
+  addExerciseCue,
+  replaceExerciseCue,
+}
+
 class _DraggedExercise {
   final String sourceTemplateId;
   final int sourceIndex;
@@ -78,6 +86,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
   bool _loadingBlocks = true;
   bool _wpDemoShownThisSession = false; // prevents double auto-show within one session
+  _WpTutorialPhase _tutorialPhase = _WpTutorialPhase.inactive;
 
   // when you hover/drop we can give a little highlight
   String? _draggingOverTemplateId;
@@ -93,25 +102,46 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
   String get userId => UserContext.of(context, listen: false).currentUid;
 
+  String? get _firstActiveTemplateId {
+    if (_activeBlockId == null || _loadingBlocks) return null;
+    final list = _templatesForBlock(_activeBlockId);
+    return list.isNotEmpty ? list.first.id : null;
+  }
+
   @override
   void initState() {
     super.initState();
     _loadBlocksThenTemplates();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowWpDemo());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowWpDemoThenWalkthrough());
   }
 
   // ── Workout Planner demo ──────────────────────────────────────────────────
 
-  /// Auto-shows the video demo once per session if the logged-in user has not
-  /// yet completed it.
-  Future<void> _maybeShowWpDemo() async {
-    if (_wpDemoShownThisSession || !mounted) return;
+  Future<void> _maybeShowWpDemoThenWalkthrough() async {
+    if (!mounted) return;
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
-    final done = await OnboardingPrefs.getWpDone(uid);
-    if (done || !mounted) return;
-    _wpDemoShownThisSession = true;
-    await _showWpDemoPlayer(autoCloseAfterCompletion: true);
+
+    // Step 1: auto-show video if not yet completed
+    if (!_wpDemoShownThisSession) {
+      final demoDone = await OnboardingPrefs.getWpDone(uid);
+      if (!demoDone && mounted) {
+        _wpDemoShownThisSession = true;
+        await _showWpDemoPlayer(autoCloseAfterCompletion: true);
+      }
+    }
+
+    if (!mounted) return;
+
+    // Step 2: start walkthrough only if the video has now been completed
+    final demoDone = await OnboardingPrefs.getWpDone(uid);
+    if (!demoDone) return; // user closed the video before it finished
+
+    final walkthroughDone =
+        await OnboardingPrefs.getWpPlannerWalkthroughComplete(uid);
+    if (!walkthroughDone && mounted) {
+      setState(() => _tutorialPhase = _WpTutorialPhase.expandArrow);
+    }
   }
 
   Future<void> _showWpDemoPlayer({bool autoCloseAfterCompletion = false}) async {
@@ -149,6 +179,12 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         if (val == 'demo') _showWpDemoPlayer();
       },
     );
+  }
+
+  void _completePlannerWalkthrough() {
+    setState(() => _tutorialPhase = _WpTutorialPhase.inactive);
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) OnboardingPrefs.setWpPlannerWalkthroughComplete(uid);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -206,6 +242,9 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
 
   Future<void> _showExercisePickerDialogForTemplate(Template template) async {
+    if (_tutorialPhase == _WpTutorialPhase.addExerciseCue) {
+      setState(() => _tutorialPhase = _WpTutorialPhase.replaceExerciseCue);
+    }
     // 1) load planned exercise ids (for planned-only toggle)
     Set<String> plannedExerciseIds = {};
     bool plannedModeAvailable = false;
@@ -473,7 +512,9 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       Template template,
       int exerciseIndex,
       ) async {
-
+    if (_tutorialPhase == _WpTutorialPhase.replaceExerciseCue) {
+      _completePlannerWalkthrough();
+    }
     // ---- Planned-only support (safe-guarded)
     Set<String> plannedExerciseIds = {};
     bool plannedModeAvailable = false;
@@ -1031,10 +1072,17 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
   void _toggleExpanded(String templateId) {
     setState(() {
+      final wasCollapsed = !_expandedTemplateIds.contains(templateId);
       if (_expandedTemplateIds.contains(templateId)) {
         _expandedTemplateIds.remove(templateId);
       } else {
         _expandedTemplateIds.add(templateId);
+      }
+      // Tutorial: Phase 1 → Phase 2 when the first active template expands
+      if (_tutorialPhase == _WpTutorialPhase.expandArrow &&
+          wasCollapsed &&
+          templateId == _firstActiveTemplateId) {
+        _tutorialPhase = _WpTutorialPhase.dragCue;
       }
     });
   }
@@ -1150,6 +1198,11 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       }
       sourceTemplate.exercises.removeAt(dragged.sourceIndex);
 
+      // Tutorial: Phase 2 → 3 on delete drag
+      if (_tutorialPhase == _WpTutorialPhase.dragCue) {
+        _tutorialPhase = _WpTutorialPhase.addExerciseCue;
+      }
+
       // persist
       _saveTemplateExercises(
         sourceTemplate.id,
@@ -1241,6 +1294,11 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
       // 5) clear highlight
       _draggingOverTemplateId = null;
+
+      // Tutorial: Phase 2 → 3 on any successful drag/drop
+      if (_tutorialPhase == _WpTutorialPhase.dragCue) {
+        _tutorialPhase = _WpTutorialPhase.addExerciseCue;
+      }
 
       // 6) persist
       _saveTemplateExercises(
@@ -1403,6 +1461,23 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (_tutorialPhase == _WpTutorialPhase.dragCue)
+              _buildWordCue(
+                text: 'Press and hold any exercise to drag and reorder, or drag to the bin icon to delete.',
+                onGotIt: () => setState(
+                    () => _tutorialPhase = _WpTutorialPhase.addExerciseCue),
+              ),
+            if (_tutorialPhase == _WpTutorialPhase.addExerciseCue)
+              _buildWordCue(
+                text: 'Tap add exercise to add a new exercise.',
+                onGotIt: () => setState(
+                    () => _tutorialPhase = _WpTutorialPhase.replaceExerciseCue),
+              ),
+            if (_tutorialPhase == _WpTutorialPhase.replaceExerciseCue)
+              _buildWordCue(
+                text: 'Tap any exercise once to replace it.',
+                onGotIt: _completePlannerWalkthrough,
+              ),
             // 🔹 Active block templates (reorderable)
             if (allToShow.isEmpty)
               const Padding(
@@ -1516,6 +1591,59 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
 
 
+  Widget _buildPhase1LabelRow() {
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Padding(
+        padding: const EdgeInsets.only(right: 4, top: 4),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const _WpBounceLabel(),
+            Container(width: 1, height: 12, color: Colors.white38),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWordCue(
+      {required String text, required VoidCallback onGotIt}) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8, left: 4, right: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.blueGrey.shade800.withOpacity(0.92),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: Colors.tealAccent.withOpacity(0.35),
+          width: 0.8,
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(color: Colors.white70, fontSize: 12.5),
+            ),
+          ),
+          const SizedBox(width: 8),
+          TextButton(
+            onPressed: onGotIt,
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              foregroundColor: Colors.tealAccent,
+            ),
+            child: const Text('Got it', style: TextStyle(fontSize: 12)),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildTemplateCard(Template template, {int? index}) {
     return ReorderableDelayedDragStartListener(
       index: index ?? 0,
@@ -1544,8 +1672,9 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ✅ paste your existing ListTile + expanded circuits here
-              // (everything you had inside before)
+              if (_tutorialPhase == _WpTutorialPhase.expandArrow &&
+                  template.id == _firstActiveTemplateId)
+                _buildPhase1LabelRow(),
               _buildTemplateHeaderRow(template),
               if (_expandedTemplateIds.contains(template.id))
                 _buildTemplateExpandedBody(template),
@@ -1643,17 +1772,23 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
               ),
             ),
 
-          // 👇 expand/collapse arrow (always)
-          IconButton(
-            icon: Icon(
-              _expandedTemplateIds.contains(template.id)
-                  ? Icons.expand_less
-                  : Icons.expand_more,
-              color: Colors.white70,
-              size: 20,
-            ),
-            onPressed: () => _toggleExpanded(template.id),
-          ),
+          // 👇 expand/collapse arrow — glowing ring during Phase 1
+          (_tutorialPhase == _WpTutorialPhase.expandArrow &&
+                  template.id == _firstActiveTemplateId)
+              ? _WpGlowArrow(
+                  isExpanded: _expandedTemplateIds.contains(template.id),
+                  onTap: () => _toggleExpanded(template.id),
+                )
+              : IconButton(
+                  icon: Icon(
+                    _expandedTemplateIds.contains(template.id)
+                        ? Icons.expand_less
+                        : Icons.expand_more,
+                    color: Colors.white70,
+                    size: 20,
+                  ),
+                  onPressed: () => _toggleExpanded(template.id),
+                ),
         ],
       ),
 
@@ -2644,6 +2779,138 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
             Navigator.pop(context,
                 selectedTemplate); // Pass the template back to WorkoutPage
           },
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Tutorial helper widgets ─────────────────────────────────────────────────
+
+/// Pulsing glow ring around the expand/collapse arrow for Phase 1.
+class _WpGlowArrow extends StatefulWidget {
+  final bool isExpanded;
+  final VoidCallback onTap;
+  const _WpGlowArrow({required this.isExpanded, required this.onTap});
+
+  @override
+  State<_WpGlowArrow> createState() => _WpGlowArrowState();
+}
+
+class _WpGlowArrowState extends State<_WpGlowArrow>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _glow;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1200))
+      ..repeat(reverse: true);
+    _glow = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: widget.onTap,
+      child: SizedBox(
+        width: 40,
+        height: 40,
+        child: Center(
+          child: AnimatedBuilder(
+            animation: _glow,
+            builder: (_, __) => Container(
+              width: 30,
+              height: 30,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Colors.tealAccent
+                      .withOpacity(0.45 + _glow.value * 0.35),
+                  width: 1.2,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.tealAccent.withOpacity(_glow.value * 0.45),
+                    blurRadius: 8,
+                    spreadRadius: 2,
+                  ),
+                ],
+              ),
+              child: Center(
+                child: Icon(
+                  widget.isExpanded ? Icons.expand_less : Icons.expand_more,
+                  color: Colors.white70,
+                  size: 20,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// "tap here" label — rests still, then bumps upward every 1.5 s.
+class _WpBounceLabel extends StatefulWidget {
+  const _WpBounceLabel();
+
+  @override
+  State<_WpBounceLabel> createState() => _WpBounceLabelState();
+}
+
+class _WpBounceLabelState extends State<_WpBounceLabel>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _nudge;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 380));
+    _nudge = Tween<double>(begin: 0, end: -6)
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
+    _timer = Timer.periodic(const Duration(milliseconds: 1500), (_) {
+      if (!mounted || _ctrl.isAnimating) return;
+      _ctrl.forward().then((_) {
+        if (mounted) _ctrl.reverse();
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _nudge,
+      builder: (_, child) => Transform.translate(
+        offset: Offset(0, _nudge.value),
+        child: child,
+      ),
+      child: const Text(
+        'tap here',
+        style: TextStyle(
+          fontSize: 10.5,
+          color: Colors.tealAccent,
+          fontWeight: FontWeight.w500,
+          letterSpacing: 0.3,
         ),
       ),
     );

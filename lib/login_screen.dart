@@ -100,7 +100,8 @@ class _LoginScreenState extends State<LoginScreen> {
       await _upsertUserDoc(cred.user);
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('goodlift_explicit_logout', false);
-      await writeAuthBreadcrumb('AUTHLOGIN email uid=${cred.user?.uid}');
+      await prefs.setString('goodlift_last_login_provider', 'password');
+      await writeAuthBreadcrumb('AUTHLOGIN provider=password uid=${cred.user?.uid}');
       debugPrint('[AUTHLOGIN] email sign-in uid=${cred.user?.uid} — explicit logout flag cleared');
       Navigator.pushReplacementNamed(context, '/home');
     } on FirebaseAuthException catch (e) {
@@ -139,7 +140,8 @@ class _LoginScreenState extends State<LoginScreen> {
       await _upsertUserDoc(cred.user);
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('goodlift_explicit_logout', false);
-      await writeAuthBreadcrumb('AUTHLOGIN google uid=${cred.user?.uid}');
+      await prefs.setString('goodlift_last_login_provider', 'google');
+      await writeAuthBreadcrumb('AUTHLOGIN provider=google uid=${cred.user?.uid}');
       debugPrint('[AUTHLOGIN] Google sign-in uid=${cred.user?.uid} — explicit logout flag cleared');
       Navigator.pushReplacementNamed(context, '/home');
     } on FirebaseAuthException catch (e) {
@@ -164,7 +166,8 @@ class _LoginScreenState extends State<LoginScreen> {
       await _upsertUserDoc(cred.user);
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('goodlift_explicit_logout', false);
-      await writeAuthBreadcrumb('AUTHLOGIN apple uid=${cred.user?.uid}');
+      await prefs.setString('goodlift_last_login_provider', 'apple');
+      await writeAuthBreadcrumb('AUTHLOGIN provider=apple uid=${cred.user?.uid}');
       debugPrint('[AUTHLOGIN] Apple sign-in uid=${cred.user?.uid} — explicit logout flag cleared');
       Navigator.pushReplacementNamed(context, '/home');
     } on FirebaseAuthException catch (e) {
@@ -450,22 +453,24 @@ class _LoginScreenState extends State<LoginScreen> {
                                 Text(
                                   'Auth Diagnostics',
                                   style: TextStyle(
-                                    fontSize: 10,
+                                    fontSize: 12,
                                     fontWeight: FontWeight.bold,
                                     color: Colors.amber.shade900,
                                   ),
                                 ),
                                 Text(
                                   'currentUser: $_diagCurrentUser',
-                                  style: const TextStyle(fontSize: 10),
+                                  style: const TextStyle(fontSize: 12, color: Colors.black87),
                                 ),
                                 Text(
                                   'explicitLogout: $_diagExplicitLogout',
-                                  style: const TextStyle(fontSize: 10),
+                                  style: const TextStyle(fontSize: 12, color: Colors.black87),
                                 ),
                                 Text(
                                   'lastBreadcrumb:\n${_diagLastBreadcrumb ?? "none"}',
-                                  style: const TextStyle(fontSize: 10),
+                                  style: const TextStyle(fontSize: 12, color: Colors.black87),
+                                  maxLines: 6,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
                               ],
                             ),

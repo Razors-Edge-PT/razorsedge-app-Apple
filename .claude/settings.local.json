@@ -47,7 +47,8 @@
       "Bash(Select-String -Pattern \"error|planned_only_resolver|WES2_exercise_picker|bb3_week_planner|templates\\\\.dart\")",
       "Bash(Select-String -Pattern \"error|planned_only\")",
       "PowerShell(Set-Location \"C:\\\\Projects\\\\RE-test\"; $out = flutter analyze lib/onboarding_prefs.dart lib/home_screen.dart lib/WES2_widgets/WES2_tutorial_banner.dart lib/WES2_widgets/WES2_exercise_card.dart lib/WES2_widgets/WES2_set_row.dart lib/WES2_screen.dart 2>&1; $out | Where-Object { $_ -notmatch \"^  info\" } | Select-Object -Last 40)",
-      "PowerShell(Set-Location \"C:\\\\Projects\\\\RE-test\"; $out = flutter analyze lib/WES2_widgets/WES2_day_actions_row.dart lib/WES2_widgets/WES2_template_picker.dart lib/WES2_screen.dart 2>&1; $out | Where-Object { $_ -notmatch \"^\\\\s+info\" } | Select-Object -Last 15; $out | Select-String \"issues found\")"
+      "PowerShell(Set-Location \"C:\\\\Projects\\\\RE-test\"; $out = flutter analyze lib/WES2_widgets/WES2_day_actions_row.dart lib/WES2_widgets/WES2_template_picker.dart lib/WES2_screen.dart 2>&1; $out | Where-Object { $_ -notmatch \"^\\\\s+info\" } | Select-Object -Last 15; $out | Select-String \"issues found\")",
+      "Bash(Select-String \"error -\")"
     ]
   }
 }

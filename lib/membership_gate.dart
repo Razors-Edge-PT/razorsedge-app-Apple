@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_debug.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
@@ -291,6 +292,7 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('goodlift_explicit_logout', true);
     await writeAuthBreadcrumb('AUTHLOGOUT membershipInactive uid=${FirebaseAuth.instance.currentUser?.uid}');
+    await GoogleSignIn().signOut();
     await FirebaseAuth.instance.signOut();
     Navigator.pushReplacementNamed(context, '/login');
   }

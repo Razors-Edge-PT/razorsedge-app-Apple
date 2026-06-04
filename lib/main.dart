@@ -28,6 +28,7 @@ import 'coach_home_screen.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:facebook_app_events/facebook_app_events.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'auth_debug.dart';
@@ -91,6 +92,7 @@ class _AppRootState extends State<AppRoot> {
   // SharedPreferences key written true only on an explicit user-initiated logout.
   // Prevents treating Firebase Auth's transient null on cold-start as a real logout.
   static const _kExplicitLogout = 'goodlift_explicit_logout';
+  static const _kLastLoginProvider = 'goodlift_last_login_provider';
 
   static const _devCoachUids = {
     'yoVAqScwLMQLAgNHh8v9IK49fBw2', // Richard Razorsedge
@@ -267,6 +269,14 @@ class _AppRootState extends State<AppRoot> {
       return;
     }
 
+    // Step 5: silent Google restore — only runs when last provider was Google.
+    if (gen != _authGen || !mounted) return;
+    final silentlyRestored = await _trySilentGoogleRestore(gen);
+    if (silentlyRestored != null && !silentlyRestored.isAnonymous) {
+      await _handleValidUser(silentlyRestored, gen);
+      return;
+    }
+
     debugPrint('[AUTHNULL] all restore checks confirm no user — showing Login');
     await writeAuthBreadcrumb('allRestoreChecksFailed showLogin gen=$gen');
     _clearMemo();
@@ -277,6 +287,58 @@ class _AppRootState extends State<AppRoot> {
     _memoUid = null;
     _tokenFuture = null;
     _userContext = null;
+  }
+
+  // ─── silent Google restore ────────────────────────────────────────────────
+
+  Future<User?> _trySilentGoogleRestore(int gen) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (gen != _authGen || !mounted) return null;
+
+      final lastProvider = prefs.getString(_kLastLoginProvider);
+      if (lastProvider != 'google') {
+        await writeAuthBreadcrumb('silentGoogleRestore skipped lastProvider=$lastProvider gen=$gen');
+        return null;
+      }
+
+      final googleUser = await GoogleSignIn().signInSilently();
+      if (gen != _authGen || !mounted) return null;
+
+      if (googleUser == null) {
+        await writeAuthBreadcrumb('silentGoogleRestore noAccount gen=$gen');
+        debugPrint('[AUTHRESTORE] silentGoogleRestore: no Google account returned');
+        return null;
+      }
+
+      final googleAuth = await googleUser.authentication;
+      if (gen != _authGen || !mounted) return null;
+
+      final accessTokenPresent = googleAuth.accessToken != null;
+      final idTokenPresent = googleAuth.idToken != null;
+      debugPrint('[AUTHRESTORE] silentGoogleRestore accessTokenPresent=$accessTokenPresent idTokenPresent=$idTokenPresent');
+
+      final credential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+
+      final cred = await FirebaseAuth.instance.signInWithCredential(credential);
+      if (gen != _authGen || !mounted) return null;
+
+      await prefs.setBool(_kExplicitLogout, false);
+      await writeAuthBreadcrumb('silentGoogleRestore success uid=${cred.user?.uid} gen=$gen');
+      debugPrint('[AUTHRESTORE] silentGoogleRestore success uid=${cred.user?.uid}');
+      return cred.user;
+    } on FirebaseAuthException catch (e) {
+      await writeAuthBreadcrumb('silentGoogleRestore FirebaseAuthException ${e.code} gen=$gen');
+      debugPrint('[AUTHRESTORE] silentGoogleRestore FirebaseAuthException: $e');
+      return null;
+    } catch (e) {
+      await writeAuthBreadcrumb('silentGoogleRestore error gen=$gen');
+      debugPrint('[AUTHRESTORE] silentGoogleRestore error: $e');
+      return null;
+    }
   }
 
   // ─── build ────────────────────────────────────────────────────────────────

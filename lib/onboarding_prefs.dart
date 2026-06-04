@@ -27,4 +27,18 @@ class OnboardingPrefs {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kWesDone(uid), true);
   }
+
+  static String _kWpWalkthroughDone(String uid) =>
+      'ob.$uid.wpPlannerWalkthroughComplete';
+
+  static Future<bool> getWpPlannerWalkthroughComplete(String uid) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_kWpWalkthroughDone(uid)) ?? false;
+  }
+
+  /// Marks the Workout Planner in-screen walkthrough as complete. Idempotent.
+  static Future<void> setWpPlannerWalkthroughComplete(String uid) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kWpWalkthroughDone(uid), true);
+  }
 }
