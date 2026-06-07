@@ -218,9 +218,10 @@ class _Wes2ExerciseSettingsDialogState
       if (!mounted) return;
 
       var raw = allSettings[widget.exerciseId];
-      if (raw == null) {
-        // Safety net: exercise has no settings (arrived via an unguarded path).
-        // Create defaults and reload once so the dialog does not open empty.
+      // Safety net: trigger if settings are absent OR incomplete (e.g. only
+      // week-N fragments with no core scalars like periodizationModel).
+      if (!BlockExerciseDefaultsRepository.isSettingsUsable(
+          raw is Map<String, dynamic> ? raw : null)) {
         try {
           await BlockExerciseDefaultsRepository.ensureExerciseDefaults(
             uid: widget.uid,

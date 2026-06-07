@@ -395,6 +395,41 @@ class BlockExerciseDefaultsRepository {
   }
 
   // ---------------------------------------------------------------------------
+  // 3b) USABILITY CHECK — distinguishes complete entries from partial fragments
+  // ---------------------------------------------------------------------------
+
+  /// Returns true when [settings] contains the minimum core fields required
+  /// for the hint engine and settings dialog to function correctly.
+  /// An entry that carries only week-N repTargets/rirPlan fragments but is
+  /// missing core scalars (periodizationModel, weeklyFrequency, repTargets)
+  /// is considered incomplete and returns false.
+  static bool isSettingsUsable(Map<String, dynamic>? settings) {
+    if (settings == null || settings.isEmpty) return false;
+    final model = settings['periodizationModel'];
+    if (model is! String || model.isEmpty) return false;
+    final wf = settings['weeklyFrequency'];
+    if (wf == null || (wf is num && wf <= 0)) return false;
+    final repTargets = settings['repTargets'];
+    if (repTargets is! Map || repTargets.isEmpty) return false;
+    // For DUP By Exposure/Week: weeklyFrequency must equal the instanceN count
+    // in repTargets.week1. A mismatch (e.g. wf=14 but only 2 instances) means
+    // the data is corrupt and needs healing. Skipped for DUP Signature which
+    // uses repRange instead of instanceN keys (instanceCount would be 0).
+    if (model.startsWith('DUP') && repTargets is Map) {
+      final week1 = repTargets['week1'];
+      if (week1 is Map) {
+        final instanceCount = week1.keys
+            .where((k) => k.toString().startsWith('instance'))
+            .length;
+        if (instanceCount > 0 && instanceCount != (wf is num ? wf.toInt() : 0)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  // ---------------------------------------------------------------------------
   // 4) Firestore-only "onUpdateSetting" equivalent (no setState)
   // ---------------------------------------------------------------------------
 
@@ -560,10 +595,12 @@ class BlockExerciseDefaultsRepository {
   // 5b) LAZY HEALER: ensure a single exercise has defaults in a block doc
   // ---------------------------------------------------------------------------
 
-  /// Checks whether [exerciseId] already has exerciseSettings in [blockId].
-  /// If not, fetches exercise metadata and seeds defaults — same structure as
-  /// seedDefaultsForBlock but for a single exercise.
-  /// Idempotent: no-op if settings already exist.
+  /// Ensures [exerciseId] has complete, usable exerciseSettings in [blockId].
+  /// No-op when settings are already complete (per [isSettingsUsable]).
+  /// When settings are absent, writes the full default payload.
+  /// When settings exist but are incomplete (e.g. only week-N fragments),
+  /// writes only the missing top-level fields and missing sub-keys —
+  /// existing values are never overwritten.
   static Future<void> ensureExerciseDefaults({
     required String uid,
     required String blockId,
@@ -577,10 +614,11 @@ class BlockExerciseDefaultsRepository {
         .collection('blocks')
         .doc(blockId);
 
-    // 1. Check whether settings already exist — skip if so.
+    // 1. Check whether settings are already complete — skip if so.
     final snap = await docRef.get();
     final existing = snap.data()?['exerciseSettings'] as Map<String, dynamic>? ?? {};
-    if (existing.containsKey(exerciseId)) return;
+    final existingForId = existing[exerciseId];
+    if (existingForId is Map<String, dynamic> && isSettingsUsable(existingForId)) return;
 
     // 2. Fetch exercise metadata.
     final exDoc = await FirebaseFirestore.instance
@@ -624,11 +662,51 @@ class BlockExerciseDefaultsRepository {
       'modelSpecificRepTargets': defaults['modelSpecificRepTargets'],
     };
 
-    // 4. Merge into block doc (additive — never overwrites existing data).
-    await docRef.set({
-      'plannedExerciseDetails': {exerciseId: detailPayload},
-      'exerciseSettings': {exerciseId: settingsPayload},
-    }, SetOptions(merge: true));
+    // 4. Write: strategy depends on whether a partial entry already exists.
+    if (existingForId == null) {
+      // Fully absent: write the complete payload for both sub-collections.
+      await docRef.set({
+        'plannedExerciseDetails': {exerciseId: detailPayload},
+        'exerciseSettings': {exerciseId: settingsPayload},
+      }, SetOptions(merge: true));
+    } else {
+      // Partially present (e.g. only week-N repTargets/rirPlan fragments):
+      // update only fields and sub-keys that are missing — never overwrite.
+      //
+      // Exception: weeklyFrequency, repTargets, and rirPlan are tightly coupled
+      // (wf dictates how many instanceN keys must exist). When wf doesn't match
+      // the computed defaults, all three are force-overwritten as a unit so they
+      // stay self-consistent (e.g. wf=14 with only 2 instances → reset to 3/3/3).
+      final existingMap = Map<String, dynamic>.from(existingForId);
+      final existingWf = (existingMap['weeklyFrequency'] as num?)?.toInt() ?? 0;
+      final defaultWf  = (settingsPayload['weeklyFrequency'] as num?)?.toInt() ?? 0;
+      final wfMismatch = defaultWf > 0 && existingWf != defaultWf;
+
+      final updates = <String, dynamic>{};
+      settingsPayload.forEach((key, value) {
+        final isCoupled =
+            key == 'weeklyFrequency' || key == 'repTargets' || key == 'rirPlan';
+        if (wfMismatch && isCoupled) {
+          // Force-write the three coupled fields to make them self-consistent.
+          updates['exerciseSettings.$exerciseId.$key'] = value;
+        } else if (!existingMap.containsKey(key)) {
+          // Top-level key entirely absent: write the full default value.
+          updates['exerciseSettings.$exerciseId.$key'] = value;
+        } else if (!isCoupled && value is Map && existingMap[key] is Map) {
+          // Both are maps: only add sub-keys that are missing.
+          final existingSub = Map<String, dynamic>.from(existingMap[key] as Map);
+          (value as Map).forEach((subKey, subValue) {
+            if (!existingSub.containsKey(subKey)) {
+              updates['exerciseSettings.$exerciseId.$key.$subKey'] = subValue;
+            }
+          });
+        }
+        // Scalar field already present and not coupled: existing value wins — skip.
+      });
+      if (updates.isNotEmpty) {
+        await docRef.update(updates);
+      }
+    }
 
     debugPrint('🩹 [DefaultsRepo] healed defaults for $exerciseId in block=$blockId');
   }

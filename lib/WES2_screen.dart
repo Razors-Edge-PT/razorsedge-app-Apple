@@ -447,7 +447,13 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       // ensureExerciseDefaults is idempotent — rows already present are no-ops.
       final missingIds = _controller.rows
           .map((r) => r.exerciseId)
-          .where((id) => id.isNotEmpty && !_cachedExerciseSettings.containsKey(id))
+          .where((id) {
+            if (id.isEmpty) return false;
+            final s = _cachedExerciseSettings[id];
+            return !BlockExerciseDefaultsRepository.isSettingsUsable(
+              s is Map<String, dynamic> ? s : null,
+            );
+          })
           .toSet();
 
       if (missingIds.isNotEmpty) {
