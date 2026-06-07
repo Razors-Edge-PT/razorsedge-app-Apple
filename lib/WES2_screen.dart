@@ -76,15 +76,18 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   Set<String> _bb3PlannedExerciseIds = const {};
   // Composite key uid|blockId|date — prevents redundant server history refreshes.
   String? _lastHistoryRefreshKey;
+  // Composite identity key for _cachedExerciseSettings — 'actingUid|blockId'.
+  // Reloads cache unconditionally when actingUid or blockId changes.
+  String? _cachedSettingsKey;
 
   // ── Tutorial state (Phase 2 onboarding) ──────────────────────────────────
   // 0=inactive 1=loadTemplateCue 2=firstTemplateCue 3=weight 4=reps 5=rir
   // Uses FirebaseAuth actor UID, NOT the impersonated athlete.
   int _tutorialStep = 0;
 
-  // ── Settings cog tutorial cue (session-only) ─────────────────────────────
-  // Set to true the moment the settings panel is opened. Resets when the
-  // Wes2Screen widget is disposed (i.e. not persisted across sessions).
+  // ── Settings cog tutorial cue ────────────────────────────────────────────
+  // Persisted once per FirebaseAuth actor UID via OnboardingPrefs.
+  // Loaded on open; set to true when the settings panel is first opened.
   bool _cogCueDismissed = false;
 
   // ── Day timer state (Phase 17) ─────────────────────────────────────────────
@@ -111,6 +114,14 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     final wesDone = await OnboardingPrefs.getWesDone(uid);
     if (!wpDone || wesDone || !mounted) return;
     setState(() => _tutorialStep = 1);
+  }
+
+  Future<void> _loadCogCueState() async {
+    // Uses FirebaseAuth actor UID — never the impersonated athlete UID.
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    final done = await OnboardingPrefs.getWesCogCueDone(uid);
+    if (done && mounted) setState(() => _cogCueDismissed = true);
   }
 
   Future<void> _onTutorialStepDismiss() async {
@@ -195,6 +206,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       _loadStarted = true;
       _loadDay();
       unawaited(_loadTutorialState());
+      unawaited(_loadCogCueState());
     }
   }
 
@@ -415,7 +427,42 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     await _refreshHistoryForHints(_controller.selectedDate);
 
     try {
-      if (_cachedExerciseSettings.isEmpty) {
+      // ── Settings cache with identity guard ─────────────────────────────
+      // Reload when actingUid or blockId changes (coach/athlete switch, new block).
+      final currentSettingsKey = '${_controller.actingUid}|$blockId';
+      if (_cachedSettingsKey != currentSettingsKey) {
+        _cachedExerciseSettings = await _planService.loadExerciseSettings(
+          uid: _controller.actingUid,
+          blockId: blockId,
+        );
+        _cachedSettingsKey = currentSettingsKey;
+        _controller.setExerciseSettings(_cachedExerciseSettings);
+      }
+
+      if (!mounted) return;
+
+      // ── Centralized defaults guard ──────────────────────────────────────
+      // Ensures every row.exerciseId has exerciseSettings regardless of how
+      // the row arrived (BB3 planned, completed workout, template, replace).
+      // ensureExerciseDefaults is idempotent — rows already present are no-ops.
+      final missingIds = _controller.rows
+          .map((r) => r.exerciseId)
+          .where((id) => id.isNotEmpty && !_cachedExerciseSettings.containsKey(id))
+          .toSet();
+
+      if (missingIds.isNotEmpty) {
+        for (final exerciseId in missingIds) {
+          try {
+            await BlockExerciseDefaultsRepository.ensureExerciseDefaults(
+              uid: _controller.actingUid,
+              blockId: blockId,
+              exerciseId: exerciseId,
+            );
+          } catch (e) {
+            debugPrint('[WES2] ensureDefaults failed for $exerciseId: $e');
+          }
+        }
+        if (!mounted) return;
         _cachedExerciseSettings = await _planService.loadExerciseSettings(
           uid: _controller.actingUid,
           blockId: blockId,
@@ -1778,7 +1825,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       resolvedActiveInstance = cogRes?.instanceNumber;
     }
 
-    if (!_cogCueDismissed && mounted) setState(() => _cogCueDismissed = true);
+    if (!_cogCueDismissed && mounted) {
+      setState(() => _cogCueDismissed = true);
+      final actorUid = FirebaseAuth.instance.currentUser?.uid;
+      if (actorUid != null) unawaited(OnboardingPrefs.setWesCogCueDone(actorUid));
+    }
     final saved = await showDialog<bool>(
       context: context,
       builder: (_) => Wes2ExerciseSettingsDialog(

@@ -988,12 +988,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         padding: const EdgeInsets.symmetric(horizontal: 32),
         child: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const CircularProgressIndicator(),
             const SizedBox(height: 24),
             Text(
               _setupStatusMessage,
-              textAlign: TextAlign.center,
+              textAlign: TextAlign.left,
               style: Theme.of(context)
                   .textTheme
                   .bodyLarge

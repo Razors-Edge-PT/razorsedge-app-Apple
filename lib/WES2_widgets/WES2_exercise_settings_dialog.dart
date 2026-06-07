@@ -1,6 +1,7 @@
 ﻿import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../WES2_plan_service.dart';
+import '../block_exercise_defaults_repository.dart';
 
 const Set<String> _defaultVelocityExerciseIds = {
   'heeBViVINHO6tUScSd6y',
@@ -216,7 +217,23 @@ class _Wes2ExerciseSettingsDialogState
       );
       if (!mounted) return;
 
-      final raw = allSettings[widget.exerciseId];
+      var raw = allSettings[widget.exerciseId];
+      if (raw == null) {
+        // Safety net: exercise has no settings (arrived via an unguarded path).
+        // Create defaults and reload once so the dialog does not open empty.
+        try {
+          await BlockExerciseDefaultsRepository.ensureExerciseDefaults(
+            uid: widget.uid,
+            blockId: widget.blockId,
+            exerciseId: widget.exerciseId,
+          );
+          final reloaded = await widget.planService.loadExerciseSettings(
+            uid: widget.uid,
+            blockId: widget.blockId,
+          );
+          raw = reloaded[widget.exerciseId];
+        } catch (_) {}
+      }
       final Map<String, dynamic> settings =
           raw is Map<String, dynamic> ? raw : {};
 

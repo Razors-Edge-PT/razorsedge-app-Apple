@@ -41,4 +41,17 @@ class OnboardingPrefs {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kWpWalkthroughDone(uid), true);
   }
+
+  static String _kWesCogCueDone(String uid) => 'ob.$uid.wesCogCueDone';
+
+  static Future<bool> getWesCogCueDone(String uid) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_kWesCogCueDone(uid)) ?? false;
+  }
+
+  /// Marks the WES2 settings cog tutorial cue as seen. Idempotent.
+  static Future<void> setWesCogCueDone(String uid) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kWesCogCueDone(uid), true);
+  }
 }

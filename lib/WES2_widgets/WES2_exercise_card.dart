@@ -449,30 +449,41 @@ class _CogCueWrapper extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = Theme.of(context).colorScheme.secondary;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _CogNudgingLabel(color: color),
-        Container(
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            border: Border.all(color: color, width: 1.5),
-            boxShadow: [
-              BoxShadow(
-                color: color.withValues(alpha: 0.35),
-                blurRadius: 6,
-                spreadRadius: 1,
-              ),
-            ],
+
+    return SizedBox(
+      width: 32,
+      height: 32,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.center,
+        children: [
+          DecoratedBox(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: color, width: 1.5),
+              boxShadow: [
+                BoxShadow(
+                  color: color.withValues(alpha: 0.35),
+                  blurRadius: 6,
+                  spreadRadius: 1,
+                ),
+              ],
+            ),
+            child: IconButton(
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+              icon: const Icon(Icons.settings, size: 20, color: Colors.grey),
+              onPressed: onPressed,
+            ),
           ),
-          child: IconButton(
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints.tightFor(width: 32, height: 32),
-            icon: const Icon(Icons.settings, size: 20, color: Colors.grey),
-            onPressed: onPressed,
+          Positioned(
+            top: -14,
+            child: IgnorePointer(
+              child: _CogNudgingLabel(color: color),
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
