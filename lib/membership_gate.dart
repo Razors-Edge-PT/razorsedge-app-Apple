@@ -118,14 +118,14 @@ class MembershipGate extends StatelessWidget {
           return child;
         }
 
-        // Check 3: no real set logged yet → still in free-trial window.
-        if (data['firstRealSetLogged'] != true) {
-          debugPrint('[MEMBERSHIP] firstRealSetLogged not set — free-trial access granted');
+        // Check 3: fewer than 4 qualifying workout dates → still in free-trial window.
+        if (data['paywallTriggered'] != true) {
+          debugPrint('[MEMBERSHIP] paywallTriggered not set — free-trial access granted');
           return child;
         }
 
-        // Check 4: real set logged but inactive → paywall.
-        debugPrint('[MEMBERSHIP] firstRealSetLogged=true inactive — showing paywall');
+        // Check 4: 4+ qualifying workout dates but inactive → paywall.
+        debugPrint('[MEMBERSHIP] paywallTriggered=true inactive — showing paywall');
         return const MembershipInactiveScreen();
       },
     );

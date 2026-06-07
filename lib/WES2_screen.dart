@@ -89,6 +89,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   // Persisted once per FirebaseAuth actor UID via OnboardingPrefs.
   // Loaded on open; set to true when the settings panel is first opened.
   bool _cogCueDismissed = false;
+  // True once the actor has logged qualifying sets on 3 distinct calendar days.
+  bool _cogCueUnlocked = false;
 
   // ── Day timer state (Phase 17) ─────────────────────────────────────────────
   bool _timerVisible = false;
@@ -101,8 +103,13 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   int _workoutDurationMilliseconds = 0;
   DateTime? _workoutDurationSegmentStartedAt;
 
-  // ── First-real-set paywall flag (written once per session after confirmed save) ─
-  bool _firstRealSetWritten = false;
+  // ── Paywall qualifying-date tracking ─────────────────────────────────────────
+  // Loaded once per session from the membership doc; updated locally on each new
+  // qualifying date so we never double-count or re-read Firestore every save.
+  final Set<String> _qualifiedDatesCached = {};
+  int _qualifiedDaysCountCached = 0;
+  bool _qualifiedDatesLoaded = false;
+  bool _qualifiedDatesLoading = false;
 
   // ── Tutorial helpers ──────────────────────────────────────────────────────
 
@@ -121,7 +128,12 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
     final done = await OnboardingPrefs.getWesCogCueDone(uid);
-    if (done && mounted) setState(() => _cogCueDismissed = true);
+    if (done) {
+      if (mounted) setState(() => _cogCueDismissed = true);
+      return;
+    }
+    final days = await OnboardingPrefs.getWesCogCueQualifiedDays(uid);
+    if (days.length >= 3 && mounted) setState(() => _cogCueUnlocked = true);
   }
 
   Future<void> _onTutorialStepDismiss() async {
@@ -966,25 +978,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         fieldKey: fieldKey,
         value: value,
       );
-      // First-real-set detection: runs only after a confirmed Firestore write.
-      // Only triggered by weight or reps edits with a non-null value.
-      if (!_firstRealSetWritten &&
-          value != null &&
+      // Paywall qualifying-date check: runs after every confirmed weight/reps save.
+      if (value != null &&
           (fieldKey == Wes2FieldKey.weight || fieldKey == Wes2FieldKey.reps)) {
-        final currentIdx =
-            _controller.rows.indexWhere((r) => r.exerciseId == row.exerciseId);
-        if (currentIdx != -1) {
-          final currentRow = _controller.rows[currentIdx];
-          for (final s in currentRow.sets) {
-            final w = s.weight.actualValue;
-            final r = s.reps.actualValue;
-            if (w != null && w > 0 && r != null && r > 0) {
-              _firstRealSetWritten = true;
-              await _markFirstRealSetLogged();
-              break;
-            }
-          }
-        }
+        await _checkQualifyingDate(date: date);
       }
     } catch (_) {
       // Silent failure for Phase 8.
@@ -992,26 +989,107 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     }
   }
 
-  /// Writes firstRealSetLogged: true to the actor's membership doc.
-  /// Uses actorUid (logged-in account UID) — never the impersonated athlete.
-  /// Resets [_firstRealSetWritten] on failure so the next confirmed save retries.
-  Future<void> _markFirstRealSetLogged() async {
-    final actorUid = _controller.actorUid;
-    if (actorUid.isEmpty) return;
+  /// Fetches the membership doc once per session and populates the local
+  /// qualified-dates cache. No-ops if already loaded or loading.
+  Future<void> _ensureQualifiedDatesLoaded() async {
+    if (_qualifiedDatesLoaded || _qualifiedDatesLoading) return;
+    _qualifiedDatesLoading = true;
     try {
-      await FirebaseFirestore.instance
+      final actorUid = _controller.actorUid;
+      if (actorUid.isEmpty) return;
+      final doc = await FirebaseFirestore.instance
           .collection('users')
           .doc(actorUid)
           .collection('profile')
           .doc('membership')
-          .set({
-        'firstRealSetLogged': true,
-        'firstRealSetLoggedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-      debugPrint('[WES2] firstRealSetLogged written for actorUid=$actorUid');
+          .get();
+      if (doc.exists) {
+        final data = doc.data() ?? {};
+        final datesMap =
+            (data['qualifiedWorkoutDates'] as Map<String, dynamic>?) ?? {};
+        _qualifiedDatesCached.addAll(datesMap.keys);
+        // Fall back to map length if the count field is missing (legacy docs).
+        _qualifiedDaysCountCached =
+            (data['qualifiedWorkoutDaysCount'] as int?) ?? datesMap.length;
+      }
+      _qualifiedDatesLoaded = true;
     } catch (e) {
-      debugPrint('[WES2] firstRealSetLogged write failed: $e');
-      _firstRealSetWritten = false; // allow retry on next confirmed save
+      debugPrint('[WES2] _ensureQualifiedDatesLoaded error: $e');
+      // Leave _qualifiedDatesLoaded false so the next save retries.
+    } finally {
+      _qualifiedDatesLoading = false;
+    }
+  }
+
+  /// Called after each confirmed weight/reps save.
+  /// Counts qualifying sets (weight > 0 AND reps > 0) across all rows for
+  /// [date]. If the date reaches ≥ 2 qualifying sets and hasn't been counted
+  /// before, records it in the membership doc and increments the count.
+  /// When the count reaches 4, sets paywallTriggered: true.
+  /// Uses actorUid (logged-in account UID) — never the impersonated athlete.
+  Future<void> _checkQualifyingDate({required DateTime date}) async {
+    final actorUid = _controller.actorUid;
+    if (actorUid.isEmpty) return;
+
+    final dateKey =
+        '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+
+    if (!_qualifiedDatesLoaded) {
+      await _ensureQualifiedDatesLoaded();
+    }
+
+    // Already counted for this date → nothing to do.
+    if (_qualifiedDatesCached.contains(dateKey)) return;
+
+    // Count sets with both weight > 0 and reps > 0 across all rows.
+    int validSets = 0;
+    outer:
+    for (final r in _controller.rows) {
+      for (final s in r.sets) {
+        final w = s.weight.actualValue;
+        final rep = s.reps.actualValue;
+        if (w != null && w > 0 && rep != null && rep > 0) {
+          validSets++;
+          if (validSets >= 2) break outer;
+        }
+      }
+    }
+    if (validSets < 2) return;
+
+    // Date qualifies — update local cache first, then persist.
+    _qualifiedDatesCached.add(dateKey);
+    _qualifiedDaysCountCached++;
+    final triggerPaywall = _qualifiedDaysCountCached >= 4;
+
+    // Record qualifying day for cog cue (actor-keyed SharedPreferences).
+    // Done before the Firestore write so it succeeds even when offline.
+    await OnboardingPrefs.addWesCogCueQualifiedDay(actorUid, dateKey);
+    final cogDays = await OnboardingPrefs.getWesCogCueQualifiedDays(actorUid);
+    if (!_cogCueDismissed && !_cogCueUnlocked && cogDays.length >= 3 && mounted) {
+      setState(() => _cogCueUnlocked = true);
+    }
+
+    try {
+      final membershipRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(actorUid)
+          .collection('profile')
+          .doc('membership');
+
+      final Map<String, dynamic> patch = {
+        'qualifiedWorkoutDates.$dateKey': true,
+        'qualifiedWorkoutDaysCount': FieldValue.increment(1),
+        if (triggerPaywall) 'paywallTriggered': true,
+        if (triggerPaywall) 'paywallTriggeredAt': FieldValue.serverTimestamp(),
+      };
+      await membershipRef.update(patch);
+      debugPrint(
+          '[WES2] qualifyingDate=$dateKey count=$_qualifiedDaysCountCached paywall=$triggerPaywall');
+    } catch (e) {
+      debugPrint('[WES2] _checkQualifyingDate write failed: $e');
+      // Roll back local cache so the next save retries.
+      _qualifiedDatesCached.remove(dateKey);
+      _qualifiedDaysCountCached--;
     }
   }
 
@@ -1362,13 +1440,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         final setsLogged =
             rows.expand((r) => r.sets).where((s) => s.hasAnyActual).length;
 
-        final qualifyingWrSets = rows
-            .expand((r) => r.sets)
-            .where((s) => s.weight.hasActual && s.reps.hasActual)
-            .length;
         final showCogCue = _tutorialStep == 0 &&
             !_cogCueDismissed &&
-            qualifyingWrSets >= 2;
+            _cogCueUnlocked;
 
         // Build flat item list: circuit headers inserted when circuitIndex changes.
         final items = <Widget>[];

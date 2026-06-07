@@ -54,4 +54,27 @@ class OnboardingPrefs {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kWesCogCueDone(uid), true);
   }
+
+  static String _kWesCogCueQualifiedDays(String uid) =>
+      'ob.$uid.wesCogCueQualifiedDays';
+
+  /// Returns the set of calendar date keys (yyyy-MM-dd) on which this actor
+  /// has logged a qualifying workout (≥ 2 sets with weight AND reps).
+  static Future<Set<String>> getWesCogCueQualifiedDays(String uid) async {
+    final prefs = await SharedPreferences.getInstance();
+    return (prefs.getStringList(_kWesCogCueQualifiedDays(uid)) ?? []).toSet();
+  }
+
+  /// Adds [dateKey] to the qualifying-day set. Idempotent — the same date
+  /// is never counted twice even if called repeatedly.
+  static Future<void> addWesCogCueQualifiedDay(
+      String uid, String dateKey) async {
+    final prefs = await SharedPreferences.getInstance();
+    final current =
+        (prefs.getStringList(_kWesCogCueQualifiedDays(uid)) ?? []).toSet();
+    if (current.add(dateKey)) {
+      await prefs.setStringList(
+          _kWesCogCueQualifiedDays(uid), current.toList());
+    }
+  }
 }
