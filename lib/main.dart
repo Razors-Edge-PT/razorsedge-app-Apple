@@ -93,6 +93,8 @@ class _AppRootState extends State<AppRoot> {
   // Prevents treating Firebase Auth's transient null on cold-start as a real logout.
   static const _kExplicitLogout = 'goodlift_explicit_logout';
   static const _kLastLoginProvider = 'goodlift_last_login_provider';
+  // Per-uid cache of isCoach so we never block on getIdTokenResult at startup.
+  static const _kCoachCache = 'goodlift_iscoach_'; // + uid suffix
 
   static const _devCoachUids = {
     'yoVAqScwLMQLAgNHh8v9IK49fBw2', // Richard Razorsedge
@@ -138,18 +140,51 @@ class _AppRootState extends State<AppRoot> {
       }
     });
 
-    // Hard cap: guarantee restoring/tokenPending cannot spin forever.
-    // Fires 12 s after launch; a no-op unless _phase is still stuck.
+    // Hard cap: if restoring/tokenPending is still stuck after 12 s, try a final
+    // currentUser read. Only force Login when the user explicitly logged out —
+    // a slow network must never kick a remembered user back to the login screen.
     Future.delayed(const Duration(seconds: 12), () async {
       if (!mounted) return;
       if (_phase != _AuthPhase.restoring && _phase != _AuthPhase.tokenPending) return;
       final gen = ++_authGen;
       final phaseLabel = _phase.name;
       await writeAuthBreadcrumb(
-          'AUTHWATCHDOG hardCap phase=$phaseLabel forcingLogin gen=$gen');
-      debugPrint('[AUTHWATCHDOG] hardCap phase=$phaseLabel forcingLogin gen=$gen');
-      _clearMemo();
-      setState(() => _phase = _AuthPhase.unauthenticated);
+        'AUTHWATCHDOG hardCap phase=$phaseLabel checking explicitLogout gen=$gen',
+      );
+      debugPrint('[AUTHWATCHDOG] hardCap phase=$phaseLabel gen=$gen — checking explicitLogout');
+
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
+
+      final explicitLogout = prefs.getBool(_kExplicitLogout) ?? false;
+      if (explicitLogout) {
+        await writeAuthBreadcrumb(
+          'AUTHWATCHDOG hardCap explicitLogout=true forcingLogin gen=$gen',
+        );
+        debugPrint('[AUTHWATCHDOG] hardCap explicitLogout=true — forcing login');
+        _clearMemo();
+        setState(() => _phase = _AuthPhase.unauthenticated);
+        return;
+      }
+
+      // Not an explicit logout — attempt one final currentUser recovery.
+      final current = FirebaseAuth.instance.currentUser;
+      if (current != null && !current.isAnonymous) {
+        await writeAuthBreadcrumb(
+          'AUTHWATCHDOG hardCap recoveredUser uid=${current.uid} gen=$gen',
+        );
+        debugPrint('[AUTHWATCHDOG] hardCap: found currentUser ${current.uid} — recovering');
+        await _handleValidUser(current, gen);
+      } else {
+        // Still no user but no explicit logout — log and leave the phase alone.
+        // The user may be on a very poor connection; we must not force them to Login.
+        await writeAuthBreadcrumb(
+          'AUTHWATCHDOG hardCap noUser noExplicitLogout — leaving phase=$phaseLabel gen=$gen',
+        );
+        debugPrint(
+          '[AUTHWATCHDOG] hardCap: no user, no explicit logout — not forcing Login',
+        );
+      }
     });
   }
 
@@ -196,36 +231,83 @@ class _AppRootState extends State<AppRoot> {
     }
 
     if (_userContext == null) {
-      if (mounted) setState(() => _phase = _AuthPhase.tokenPending);
-      try {
-        final token = await _tokenFuture!.timeout(const Duration(seconds: 5));
-        if (gen != _authGen || !mounted) return;
-        if (_userContext == null) {
-          final isCoach =
-              (token.claims?['isCoach'] == true) ||
-              _devCoachUids.contains(user.uid);
-          ensureMembershipDoc(user.uid);
-          upsertUserLookup();
-          _userContext = UserContext(actorUid: user.uid, isCoach: isCoach);
-          _userContext!.bootstrapBlockMeta(uid: user.uid);
-        }
-      } catch (e) {
-        debugPrint('[AUTHROOT] getIdTokenResult failed: $e — falling back to uid-only coach check');
-        await writeAuthBreadcrumb('AUTHROOT token timeout/fail fallback uid=${user.uid} gen=$gen');
-        if (gen != _authGen || !mounted) return;
-        if (_userContext == null) {
-          final isCoach = _devCoachUids.contains(user.uid);
-          ensureMembershipDoc(user.uid);
-          upsertUserLookup();
-          _userContext = UserContext(actorUid: user.uid, isCoach: isCoach);
-          _userContext!.bootstrapBlockMeta(uid: user.uid);
-        }
+      // Determine isCoach without waiting on the network token.
+      // Priority: (1) hardcoded dev/admin list (sync), (2) cached prefs value from
+      // last session (sync), (3) background token refresh updates cache for next open.
+      bool isCoach = _devCoachUids.contains(user.uid);
+      if (!isCoach) {
+        isCoach = prefs.getBool('$_kCoachCache${user.uid}') ?? false;
       }
+      debugPrint(
+        '[AUTHROOT] isCoach=$isCoach (sync, uid=${user.uid}) — '
+        'token refreshing in background',
+      );
+
+      ensureMembershipDoc(user.uid);
+      upsertUserLookup();
+      _userContext = UserContext(actorUid: user.uid, isCoach: isCoach);
+      _userContext!.bootstrapBlockMeta(uid: user.uid);
+
+      // Background: resolve real token claim, persist for next session, rebuild
+      // UserContext only if coach status changed.
+      _resolveTokenInBackground(
+        user: user,
+        gen: gen,
+        prefs: prefs,
+        currentIsCoach: isCoach,
+      );
     }
 
     if (gen != _authGen || !mounted) return;
     await writeAuthBreadcrumb('authenticated uid=${user.uid}');
+    // Route immediately — never stall on tokenPending for remembered users.
     setState(() => _phase = _AuthPhase.authenticated);
+  }
+
+  /// Resolves the Firebase ID token in background and keeps isCoach prefs up to date.
+  /// Rebuilds UserContext only if coach status differs from what we assumed at startup.
+  void _resolveTokenInBackground({
+    required User user,
+    required int gen,
+    required SharedPreferences prefs,
+    required bool currentIsCoach,
+  }) {
+    final tokenFuture = _tokenFuture;
+    if (tokenFuture == null) return;
+
+    tokenFuture.timeout(const Duration(seconds: 10)).then((token) async {
+      if (!mounted) return;
+      final isCoachFromToken =
+          (token.claims?['isCoach'] == true) || _devCoachUids.contains(user.uid);
+
+      // Persist authoritative value for next cold start.
+      await prefs.setBool('$_kCoachCache${user.uid}', isCoachFromToken);
+      debugPrint(
+        '[AUTHROOT] background token resolved: uid=${user.uid} '
+        'isCoach=$isCoachFromToken (was $currentIsCoach)',
+      );
+      await writeAuthBreadcrumb(
+        'tokenResolved uid=${user.uid} isCoach=$isCoachFromToken gen=$gen',
+      );
+
+      // If coach status changed, rebuild UserContext so the UI reflects reality.
+      if (mounted && gen == _authGen && isCoachFromToken != currentIsCoach) {
+        debugPrint(
+          '[AUTHROOT] coach status $currentIsCoach→$isCoachFromToken — '
+          'rebuilding UserContext uid=${user.uid}',
+        );
+        final newCtx = UserContext(actorUid: user.uid, isCoach: isCoachFromToken);
+        setState(() => _userContext = newCtx);
+        unawaited(newCtx.bootstrapBlockMeta(uid: user.uid));
+      }
+    }).catchError((Object e) async {
+      debugPrint('[AUTHROOT] background token resolve failed: $e');
+      await writeAuthBreadcrumb(
+        'tokenResolveFailed uid=${user.uid} gen=$gen err=$e',
+      );
+      // Persist current best-guess so it is used on next cold start.
+      await prefs.setBool('$_kCoachCache${user.uid}', currentIsCoach);
+    });
   }
 
   // ─── null / anon path with restore grace period ──────────────────────────

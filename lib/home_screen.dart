@@ -58,7 +58,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   String? mostRecentWeight;
   Workout? mostRecentWorkout;
-  bool isLoading = true;
+  // isLoading is no longer a full-page gate. It is true only during first-time
+  // new-user block setup so existing users see Home immediately.
+  bool isLoading = false;
+  // First-time setup state (new users only).
+  bool _isFirstTimeSetup = false;
+  String _setupStatusMessage = '';
+  // True once we have confirmed an active block is available for navigation.
+  bool _blockSetupComplete = false;
+  // Tracks last uid for which athlete email was loaded (dedup).
+  String? _lastEmailLoadedForUid;
   String errorMessage = '';
 
   // Firestore subscription for active block changes (training days refresh)
@@ -117,21 +126,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     super.initState();
     debugPrint('🏠 [HOME:initState] running initState()');
 
-    final userContext = Provider.of<UserContext>(context, listen: false);
-    final actingUid = userContext.actingAsUid;
+    final uc = Provider.of<UserContext>(context, listen: false);
+    final actingUid = uc.actingAsUid;
     _homeScrollCtrl.addListener(_onHomeScroll);
     _pointsScrollCtrl.addListener(_onPointsScroll);
 
-    // 🔄 Replace the three separate blocks with this single kickoff
+    // Feed chain — always starts immediately, independent of block data.
     unawaited(() async {
-      // 1) Resolve owners once
       await _resolveFeedOwners();
-
-      // 2) Restore last selected tab once
       await _restoreSelectedFeed();
       if (!mounted) return;
-
-      // 4) Kick exactly one initial load for the selected tab
       if (_selectedFeed == SelectedFeed.home) {
         await _loadInitialHomeFeed();
       } else {
@@ -139,59 +143,37 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       }
     }());
 
-// Pass block + date so Warmup can precompute the exact WES snapshot you'll need.
-    // BB2 wiring disabled: warmWES pre-computes BB2-derived hints into WESInitSnapshot.
-    // Disabled until BB3 integration is ready.
-    // unawaited(WarmupService.instance.warmWES(
-    //   actingUid ?? '',
-    //   activeBlockId: userContext.activeBlockId,
-    //   selectedDate: _warmDate,
-    // ));
+    // Recent data fetch — starts immediately; never gates Home render.
+    unawaited(_fetchRecentData());
 
-    // Delay the email fetch until after build
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _loadAthleteEmail();
-    });
-
-    _ensureAtLeastOneBlockExists().then((_) async {
-      if (!mounted) return;
-      final uc = Provider.of<UserContext>(context, listen: false);
-      await uc.refreshBlockMetaFromServer(uid: uc.actingAsUid);
-
-      _fetchRecentData();
-      _fetchTrainingDaysForMonth(_focusedDay);
-
-      _activeBlockSub = FirebaseFirestore.instance
-          .collection('planned_blocks')
-          .doc(actingUid) //
-          .collection('blocks')
-          .where('isActive', isEqualTo: true)
-          .snapshots()
-          .listen((_) {
-        _fetchTrainingDaysForMonth(_focusedDay);
-      });
-
-
-      // 🔎 Kick the 8-day local/FS scan once (post-frame so context is ready)
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        final uc = Provider.of<UserContext>(context, listen: false);
-        final uid = uc.actingAsUid;
-        final bid = uc.activeBlockId;
-        if (uid.isNotEmpty && bid != null && bid.isNotEmpty) {
-          // Self-heal sparse rirPlan for existing users (no-op if already complete).
-          unawaited(BlockExerciseDefaultsRepository.healActiveBlockRirPlan(
-            uid: uid,
-            blockId: bid,
-          ));
-        }
-      });
-    });
-
-    // Load onboarding cue state (non-blocking; defaults keep Home safe until this resolves)
+    // Onboarding cue state.
     unawaited(_loadOnboardingState());
 
-    // 🔧 One-time default template bootstrap (non-blocking) — gated on users + fitness_onboarding
-    // 🚫 Auth stability guard — do NOT attach Firestore listeners if auth is unstable
+    // Block setup: fast-path for existing users, first-time setup for new users.
+    // bootstrapBlockMeta (called in AppRoot before authenticated phase) hydrates
+    // _activeBlockId from SharedPreferences, so non-null here means existing user.
+    final hasBlockMeta = uc.activeBlockId != null && uc.activeBlockId!.isNotEmpty;
+    if (hasBlockMeta) {
+      // Existing user: block meta already cached. Home renders without any server wait.
+      debugPrint('🏠 [HOME] existing user (blockId=${uc.activeBlockId}) — rendering immediately');
+      _blockSetupComplete = true;
+      _fetchTrainingDaysForMonth(_focusedDay);
+      _setupActiveBlockListener(actingUid);
+      _scheduleRirHeal(uc);
+      // Background: verify block exists + server-refresh meta (non-blocking).
+      unawaited(() async {
+        await _ensureAtLeastOneBlockExists();
+        if (!mounted) return;
+        final freshUc = Provider.of<UserContext>(context, listen: false);
+        unawaited(freshUc.refreshBlockMetaFromServer(uid: freshUc.actingAsUid));
+      }());
+    } else {
+      // New user or no cached block meta: run first-time setup.
+      debugPrint('🏠 [HOME] no block meta cached — running first-time setup');
+      unawaited(_runFirstTimeSetup(actingUid));
+    }
+
+    // Auth stability guard + template bootstrap listeners (unchanged below).
     final authUser = FirebaseAuth.instance.currentUser;
     if (!mounted || authUser == null || authUser.uid != actingUid) {
       debugPrint('🛑 [HOME] Skipping onboarding listeners (auth unstable)');
@@ -364,12 +346,23 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
 
   Future<void> _ensureAtLeastOneBlockExists() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    // Always use the selected-athlete UID, not the auth UID, so coach
+    // impersonation reads the right data.
+    final uc = Provider.of<UserContext>(context, listen: false);
+    final uid = uc.actingAsUid;
+    if (uid.isEmpty) return;
+
+    // Do NOT create default blocks for athletes being viewed via coach
+    // impersonation — only create blocks for the authenticated user themselves.
+    if (uid != uc.actorUid) {
+      debugPrint(
+        '🛑 [HOME] Block setup skipped — coaching athlete uid=$uid '
+        '(actorUid=${uc.actorUid})',
+      );
+      return;
+    }
 
     final swTotal = Stopwatch()..start();
-
-    final uid = user.uid;
     final blocksRef = FirebaseFirestore.instance
         .collection('planned_blocks')
         .doc(uid)
@@ -794,13 +787,30 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     final newUid = uc.actingAsUid;
 
     if (newUid != _lastWarmUid) {
+      final prevUid = _lastWarmUid;
       _lastWarmUid = newUid;
+      // Keep dedup in sync so didChangeDependencies doesn't double-load email.
+      _lastEmailLoadedForUid = newUid;
+      debugPrint('🏠 [HOME] actingAsUid $prevUid → $newUid — refreshing all listeners');
 
-      // Keep your existing warm
+      // Re-subscribe active-block listener for the new athlete.
+      _setupActiveBlockListener(newUid);
+
+      // Reload display name for the new athlete.
+      unawaited(_loadAthleteEmail());
+
+      // Refresh recent data (weight/workout) for the new athlete.
+      unawaited(_fetchRecentData());
+
+      // Refresh training-days calendar for the new athlete.
+      _fetchTrainingDaysForMonth(_focusedDay);
+
+      // WES warmup for the new athlete.
       unawaited(WarmupService.instance.warmWES(newUid));
 
-      // RIR heal after switch (post-frame so block meta has a chance to hydrate)
+      // RIR heal after switch (post-frame so block meta has a chance to hydrate).
       WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
         final bid = uc.activeBlockId;
         if (bid != null && bid.isNotEmpty) {
           unawaited(BlockExerciseDefaultsRepository.healActiveBlockRirPlan(
@@ -817,15 +827,22 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   void didChangeDependencies() {
     super.didChangeDependencies();
     if (!_ucBound) {
-      _uc = context.read<UserContext>(); // ✅ safe here
+      _uc = context.read<UserContext>();
       _ucBound = true;
-      _uc.addListener(_onUserContextChange); // ✅ (also ensures you're actually listening)
+      _uc.addListener(_onUserContextChange);
     }
 
-    _loadAthleteEmail(); // 👈 this line ensures _actingAsEmail is set
+    // Only reload athlete email when actingAsUid actually changes,
+    // preventing redundant Firestore reads on every rebuild.
+    final currentUid = context.read<UserContext>().actingAsUid;
+    if (currentUid != _lastEmailLoadedForUid) {
+      _lastEmailLoadedForUid = currentUid;
+      unawaited(_loadAthleteEmail());
+    }
+
     final ModalRoute<dynamic>? route = ModalRoute.of(context);
     if (route != null) {
-      routeObserver.subscribe(this, route); // 👈 subscribe
+      routeObserver.subscribe(this, route);
     }
   }
 
@@ -854,6 +871,139 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     super.dispose();
   }
 
+
+  // ── Block-setup helpers ───────────────────────────────────────────────────
+
+  /// Subscribe (or re-subscribe) the active-block Firestore listener for [uid].
+  /// Cancels any previous subscription first.
+  void _setupActiveBlockListener(String uid) {
+    _activeBlockSub?.cancel();
+    _activeBlockSub = null;
+    if (uid.isEmpty) return;
+    _activeBlockSub = FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(uid)
+        .collection('blocks')
+        .where('isActive', isEqualTo: true)
+        .snapshots()
+        .listen((_) {
+      if (mounted) _fetchTrainingDaysForMonth(_focusedDay);
+    });
+    debugPrint('🏠 [HOME] block listener subscribed uid=$uid');
+  }
+
+  /// Schedules a post-frame RIR self-heal for the current active block.
+  void _scheduleRirHeal(UserContext uc) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final uid = uc.actingAsUid;
+      final bid = uc.activeBlockId;
+      if (uid.isNotEmpty && bid != null && bid.isNotEmpty) {
+        unawaited(BlockExerciseDefaultsRepository.healActiveBlockRirPlan(
+          uid: uid,
+          blockId: bid,
+        ));
+      }
+    });
+  }
+
+  /// First-time setup flow for brand-new users who have no blocks yet.
+  /// Shows progress messages while creating blocks, then unlocks navigation.
+  Future<void> _runFirstTimeSetup(String actingUid) async {
+    if (!mounted) return;
+    debugPrint('🏠 [HOME] _runFirstTimeSetup uid=$actingUid');
+
+    setState(() {
+      _isFirstTimeSetup = true;
+      _setupStatusMessage = 'Profile locked in\n'
+          'Your training preferences are saved. Building your program based on your preferences...';
+    });
+
+    await _ensureAtLeastOneBlockExists();
+    if (!mounted) return;
+
+    // If user doc wasn't ready (hasCore=false), _ensureAtLeastOneBlockExists
+    // returned early and scheduled its own retry via unawaited Future. Wait for
+    // applyBlockMeta to fire (sets activeBlockId) before continuing.
+    final uc = Provider.of<UserContext>(context, listen: false);
+    if (uc.activeBlockId == null) {
+      debugPrint('🏠 [HOME] first-time setup: user doc not ready — waiting for retry...');
+      for (int i = 0; i < 30 && mounted && uc.activeBlockId == null; i++) {
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+    }
+    if (!mounted) return;
+
+    setState(() {
+      _setupStatusMessage = 'Training structure built\n'
+          'Your first block is built. Finalising your exercise settings...';
+    });
+
+    // Server-confirm block meta so WES has accurate context from the start.
+    await uc.refreshBlockMetaFromServer(uid: uc.actingAsUid);
+    if (!mounted) return;
+
+    setState(() {
+      _setupStatusMessage = 'Ready to train\n'
+          "GoodLift is ready. Let's start training with purpose 💪";
+    });
+    await Future.delayed(const Duration(milliseconds: 1500));
+    if (!mounted) return;
+
+    final ready = uc.activeBlockId != null && uc.activeBlockId!.isNotEmpty;
+    setState(() {
+      _blockSetupComplete = ready;
+      _isFirstTimeSetup = false;
+      _setupStatusMessage = '';
+    });
+    debugPrint('🏠 [HOME] first-time setup complete blockSetupComplete=$ready');
+
+    _fetchTrainingDaysForMonth(_focusedDay);
+    _setupActiveBlockListener(uc.actingAsUid);
+    _scheduleRirHeal(uc);
+  }
+
+  // ── Navigation guard helpers ──────────────────────────────────────────────
+
+  /// Returns true when it is safe to open training-critical screens.
+  bool _isBlockReady() {
+    if (_isFirstTimeSetup) return false;
+    if (!_blockSetupComplete) return false;
+    final uc = UserContext.of(context, listen: false);
+    return uc.activeBlockId != null && uc.activeBlockId!.isNotEmpty;
+  }
+
+  /// Shows a contextual snackbar when training navigation is blocked.
+  void _showBlockNotReadySnack() {
+    final msg = _isFirstTimeSetup
+        ? 'Setting up your training profile, please wait a moment...'
+        : 'Training data is loading, please wait...';
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  /// Inline setup body shown to new users while blocks are being created.
+  Widget _buildSetupBody() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: 24),
+            Text(
+              _setupStatusMessage,
+              textAlign: TextAlign.center,
+              style: Theme.of(context)
+                  .textTheme
+                  .bodyLarge
+                  ?.copyWith(color: Colors.white),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   void didPopNext() {
@@ -1217,12 +1367,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   Future<void> _fetchTrainingDaysForMonth(DateTime month) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    final uid = Provider.of<UserContext>(context, listen: false).actingAsUid;
+    if (uid.isEmpty) return;
 
     try {
-      // 1️⃣ Get the active block doc
-      final blockDoc = await _fetchActiveBlock();
+      // 1️⃣ Get the active block doc for the selected athlete
+      final blockDoc = await _fetchActiveBlock(uid);
       final data = blockDoc.data() as Map<String, dynamic>;
 
       // 2️⃣ Read the start/end Timestamps
@@ -1272,47 +1422,40 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   Future<void> _fetchRecentData() async {
+    final uid = Provider.of<UserContext>(context, listen: false).actingAsUid;
+    if (uid.isEmpty) return;
     await Future.wait([
-      _fetchMostRecentWeight(),
-      _fetchMostRecentWorkout(),
+      _fetchMostRecentWeight(uid),
+      _fetchMostRecentWorkout(uid),
     ]);
-    if (!mounted) return;
-    setState(() {
-      isLoading = false;
-    });
+    // isLoading is no longer driven by this fetch; Home is always rendered.
   }
 
 
-  Future<void> _fetchMostRecentWeight() async {
+  Future<void> _fetchMostRecentWeight(String uid) async {
     try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user != null) {
-        final userId = user.uid;
-        final snapshot = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(userId)
-            .collection('weights')
-            .orderBy('timestamp', descending: true)
-            .limit(1)
-            .get();
-
-        if (snapshot.docs.isNotEmpty) {
-          final weightData = snapshot.docs.first.data();
-          mostRecentWeight = '${weightData['weight']} ${weightData['unit']}';
-        }
+      if (uid.isEmpty) return;
+      final snapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('weights')
+          .orderBy('timestamp', descending: true)
+          .limit(1)
+          .get();
+      if (snapshot.docs.isNotEmpty) {
+        final weightData = snapshot.docs.first.data();
+        mostRecentWeight = '${weightData['weight']} ${weightData['unit']}';
       }
-    } catch (error) {
-      errorMessage = 'Failed to load recent weight: $error';
-    }
+    } catch (_) {}
   }
 
-  Future<void> _fetchMostRecentWorkout() async {
+  Future<void> _fetchMostRecentWorkout(String uid) async {
     try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user != null) {
+      if (uid.isEmpty) return;
+      {
         final querySnapshot = await FirebaseFirestore.instance
             .collection('users')
-            .doc(user.uid)
+            .doc(uid)
             .collection('workouts')
             .orderBy('date', descending: true)
             .limit(1)
@@ -1350,22 +1493,15 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           );
         }
       }
-    } catch (error) {
-      setState(() {
-        errorMessage = 'Failed to load recent workout: $error';
-      });
-    }
+    } catch (_) {}
   }
 
-  Future<DocumentSnapshot<Object?>> _fetchActiveBlock() async {
-    final userId = FirebaseAuth.instance.currentUser?.uid;
-    if (userId == null) {
-      throw Exception('User not logged in');
-    }
+  Future<DocumentSnapshot<Object?>> _fetchActiveBlock(String uid) async {
+    if (uid.isEmpty) throw Exception('No UID — cannot fetch active block');
 
     final query = await FirebaseFirestore.instance
         .collection('planned_blocks')
-        .doc(userId)
+        .doc(uid)
         .collection('blocks')
         .where('isActive', isEqualTo: true)
         .limit(1)
@@ -1842,11 +1978,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       //backgroundImage: AssetImage('assets/avatar.png'),
 
       drawer: const AppDrawer(),
-      body: isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : errorMessage.isNotEmpty
-              ? Center(child: Text(errorMessage))
-              : SingleChildScrollView(
+      body: _isFirstTimeSetup
+          ? _buildSetupBody()
+          : SingleChildScrollView(
                   controller: _homeScrollCtrl, // 👈 add this
                   padding: const EdgeInsets.all(16),
                   child: Column(
@@ -1869,6 +2003,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                     icon: Icons.fitness_center,
                                     label: 'Enter\nWorkout',
                                     onTap: () {
+                                      if (!_isBlockReady()) {
+                                        _showBlockNotReadySnack();
+                                        return;
+                                      }
                                       final uc = UserContext.of(context, listen: false);
                                       Navigator.push(context, MaterialPageRoute(
                                         builder: (_) => ChangeNotifierProvider<UserContext>.value(
@@ -1902,6 +2040,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                     icon: Icons.view_list,
                                     label: 'Workout\nPlanner',
                                     onTap: () {
+                                      if (!_isBlockReady()) {
+                                        _showBlockNotReadySnack();
+                                        return;
+                                      }
                                       final uc = UserContext.of(context, listen: false);
                                       Navigator.push(context, MaterialPageRoute(
                                         builder: (_) => ChangeNotifierProvider<UserContext>.value(
@@ -1928,6 +2070,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                   icon: Icons.track_changes,
                                   label: 'Planned\nBlocks',
                                   onTap: () {
+                                    if (_isFirstTimeSetup) {
+                                      _showBlockNotReadySnack();
+                                      return;
+                                    }
                                     final uc = UserContext.of(context, listen: false);
                                     Navigator.of(context).push(MaterialPageRoute(
                                       builder: (_) => ChangeNotifierProvider<UserContext>.value(
@@ -1939,6 +2085,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                   icon: Icons.calendar_view_week,
                                   label: 'Week\nPlanner',
                                   onTap: () {
+                                    if (!_isBlockReady()) {
+                                      _showBlockNotReadySnack();
+                                      return;
+                                    }
                                     final uc = UserContext.of(context, listen: false);
                                     Navigator.push(context, MaterialPageRoute(
                                       builder: (_) => ChangeNotifierProvider<UserContext>.value(
@@ -2017,6 +2167,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                               _selectedDay = selectedDay;
                               _focusedDay = focusedDay;
                             });
+
+                            if (!_isBlockReady()) {
+                              _showBlockNotReadySnack();
+                              return;
+                            }
 
                             final userContext = UserContext.of(context, listen: false);
 
