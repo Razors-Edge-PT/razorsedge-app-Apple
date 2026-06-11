@@ -49,7 +49,9 @@
       "PowerShell(Set-Location \"C:\\\\Projects\\\\RE-test\"; $out = flutter analyze lib/onboarding_prefs.dart lib/home_screen.dart lib/WES2_widgets/WES2_tutorial_banner.dart lib/WES2_widgets/WES2_exercise_card.dart lib/WES2_widgets/WES2_set_row.dart lib/WES2_screen.dart 2>&1; $out | Where-Object { $_ -notmatch \"^  info\" } | Select-Object -Last 40)",
       "PowerShell(Set-Location \"C:\\\\Projects\\\\RE-test\"; $out = flutter analyze lib/WES2_widgets/WES2_day_actions_row.dart lib/WES2_widgets/WES2_template_picker.dart lib/WES2_screen.dart 2>&1; $out | Where-Object { $_ -notmatch \"^\\\\s+info\" } | Select-Object -Last 15; $out | Select-String \"issues found\")",
       "Bash(Select-String \"error -\")",
-      "Bash(grep -v \"^Downloading\\\\|^  _\\\\|^Got dep\\\\|^104 pack\\\\|^Try \\\\`fl\")"
+      "Bash(grep -v \"^Downloading\\\\|^  _\\\\|^Got dep\\\\|^104 pack\\\\|^Try \\\\`fl\")",
+      "Bash(findstr /I \"error\\\\|home_screen_2\\\\|home_bootstrap\")",
+      "Bash(Select-String -Pattern \"error|home_screen_2|home_bootstrap\")"
     ]
   }
 }

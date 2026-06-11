@@ -28,6 +28,7 @@ import 'block_exercise_defaults_repository.dart';
 import 'block_creation_helper.dart';
 import 'templates.dart';
 import 'planned_blocks_screen.dart';
+import 'home_screen_2.dart';
 import 'onboarding_prefs.dart';
 
 
@@ -2098,7 +2099,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                   },
                                 ),
                               ),
-                              // Column 4: Settings / Coach Dashboard (coach only)
+                              // Column 4: Settings / Coach Dashboard (coach) or Home (non-coach)
                               _buildQAColumn(
                                 _buildQACard(
                                   icon: Icons.settings_outlined,
@@ -2124,8 +2125,35 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                         ));
                                       },
                                     )
-                                  : const SizedBox(width: kFeatureCardWidth, height: 130),
+                                  : _buildQACard(
+                                      icon: Icons.home_outlined,
+                                      label: 'Home',
+                                      onTap: () {
+                                        final uc = UserContext.of(context, listen: false);
+                                        Navigator.of(context).push(MaterialPageRoute(
+                                          builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                            value: uc, child: const HomeScreen2()),
+                                        ));
+                                      },
+                                    ),
                               ),
+                              // Column 5 (coaches only): Home v2 entry
+                              if (UserContext.of(context).isCoach) ...[
+                                _buildQAColumn(
+                                  _buildQACard(
+                                    icon: Icons.home_outlined,
+                                    label: 'Home',
+                                    onTap: () {
+                                      final uc = UserContext.of(context, listen: false);
+                                      Navigator.of(context).push(MaterialPageRoute(
+                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                                          value: uc, child: const HomeScreen2()),
+                                      ));
+                                    },
+                                  ),
+                                  const SizedBox(width: kFeatureCardWidth, height: 130),
+                                ),
+                              ],
                             ],
                           ),
                         ),
