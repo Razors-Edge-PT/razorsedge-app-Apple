@@ -84,14 +84,15 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
         final freshUc = Provider.of<UserContext>(context, listen: false);
         unawaited(freshUc.refreshBlockMetaFromServer(uid: freshUc.actingAsUid));
       }());
+      // Blocks are already in Firestore — safe to bootstrap templates now.
+      final authUser = FirebaseAuth.instance.currentUser;
+      if (authUser != null && authUser.uid == actingUid && actingUid.isNotEmpty) {
+        HomeBootstrapService.startTemplateBootstrap(actingUid);
+      }
     } else {
       debugPrint('🏠 [HOME2] no block meta — running first-time setup');
+      // startTemplateBootstrap is called from _runFirstTimeSetup after blocks are created.
       unawaited(_runFirstTimeSetup(actingUid));
-    }
-
-    final authUser = FirebaseAuth.instance.currentUser;
-    if (authUser != null && authUser.uid == actingUid && actingUid.isNotEmpty) {
-      HomeBootstrapService.startTemplateBootstrap(actingUid);
     }
   }
 
@@ -218,6 +219,12 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
     _fetchTrainingDaysForMonth(_focusedDay);
     _setupActiveBlockListener(actingUid);
     _scheduleRirHeal(uc);
+
+    // Blocks committed — now safe to bootstrap templates.
+    final authUser = FirebaseAuth.instance.currentUser;
+    if (authUser != null && authUser.uid == actingUid && actingUid.isNotEmpty) {
+      HomeBootstrapService.startTemplateBootstrap(actingUid);
+    }
   }
 
   bool _isBlockReady() {

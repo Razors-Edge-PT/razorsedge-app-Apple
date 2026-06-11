@@ -50,6 +50,59 @@ class TemplatesBootstrapper {
     return (activeId: activeId, upcomingIds: upcomingIds);
   }
 
+  /// Repairs bootstrap templates that have [blockAssignment] (e.g. 'B2') but
+  /// are missing a valid [blockId].  Only touches docs written by the
+  /// bootstrapper (identified by the presence of [blockAssignment]).  Safe to
+  /// call repeatedly — it is idempotent and metadata-only.
+  static Future<void> _repairMissingBlockIds(
+    String uid,
+    CollectionReference<Map<String, dynamic>> templatesCol,
+  ) async {
+    final ordered = await _resolveOrderedBlockIds(uid);
+    final activeId = ordered.activeId;
+    final upcomingIds = ordered.upcomingIds;
+
+    if (activeId == null) {
+      debugPrint('🔧 [TB.repair] no active block — skipping repair');
+      return;
+    }
+
+    final assignToId = <String, String>{
+      'B1': activeId,
+      for (int i = 0; i < upcomingIds.length; i++) 'B${i + 2}': upcomingIds[i],
+    };
+    debugPrint('🔧 [TB.repair] block map = $assignToId');
+
+    final allDocs = await templatesCol.get();
+    final validIds = <String>{activeId, ...upcomingIds};
+
+    final batch = FirebaseFirestore.instance.batch();
+    int repaired = 0;
+
+    for (final doc in allDocs.docs) {
+      final data = doc.data();
+      final assign = (data['blockAssignment'] as String?)?.trim();
+      if (assign == null || assign.isEmpty) continue; // not a bootstrap template
+
+      final target = assignToId[assign];
+      if (target == null) continue; // no block mapping for this assignment
+
+      final existing = (data['blockId'] as String?)?.trim();
+      // Skip if already pointing at a valid block.
+      if (existing != null && existing.isNotEmpty && validIds.contains(existing)) continue;
+
+      batch.update(doc.reference, {'blockId': target});
+      repaired++;
+      debugPrint('🔧 [TB.repair] "${data['name']}" ($assign) → blockId=$target (was "${existing ?? 'null'}")');
+    }
+
+    if (repaired > 0) {
+      await batch.commit();
+      debugPrint('🔧 [TB.repair] committed $repaired fix(es)');
+    } else {
+      debugPrint('🔧 [TB.repair] nothing to repair');
+    }
+  }
 
 
   /// Debug utility: lists all blocks for a given user
@@ -106,7 +159,8 @@ class TemplatesBootstrapper {
     debugPrint('🧰 [TB] userDoc exists=${userSnap.exists} flag=$_flagField=$flag');
 
     if (!force && userSnap.exists && flag) {
-      debugPrint('🧰 [TB] early-exit: bootstrap flag already set → skipping');
+      debugPrint('🧰 [TB] bootstrap flag already set → checking for missing blockIds');
+      await _repairMissingBlockIds(uid, userRef.collection('templates'));
       return;
     }
 
@@ -207,6 +261,14 @@ class TemplatesBootstrapper {
     final String? activeBlockId = ordered.activeId;
     final List<String> upcomingIds = ordered.upcomingIds;
     debugPrint('🧰 [TB] ordered → active=$activeBlockId upcoming=${upcomingIds.join(', ')}');
+
+    // Guard: do not create templates until the active block exists.
+    // If this fires before block creation completes, the listener will retry
+    // on the next app launch (flag is not set, so the full path re-runs).
+    if (activeBlockId == null) {
+      debugPrint('🧰 [TB] no active block found — aborting (blocks not ready, will retry)');
+      return;
+    }
 
     // For visibility: how many currently exist
     try {

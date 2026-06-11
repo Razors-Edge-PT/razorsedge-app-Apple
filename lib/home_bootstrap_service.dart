@@ -81,6 +81,17 @@ class HomeBootstrapService {
 
       debugPrint('🧬 [BOOTSTRAP] uid=$uid username="$username" sex="$sex"');
 
+      // ── Owner metadata (debug/admin visibility only) ───────────────────────
+      final ownerEmail = (() {
+        final fromDoc = (data['email'] as String?)?.trim();
+        if (fromDoc != null && fromDoc.isNotEmpty) return fromDoc;
+        final fromAuth = auth.email?.trim();
+        if (fromAuth != null && fromAuth.isNotEmpty) return fromAuth;
+        return null;
+      })();
+      // `username` is already the best-available display name.
+      final ownerName = username;
+
       final isFemale = sex == 'F' || sex == 'N';
       debugPrint('🧬 [BOOTSTRAP] Template branch = ${isFemale ? 'FEMALE' : 'MALE'}');
 
@@ -239,7 +250,13 @@ class HomeBootstrapService {
         required DateTime start,
         required DateTime end,
         required List<String> candidateExerciseIds,
+        required int blockNumber,
       }) {
+        final labelParts = <String>[
+          if (ownerEmail != null) ownerEmail,
+          if (ownerName != null) ownerName,
+          'Block $blockNumber',
+        ];
         return {
           'name': name,
           'isActive': isActive,
@@ -257,6 +274,12 @@ class HomeBootstrapService {
               'selectedDays': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
             }
           },
+          // Admin/debug fields — not read by app logic.
+          'ownerUid': uid,
+          if (ownerEmail != null) 'ownerEmail': ownerEmail,
+          if (ownerName != null) 'ownerName': ownerName,
+          'blockNumber': blockNumber,
+          'debugLabel': labelParts.join(' · '),
         };
       }
 
@@ -267,6 +290,7 @@ class HomeBootstrapService {
         start: startDate1,
         end: endDate1,
         candidateExerciseIds: candidateIds,
+        blockNumber: 1,
       );
 
       final swCreate1 = Stopwatch()..start();
@@ -351,6 +375,7 @@ class HomeBootstrapService {
         start: startDate2,
         end: endDate2,
         candidateExerciseIds: candidateIds,
+        blockNumber: 2,
       );
 
       final swCreate2 = Stopwatch()..start();
@@ -379,6 +404,7 @@ class HomeBootstrapService {
         start: startDate3,
         end: endDate3,
         candidateExerciseIds: candidateIds,
+        blockNumber: 3,
       );
 
       final swCreate3 = Stopwatch()..start();
@@ -386,6 +412,41 @@ class HomeBootstrapService {
       swCreate3.stop();
       final block3Id = block3Ref.id;
       debugPrint('✅ [BOOTSTRAP] Block 3 created id=$block3Id (${swCreate3.elapsed.inMilliseconds} ms)');
+
+      // Merge allBlocks summary into current_block (admin visibility only).
+      unawaited(FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('block_planner')
+          .doc('current_block')
+          .set({
+        'allBlocks': [
+          {
+            'blockId': block1Id,
+            'blockName': block1Name,
+            'blockNumber': 1,
+            'isActive': true,
+            'startDateIso': startDate1.toIso8601String(),
+            'endDateIso': endDate1.toIso8601String(),
+          },
+          {
+            'blockId': block2Id,
+            'blockName': block2Name,
+            'blockNumber': 2,
+            'isActive': false,
+            'startDateIso': startDate2.toIso8601String(),
+            'endDateIso': endDate2.toIso8601String(),
+          },
+          {
+            'blockId': block3Id,
+            'blockName': block3Name,
+            'blockNumber': 3,
+            'isActive': false,
+            'startDateIso': startDate3.toIso8601String(),
+            'endDateIso': endDate3.toIso8601String(),
+          },
+        ],
+      }, SetOptions(merge: true)));
 
       unawaited(() async {
         try {
@@ -569,6 +630,87 @@ class HomeBootstrapService {
         debugPrint('🟥 [BOOTSTRAP] onboardRef.snapshots denied: $e');
         try { await onboardSub?.cancel(); } catch (_) {}
       },
+    );
+  }
+
+  // ── Owner-metadata backfill ───────────────────────────────────────────────
+
+  /// Backfills admin/debug fields ([ownerUid], [ownerEmail], [ownerName],
+  /// [blockNumber], [debugLabel]) onto existing block documents that are
+  /// missing [ownerUid].  Skips the write entirely when all blocks already
+  /// carry the metadata.  Safe to call repeatedly — idempotent.
+  static Future<void> backfillOwnerMetadata(String uid) async {
+    if (uid.isEmpty) return;
+
+    final blocksRef = FirebaseFirestore.instance
+        .collection('planned_blocks')
+        .doc(uid)
+        .collection('blocks');
+
+    final snap = await blocksRef.get();
+    if (snap.docs.isEmpty) return;
+
+    // Fast-path: nothing to do if all blocks already have ownerUid.
+    if (snap.docs.every((d) => d.data()['ownerUid'] != null)) {
+      debugPrint('🔧 [BOOTSTRAP.backfill] all blocks already have ownerUid — skipping');
+      return;
+    }
+
+    // Fetch user doc for the richest available metadata.
+    final userSnap = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+    final data = userSnap.data() ?? {};
+    final auth = FirebaseAuth.instance.currentUser;
+
+    final ownerEmail = (() {
+      final fromDoc = (data['email'] as String?)?.trim();
+      if (fromDoc != null && fromDoc.isNotEmpty) return fromDoc;
+      final fromAuth = auth?.email?.trim();
+      if (fromAuth != null && fromAuth.isNotEmpty) return fromAuth;
+      return null;
+    })();
+
+    final ownerName = (() {
+      for (final key in ['username', 'fullName', 'displayName']) {
+        final v = (data[key] as String?)?.trim();
+        if (v != null && v.isNotEmpty) return v;
+      }
+      final fromAuth = auth?.displayName?.trim();
+      if (fromAuth != null && fromAuth.isNotEmpty) return fromAuth;
+      return null;
+    })();
+
+    // Sort by startDate so blockNumber is chronologically assigned.
+    final sorted = snap.docs.toList()
+      ..sort((a, b) {
+        final aTs = a.data()['startDate'];
+        final bTs = b.data()['startDate'];
+        final aDate = aTs is Timestamp ? aTs.toDate() : DateTime(0);
+        final bDate = bTs is Timestamp ? bTs.toDate() : DateTime(0);
+        return aDate.compareTo(bDate);
+      });
+
+    final batch = FirebaseFirestore.instance.batch();
+
+    for (int i = 0; i < sorted.length; i++) {
+      final doc = sorted[i];
+      final blockNumber = i + 1;
+      final labelParts = <String>[
+        if (ownerEmail != null) ownerEmail,
+        if (ownerName != null) ownerName,
+        'Block $blockNumber',
+      ];
+      batch.update(doc.reference, {
+        'ownerUid': uid,
+        if (ownerEmail != null) 'ownerEmail': ownerEmail,
+        if (ownerName != null) 'ownerName': ownerName,
+        'blockNumber': blockNumber,
+        'debugLabel': labelParts.join(' · '),
+      });
+    }
+
+    await batch.commit();
+    debugPrint(
+      '🔧 [BOOTSTRAP.backfill] wrote metadata to ${sorted.length} blocks for uid=$uid',
     );
   }
 }
