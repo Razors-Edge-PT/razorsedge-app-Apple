@@ -4,9 +4,10 @@ import 'package:google_fonts/google_fonts.dart';
 /// App-wide theme constants and theme builders.
 ///
 /// Role semantics (user-facing names):
-///   Primary   = chrome / branded background surfaces (AppBar, scaffold, drawer)
-///   Secondary = active / selected states (switches, focused borders, chart lines)
-///   Tertiary  = action icons / accent highlights (FABs, chips, send icons, bubbles)
+///   Primary    = chrome / branded background surfaces (AppBar, scaffold, drawer)
+///   Secondary  = active / selected states (switches, focused borders, chart lines)
+///   Tertiary   = action icons / accent highlights (FABs, chips, send icons, bubbles)
+///   Quaternary = completed / success states (completed workout calendar markers)
 class AppTheme {
   // Default primary = blueGrey.shade900 (app chrome — same hardcoded value as before)
   static const Color defaultPrimary   = Color(0xFF263238); // BlueGrey 900
@@ -14,6 +15,8 @@ class AppTheme {
   static const Color defaultSecondary = Color(0xFF40C4FF); // Colors.lightBlueAccent
   // Default tertiary  = cyanAccent (was defaultSecondary in Phase 1)
   static const Color defaultTertiary  = Color(0xFF18FFFF); // Colors.cyanAccent
+  // Default quaternary = green.shade400 — completed / success states
+  static const Color defaultQuaternary = Color(0xFF66BB6A); // Colors.green.shade400
 
   static const ThemeMode defaultThemeMode = ThemeMode.dark;
 
@@ -21,10 +24,16 @@ class AppTheme {
   static Color onColor(Color bg) =>
       bg.computeLuminance() > 0.35 ? Colors.black87 : Colors.white;
 
-  static ThemeData dark({Color? primary, Color? secondary, Color? tertiary}) {
-    final chrome = primary   ?? defaultPrimary;    // scaffold / AppBar bg
-    final active = secondary ?? defaultSecondary;  // colorScheme.primary slot
-    final accent = tertiary  ?? defaultTertiary;   // colorScheme.tertiary slot
+  static ThemeData dark({
+    Color? primary,
+    Color? secondary,
+    Color? tertiary,
+    Color? quaternary,
+  }) {
+    final chrome = primary    ?? defaultPrimary;    // scaffold / AppBar bg
+    final active = secondary  ?? defaultSecondary;  // colorScheme.primary slot
+    final accent = tertiary   ?? defaultTertiary;   // colorScheme.tertiary slot
+    final done   = quaternary ?? defaultQuaternary; // completed / success
     final onActive = onColor(active);
     final onAccent = onColor(accent);
 
@@ -46,6 +55,9 @@ class AppTheme {
         onSurface: Colors.white,
         outline: Color.lerp(chrome, Colors.white, 0.25)!,
       ),
+      extensions: <ThemeExtension<dynamic>>[
+        GoodLiftColors(quaternary: done),
+      ],
       appBarTheme: AppBarTheme(
         backgroundColor: chrome,
         foregroundColor: Colors.white,
@@ -89,15 +101,21 @@ class AppTheme {
     );
   }
 
-  static ThemeData light({Color? primary, Color? secondary, Color? tertiary}) {
+  static ThemeData light({
+    Color? primary,
+    Color? secondary,
+    Color? tertiary,
+    Color? quaternary,
+  }) {
     // Derive a tinted light surface from the chrome primary color.
     // At default (blueGrey 900) this produces ~#D0D4D5, near-identical to grey.shade200.
     final chrome = primary ?? defaultPrimary;
     final lightChrome = Color.lerp(chrome, Colors.white, 0.85)!;
     final onChrome = onColor(lightChrome); // always black87 for any sensible chrome
 
-    final active = secondary ?? defaultSecondary;
-    final accent = tertiary  ?? defaultTertiary;
+    final active = secondary  ?? defaultSecondary;
+    final accent = tertiary   ?? defaultTertiary;
+    final done   = quaternary ?? defaultQuaternary;
     final onActive = onColor(active);
     final onAccent = onColor(accent);
 
@@ -119,6 +137,9 @@ class AppTheme {
         onSurface: Colors.black87,
         outline: Color.lerp(lightChrome, Colors.black, 0.25)!,
       ),
+      extensions: <ThemeExtension<dynamic>>[
+        GoodLiftColors(quaternary: done),
+      ],
       appBarTheme: AppBarTheme(
         backgroundColor: lightChrome,
         foregroundColor: onChrome,
@@ -159,6 +180,33 @@ class AppTheme {
         bodyMedium: TextStyle(color: Colors.black87),
         labelLarge: TextStyle(color: Colors.black87),
       ),
+    );
+  }
+}
+
+/// GoodLift-specific colour tokens that have no standard [ColorScheme] slot.
+///
+/// Access via:
+/// ```dart
+/// Theme.of(context).extension<GoodLiftColors>()?.quaternary
+///   ?? AppTheme.defaultQuaternary
+/// ```
+@immutable
+class GoodLiftColors extends ThemeExtension<GoodLiftColors> {
+  const GoodLiftColors({required this.quaternary});
+
+  /// Completed / success state colour — e.g. completed workout calendar markers.
+  final Color quaternary;
+
+  @override
+  GoodLiftColors copyWith({Color? quaternary}) =>
+      GoodLiftColors(quaternary: quaternary ?? this.quaternary);
+
+  @override
+  GoodLiftColors lerp(ThemeExtension<GoodLiftColors>? other, double t) {
+    if (other is! GoodLiftColors) return this;
+    return GoodLiftColors(
+      quaternary: Color.lerp(quaternary, other.quaternary, t) ?? quaternary,
     );
   }
 }

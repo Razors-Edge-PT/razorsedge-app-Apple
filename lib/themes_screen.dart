@@ -128,6 +128,14 @@ class ThemesScreen extends StatelessWidget {
                     presets: _presets,
                     onChanged: (c) => tc.update(tertiary: c),
                   ),
+                  const SizedBox(height: 28),
+                  _ColorSection(
+                    label: 'Quaternary Color',
+                    subtitle: 'Completed workouts, success states, completed calendar markers',
+                    current: tc.quaternaryColor,
+                    presets: _presets,
+                    onChanged: (c) => tc.update(quaternary: c),
+                  ),
                   const SizedBox(height: 32),
                   SizedBox(
                     width: double.infinity,

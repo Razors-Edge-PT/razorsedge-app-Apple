@@ -212,8 +212,7 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
   // ── Calendar day helper ────────────────────────────────────────────────────
 
   /// Builds a single calendar day cell with the correct state visual.
-  /// Uses colorScheme.tertiary for planned, Colors.greenAccent for completed,
-  /// and a split-circle [_SplitCirclePainter] for mixed state.
+  /// Colours come from [_HomeV2CalendarColors.of] — see that class for sourcing.
   Widget _buildCalendarDay(
     BuildContext context,
     DateTime date,
@@ -222,7 +221,7 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
     bool isSelected = false,
   }) {
     final cs = Theme.of(context).colorScheme;
-    const completedColor = Colors.greenAccent;
+    final cc = _HomeV2CalendarColors.of(context);
 
     Color? bgColor;
     if (isSelected) {
@@ -253,8 +252,8 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
             Positioned.fill(
               child: CustomPaint(
                 painter: _SplitCirclePainter(
-                  topColor: completedColor,
-                  bottomColor: cs.tertiary,
+                  topColor: cc.completed,
+                  bottomColor: cc.planned,
                 ),
               ),
             ),
@@ -269,9 +268,9 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
     } else if (isToday) {
       borderColor = cs.tertiary;
     } else if (kind == HomeV2CalendarDayKind.planned) {
-      borderColor = cs.tertiary;
+      borderColor = cc.planned;
     } else if (kind == HomeV2CalendarDayKind.completed) {
-      borderColor = completedColor;
+      borderColor = cc.completed;
     }
 
     return Container(
@@ -702,6 +701,41 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                 ],
               ),
             ),
+    );
+  }
+}
+
+// ── Calendar colour tokens ─────────────────────────────────────────────────────
+// GoodLift's AppTheme defines three user-configurable colour slots:
+//   primary   (chrome/scaffold)
+//   secondary (active/selected)
+//   tertiary  (accent / training-day indicator)
+//
+// There is no quaternary / success / completed slot, so the completed colour
+// is a fixed success-green that is NOT user-theme-customisable.  It is defined
+// here so it can be swapped in one place if a theme slot is added later.
+class _HomeV2CalendarColors {
+  const _HomeV2CalendarColors({
+    required this.planned,
+    required this.completed,
+  });
+
+  /// Training-day planned indicator — user's theme accent (colorScheme.tertiary).
+  final Color planned;
+
+  /// Workout completed indicator — fixed success-green (no quaternary slot in
+  /// AppTheme; not affected by the user's colour-picker selection).
+  final Color completed;
+
+  // green.shade400 — readable on the default blueGrey-900 dark scaffold and
+  // legible against any reasonable user-chosen primary shade.
+  static const Color _completedFallback = Color(0xFF66BB6A);
+
+  static _HomeV2CalendarColors of(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return _HomeV2CalendarColors(
+      planned:   cs.tertiary,
+      completed: _completedFallback,
     );
   }
 }

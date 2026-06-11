@@ -664,8 +664,8 @@ class MyApp extends StatelessWidget {
         // add any others you need…
       ],
 
-      theme: AppTheme.light(primary: tc.primaryColor, secondary: tc.secondaryColor, tertiary: tc.tertiaryColor),
-      darkTheme: AppTheme.dark(primary: tc.primaryColor, secondary: tc.secondaryColor, tertiary: tc.tertiaryColor),
+      theme: AppTheme.light(primary: tc.primaryColor, secondary: tc.secondaryColor, tertiary: tc.tertiaryColor, quaternary: tc.quaternaryColor),
+      darkTheme: AppTheme.dark(primary: tc.primaryColor, secondary: tc.secondaryColor, tertiary: tc.tertiaryColor, quaternary: tc.quaternaryColor),
       themeMode: tc.themeMode,
       navigatorObservers: [routeObserver],
 
