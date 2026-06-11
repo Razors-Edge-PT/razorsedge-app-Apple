@@ -238,13 +238,14 @@ class HomeV2Controller extends ChangeNotifier {
     if (uid.isEmpty) return;
     final key = '$uid/${month.year}-${month.month}';
     if (!force && key == _calendarFetchKey) return;
-    _calendarFetchKey = key;
-
+    // Key is set AFTER a successful fetch so a network failure doesn't
+    // permanently suppress retries for this month.
     final states = await HomeV2CalendarService.fetchCalendarDayStatesForMonth(
       uid: uid,
       month: month,
     );
     if (_disposed) return;
+    _calendarFetchKey = key;
     calendarDays = states;
     _notify();
   }

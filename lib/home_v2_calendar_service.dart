@@ -15,57 +15,76 @@ enum HomeV2CalendarDayKind {
 
 /// Fetches calendar day states for the HomeScreen2 training calendar.
 /// Pure static helper — no state, no BuildContext.
+///
+/// Data sources (spec section 8.6):
+///   Planned:   planned_blocks/{uid}/blocks/{blockId}/weeks/week_N/days/day_N
+///              → planned when exercises is a non-empty List
+///   Also:      users/{uid}/workouts/{yyyy-MM-dd}.wesPlannedExercises
+///              → planned when wesPlannedExercises is a non-empty List
+///   Completed: users/{uid}/workouts/{yyyy-MM-dd}.exercises
+///              → completed when any set has weight > 0 AND reps > 0
+///
+/// Week/day index:  0-based, sequential from blockStart.
+///   weekIndex = (date − blockStart).inDays ~/ 7
+///   dayIndex  = (date − blockStart).inDays %  7
 class HomeV2CalendarService {
-  static const Map<String, int> _dayMap = {
-    'Mon': DateTime.monday,
-    'Tue': DateTime.tuesday,
-    'Wed': DateTime.wednesday,
-    'Thu': DateTime.thursday,
-    'Fri': DateTime.friday,
-    'Sat': DateTime.saturday,
-    'Sun': DateTime.sunday,
-  };
+  // ── Public API ──────────────────────────────────────────────────────────────
 
-  /// Returns a map of normalised training dates (midnight) to their
-  /// [HomeV2CalendarDayKind] for the visible [month].
-  ///
-  /// Two queries run in sequence:
-  ///   1. Active block doc → which weekdays are scheduled training days.
-  ///   2. WES2 workout docs for the month → which days have completed sets.
-  ///
-  /// Returns an empty map on error or when no active block exists.
+  /// Returns a [HomeV2CalendarDayKind] map for all notable dates in [month].
+  /// Block-planned and WES2-data fetches fail independently: a failure in one
+  /// source does not discard results from the other.
   static Future<Map<DateTime, HomeV2CalendarDayKind>> fetchCalendarDayStatesForMonth({
     required String uid,
     required DateTime month,
   }) async {
     if (uid.isEmpty) return {};
-    try {
-      final planned   = await _fetchPlannedDaysForMonth(uid, month);
-      final completed = await _fetchCompletedDaysForMonth(uid, month);
 
-      final result = <DateTime, HomeV2CalendarDayKind>{};
-      for (final d in {...planned, ...completed}) {
-        final p = planned.contains(d);
-        final c = completed.contains(d);
-        if (p && c) {
-          result[d] = HomeV2CalendarDayKind.mixed;
-        } else if (p) {
-          result[d] = HomeV2CalendarDayKind.planned;
-        } else {
-          result[d] = HomeV2CalendarDayKind.completed;
-        }
-      }
-      return result;
+    var blockPlanned = <DateTime>{};
+    var wes2Planned  = <DateTime>{};
+    var completed    = <DateTime>{};
+
+    // Block day docs — fail independently from WES2
+    try {
+      blockPlanned = await _fetchBlockPlannedDays(uid, month);
     } catch (e) {
-      debugPrint('📅 [CalSvc] error: $e');
-      return {};
+      debugPrint('📅 [CalSvc] block planned error: $e');
     }
+
+    // WES2 workout docs — provides both WES2-planned and completed days
+    try {
+      final wes2 = await _fetchWes2Data(uid, month);
+      wes2Planned = wes2.$1;
+      completed   = wes2.$2;
+    } catch (e) {
+      debugPrint('📅 [CalSvc] WES2 error: $e');
+    }
+
+    final planned = {...blockPlanned, ...wes2Planned};
+    final result  = <DateTime, HomeV2CalendarDayKind>{};
+
+    for (final d in {...planned, ...completed}) {
+      final p = planned.contains(d);
+      final c = completed.contains(d);
+      if (p && c) {
+        result[d] = HomeV2CalendarDayKind.mixed;
+      } else if (p) {
+        result[d] = HomeV2CalendarDayKind.planned;
+      } else {
+        result[d] = HomeV2CalendarDayKind.completed;
+      }
+    }
+    return result;
   }
 
-  // ── Planned days ────────────────────────────────────────────────────────────
+  // ── Block planned days ──────────────────────────────────────────────────────
 
-  static Future<Set<DateTime>> _fetchPlannedDaysForMonth(
+  /// Fetches /planned_blocks/{uid}/blocks/{blockId}/weeks/week_N/days/day_N
+  /// for every date in [month] that falls inside the active block's date range.
+  /// A date is counted as planned only when the day doc's exercises list is
+  /// non-empty.  All day-doc reads are issued in parallel.
+  static Future<Set<DateTime>> _fetchBlockPlannedDays(
       String uid, DateTime month) async {
+    // 1. Load active block metadata.
     final query = await FirebaseFirestore.instance
         .collection('planned_blocks')
         .doc(uid)
@@ -75,65 +94,117 @@ class HomeV2CalendarService {
         .get();
     if (query.docs.isEmpty) return {};
 
-    final data       = query.docs.first.data();
-    final blockStart = (data['startDate'] as Timestamp).toDate();
-    final blockEnd   = (data['endDate']   as Timestamp).toDate();
+    final blockDoc   = query.docs.first;
+    final blockId    = blockDoc.id;
+    final data       = blockDoc.data();
+    final blockStart = _normalise((data['startDate'] as Timestamp).toDate());
+    final blockEnd   = _normalise((data['endDate']   as Timestamp).toDate());
 
-    final List<dynamic> rawDays =
-        data['selectedDays'] ?? data['daysOfWeek'] ?? [];
-    final Set<int> weekdays = rawDays
-        .map((d) => _dayMap[d.toString()])
-        .whereType<int>()
-        .toSet();
-    if (weekdays.isEmpty) return {};
-
+    // 2. Find date range: intersection of visible month and block range.
     final first = DateTime(month.year, month.month, 1);
     final last  = DateTime(month.year, month.month + 1, 0);
     final from  = first.isAfter(blockStart) ? first : blockStart;
     final to    = last.isBefore(blockEnd)   ? last  : blockEnd;
     if (from.isAfter(to)) return {};
 
-    final result = <DateTime>{};
+    // 3. Build parallel fetches for all dates in the intersection.
+    final dates   = <DateTime>[];
+    final futures = <Future<DocumentSnapshot<Map<String, dynamic>>>>[];
+
     for (var d = from; !d.isAfter(to); d = d.add(const Duration(days: 1))) {
-      if (weekdays.contains(d.weekday)) {
-        result.add(DateTime(d.year, d.month, d.day));
-      }
+      final norm     = _normalise(d);
+      final diffDays = norm.difference(blockStart).inDays;
+      final wIdx     = diffDays ~/ 7;
+      final dIdx     = diffDays % 7;
+
+      dates.add(norm);
+      futures.add(
+        FirebaseFirestore.instance
+            .collection('planned_blocks')
+            .doc(uid)
+            .collection('blocks')
+            .doc(blockId)
+            .collection('weeks')
+            .doc('week_$wIdx')
+            .collection('days')
+            .doc('day_$dIdx')
+            .get(),
+      );
     }
-    return result;
-  }
 
-  // ── Completed days ──────────────────────────────────────────────────────────
-
-  /// Queries /users/{uid}/workouts for docs whose `date` field falls in [month]
-  /// and contain at least one set with reps > 0 AND weight > 0.
-  static Future<Set<DateTime>> _fetchCompletedDaysForMonth(
-      String uid, DateTime month) async {
-    final start = _dateKey(DateTime(month.year, month.month, 1));
-    final end   = _dateKey(DateTime(month.year, month.month + 1, 0));
-
-    final snap = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(uid)
-        .collection('workouts')
-        .where('date', isGreaterThanOrEqualTo: start)
-        .where('date', isLessThanOrEqualTo: end)
-        .get();
-
+    final snaps  = await Future.wait(futures);
     final result = <DateTime>{};
-    for (final doc in snap.docs) {
-      if (!_hasCompletedSets(doc.data())) continue;
-      final parts = doc.id.split('-');
-      if (parts.length != 3) continue;
-      final y = int.tryParse(parts[0]);
-      final m = int.tryParse(parts[1]);
-      final d = int.tryParse(parts[2]);
-      if (y != null && m != null && d != null) {
-        result.add(DateTime(y, m, d));
+
+    for (var i = 0; i < snaps.length; i++) {
+      final snap = snaps[i];
+      if (!snap.exists) continue;
+      final d = snap.data();
+      if (d == null) continue;
+      final exercises = d['exercises'];
+      if (exercises is List && exercises.isNotEmpty) {
+        result.add(dates[i]);
       }
     }
     return result;
   }
 
+  // ── WES2 workout docs ───────────────────────────────────────────────────────
+
+  /// Direct-gets each yyyy-MM-dd workout doc for the visible month.
+  /// Returns (wesPlannedDays, completedDays).
+  ///
+  /// Doc IDs are the authoritative source (not the `date` field) to avoid
+  /// relying on string-field consistency across older documents.
+  static Future<(Set<DateTime>, Set<DateTime>)> _fetchWes2Data(
+      String uid, DateTime month) async {
+    final daysInMonth = DateTime(month.year, month.month + 1, 0).day;
+
+    final dates   = <DateTime>[];
+    final futures = <Future<DocumentSnapshot<Map<String, dynamic>>>>[];
+
+    for (var day = 1; day <= daysInMonth; day++) {
+      final norm = DateTime(month.year, month.month, day);
+      dates.add(norm);
+      futures.add(
+        FirebaseFirestore.instance
+            .collection('users')
+            .doc(uid)
+            .collection('workouts')
+            .doc(_dateKey(norm))
+            .get(),
+      );
+    }
+
+    final snaps      = await Future.wait(futures);
+    final wes2Planned = <DateTime>{};
+    final completed   = <DateTime>{};
+
+    for (var i = 0; i < snaps.length; i++) {
+      final snap = snaps[i];
+      if (!snap.exists) continue;
+      final data = snap.data();
+      if (data == null) continue;
+
+      // wesPlannedExercises → planned state
+      final wesPlanned = data['wesPlannedExercises'];
+      if (wesPlanned is List && wesPlanned.isNotEmpty) {
+        wes2Planned.add(dates[i]);
+      }
+
+      // exercises with qualifying sets → completed state
+      if (_hasCompletedSets(data)) {
+        completed.add(dates[i]);
+      }
+    }
+
+    return (wes2Planned, completed);
+  }
+
+  // ── Helpers ─────────────────────────────────────────────────────────────────
+
+  /// A set is considered completed when it has weight > 0 AND reps > 0.
+  /// Checks both current (`weight`/`reps`) and legacy (`actualWeight`/`actualReps`)
+  /// field names to handle older workout documents.
   static bool _hasCompletedSets(Map<String, dynamic> data) {
     final exercises = data['exercises'];
     if (exercises is! List) return false;
@@ -143,11 +214,15 @@ class HomeV2CalendarService {
       if (sets is! List) continue;
       for (final s in sets) {
         if (s is! Map) continue;
-        if (_toNum(s['weight']) > 0 && _toNum(s['reps']) > 0) return true;
+        final weight = _toNum(s['weight'] ?? s['actualWeight']);
+        final reps   = _toNum(s['reps']   ?? s['actualReps']);
+        if (weight > 0 && reps > 0) return true;
       }
     }
     return false;
   }
+
+  static DateTime _normalise(DateTime d) => DateTime(d.year, d.month, d.day);
 
   static double _toNum(dynamic v) {
     if (v == null) return 0.0;
