@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:table_calendar/table_calendar.dart';
 
 import 'app_drawer.dart';
+import 'app_theme.dart';
 import 'bb3_week_planner.dart';
 import 'coach_home_screen.dart';
 import 'home_v2_app_bar.dart';
@@ -233,7 +234,10 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
     if (kind == HomeV2CalendarDayKind.mixed) {
       return Padding(
         padding: const EdgeInsets.all(6),
+        // StackFit.expand forces the Container to fill the painted circle area,
+        // which matters when bgColor is set (today/selected states).
         child: Stack(
+          fit: StackFit.expand,
           children: [
             Container(
               decoration: BoxDecoration(
@@ -249,12 +253,10 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                 ),
               ),
             ),
-            Positioned.fill(
-              child: CustomPaint(
-                painter: _SplitCirclePainter(
-                  topColor: cc.completed,
-                  bottomColor: cc.planned,
-                ),
+            CustomPaint(
+              painter: _SplitCirclePainter(
+                topColor: cc.completed,
+                bottomColor: cc.planned,
               ),
             ),
           ],
@@ -706,14 +708,11 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
 }
 
 // ── Calendar colour tokens ─────────────────────────────────────────────────────
-// GoodLift's AppTheme defines three user-configurable colour slots:
-//   primary   (chrome/scaffold)
-//   secondary (active/selected)
-//   tertiary  (accent / training-day indicator)
-//
-// There is no quaternary / success / completed slot, so the completed colour
-// is a fixed success-green that is NOT user-theme-customisable.  It is defined
-// here so it can be swapped in one place if a theme slot is added later.
+// GoodLift's AppTheme defines four user-configurable colour slots:
+//   primary    (chrome/scaffold)
+//   secondary  (active/selected)
+//   tertiary   (accent / training-day planned indicator)
+//   quaternary (completed/success — via GoodLiftColors ThemeExtension)
 class _HomeV2CalendarColors {
   const _HomeV2CalendarColors({
     required this.planned,
@@ -723,26 +722,32 @@ class _HomeV2CalendarColors {
   /// Training-day planned indicator — user's theme accent (colorScheme.tertiary).
   final Color planned;
 
-  /// Workout completed indicator — fixed success-green (no quaternary slot in
-  /// AppTheme; not affected by the user's colour-picker selection).
+  /// Workout completed indicator — user's quaternary colour from [GoodLiftColors]
+  /// ThemeExtension; falls back to [AppTheme.defaultQuaternary] if the extension
+  /// is somehow absent (should not happen in normal app builds).
   final Color completed;
-
-  // green.shade400 — readable on the default blueGrey-900 dark scaffold and
-  // legible against any reasonable user-chosen primary shade.
-  static const Color _completedFallback = Color(0xFF66BB6A);
 
   static _HomeV2CalendarColors of(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final gl = Theme.of(context).extension<GoodLiftColors>();
     return _HomeV2CalendarColors(
       planned:   cs.tertiary,
-      completed: _completedFallback,
+      completed: gl?.quaternary ?? AppTheme.defaultQuaternary,
     );
   }
 }
 
 // ── Split-circle painter ───────────────────────────────────────────────────────
 // Draws a circle border split into top and bottom halves with separate colours.
-// Top half = completed state colour; bottom half = planned state colour.
+// Top half  = completed state colour (quaternary).
+// Bottom half = planned state colour (tertiary).
+//
+// Flutter canvas angle convention: 0 = 3-o'clock, angles increase CLOCKWISE
+// because the y-axis points downward.
+//   Top half    = 9-o'clock → CW through 12-o'clock → 3-o'clock
+//                 startAngle=π, sweepAngle=+π
+//   Bottom half = 3-o'clock → CW through 6-o'clock  → 9-o'clock
+//                 startAngle=0, sweepAngle=+π
 class _SplitCirclePainter extends CustomPainter {
   final Color topColor;
   final Color bottomColor;
@@ -761,13 +766,14 @@ class _SplitCirclePainter extends CustomPainter {
     final rect = Rect.fromCircle(center: center, radius: radius);
     final paint = Paint()
       ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.butt
       ..strokeWidth = _stroke;
 
-    // Top half: 9 o'clock → (counterclockwise through 12) → 3 o'clock
+    // Top half: 9-o'clock clockwise through 12-o'clock to 3-o'clock.
     paint.color = topColor;
-    canvas.drawArc(rect, math.pi, -math.pi, false, paint);
+    canvas.drawArc(rect, math.pi, math.pi, false, paint);
 
-    // Bottom half: 3 o'clock → (clockwise through 6) → 9 o'clock
+    // Bottom half: 3-o'clock clockwise through 6-o'clock to 9-o'clock.
     paint.color = bottomColor;
     canvas.drawArc(rect, 0, math.pi, false, paint);
   }
